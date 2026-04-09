@@ -13,9 +13,15 @@ export async function GET(req: NextRequest) {
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
         const searchParams = req.nextUrl.searchParams;
         const marca = searchParams.get("m");
+        const corpoParam = searchParams.get("corpo_id");
 
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        }
+
+        const corpoIdReq = corpoParam != null && corpoParam !== "" ? parseInt(String(corpoParam), 10) : NaN;
+        if (!Number.isFinite(corpoIdReq) || corpoIdReq <= 0) {
+            return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 200 });
         }
 
         const marcaDia = await callDynamicPrisma({
@@ -26,6 +32,13 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
+        if (Number(marcaDia.corpo_id) !== corpoIdReq) {
+            return NextResponse.json(
+                { status: false, message: "La sucursal no corresponde a la marca indicada" },
+                { status: 200 }
+            );
+        }
+
         if (!marcaDia.empleadoFijo_id) {
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
@@ -33,27 +46,9 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const lastMarca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-                orderBy: { id: "desc" }
-            }
-        });
-        if (!lastMarca) {
-            return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
-        }
-
-        if (marcaDia.id !== lastMarca.id) {
-            return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
-        }
-
         const vehiculos = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "e_registro_vehiculos", operation: "findMany", where: { corpo_id: marcaDia.corpo_id } }
+            data: { action: "GET", table: "e_registro_vehiculos", operation: "findMany", where: { corpo_id: corpoIdReq } }
         });
 
         const vehiculos_return: any[] = [];
@@ -83,6 +78,7 @@ export async function GET(req: NextRequest) {
                     nombre: responsable.nombre + " " + responsable.primer_apellido + " " + responsable.segundo_apellido,
                 },
                 created_at: v.created_at,
+                corpo_id: v.corpo_id,
                 id_local: "",
                 base64_image: ""
             });

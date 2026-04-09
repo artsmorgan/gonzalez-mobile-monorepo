@@ -61,7 +61,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           const currentMarcaData = JSON.parse(currentMarca);
           setRole(currentMarcaData.roleDivision.role.nombre);
           setDivision(currentMarcaData.roleDivision.division.nombre);
-          setHasCurrentMarca(true);
+          setHasCurrentMarca(currentMarcaData.hora_salida_digitada == null);
           const lunchTime = await AsyncStorage.getItem('lunch_time_config');
           if (lunchTime) {
             const lunchTimeData = JSON.parse(lunchTime);
@@ -389,11 +389,13 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   };
 
   const hasPermissionRole = (roles: string[]) => {
+    //return true;
     // roles será un array de strings con los nombres de los roles que tendrán permitidos y el sistema deberá verificar si la variable role está en el array de roles
     return roles.some((roleArray: string) => role === roleArray);
   };
   
   const hasPermissionDivision = (divisions: string[]) => {
+    //return true;
     // divisions será un array de strings con los nombres de las divisiones que tendrán permitidos y el sistema deberá verificar si la variable division está en el array de divisions
     return divisions.some((divisionArray: string) => division === divisionArray);
   };
@@ -793,7 +795,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasPermissionRole(['OPERATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+            {hasCurrentMarca && hasPermissionRole(['SUPERVISOR','ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1011,7 +1013,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasPermissionRole(['OPERATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+            {hasCurrentMarca  && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1449,7 +1451,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   {getActionIcon('warning', false)}
-                  Si desea ver las opciones de este menú, debe tener una marca activa.
+                  Si desea ver las opciones de este menú, debes estar en un turno activo.
                 </ThemedText>
               </ThemedView>
             )}

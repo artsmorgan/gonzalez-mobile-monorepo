@@ -19,6 +19,13 @@ interface UpdateNoteParams {
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
 
+interface DeleteNoteParams {
+    noteId: number;
+    puestoId: number;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
 export async function createNote({
     requestData,
     marcaId,
@@ -154,6 +161,54 @@ export async function updateNote({
     } catch (error) {
         console.error('Error updating note:', error);
         return { status: false, message: 'Error al actualizar la nota' };
+    }
+}
+
+export async function deleteNote({
+    noteId,
+    puestoId,
+    refreshAccessToken,
+    logout
+}: DeleteNoteParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+
+        if (!puestoId) {
+            throw new Error('Puesto ID not found');
+        }
+
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/puestos/${puestoId}/notas/${noteId}`,
+            init: {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error deleting note:', error);
+        return { status: false, message: 'Error al eliminar la nota' };
     }
 }
 

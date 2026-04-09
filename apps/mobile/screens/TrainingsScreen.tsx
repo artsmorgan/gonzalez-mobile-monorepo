@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -16,7 +16,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
@@ -28,15 +28,20 @@ import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import * as Network from 'expo-network';
-import { createTraining as createTrainingAPI } from '@/hooks/trainingFunctions';
+import { createTraining as createTrainingAPI, deleteTraining as deleteTrainingAPI } from '@/hooks/trainingFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Image } from 'react-native';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import {
+  getTrainingRecordCorpoId,
+  mergeTrainingsCacheForCorpo,
+} from '@/hooks/trainingsCacheHelpers';
 
 type TrainingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Trainings'>;
+type TrainingsScreenRouteProp = RouteProp<RootStackParamList, 'Trainings'>;
 
 interface Empresa {
   id: number;
@@ -114,16 +119,230 @@ interface Training {
     nombre: string;
   }>;
   id_local: string;
+  /** Sucursal explícita en caché / offline (p. ej. al filtrar contra el corpo del filtro) */
+  corpo_id?: number;
+}
+
+function stripQueuedTrainingDeletesForTrainingId(actions: any[], trainingId: number): any[] {
+  const id = Number(trainingId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'delete' && Number(a.trainingId) === id)
+  );
+}
+
+function appendOfflineTrainingDelete(
+  actions: any[],
+  params: { queueId: string; trainingId: number; marcaId: number }
+): any[] {
+  const next = stripQueuedTrainingDeletesForTrainingId(actions, params.trainingId);
+  next.push({
+    type: 'delete',
+    id: params.queueId,
+    trainingId: params.trainingId,
+    marcaId: params.marcaId,
+  });
+  return next;
+}
+
+interface DivisionNode {
+  id: number;
+  nombre: string;
+  contratos?: ContratoNode[];
+}
+interface ContratoNode {
+  id: number;
+  nombre: string;
+  sucursales?: SucursalNode[];
+}
+interface SucursalNode extends Sucursal {
+  nro_sucursal?: string;
+  /** Árbol main-structure: puesto → plazas → empleados */
+  puestos?: Array<{
+    id: number;
+    nombre?: string;
+    plazas?: Array<{
+      id?: number;
+      nombre?: string;
+      empleados?: Array<{
+        id?: number;
+        nombre?: string;
+        primer_apellido?: string;
+        segundo_apellido?: string;
+        cedula?: string;
+        fecha_contratacion?: string | null;
+      }>;
+    }>;
+  }>;
+}
+interface ClienteStructure {
+  id: number;
+  nombre: string;
+  division?: DivisionNode[];
+}
+interface EmpresaStructure {
+  id: number;
+  nombre: string;
+  codigo?: string;
+  clientes?: ClienteStructure[];
+}
+type StructureTree = EmpresaStructure[];
+
+type HierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  sucursalId: number | null;
+  puestoId: number | null;
+};
+
+const getMarcaDivisionIdFromCurrent = (current: any): number | null => {
+  const raw =
+    current?.roleDivision?.division?.id ??
+    current?.role_division?.division?.id ??
+    current?.division?.id ??
+    current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveDivisionIdInTree = (
+  tree: StructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null
+): number | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || divisionId == null) return divisionId;
+  const empresa = tree.find((e) => Number(e?.id) === Number(empresaId));
+  const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c) => Number(c?.id) === Number(clienteId));
+  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  if (divisiones.some((d) => Number(d?.id) === Number(divisionId))) return divisionId;
+  return null;
+};
+
+const findContratoIdForSucursalIn = (tree: StructureTree, sucursalId: number | null): number | null => {
+  if (sucursalId == null) return null;
+  for (const empresa of tree || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === Number(sucursalId)) {
+              return contrato.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+/** Localiza la sucursal (corpo) en el árbol `main_structure_cache`, misma jerarquía que main-structure/route.ts */
+const findSucursalNodeByIdInTree = (
+  tree: StructureTree,
+  sucursalId: number
+): SucursalNode | null => {
+  for (const empresa of tree || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === Number(sucursalId)) {
+              return sucursal as SucursalNode;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+const extractPuestosUniqueFromSucursalNode = (sucursal: SucursalNode): Puesto[] => {
+  const byId = new Map<number, Puesto>();
+  for (const p of sucursal.puestos || []) {
+    const id = Number(p?.id);
+    if (!Number.isFinite(id) || byId.has(id)) continue;
+    byId.set(id, { id, nombre: String(p?.nombre ?? '') });
+  }
+  return [...byId.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+};
+
+const extractEmpleadosUniqueFromSucursalNode = (sucursal: SucursalNode): Empleado[] => {
+  const byId = new Map<number, Empleado>();
+  for (const puesto of sucursal.puestos || []) {
+    for (const plaza of puesto.plazas || []) {
+      for (const emp of plaza.empleados || []) {
+        const id = Number(emp?.id);
+        if (!Number.isFinite(id) || byId.has(id)) continue;
+        const nombre = [emp?.nombre, emp?.primer_apellido, emp?.segundo_apellido]
+          .filter((x) => x != null && String(x).trim() !== '')
+          .map((x) => String(x).trim())
+          .join(' ');
+        byId.set(id, {
+          id,
+          nombre: nombre || String(emp?.nombre ?? ''),
+          cedula: String(emp?.cedula ?? ''),
+          fecha_contratacion:
+            emp?.fecha_contratacion != null ? String(emp.fecha_contratacion) : '',
+        });
+      }
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+};
+
+/** Jerarquía desde `current_marca` almacenada como en MarcarIngresoSalidaScreen (empresa, cliente, contrato, corpo, roleDivision.division, puesto). */
+const buildHierarchyFromCurrentMarca = (current: any, tree: StructureTree): HierarchyPath => {
+  const empresaId = current?.empresa?.id != null ? Number(current.empresa.id) : null;
+  const clienteId = current?.cliente?.id != null ? Number(current.cliente.id) : null;
+  const divisionIdRaw = getMarcaDivisionIdFromCurrent(current);
+  const divisionId = resolveDivisionIdInTree(tree, empresaId, clienteId, divisionIdRaw);
+  const corpoId = current?.corpo?.id != null ? Number(current.corpo.id) : null;
+  let contratoId = current?.contrato?.id != null ? Number(current.contrato.id) : null;
+  if (contratoId == null && corpoId != null) {
+    contratoId = findContratoIdForSucursalIn(tree, corpoId);
+  }
+  const puestoId = current?.puesto?.id != null ? Number(current.puesto.id) : null;
+  return {
+    empresaId,
+    clienteId,
+    divisionId,
+    contratoId,
+    sucursalId: corpoId,
+    puestoId,
+  };
+};
+
+/** Al usar caché: filtra por el corpo seleccionado en el filtro (usa `corpo_id` si existe, si no `sucursal.id`). */
+function filterCachedTrainingsForSelectedCorpo(
+  list: Training[],
+  selectedCorpoId: number,
+  matchCacheToFilterCorpo: boolean
+): Training[] {
+  if (!matchCacheToFilterCorpo) {
+    return list.filter((t) => t.sucursal?.id === selectedCorpoId);
+  }
+  return list.filter((t) => getTrainingRecordCorpoId(t) === selectedCorpoId);
 }
 
 export default function TrainingsScreen() {
+  const route = useRoute<TrainingsScreenRouteProp>();
+  const matchCacheToFilterCorpo = route.params?.matchCacheToFilterCorpo ?? true;
+
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<TrainingsScreenNavigationProp>();
 
   // Data states
   const [trainings, setTrainings] = useState<Training[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  /** Carga inicial: verificar marca y estructura */
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  /** Carga de listado desde API (no oculta filtros) */
+  const [isListLoading, setIsListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
@@ -131,12 +350,15 @@ export default function TrainingsScreen() {
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<string | null>(null);
-  // Dropdowns data
+  const [structure, setStructure] = useState<EmpresaStructure[]>([]);
+
+  // Dropdowns data (corpo del formulario de creación)
   const [puestos, setPuestos] = useState<Puesto[]>([]);
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
 
   // Form states
   const [isCreating, setIsCreating] = useState(false);
+  const [isCreateSubmitting, setIsCreateSubmitting] = useState(false);
   const [formKey, setFormKey] = useState(0); // Key para forzar re-render de inputs
   const [fechaCapacitacion, setFechaCapacitacion] = useState('');
   const [showFechaCapacitacionPicker, setShowFechaCapacitacionPicker] = useState(false);
@@ -173,12 +395,26 @@ export default function TrainingsScreen() {
   // Expanded trainings state (usando string para mayor compatibilidad)
   const [expandedTrainings, setExpandedTrainings] = useState<Set<string>>(new Set());
 
-  // Filter states
-  const [filterEmpresa, setFilterEmpresa] = useState('');
-  const [filterCliente, setFilterCliente] = useState('');
-  const [filterSucursal, setFilterSucursal] = useState('');
-  const [filterPuesto, setFilterPuesto] = useState('');
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const isRestoringFormHierarchyRef = useRef(false);
+  const pendingFormHierarchyRef = useRef<HierarchyPath | null>(null);
+  const isApplyingFormHierarchyRef = useRef(false);
+
+  const [deletingTrainingKey, setDeletingTrainingKey] = useState<string | null>(null);
+
+  // Filter states (solo campos no cubiertos por la jerarquía de selects)
   const [filterEmpleado, setFilterEmpleado] = useState('');
+  const [filterPuestoNombre, setFilterPuestoNombre] = useState('');
   const [filterResponsable, setFilterResponsable] = useState('');
   const [filterDescripcion, setFilterDescripcion] = useState('');
   const [filterResultado, setFilterResultado] = useState('');
@@ -187,26 +423,83 @@ export default function TrainingsScreen() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [showFilterFechaPicker, setShowFilterFechaPicker] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchData();
-    }, [])
-  );
-
-  useEffect(() => {
-    const handler = () => {
-      fetchData();
-    };
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
+  const fetchMainStructure = useCallback(async (): Promise<EmpresaStructure[]> => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (!cacheStr) {
+        setStructure([]);
+        return [];
+      }
+      const parsed = JSON.parse(cacheStr);
+      const arr = Array.isArray(parsed) ? parsed : [];
+      setStructure(arr);
+      return arr;
+    } catch {
+      setStructure([]);
+      return [];
+    }
   }, []);
 
+  const applyHierarchyToFilters = useCallback((current: any, tree: StructureTree) => {
+    if (!current?.empresa?.id) return;
+    const path = buildHierarchyFromCurrentMarca(current, tree);
+    setFilterEmpresaId(path.empresaId);
+    setFilterClienteId(path.clienteId);
+    setFilterDivisionId(path.divisionId);
+    setFilterContratoId(path.contratoId);
+    setFilterCorpoId(path.sucursalId);
+  }, []);
+
+  const applyFormHierarchySequentialFromMarca = useCallback((path: HierarchyPath) => {
+    pendingFormHierarchyRef.current = path;
+    isApplyingFormHierarchyRef.current = true;
+    isRestoringFormHierarchyRef.current = true;
+    setFormEmpresaId(path.empresaId);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        setIsBootstrapping(true);
+        try {
+          const currentMarca = await AsyncStorage.getItem('current_marca');
+          if (!currentMarca) {
+            if (!cancelled) {
+              setHasMarca(false);
+              setIsBootstrapping(false);
+            }
+            return;
+          }
+          const marcaData = JSON.parse(currentMarca);
+          const marca_id = Number(marcaData?.id ?? 0) || null;
+          const corpo_id = Number(marcaData?.corpo?.id ?? marcaData?.corpo_id ?? 0) || null;
+          if (!cancelled) {
+            setMarcaId(marca_id);
+            setCorpoId(corpo_id);
+            setRoleName(marcaData?.roleDivision?.role?.nombre ?? null);
+            setHasMarca(true);
+          }
+          const tree = await fetchMainStructure();
+          if (!cancelled) {
+            applyHierarchyToFilters(marcaData, tree);
+          }
+        } catch {
+          if (!cancelled) setHasMarca(false);
+        } finally {
+          if (!cancelled) setIsBootstrapping(false);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [fetchMainStructure, applyHierarchyToFilters])
+  );
+
   const checkConnection = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
-    //return false;
   };
 
   const isProbablyNetworkError = (err: any) => {
@@ -254,39 +547,60 @@ export default function TrainingsScreen() {
     return data.data;
   };
 
-  const fetchData = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      setOfflineMessage(null);
+  const hydratePuestosEmpleadosForCorpo = useCallback(async (corpoId: number) => {
+    let tree: StructureTree = Array.isArray(structure) ? structure : [];
+    if (tree.length === 0) {
+      try {
+        const raw = await AsyncStorage.getItem('main_structure_cache');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          tree = Array.isArray(parsed) ? parsed : [];
+        }
+      } catch {
+        tree = [];
+      }
+    }
+    const sucursalNode = findSucursalNodeByIdInTree(tree, corpoId);
+    if (!sucursalNode) {
+      setPuestos([]);
+      setEmpleados([]);
+      return;
+    }
+    setPuestos(extractPuestosUniqueFromSucursalNode(sucursalNode));
+    setEmpleados(extractEmpleadosUniqueFromSucursalNode(sucursalNode));
+  }, [structure]);
 
-      // Check current_marca
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasMarca(false);
-        setIsLoading(false);
-        return;
+  const listFetchGenRef = useRef(0);
+
+  const fetchTrainingsForCorpo = useCallback(async () => {
+    const marca_id = marcaId;
+    const corpo_id = filterCorpoId != null ? Number(filterCorpoId) : null;
+    if (!marca_id || corpo_id == null || !Number.isFinite(corpo_id) || corpo_id <= 0) {
+      listFetchGenRef.current += 1;
+      setIsListLoading(false);
+      setTrainings([]);
+      return;
+    }
+    const gen = ++listFetchGenRef.current;
+    const isStale = () => gen !== listFetchGenRef.current;
+
+    try {
+      if (!isStale()) {
+        setIsListLoading(true);
+        setError(null);
+        setOfflineMessage(null);
       }
 
-      const marcaData = JSON.parse(currentMarca);
-      const marca_id = marcaData.id;
-      const corpo_id = marcaData.corpo.id;
-      setMarcaId(marca_id);
-      setCorpoId(corpo_id);
-      setRoleName(marcaData.roleDivision.role.nombre);
-      setHasMarca(true);
-
-      // Check internet connection
       const hasConnection = await checkConnection();
+      if (isStale()) return;
 
       if (hasConnection) {
-        // Fetch trainings from API
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
         const response = await authedFetch({
-          url: `${apiUrl}/api/training?m=${marca_id}`,
+          url: `${apiUrl}/api/training?m=${marca_id}&corpo_id=${corpo_id}`,
           init: {
             method: 'GET',
             headers: {
@@ -297,15 +611,16 @@ export default function TrainingsScreen() {
           logout,
         });
         if (!response) return;
+        if (isStale()) return;
 
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
+        if (isStale()) return;
 
-        if (data.status && data.capacitaciones) {
-          // Parsear firmas y obtener detalles de empleados
+        if (data.status && Array.isArray(data.capacitaciones)) {
           const trainingsWithDecodedFirmas = await Promise.all(
             data.capacitaciones.map(async (training: Training) => {
               if (training.firma_responsable && training.firma_responsable.trim() !== '') {
@@ -315,7 +630,6 @@ export default function TrainingsScreen() {
                   if (parts.length === 5) {
                     const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
-                    // Obtener detalles del empleado
                     let empleadoDetalle = undefined;
                     try {
                       const empleadoResponse = await authedFetch({
@@ -353,7 +667,6 @@ export default function TrainingsScreen() {
                       empleadoDetalle,
                     };
 
-                    // Guardar en el Map
                     setDecodedFirmas(prev => {
                       const newMap = new Map(prev);
                       newMap.set(training.id, firmaData);
@@ -368,57 +681,98 @@ export default function TrainingsScreen() {
             })
           );
 
-          setTrainings(trainingsWithDecodedFirmas);
-          // Actualizar trainings_cache
-          await AsyncStorage.setItem('trainings_cache', JSON.stringify(trainingsWithDecodedFirmas));
+          if (!isStale()) {
+            const withCorpo = trainingsWithDecodedFirmas.map((t: Training) => ({
+              ...t,
+              corpo_id: t.corpo_id ?? t.sucursal?.id,
+            }));
+            let prevCache: Training[] = [];
+            try {
+              const prevStr = await AsyncStorage.getItem('trainings_cache');
+              if (prevStr) {
+                const parsed = JSON.parse(prevStr);
+                prevCache = Array.isArray(parsed) ? parsed : [];
+              }
+            } catch {
+              prevCache = [];
+            }
+            const mergedCache = mergeTrainingsCacheForCorpo(prevCache, withCorpo, corpo_id);
+            await AsyncStorage.setItem('trainings_cache', JSON.stringify(mergedCache));
+            const forDisplay = filterCachedTrainingsForSelectedCorpo(
+              mergedCache,
+              corpo_id,
+              matchCacheToFilterCorpo
+            );
+            setTrainings(forDisplay);
+          }
         } else {
-          setTrainings([]);
-          // Error real del servidor / lógica (sí cuenta como error)
-          if (data?.message) setError(String(data.message));
+          if (!isStale()) {
+            let readCacheOk = false;
+            try {
+              const trainingsCache = await AsyncStorage.getItem('trainings_cache');
+              if (trainingsCache) {
+                const parsed = JSON.parse(trainingsCache);
+                const cachedTrainings = Array.isArray(parsed) ? (parsed as Training[]) : [];
+                readCacheOk = true;
+                const filteredCache = filterCachedTrainingsForSelectedCorpo(
+                  cachedTrainings,
+                  corpo_id,
+                  matchCacheToFilterCorpo
+                );
+                setTrainings(filteredCache);
+                if (filteredCache.length > 0) {
+                  setOfflineMessage(
+                    'La respuesta del servidor no fue válida; se muestran capacitaciones en caché para la sucursal seleccionada.'
+                  );
+                } else {
+                  setOfflineMessage(null);
+                }
+              }
+            } catch {
+              /* ignorar caché corrupta */
+            }
+            if (!readCacheOk) {
+              setTrainings([]);
+            }
+            if (data?.message) setError(String(data.message));
+          }
         }
 
-        // Fetch puestos and empleados
-        await Promise.all([
-          fetchPuestos(corpo_id),
-          fetchEmpleados(corpo_id),
-        ]);
+        if (!isStale()) {
+          await hydratePuestosEmpleadosForCorpo(corpo_id);
+          setCorpoId(corpo_id);
+        }
       } else {
-        // Sin conexión, usar cache
-        console.log('Sin conexión, usando cache de capacitaciones');
         const trainingsCache = await AsyncStorage.getItem('trainings_cache');
+        if (isStale()) return;
         if (trainingsCache) {
-          const cachedTrainings = JSON.parse(trainingsCache);
-          setTrainings(cachedTrainings);
-          setOfflineMessage('Modo Offline: mostrando capacitaciones guardadas.');
+          const cachedTrainings = JSON.parse(trainingsCache) as Training[];
+          const filteredCache = filterCachedTrainingsForSelectedCorpo(
+            cachedTrainings,
+            corpo_id,
+            matchCacheToFilterCorpo
+          );
+          setTrainings(filteredCache);
+          setOfflineMessage('Modo Offline: mostrando capacitaciones guardadas para la sucursal seleccionada.');
         } else {
           setTrainings([]);
           setOfflineMessage('Sin conexión: no hay capacitaciones guardadas para mostrar.');
         }
 
-        // Cargar puestos y empleados desde cache
-        const puestosCache = await AsyncStorage.getItem('puestos_corpo_cache');
-        if (puestosCache) {
-          const cachedPuestos = JSON.parse(puestosCache);
-          setPuestos(cachedPuestos);
-        } else {
-          setPuestos([]);
-        }
-
-        const empleadosCache = await AsyncStorage.getItem('employees_corpo_cache');
-        if (empleadosCache) {
-          const cachedEmpleados = JSON.parse(empleadosCache);
-          setEmpleados(cachedEmpleados);
-        } else {
-          setEmpleados([]);
-        }
+        await hydratePuestosEmpleadosForCorpo(corpo_id);
       }
     } catch (error) {
+      if (isStale()) return;
       console.error('Error fetching trainings:', error);
-      // Intentar cargar desde cache en caso de error
       const trainingsCache = await AsyncStorage.getItem('trainings_cache');
       if (trainingsCache) {
-        const cachedTrainings = JSON.parse(trainingsCache);
-        setTrainings(cachedTrainings);
+        const cachedTrainings = JSON.parse(trainingsCache) as Training[];
+        const filteredCache = filterCachedTrainingsForSelectedCorpo(
+          cachedTrainings,
+          corpo_id,
+          matchCacheToFilterCorpo
+        );
+        setTrainings(filteredCache);
         setOfflineMessage('Modo Offline: mostrando capacitaciones guardadas debido a un error de conexión.');
       } else {
         setTrainings([]);
@@ -429,102 +783,37 @@ export default function TrainingsScreen() {
         }
       }
 
-      const puestosCache = await AsyncStorage.getItem('puestos_corpo_cache');
-      if (puestosCache) {
-        const cachedPuestos = JSON.parse(puestosCache);
-        setPuestos(cachedPuestos);
-      } else {
-        setPuestos([]);
-      }
-
-      const empleadosCache = await AsyncStorage.getItem('employees_corpo_cache');
-      if (empleadosCache) {
-        const cachedEmpleados = JSON.parse(empleadosCache);
-        setEmpleados(cachedEmpleados);
-      } else {
-        setEmpleados([]);
-      }
+      await hydratePuestosEmpleadosForCorpo(corpo_id);
     } finally {
-      setIsLoading(false);
+      if (!isStale()) setIsListLoading(false);
     }
-  };
+  }, [marcaId, filterCorpoId, refreshAccessToken, logout, matchCacheToFilterCorpo, hydratePuestosEmpleadosForCorpo]);
 
+  const fetchTrainingsForCorpoRef = useRef<(() => Promise<void>) | null>(null);
+  fetchTrainingsForCorpoRef.current = fetchTrainingsForCorpo;
 
-  const fetchPuestos = async (corpo_id: number) => {
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-      const response = await authedFetch({
-        url: `${apiUrl}/api/puestos/corpo/${corpo_id}`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response) return;
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.status && data.puestos) {
-        setPuestos(data.puestos);
-        // Actualizar puestos_corpo_cache
-        await AsyncStorage.setItem('puestos_corpo_cache', JSON.stringify(data.puestos));
-      } else {
-        setPuestos([]);
-      }
-    } catch (error) {
-      console.error('Error fetching puestos:', error);
-      setPuestos([]);
+  useEffect(() => {
+    const cid = filterCorpoId != null ? Number(filterCorpoId) : null;
+    if (!marcaId || cid == null || !Number.isFinite(cid) || cid <= 0) {
+      listFetchGenRef.current += 1;
+      setIsListLoading(false);
+      setTrainings([]);
+      return;
     }
-  };
+    void fetchTrainingsForCorpoRef.current?.();
+  }, [marcaId, filterCorpoId]);
 
-  const fetchEmpleados = async (corpo_id: number) => {
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
+  useEffect(() => {
+    const handler = () => {
+      if (filterCorpoId != null && marcaId != null) {
+        void fetchTrainingsForCorpoRef.current?.();
       }
-      const response = await authedFetch({
-        url: `${apiUrl}/api/empleados/corpo/${corpo_id}`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response) return;
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.status && data.empleados) {
-        setEmpleados(data.empleados);
-        // Actualizar employees_corpo_cache
-        await AsyncStorage.setItem('employees_corpo_cache', JSON.stringify(data.empleados));
-      } else {
-        setEmpleados([]);
-      }
-    } catch (error) {
-      console.error('Error fetching empleados:', error);
-      setEmpleados([]);
-    }
-  };
+    };
+    eventBus.on('connectionRestored', handler);
+    return () => {
+      eventBus.off('connectionRestored', handler);
+    };
+  }, [filterCorpoId, marcaId]);
 
   const dateToLocalString = (date: Date): string => {
     const year = date.getFullYear();
@@ -539,12 +828,133 @@ export default function TrainingsScreen() {
     return `${day}-${month}-${year}`;
   };
 
+  const filterStructureRoots = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  const filterClientes = useMemo(() => {
+    const empresa = filterStructureRoots.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterStructureRoots, filterEmpresaId]);
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+  const filterContratos = useMemo(() => {
+    const division = filterDivisiones.find((d) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+  const filterSucursales = useMemo(() => {
+    const contrato = filterContratos.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const formEmpresasList = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  const formClientesList = useMemo(() => {
+    const e = formEmpresasList.find((x) => x.id === formEmpresaId);
+    return e?.clientes || [];
+  }, [formEmpresasList, formEmpresaId]);
+  const formDivisionesList = useMemo(() => {
+    const c = formClientesList.find((x) => x.id === formClienteId);
+    return c?.division || [];
+  }, [formClientesList, formClienteId]);
+  const formContratosList = useMemo(() => {
+    const d = formDivisionesList.find((x) => x.id === formDivisionId);
+    return d?.contratos || [];
+  }, [formDivisionesList, formDivisionId]);
+  const formSucursalesList = useMemo(() => {
+    const c = formContratosList.find((x) => x.id === formContratoId);
+    return c?.sucursales || [];
+  }, [formContratosList, formContratoId]);
+  const formPuestosFromStructure = useMemo((): Puesto[] => {
+    const s = formSucursalesList.find((x) => x.id === formCorpoId) as SucursalNode | undefined;
+    if (!s) return [];
+    return extractPuestosUniqueFromSucursalNode(s);
+  }, [formSucursalesList, formCorpoId]);
+  const puestosForFormPicker = useMemo(
+    () => (puestos.length > 0 ? puestos : formPuestosFromStructure),
+    [puestos, formPuestosFromStructure]
+  );
+
+  const normPicker = (v: unknown): number | null =>
+    v != null && v !== '' ? Number(v) : null;
+
+  useEffect(() => {
+    const pending = pendingFormHierarchyRef.current;
+    if (!pending || !isApplyingFormHierarchyRef.current || !isCreating) return;
+
+    if ((pending.empresaId ?? null) !== (formEmpresaId ?? null)) {
+      setFormEmpresaId(pending.empresaId ?? null);
+      return;
+    }
+    if ((pending.clienteId ?? null) !== (formClienteId ?? null)) {
+      setFormClienteId(pending.clienteId ?? null);
+      return;
+    }
+    if ((pending.divisionId ?? null) !== (formDivisionId ?? null)) {
+      setFormDivisionId(pending.divisionId ?? null);
+      return;
+    }
+    if ((pending.contratoId ?? null) !== (formContratoId ?? null)) {
+      setFormContratoId(pending.contratoId ?? null);
+      return;
+    }
+    if ((pending.sucursalId ?? null) !== (formCorpoId ?? null)) {
+      setFormCorpoId(pending.sucursalId ?? null);
+      return;
+    }
+
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringFormHierarchyRef.current = false;
+  }, [isCreating, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]);
+
+  useEffect(() => {
+    if (isRestoringFormHierarchyRef.current) return;
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
+  }, [formEmpresaId]);
+
+  useEffect(() => {
+    if (isRestoringFormHierarchyRef.current) return;
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
+  }, [formClienteId]);
+
+  useEffect(() => {
+    if (isRestoringFormHierarchyRef.current) return;
+    setFormContratoId(null);
+    setFormCorpoId(null);
+  }, [formDivisionId]);
+
+  useEffect(() => {
+    if (isRestoringFormHierarchyRef.current) return;
+    setFormCorpoId(null);
+  }, [formContratoId]);
+
+  useEffect(() => {
+    if (formCorpoId == null) {
+      setPuestos([]);
+      setEmpleados([]);
+      return;
+    }
+    void hydratePuestosEmpleadosForCorpo(formCorpoId);
+  }, [formCorpoId, hydratePuestosEmpleadosForCorpo]);
+
   const startCreating = async () => {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringFormHierarchyRef.current = false;
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
     setIsCreating(true);
     setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
     tituloRef.current = '';
@@ -560,6 +970,18 @@ export default function TrainingsScreen() {
     setFirmaResponsable(null);
     setTrainingImageBase64(null);
     setLocation(null);
+
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      const tree = structure.length > 0 ? structure : await fetchMainStructure();
+      if (currentMarcaStr) {
+        const marcaObj = JSON.parse(currentMarcaStr);
+        const path = buildHierarchyFromCurrentMarca(marcaObj, tree);
+        applyFormHierarchySequentialFromMarca(path);
+      }
+    } catch (e) {
+      console.error('Precarga jerarquía formulario:', e);
+    }
 
     // Request location permissions
     (async () => {
@@ -580,11 +1002,22 @@ export default function TrainingsScreen() {
   };
 
   const cancelCreating = () => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringFormHierarchyRef.current = false;
     setIsCreating(false);
     resetForm();
   };
 
   const resetForm = () => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringFormHierarchyRef.current = false;
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormCorpoId(null);
     setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
     tituloRef.current = '';
     descripcionRef.current = '';
@@ -845,18 +1278,34 @@ export default function TrainingsScreen() {
     });
   };
 
-  const resetAllFilters = () => {
-    setFilterEmpresa('');
-    setFilterCliente('');
-    setFilterSucursal('');
-    setFilterPuesto('');
+  const resetAllFilters = useCallback(async () => {
     setFilterEmpleado('');
+    setFilterPuestoNombre('');
     setFilterResponsable('');
     setFilterDescripcion('');
     setFilterResultado('');
     setFilterObservaciones('');
     setFilterFecha('');
-  };
+    try {
+      const raw = await AsyncStorage.getItem('current_marca');
+      const tree = structure.length > 0 ? structure : await fetchMainStructure();
+      if (raw) {
+        applyHierarchyToFilters(JSON.parse(raw), tree);
+      } else {
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        setFilterCorpoId(null);
+      }
+    } catch {
+      setFilterEmpresaId(null);
+      setFilterClienteId(null);
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+    }
+  }, [structure, fetchMainStructure, applyHierarchyToFilters]);
 
   const handleFilterFechaChange = (event: any, selectedDate?: Date) => {
     setShowFilterFechaPicker(Platform.OS === 'ios');
@@ -865,22 +1314,18 @@ export default function TrainingsScreen() {
     }
   };
 
-  // Filter trainings
-  const filteredTrainings = trainings.filter(training => {
-    const matchesEmpresa = !filterEmpresa ||
-      training.empresa.nombre.toLowerCase().includes(filterEmpresa.toLowerCase());
-
-    const matchesCliente = !filterCliente ||
-      training.cliente.nombre.toLowerCase().includes(filterCliente.toLowerCase());
-
-    const matchesSucursal = !filterSucursal ||
-      training.sucursal.nombre.toLowerCase().includes(filterSucursal.toLowerCase());
-
-    const matchesPuesto = !filterPuesto ||
-      training.puestos.some(p => p.nombre.toLowerCase().includes(filterPuesto.toLowerCase()));
+  const filteredTrainings = trainings.filter((training) => {
+    const matchesEmpresa = !filterEmpresaId || training.empresa.id === filterEmpresaId;
+    const matchesCliente = !filterClienteId || training.cliente.id === filterClienteId;
+    const matchesSucursal = !filterCorpoId || training.sucursal.id === filterCorpoId;
 
     const matchesEmpleado = !filterEmpleado ||
       training.empleados.some(e => e.nombre.toLowerCase().includes(filterEmpleado.toLowerCase()) || e.cedula.toLowerCase().includes(filterEmpleado.toLowerCase()));
+
+    const puestoNeedle = filterPuestoNombre.trim().toLowerCase();
+    const matchesPuesto =
+      !puestoNeedle ||
+      (training.puestos?.some((p) => p.nombre.toLowerCase().includes(puestoNeedle)) ?? false);
 
     const matchesResponsable = !filterResponsable ||
       training.responsable.nombre.toLowerCase().includes(filterResponsable.toLowerCase());
@@ -898,11 +1343,25 @@ export default function TrainingsScreen() {
       (training.fecha && training.fecha.split('T')[0] === filterFecha);
 
     return matchesEmpresa && matchesCliente && matchesSucursal &&
-      matchesPuesto && matchesEmpleado && matchesResponsable &&
+      matchesEmpleado && matchesPuesto && matchesResponsable &&
       matchesDescripcion && matchesResultado && matchesObservaciones && matchesFecha;
   });
 
   const validateForm = (): boolean => {
+    if (
+      !formEmpresaId ||
+      !formClienteId ||
+      !formDivisionId ||
+      !formContratoId ||
+      !formCorpoId
+    ) {
+      Alert.alert('Error', 'Debes completar la jerarquía Empresa → Sucursal');
+      return false;
+    }
+    if (selectedPuestos.length === 0) {
+      Alert.alert('Error', 'Debes seleccionar al menos un puesto');
+      return false;
+    }
     if (!tituloRef.current.trim()) {
       Alert.alert('Error', 'El título de la capacitación es requerido');
       return false;
@@ -936,157 +1395,244 @@ export default function TrainingsScreen() {
     return true;
   };
 
-  const createTraining = async () => {
-    if (!validateForm()) {
-      return;
-    }
+  const submitCreateTraining = async () => {
+    if (!validateForm() || !firmaResponsable || !marcaId) return;
+    setIsCreateSubmitting(true);
+    try {
+      const signatureHash = btoa(
+        firmaResponsable.sessionId +
+          ':' +
+          firmaResponsable.empleadoId +
+          ':' +
+          firmaResponsable.latitud +
+          ':' +
+          firmaResponsable.longitud +
+          ':' +
+          firmaResponsable.timestamp
+      );
 
+      let imageBase64 = null;
+      if (trainingImageBase64) {
+        const base64Regex = /^data:(.+);base64,(.+)$/;
+        if (base64Regex.test(trainingImageBase64)) {
+          imageBase64 = trainingImageBase64;
+        } else if (trainingImageBase64.startsWith('data:image')) {
+          imageBase64 = trainingImageBase64;
+        } else {
+          imageBase64 = `data:image/jpeg;base64,${trainingImageBase64}`;
+        }
+      }
+
+      const requestData = {
+        marca_id: marcaId,
+        empresa_id: formEmpresaId,
+        cliente_id: formClienteId,
+        corpo_id: formCorpoId,
+        titulo: tituloRef.current,
+        descripcion: descripcionRef.current,
+        tipo: selectedTipo,
+        resultado: selectedResultado || null,
+        observaciones: observacionesRef.current.trim() !== '' ? observacionesRef.current.trim() : '-',
+        nombre_responsable: nombreResponsableRef.current,
+        cedula_responsable: cedulaResponsableRef.current,
+        firma_responsable: signatureHash,
+        file: imageBase64,
+        fecha: fechaCapacitacion,
+        empleados: selectedEmpleados.map((e) => e.id),
+        puestos: selectedPuestos.map((p) => p.id),
+      };
+
+      const hasConnection = await checkConnection();
+
+      if (hasConnection) {
+        const result = await createTrainingAPI({
+          requestData,
+          marcaId,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          Alert.alert('Éxito', 'Capacitación creada correctamente');
+          setIsCreating(false);
+          resetForm();
+          void fetchTrainingsForCorpoRef.current?.();
+        } else {
+          Alert.alert('Error', result.message || 'No se pudo crear la capacitación');
+        }
+      } else {
+        const localId = Math.random().toString(36).substring(2, 12);
+        const actionsStr = await AsyncStorage.getItem('trainings_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = actions.filter(
+          (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+        );
+        actions.push({
+          requestData,
+          marcaId,
+          id: localId,
+          type: 'create',
+        });
+        await AsyncStorage.setItem('trainings_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('trainings_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+        const empNode = formEmpresasList.find((e) => e.id === formEmpresaId);
+        const cliNode = formClientesList.find((c) => c.id === formClienteId);
+        const sucNode = formSucursalesList.find((s) => s.id === formCorpoId);
+
+        const newTraining: Training = {
+          id: 0,
+          empresa: { id: formEmpresaId!, nombre: empNode?.nombre || '-' },
+          cliente: { id: formClienteId!, nombre: cliNode?.nombre || '-' },
+          sucursal: { id: formCorpoId!, nombre: sucNode?.nombre || '-' },
+          titulo: tituloRef.current,
+          descripcion: descripcionRef.current,
+          tipo: selectedTipo,
+          resultado: selectedResultado || null,
+          observaciones: observacionesRef.current.trim() !== '' ? observacionesRef.current.trim() : '-',
+          responsable: {
+            nombre: nombreResponsableRef.current,
+            cedula: cedulaResponsableRef.current,
+          },
+          fecha: fechaCapacitacion,
+          firma_responsable: signatureHash,
+          nombre_firma: firmaResponsable?.empleadoDetalle
+            ? `${firmaResponsable.empleadoDetalle.nombre} ${firmaResponsable.empleadoDetalle.primer_apellido} ${firmaResponsable.empleadoDetalle.segundo_apellido}`
+            : '-',
+          base64_file: imageBase64 || '',
+          empleados: selectedEmpleados.map((e) => ({ id: e.id, nombre: e.nombre, cedula: e.cedula })),
+          puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+          corpo_id: formCorpoId!,
+          id_local: localId,
+        };
+
+        cache.push(newTraining);
+        await AsyncStorage.setItem('trainings_cache', JSON.stringify(cache));
+        Alert.alert('Modo Offline', 'Capacitación registrada localmente. Se sincronizará cuando haya conexión.');
+        setIsCreating(false);
+        resetForm();
+        const corpo = formCorpoId;
+        if (corpo != null && filterCorpoId === corpo) {
+          setTrainings((prev) => [...prev, newTraining]);
+        }
+      }
+    } catch (error) {
+      console.error('Error creating training:', error);
+      Alert.alert('Error', 'No se pudo crear la capacitación');
+    } finally {
+      setIsCreateSubmitting(false);
+    }
+  };
+
+  const createTraining = () => {
+    if (isCreateSubmitting) return;
+    if (!validateForm()) return;
     if (!marcaId) {
       Alert.alert('Error', 'No se encontró la marca actual');
       return;
     }
+    Alert.alert('Confirmar', '¿Estás seguro de que deseas crear esta capacitación?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void submitCreateTraining() },
+    ]);
+  };
 
-    Alert.alert(
-      'Confirmar',
-      '¿Estás seguro de que deseas crear esta capacitación?',
-      [
+  const confirmDeleteTraining = (training: Training, trainingKey: string) => {
+    if (training.id === 0 && training.id_local) {
+      Alert.alert('Eliminar', '¿Eliminar esta capacitación pendiente de sincronización?', [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Eliminar',
+          style: 'destructive',
           onPress: async () => {
+            setDeletingTrainingKey(trainingKey);
             try {
-              // Re-encode signature
-              const signatureHash = btoa(
-                firmaResponsable!.sessionId + ":" +
-                firmaResponsable!.empleadoId + ":" +
-                firmaResponsable!.latitud + ":" +
-                firmaResponsable!.longitud + ":" +
-                firmaResponsable!.timestamp
+              const actionsStr = await AsyncStorage.getItem('trainings_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const list = Array.isArray(actions) ? actions : [];
+              const next = list.filter(
+                (a: any) =>
+                  !(a?.type === 'create' && String(a?.id) === String(training.id_local))
               );
-
-              // Preparar imagen (asegurar formato correcto: data:image/jpeg;base64,<base64_string>)
-              let imageBase64 = null;
-              if (trainingImageBase64) {
-                // Verificar si ya tiene el formato correcto
-                const base64Regex = /^data:(.+);base64,(.+)$/;
-                if (base64Regex.test(trainingImageBase64)) {
-                  imageBase64 = trainingImageBase64;
-                } else if (trainingImageBase64.startsWith('data:image')) {
-                  // Ya tiene data:image pero puede que no tenga el formato exacto
-                  imageBase64 = trainingImageBase64;
-                } else {
-                  // Agregar el prefijo si no lo tiene
-                  imageBase64 = `data:image/jpeg;base64,${trainingImageBase64}`;
-                }
-              }
-
-              const requestData = {
-                marca_id: marcaId,
-                titulo: tituloRef.current,
-                descripcion: descripcionRef.current,
-                tipo: selectedTipo,
-                resultado: selectedResultado || null,
-                observaciones: observacionesRef.current.trim() !== "" ? observacionesRef.current.trim() : "-",
-                nombre_responsable: nombreResponsableRef.current,
-                cedula_responsable: cedulaResponsableRef.current,
-                firma_responsable: signatureHash,
-                file: imageBase64,
-                fecha: fechaCapacitacion,
-                empleados: selectedEmpleados.map(e => e.id),
-                puestos: selectedPuestos.map(p => p.id),
-              };
-
-              // Check internet connection
-              const hasConnection = await checkConnection();
-
-              if (hasConnection) {
-                // Con conexión, enviar a la API
-                const result = await createTrainingAPI({
-                  requestData,
-                  marcaId,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (result.status) {
-                  Alert.alert('Éxito', 'Capacitación creada correctamente');
-                  setIsCreating(false);
-                  resetForm();
-                  fetchData();
-                } else {
-                  Alert.alert('Error', result.message || 'No se pudo crear la capacitación');
-                }
-              } else {
-                // Sin conexión, guardar en cache y actions
-                const localId = Math.random().toString(36).substring(2, 12);
-
-                // Crear entrada en trainings_actions
-                const actionsStr = await AsyncStorage.getItem('trainings_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  requestData,
-                  marcaId,
-                  id: localId,
-                  type: 'create',
-                });
-                await AsyncStorage.setItem('trainings_actions', JSON.stringify(actions));
-
-                // Crear capacitación en cache
-                const cacheStr = await AsyncStorage.getItem('trainings_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const horaAccion = await getHoraAccion();
-
-                const currentMarca = await AsyncStorage.getItem('current_marca');
-                if (!currentMarca) {
-                  Alert.alert('Error', 'No se encontró la marca actual');
-                  return;
-                }
-                const currentMarcaObj = JSON.parse(currentMarca);
-
-                const newTraining: Training = {
-                  id: 0,
-                  empresa: { id: currentMarcaObj.empresa.id, nombre: currentMarcaObj.empresa.nombre || '-' },
-                  cliente: { id: currentMarcaObj.cliente.id, nombre: currentMarcaObj.cliente.nombre || '-' },
-                  sucursal: { id: currentMarcaObj.sucursal?.id || currentMarcaObj.corpo.id, nombre: currentMarcaObj.sucursal?.nombre || currentMarcaObj.corpo.nombre || '-' },
-                  titulo: tituloRef.current,
-                  descripcion: descripcionRef.current,
-                  tipo: selectedTipo,
-                  resultado: selectedResultado || null,
-                  observaciones: observacionesRef.current.trim() !== "" ? observacionesRef.current.trim() : "-",
-                  responsable: {
-                    nombre: nombreResponsableRef.current,
-                    cedula: cedulaResponsableRef.current,
-                  },
-                  fecha: fechaCapacitacion,
-                  firma_responsable: signatureHash,
-                  nombre_firma: firmaResponsable?.empleadoDetalle ?
-                    `${firmaResponsable.empleadoDetalle.nombre} ${firmaResponsable.empleadoDetalle.primer_apellido} ${firmaResponsable.empleadoDetalle.segundo_apellido}` :
-                    '-',
-                  base64_file: imageBase64 || '',
-                  empleados: selectedEmpleados.map(e => ({ id: e.id, nombre: e.nombre, cedula: e.cedula })),
-                  puestos: selectedPuestos.map(p => ({ id: p.id, nombre: p.nombre })),
-                  id_local: localId,
-                };
-
-                cache.push(newTraining);
-                await AsyncStorage.setItem('trainings_cache', JSON.stringify(cache));
-
-                Alert.alert('Modo Offline', 'Capacitación registrada localmente. Se sincronizará cuando haya conexión.');
-                setIsCreating(false);
-                resetForm();
-
-                // Actualizar la lista con el cache actualizado
-                setTrainings(cache);
-              }
-            } catch (error) {
-              console.error('Error creating training:', error);
-              Alert.alert('Error', 'No se pudo crear la capacitación');
+              await AsyncStorage.setItem('trainings_actions', JSON.stringify(next));
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const nextCache = cache.filter(
+                (t: Training) => t.id_local !== training.id_local
+              );
+              await AsyncStorage.setItem('trainings_cache', JSON.stringify(nextCache));
+              setTrainings((prev) => prev.filter((t) => t.id_local !== training.id_local));
+              Alert.alert('Éxito', 'Capacitación eliminada correctamente.');
+            } finally {
+              setDeletingTrainingKey(null);
             }
           },
         },
-      ]
-    );
+      ]);
+      return;
+    }
+    Alert.alert('Eliminar', '¿Eliminar esta capacitación? Esta acción no se puede deshacer.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingTrainingKey(trainingKey);
+          try {
+            const hasConnection = await checkConnection();
+            if (!hasConnection) {
+              if (marcaId == null) {
+                Alert.alert('Error', 'No se encontró la marca actual');
+                return;
+              }
+              const actionId = Math.random().toString(36).substring(2, 12);
+              const actionsStr = await AsyncStorage.getItem('trainings_actions');
+              let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+              if (!Array.isArray(actions)) actions = [];
+              actions = appendOfflineTrainingDelete(actions, {
+                queueId: actionId,
+                trainingId: training.id,
+                marcaId,
+              });
+              await AsyncStorage.setItem('trainings_actions', JSON.stringify(actions));
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const nextCache = cache.filter((t: Training) => t.id !== training.id);
+              await AsyncStorage.setItem('trainings_cache', JSON.stringify(nextCache));
+              setTrainings((prev) => prev.filter((t) => t.id !== training.id));
+              Alert.alert(
+                'Éxito',
+                'Eliminación registrada. Se sincronizará con el servidor cuando haya conexión.'
+              );
+              return;
+            }
+            const result = await deleteTrainingAPI({
+              trainingId: training.id,
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              setTrainings((prev) => prev.filter((t) => t.id !== training.id));
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr) as Training[];
+                const nextCache = cache.filter((t) => t.id !== training.id);
+                await AsyncStorage.setItem('trainings_cache', JSON.stringify(nextCache));
+              }
+              Alert.alert('Éxito', 'Capacitación eliminada correctamente.');
+              void fetchTrainingsForCorpoRef.current?.();
+            } else {
+              Alert.alert('Error', (result as { message?: string }).message || 'No se pudo eliminar');
+            }
+          } finally {
+            setDeletingTrainingKey(null);
+          }
+        },
+      },
+    ]);
   };
 
   const getActionIcon = (action: string) => {
@@ -1115,13 +1661,13 @@ export default function TrainingsScreen() {
     setIsMenuVisible(false);
   };
 
-  if (isLoading) {
+  if (isBootstrapping) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={handleMenuPress} title="Registro de Capacitaciones" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando capacitaciones...</ThemedText>
+          <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
         </ThemedView>
         <AppFooter />
         <SlideMenu
@@ -1210,46 +1756,111 @@ export default function TrainingsScreen() {
               <ThemedView style={styles.filtersContent}>
                 <ThemedView style={styles.filterGroup}>
                   <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                  <TextInput
-                    style={styles.searchInput}
-                    value={filterEmpresa}
-                    onChangeText={setFilterEmpresa}
-                    placeholder="Filtrar por empresa..."
-                    placeholderTextColor="#999"
-                  />
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={filterEmpresaId ?? undefined}
+                      onValueChange={(value) => {
+                        const n = normPicker(value);
+                        setFilterEmpresaId(n);
+                        setFilterClienteId(null);
+                        setFilterDivisionId(null);
+                        setFilterContratoId(null);
+                        setFilterCorpoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todas..." value={undefined} color="#000000" />
+                      {filterStructureRoots.map((e) => (
+                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
                 </ThemedView>
 
                 <ThemedView style={styles.filterGroup}>
                   <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                  <TextInput
-                    style={styles.searchInput}
-                    value={filterCliente}
-                    onChangeText={setFilterCliente}
-                    placeholder="Filtrar por cliente..."
-                    placeholderTextColor="#999"
-                  />
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={filterClienteId ?? undefined}
+                      onValueChange={(value) => {
+                        const n = normPicker(value);
+                        setFilterClienteId(n);
+                        setFilterDivisionId(null);
+                        setFilterContratoId(null);
+                        setFilterCorpoId(null);
+                      }}
+                      enabled={!!filterEmpresaId}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todos..." value={undefined} color="#000000" />
+                      {filterClientes.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={filterDivisionId ?? undefined}
+                      onValueChange={(value) => {
+                        const n = normPicker(value);
+                        setFilterDivisionId(n);
+                        setFilterContratoId(null);
+                        setFilterCorpoId(null);
+                      }}
+                      enabled={!!filterClienteId}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todas..." value={undefined} color="#000000" />
+                      {filterDivisiones.map((d) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={filterContratoId ?? undefined}
+                      onValueChange={(value) => {
+                        const n = normPicker(value);
+                        setFilterContratoId(n);
+                        setFilterCorpoId(null);
+                      }}
+                      enabled={!!filterDivisionId}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todos..." value={undefined} color="#000000" />
+                      {filterContratos.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
                 </ThemedView>
 
                 <ThemedView style={styles.filterGroup}>
                   <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                  <TextInput
-                    style={styles.searchInput}
-                    value={filterSucursal}
-                    onChangeText={setFilterSucursal}
-                    placeholder="Filtrar por sucursal..."
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
-
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                  <TextInput
-                    style={styles.searchInput}
-                    value={filterPuesto}
-                    onChangeText={setFilterPuesto}
-                    placeholder="Filtrar por puesto..."
-                    placeholderTextColor="#999"
-                  />
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={filterCorpoId ?? undefined}
+                      onValueChange={(value) => {
+                        const n = normPicker(value);
+                        setFilterCorpoId(n);
+                      }}
+                      enabled={!!filterContratoId}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar sucursal..." value={undefined} color="#000000" />
+                      {filterSucursales.map((s) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
                 </ThemedView>
 
                 <ThemedView style={styles.filterGroup}>
@@ -1259,6 +1870,17 @@ export default function TrainingsScreen() {
                     value={filterEmpleado}
                     onChangeText={setFilterEmpleado}
                     placeholder="Filtrar por empleado..."
+                    placeholderTextColor="#999"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.filterGroup}>
+                  <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                  <TextInput
+                    style={styles.searchInput}
+                    value={filterPuestoNombre}
+                    onChangeText={setFilterPuestoNombre}
+                    placeholder="Filtrar por nombre de puesto..."
                     placeholderTextColor="#999"
                   />
                 </ThemedView>
@@ -1349,6 +1971,101 @@ export default function TrainingsScreen() {
         {isCreating && (
           <ThemedView style={styles.formCard}>
             <ThemedText style={styles.formTitle}>Nueva Capacitación</ThemedText>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Empresa *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formEmpresaId ?? undefined}
+                  onValueChange={(v) => {
+                    if (isRestoringFormHierarchyRef.current) return;
+                    setFormEmpresaId(normPicker(v));
+                  }}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar empresa..." value={undefined} color="#000000" />
+                  {formEmpresasList.map((e) => (
+                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Cliente *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formClienteId ?? undefined}
+                  onValueChange={(v) => {
+                    if (isRestoringFormHierarchyRef.current) return;
+                    setFormClienteId(normPicker(v));
+                  }}
+                  enabled={!!formEmpresaId}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar cliente..." value={undefined} color="#000000" />
+                  {formClientesList.map((c) => (
+                    <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>División *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formDivisionId ?? undefined}
+                  onValueChange={(v) => {
+                    if (isRestoringFormHierarchyRef.current) return;
+                    setFormDivisionId(normPicker(v));
+                  }}
+                  enabled={!!formClienteId}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar división..." value={undefined} color="#000000" />
+                  {formDivisionesList.map((d) => (
+                    <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Contrato *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formContratoId ?? undefined}
+                  onValueChange={(v) => {
+                    if (isRestoringFormHierarchyRef.current) return;
+                    setFormContratoId(normPicker(v));
+                  }}
+                  enabled={!!formDivisionId}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar contrato..." value={undefined} color="#000000" />
+                  {formContratosList.map((c) => (
+                    <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Sucursal *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formCorpoId ?? undefined}
+                  onValueChange={(v) => {
+                    if (isRestoringFormHierarchyRef.current) return;
+                    setFormCorpoId(normPicker(v));
+                  }}
+                  enabled={!!formContratoId}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar sucursal..." value={undefined} color="#000000" />
+                  {formSucursalesList.map((s) => (
+                    <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
 
             {/* Título */}
             <ThemedView style={styles.formGroup}>
@@ -1505,8 +2222,8 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={undefined}
                   onValueChange={(value) => {
-                    if (value && !selectedPuestos.find(p => p.id === value)) {
-                      const puesto = puestos.find(p => p.id === value);
+                    if (value && !selectedPuestos.find((p) => p.id === value)) {
+                      const puesto = puestosForFormPicker.find((p) => p.id === value);
                       if (puesto) {
                         setSelectedPuestos([...selectedPuestos, puesto]);
                       }
@@ -1515,8 +2232,8 @@ export default function TrainingsScreen() {
                   style={styles.picker}
                 >
                   <Picker.Item label="Seleccionar puesto..." value={undefined} color="#000000" />
-                  {puestos
-                    .filter(p => !selectedPuestos.find(sp => sp.id === p.id))
+                  {puestosForFormPicker
+                    .filter((p) => !selectedPuestos.find((sp) => sp.id === p.id))
                     .map((puesto) => (
                       <Picker.Item
                         key={puesto.id}
@@ -1704,18 +2421,28 @@ export default function TrainingsScreen() {
               <TouchableOpacity
                 style={[styles.formButton, styles.cancelButton]}
                 onPress={cancelCreating}
+                disabled={isCreateSubmitting}
               >
                 <ThemedText style={styles.formButtonText}>
                   {getActionIcon('cancel')}
                 </ThemedText>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.formButton, styles.confirmButton]}
+                style={[
+                  styles.formButton,
+                  styles.confirmButton,
+                  isCreateSubmitting && { opacity: 0.6 },
+                ]}
                 onPress={createTraining}
+                disabled={isCreateSubmitting}
               >
-                <ThemedText style={styles.formButtonText}>
-                  {getActionIcon('confirm')}
-                </ThemedText>
+                {isCreateSubmitting ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.formButtonText}>
+                    {getActionIcon('confirm')}
+                  </ThemedText>
+                )}
               </TouchableOpacity>
             </ThemedView>
           </ThemedView>
@@ -1724,7 +2451,12 @@ export default function TrainingsScreen() {
         {/* Trainings List */}
         {!isCreating && (
           <ThemedView style={styles.listContainer}>
-            {filteredTrainings.length === 0 ? (
+            {isListLoading ? (
+              <ThemedView style={styles.listLoadingContainer}>
+                <ActivityIndicator size="large" color="#007AFF" />
+                <ThemedText style={styles.loadingText}>Cargando capacitaciones...</ThemedText>
+              </ThemedView>
+            ) : filteredTrainings.length === 0 ? (
               <ThemedText style={styles.emptyText}>
                 {trainings.length === 0
                   ? 'No hay capacitaciones registradas'
@@ -1883,6 +2615,24 @@ export default function TrainingsScreen() {
                         </ThemedView>
                       </ThemedView>
                     )}
+
+                    <TouchableOpacity
+                      style={[
+                        styles.trainingDeleteButton,
+                        deletingTrainingKey === trainingKey && styles.trainingDeleteButtonDisabled,
+                      ]}
+                      onPress={() => confirmDeleteTraining(training, trainingKey)}
+                      disabled={deletingTrainingKey !== null}
+                    >
+                      {deletingTrainingKey === trainingKey ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <>
+                          <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.trainingDeleteButtonText}>Eliminar</ThemedText>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   </ThemedView>
                 );
               })
@@ -2303,7 +3053,14 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   listContainer: {
-
+    width: '100%',
+  },
+  listLoadingContainer: {
+    minHeight: 200,
+    width: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 32,
   },
   titleContainer: {
     alignItems: 'center',
@@ -2421,6 +3178,25 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+  },
+  trainingDeleteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#FF3B30',
+    borderRadius: 8,
+  },
+  trainingDeleteButtonDisabled: {
+    opacity: 0.65,
+  },
+  trainingDeleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
   },
   trainingTitle: {
     fontSize: 18,

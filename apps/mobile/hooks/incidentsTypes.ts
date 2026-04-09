@@ -58,6 +58,8 @@ export type IncidentContribution = {
 
 export type Incident = {
   id: number;
+  /** Jerarquía (id de sucursal / `e_estructura_sucursal`, mismo valor que `corpo_id` en BD) */
+  corpo_id?: number;
   estado: boolean;
   ejecutivo: IncidentExecutive;
   fecha_incidente: string; // ISO 8601 string

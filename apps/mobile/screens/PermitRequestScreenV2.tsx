@@ -9,6 +9,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   TouchableOpacity,
   View,
@@ -258,6 +259,7 @@ export default function PermitRequestScreenV2() {
   const [firmaEjecutivoManual, setFirmaEjecutivoManual] = useState('');
   const [isGeneratingFirmaEjecutivo, setIsGeneratingFirmaEjecutivo] = useState(false);
   const [isSavingComplete, setIsSavingComplete] = useState(false);
+  const [rejectingRecordId, setRejectingRecordId] = useState<number | null>(null);
 
   const [currentPuestoNombre, setCurrentPuestoNombre] = useState<string | null>(null);
 
@@ -659,13 +661,7 @@ export default function PermitRequestScreenV2() {
     setTurnosMessage(plazaId ? 'Cambiaste de plaza. Vuelve a buscar turnos.' : 'Selecciona una plaza y busca turnos.');
   };
 
-  const handleCreate = async () => {
-    if (!isOnline) return Alert.alert('Sin conexión', 'Este módulo funciona únicamente con internet');
-    if (!selectedPlazaId) return Alert.alert('Error', 'Debes seleccionar una plaza');
-    if (!tipo) return Alert.alert('Error', 'Debes seleccionar tipo de solicitud');
-    if (!firmaResponsable) return Alert.alert('Error', 'Debes generar la firma responsable');
-    if (!turnosPreview.length) return Alert.alert('Error', 'Debes consultar un rango con turnos disponibles');
-
+  const executeCreate = async () => {
     setIsSubmitting(true);
     try {
       const horaAccion = await getHoraAccion();
@@ -711,6 +707,23 @@ export default function PermitRequestScreenV2() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleCreate = () => {
+    if (!isOnline) return Alert.alert('Sin conexión', 'Este módulo funciona únicamente con internet');
+    if (!selectedPlazaId) return Alert.alert('Error', 'Debes seleccionar una plaza');
+    if (!tipo) return Alert.alert('Error', 'Debes seleccionar tipo de solicitud');
+    if (!firmaResponsable) return Alert.alert('Error', 'Debes generar la firma responsable');
+    if (!turnosPreview.length) return Alert.alert('Error', 'Debes consultar un rango con turnos disponibles');
+
+    Alert.alert(
+      'Confirmar ubicación',
+      '¿Deseas enviar esta solicitud con los datos ingresados?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void executeCreate() },
+      ]
+    );
   };
 
   const openCompleteModal = (record: PermitRecord) => {
@@ -850,13 +863,24 @@ export default function PermitRequestScreenV2() {
     setIsDrawModalVisible(false);
   };
 
-  const acceptSignature = () => {
+  const runAcceptSignature = () => {
     if (!signatureRef.current?.readSignature) return;
     setIsReadingSignature(true);
     signatureRef.current.readSignature();
   };
 
-  const saveCompletion = async () => {
+  const requestConfirmAcceptSignature = () => {
+    Alert.alert(
+      'Confirmar firma',
+      '¿Deseas guardar esta firma manual?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => runAcceptSignature() },
+      ]
+    );
+  };
+
+  const executeSaveCompletion = async () => {
     if (!selectedRecord) return;
     if (!firmaEjecutivoDigital) return Alert.alert('Error', 'Debes generar firma digital del ejecutivo');
     if (!firmaEjecutivoManual) return Alert.alert('Error', 'Debes generar firma manual del ejecutivo');
@@ -896,7 +920,23 @@ export default function PermitRequestScreenV2() {
     }
   };
 
-  const rejectRecord = async (record: PermitRecord) => {
+  const saveCompletion = () => {
+    if (!selectedRecord) return;
+    if (!firmaEjecutivoDigital) return Alert.alert('Error', 'Debes generar firma digital del ejecutivo');
+    if (!firmaEjecutivoManual) return Alert.alert('Error', 'Debes generar firma manual del ejecutivo');
+
+    Alert.alert(
+      'Confirmar firma',
+      '¿Deseas aprobar esta solicitud con las firmas ingresadas?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void executeSaveCompletion() },
+      ]
+    );
+  };
+
+  const executeRejectRecord = async (record: PermitRecord) => {
+    setRejectingRecordId(record.id);
     try {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
@@ -922,7 +962,26 @@ export default function PermitRequestScreenV2() {
       await fetchAll();
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo rechazar');
+    } finally {
+      setRejectingRecordId(null);
     }
+  };
+
+  const rejectRecord = (record: PermitRecord) => {
+    if (rejectingRecordId !== null) return;
+    Alert.alert(
+      'Confirmar rechazo',
+      'Esta solicitud será rechazada. ¿Deseas continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          style: 'destructive',
+          onPress: () => void executeRejectRecord(record),
+        },
+      ],
+      { cancelable: true }
+    );
   };
 
   const openAttachment = async (record: PermitRecord, file: PermitAttachment) => {
@@ -1261,22 +1320,23 @@ export default function PermitRequestScreenV2() {
                               <ThemedText style={styles.actionBtnText}>Aprobar</ThemedText>
                             </TouchableOpacity>
                             <TouchableOpacity
-                              style={[styles.actionBtn, styles.rejectBtn]}
-                              onPress={() =>
-                                Alert.alert(
-                                  'Confirmar rechazo',
-                                  'Esta solicitud será rechazada. ¿Deseas continuar?',
-                                  [
-                                    { text: 'Cancelar', style: 'cancel' },
-                                    { text: 'Rechazar', style: 'destructive', onPress: () => rejectRecord(r) },
-                                  ],
-                                  { cancelable: true }
-                                )
-                              }
+                              style={[
+                                styles.actionBtn,
+                                styles.rejectBtn,
+                                rejectingRecordId === r.id && styles.actionBtnDisabled,
+                              ]}
+                              onPress={() => rejectRecord(r)}
+                              disabled={rejectingRecordId === r.id}
                               activeOpacity={0.85}
                             >
-                              <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
-                              <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
+                              {rejectingRecordId === r.id ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <>
+                                  <Ionicons name="close-circle-outline" size={18} color="#FFFFFF" />
+                                  <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
+                                </>
+                              )}
                             </TouchableOpacity>
                           </>
                         )}
@@ -1500,7 +1560,14 @@ export default function PermitRequestScreenV2() {
                   <ThemedText style={styles.secondaryButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]} onPress={handleCreate} disabled={isSubmitting}>
-                  {isSubmitting ? <ActivityIndicator size="small" color="#fff" /> : <ThemedText style={styles.secondaryButtonText}>Guardar</ThemedText>}
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <View style={styles.secondaryButtonInner}>
+                      <Ionicons name="checkmark-sharp" size={20} color="#FFFFFF" />
+                      <Text style={styles.secondaryButtonText}>Aceptar</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               </View>
             </ThemedView>
@@ -1653,7 +1720,14 @@ export default function PermitRequestScreenV2() {
                   <ThemedText style={styles.secondaryButtonText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]} onPress={saveCompletion} disabled={isSavingComplete}>
-                  {isSavingComplete ? <ActivityIndicator size="small" color="#fff" /> : <ThemedText style={styles.secondaryButtonText}>Guardar</ThemedText>}
+                  {isSavingComplete ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <View style={styles.secondaryButtonInner}>
+                      <Ionicons name="checkmark-sharp" size={20} color="#FFFFFF" />
+                      <Text style={styles.secondaryButtonText}>Aceptar</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -1688,8 +1762,19 @@ export default function PermitRequestScreenV2() {
               <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={clearSignatureInModal}>
                 <ThemedText style={styles.secondaryButtonText}>Limpiar</ThemedText>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]} onPress={acceptSignature} disabled={isReadingSignature}>
-                {isReadingSignature ? <ActivityIndicator size="small" color="#fff" /> : <ThemedText style={styles.secondaryButtonText}>Guardar</ThemedText>}
+              <TouchableOpacity
+                style={[styles.secondaryButton, { backgroundColor: '#007AFF' }]}
+                onPress={requestConfirmAcceptSignature}
+                disabled={isReadingSignature}
+              >
+                {isReadingSignature ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <View style={styles.secondaryButtonInner}>
+                    <Ionicons name="checkmark-sharp" size={20} color="#FFFFFF" />
+                    <Text style={styles.secondaryButtonText}>Aceptar</Text>
+                  </View>
+                )}
               </TouchableOpacity>
             </View>
           </ThemedView>
@@ -1853,10 +1938,18 @@ const styles = StyleSheet.create({
   rejectBtn: { backgroundColor: '#FF3B30' },
   downloadBtn: { backgroundColor: '#34C759' },
   actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
+  actionBtnDisabled: { opacity: 0.65 },
 
   rowButtons: { flexDirection: 'row', gap: 8, marginTop: 8 },
   secondaryButton: { flex: 1, borderRadius: 8, paddingVertical: 10, alignItems: 'center' },
-  secondaryButtonText: { color: '#fff', fontWeight: '700' },
+  secondaryButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
+  secondaryButtonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
   formCard: { marginTop: 12, backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0', gap: 8 },
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
 

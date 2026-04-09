@@ -27,7 +27,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const body = await req.json();
     const {
-      marca_id,
+      cliente_id,
+      corpo_id,
       fecha,
       nombre_oficial_entrega,
       nombre_oficial_recibe,
@@ -37,21 +38,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable,
     } = body ?? {};
 
-    if (!marca_id) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    if (cliente_id == null || corpo_id == null) {
+      return NextResponse.json({ status: false, message: "cliente_id y corpo_id son obligatorios" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: parseInt(String(marca_id)) },
-      },
-    });
-    if (!marcaDia || !marcaDia.id) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+    const clienteIdNum = parseInt(String(cliente_id), 10);
+    const corpoIdNum = parseInt(String(corpo_id), 10);
+    if (!Number.isFinite(clienteIdNum) || clienteIdNum <= 0 || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) {
+      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 200 });
     }
 
     const existing = await callDynamicPrisma({
@@ -67,7 +61,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    if (existing.cliente_id !== marcaDia.cliente_id || existing.corpo_id !== marcaDia.corpo_id) {
+    if (existing.cliente_id !== clienteIdNum || existing.corpo_id !== corpoIdNum) {
       return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 200 });
     }
 
@@ -169,22 +163,16 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
-    const marcaIdStr = req.nextUrl.searchParams.get("m");
-    if (!marcaIdStr) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+    const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+    if (!corpoIdStr || !clienteIdStr) {
+      return NextResponse.json({ status: false, message: "corpo_id y cliente_id son obligatorios" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: parseInt(marcaIdStr) },
-      },
-    });
-    if (!marcaDia || !marcaDia.id) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+    const corpoIdNum = parseInt(corpoIdStr, 10);
+    const clienteIdNum = parseInt(clienteIdStr, 10);
+    if (!Number.isFinite(corpoIdNum) || corpoIdNum <= 0 || !Number.isFinite(clienteIdNum) || clienteIdNum <= 0) {
+      return NextResponse.json({ status: false, message: "corpo_id o cliente_id inválidos" }, { status: 200 });
     }
 
     const existing = await callDynamicPrisma({
@@ -200,7 +188,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    if (existing.cliente_id !== marcaDia.cliente_id || existing.corpo_id !== marcaDia.corpo_id) {
+    if (existing.cliente_id !== clienteIdNum || existing.corpo_id !== corpoIdNum) {
       return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 200 });
     }
 

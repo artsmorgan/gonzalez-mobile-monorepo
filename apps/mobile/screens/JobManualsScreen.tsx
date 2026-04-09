@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, Image, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
@@ -17,7 +17,8 @@ import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
-import { createJobManual, listJobManualsByMarca, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
+import { appendJobManualPuestos, createJobManual, listJobManualsByPuesto, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
+import { getManualPuestoId, mergeJobManualsCacheForPuesto } from '../hooks/jobManualsCacheHelpers';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
@@ -26,6 +27,41 @@ import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { jwtDecode } from 'jwt-decode';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+function ScalePressButton({
+  children,
+  onPress,
+  disabled,
+  style,
+}: {
+  children: React.ReactNode;
+  onPress?: () => void;
+  disabled?: boolean;
+  style?: object | object[];
+}) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const pressIn = () => {
+    if (disabled) return;
+    Animated.spring(scale, { toValue: 0.94, useNativeDriver: true, friction: 6 }).start();
+  };
+  const pressOut = () => {
+    Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 5 }).start();
+  };
+  return (
+    <AnimatedTouchable
+      activeOpacity={1}
+      disabled={disabled}
+      onPress={onPress}
+      onPressIn={pressIn}
+      onPressOut={pressOut}
+      style={[style, { transform: [{ scale }] }]}
+    >
+      {children}
+    </AnimatedTouchable>
+  );
+}
 
 type JobManualsNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -111,6 +147,8 @@ interface JobManualRemote {
   currentEmployeeSigned: boolean;
   id_local?: string;
   synced?: boolean;
+  /** Opcional en caché / normalización; preferir `puesto.id`. */
+  puesto_id?: number;
 }
 
 export default function JobManualsScreen() {
@@ -167,6 +205,33 @@ export default function JobManualsScreen() {
   const [hasConfirmedPuestos, setHasConfirmedPuestos] = useState(false);
   const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
 
+  /** Filtro de lista principal (solo no OPERATIVO) — precarga desde current_marca. */
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  /** puesto_id de la marca activa (lista OPERATIVO). */
+  const [marcaPuestoIdFromMarca, setMarcaPuestoIdFromMarca] = useState<number | null>(null);
+  const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
+
+  /** Modal "Actualizar puestos" (misma jerarquía que en creación) */
+  const [isUpdManualPuestosModalVisible, setIsUpdManualPuestosModalVisible] = useState(false);
+  const [updManualForPuestos, setUpdManualForPuestos] = useState<JobManualRemote | null>(null);
+  const [isSubmittingUpdManualPuestos, setIsSubmittingUpdManualPuestos] = useState(false);
+  const [updAssignToAllDivision, setUpdAssignToAllDivision] = useState(false);
+  const [updSelectedDivisionForAll, setUpdSelectedDivisionForAll] = useState<number | null>(null);
+  const [updEmpresaId, setUpdEmpresaId] = useState<number | null>(null);
+  const [updClienteId, setUpdClienteId] = useState<number | null>(null);
+  const [updDivisionId, setUpdDivisionId] = useState<number | null>(null);
+  const [updContratoId, setUpdContratoId] = useState<number | null>(null);
+  const [updSucursalId, setUpdSucursalId] = useState<number | null>(null);
+  const [updPuestoId, setUpdPuestoId] = useState<number | null>(null);
+  const [updSelectedPuestos, setUpdSelectedPuestos] = useState<number[]>([]);
+  const [updHasConfirmedPuestos, setUpdHasConfirmedPuestos] = useState(false);
+  const [updIsSelectedPuestosExpanded, setUpdIsSelectedPuestosExpanded] = useState(false);
+
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
@@ -208,6 +273,17 @@ export default function JobManualsScreen() {
   const [quizTempAnswer, setQuizTempAnswer] = useState('');
   const [quizTempAnswers, setQuizTempAnswers] = useState<string[]>([]);
   const [quizTempPoints, setQuizTempPoints] = useState<string>('');
+  const [isSavingQuizQuestion, setIsSavingQuizQuestion] = useState(false);
+
+  const getDivisionIdFromMarcaJson = (marca: any): number | null => {
+    const raw =
+      marca?.roleDivision?.division?.id ??
+      marca?.role_division?.division?.id ??
+      marca?.division?.id ??
+      marca?.division_id;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  };
 
   const appendTokenToUrl = useCallback((url: string) => {
     if (!url) return '';
@@ -266,6 +342,7 @@ export default function JobManualsScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    return false;
     try {
       const networkState = await Network.getNetworkStateAsync();
       return networkState.isConnected === true && networkState.isInternetReachable === true;
@@ -337,95 +414,146 @@ export default function JobManualsScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         setHasMarca(false);
-        setIsLoading(false);
         return;
       }
 
       const currentMarca = JSON.parse(currentMarcaStr);
       setHasMarca(true);
-      setMarcaId(currentMarca.id);
+      setMarcaId(Number(currentMarca.id));
       setPuestoActualNombre(currentMarca.puesto?.nombre || '');
-      const role = currentMarca.roleDivision?.role?.nombre || null;
-      setRoleName(role);
+      const role = currentMarca.roleDivision?.role?.nombre ?? currentMarca.role_division?.role?.nombre ?? null;
+      setRoleName(typeof role === 'string' ? role : null);
+      const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
+      setMarcaPuestoIdFromMarca(Number.isFinite(pid as number) && (pid as number) > 0 ? pid : null);
 
-      // Cargar estructura (cache-first) para selección de puestos por árbol
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      setFilterSucursalId(currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null);
+      setFilterPuestoId(pid != null && Number.isFinite(pid) && pid > 0 ? pid : null);
+
       await fetchMainStructure();
-
-      // Preseleccionar árbol con la marca actual (si viene disponible)
-      setSelectedEmpresaId(currentMarca.empresa?.id ?? null);
-      setSelectedClienteId(currentMarca.cliente?.id ?? null);
-      setSelectedDivisionId(currentMarca.division?.id ?? null);
-      setSelectedContratoId(currentMarca.contrato?.id ?? null);
-      setSelectedSucursalId(currentMarca.corpo?.id ?? null);
-      setSelectedPuestoId(null);
-
-      // Cargar manuales para visualización
-      await fetchManuals(currentMarca.id);
     } catch (error) {
       console.error('Error fetching current marca for job manuals:', error);
     } finally {
       setIsLoading(false);
     }
+  }, [fetchMainStructure]);
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      setFilterSucursalId(currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null);
+      setFilterPuestoId(pid != null && Number.isFinite(pid) && pid > 0 ? pid : null);
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca:', e);
+    }
   }, []);
 
-  const fetchManuals = async (marcaIdToUse: number) => {
-    try {
-      setIsLoadingManuals(true);
-      const isConnected = await getConnectionStatus();
-
-      if (isConnected) {
-        const result = await listJobManualsByMarca({
-          marcaId: marcaIdToUse,
-          refreshAccessToken,
-          logout,
-        });
-
-        if (result.status && result.manuals) {
-          setManuals(result.manuals as JobManualRemote[]);
-          await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(result.manuals));
-        } else {
-          setManuals([]);
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          setManuals(cache);
-        } else {
-          setManuals([]);
-        }
-      }
-    } catch (error) {
-      console.error('Error fetching job manuals:', error);
+  const fetchManuals = useCallback(
+    async (marcaIdToUse: number, listPuestoId: number | null) => {
       try {
-        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          setManuals(cache);
+        setIsLoadingManuals(true);
+        // Solo listar con puesto válido: OPERATIVO usa `current_marca.puesto`; resto usa filtro jerárquico hasta "Puesto *" (o puesto en marca precargado).
+        if (listPuestoId == null || !Number.isFinite(Number(listPuestoId)) || Number(listPuestoId) <= 0) {
+          setManuals([]);
+          return;
         }
-      } catch (cacheErr) {
-        console.error('Error loading job manuals from cache:', cacheErr);
+        const puestoIdNum = Number(listPuestoId);
+        const isConnected = await getConnectionStatus();
+
+        const manualsForListScope = (cacheArr: JobManualRemote[]) =>
+          cacheArr.filter((m) => getManualPuestoId(m) === puestoIdNum);
+
+        if (isConnected) {
+          const result = await listJobManualsByPuesto({
+            puestoId: puestoIdNum,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status && result.manuals) {
+            const list = result.manuals as JobManualRemote[];
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
+            const merged = mergeJobManualsCacheForPuesto(existing, list, puestoIdNum);
+            await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
+            setManuals(manualsForListScope(merged));
+          } else {
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              try {
+                const cache = JSON.parse(cacheStr);
+                const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
+                setManuals(filtered);
+              } catch {
+                setManuals([]);
+              }
+            } else {
+              setManuals([]);
+            }
+          }
+        } else {
+          const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
+            const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
+            setManuals(filtered);
+          } else {
+            setManuals([]);
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching job manuals:', error);
+        try {
+          if (listPuestoId != null && Number.isFinite(Number(listPuestoId))) {
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const puestoIdNum = Number(listPuestoId);
+              const filtered = Array.isArray(cache)
+                ? (cache as JobManualRemote[]).filter((m) => getManualPuestoId(m) === puestoIdNum)
+                : [];
+              setManuals(filtered);
+            }
+          }
+        } catch (cacheErr) {
+          console.error('Error loading job manuals from cache:', cacheErr);
+        }
+      } finally {
+        setIsLoadingManuals(false);
       }
-    } finally {
-      setIsLoadingManuals(false);
-    }
-  };
+    },
+    [refreshAccessToken, logout]
+  );
+
+  useEffect(() => {
+    if (!hasMarca || marcaId == null) return;
+    const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+    void fetchManuals(marcaId, listPuestoId);
+  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, filterPuestoId, fetchManuals]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchCurrentMarca();
+      void fetchCurrentMarca();
       const handler = () => {
-        if (marcaId) {
-          fetchManuals(marcaId);
-        } else {
-          fetchCurrentMarca();
-        }
+        void fetchCurrentMarca();
       };
       eventBus.on('connectionRestored', handler);
       return () => {
         eventBus.off('connectionRestored', handler);
       };
-    }, [fetchCurrentMarca, marcaId])
+    }, [fetchCurrentMarca])
   );
 
   useEffect(() => {
@@ -444,6 +572,24 @@ export default function JobManualsScreen() {
     navigation.navigate('Home');
   };
 
+  const applyCurrentMarcaToCreateHierarchy = async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(marca);
+      setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setSelectedDivisionId(divId);
+      setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      const puestoId = marca.puesto?.id != null ? Number(marca.puesto.id) : null;
+      setSelectedPuestoId(puestoId != null && Number.isFinite(puestoId) && puestoId > 0 ? puestoId : null);
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateHierarchy:', e);
+    }
+  };
+
   const startCreating = () => {
     setIsCreating(true);
     tituloRef.current = '';
@@ -456,6 +602,7 @@ export default function JobManualsScreen() {
     setFirmaResponsable(null);
     setLocation(null);
     setQuizQuestions([]);
+    void applyCurrentMarcaToCreateHierarchy();
 
     // Solicitar permisos de ubicación y obtener la posición actual (similar a TrainingsScreen)
     (async () => {
@@ -570,7 +717,101 @@ export default function JobManualsScreen() {
     }
   };
 
+  const commitQuizQuestionFromModal = () => {
+    if (isSavingQuizQuestion) return;
+    const title = quizTempTitle.trim();
+    if (!title) {
+      Alert.alert('Error', 'El título de la pregunta es obligatorio');
+      return;
+    }
+
+    const needsOptions = quizTempType === 'multiple_choice' || quizTempType === 'multiple_select' || quizTempType === 'list';
+    if (needsOptions && quizTempOptions.length === 0) {
+      Alert.alert('Error', 'Debes agregar al menos una opción');
+      return;
+    }
+
+    if ((quizTempType === 'short' || quizTempType === 'paragraph') && !quizTempAnswer.trim()) {
+      Alert.alert('Error', 'Debes indicar la respuesta correcta');
+      return;
+    }
+
+    if ((quizTempType === 'multiple_choice' || quizTempType === 'list') && !quizTempAnswer) {
+      Alert.alert('Error', 'Selecciona la respuesta correcta');
+      return;
+    }
+
+    if (quizTempType === 'multiple_select' && quizTempAnswers.length === 0) {
+      Alert.alert('Error', 'Selecciona al menos una respuesta correcta');
+      return;
+    }
+
+    if (!quizTempPoints.trim()) {
+      Alert.alert('Error', 'El puntaje es obligatorio');
+      return;
+    }
+
+    const pointsValue = parseFloat(quizTempPoints.trim());
+    if (isNaN(pointsValue) || pointsValue < 0) {
+      Alert.alert('Error', 'El puntaje debe ser un número válido mayor o igual a 0');
+      return;
+    }
+
+    Alert.alert('Confirmar', '¿Agregar esta pregunta al quiz?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Aceptar',
+        onPress: () => {
+          void (async () => {
+            setIsSavingQuizQuestion(true);
+            try {
+              const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+              let id = 'q_';
+              for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
+
+              const newQuestion: QuizQuestion = {
+                id,
+                title,
+                type: quizTempType,
+                options: needsOptions ? quizTempOptions : undefined,
+                answer: (quizTempType === 'short' || quizTempType === 'paragraph' || quizTempType === 'multiple_choice' || quizTempType === 'list')
+                  ? (quizTempAnswer.trim() || undefined)
+                  : undefined,
+                answers: quizTempType === 'multiple_select' ? quizTempAnswers : undefined,
+                points: pointsValue,
+              };
+
+              setQuizQuestions(prev => [...prev, newQuestion]);
+              setQuizTempTitle('');
+              setQuizTempType('short');
+              setQuizTempOptions([]);
+              setQuizTempOptionInput('');
+              setQuizTempAnswer('');
+              setQuizTempAnswers([]);
+              setQuizTempPoints('');
+              setIsQuizModalVisible(false);
+            } finally {
+              setIsSavingQuizQuestion(false);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   const handleSetQuizResult = async (manualId: number, empleadoId: number, approved: boolean) => {
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Confirmar',
+        `¿Desea registrar el resultado del quiz como ${approved ? 'aprobado' : 'reprobado'}?`,
+        [
+          { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Aceptar', onPress: () => resolve(true) },
+        ]
+      );
+    });
+    if (!confirmed) return;
+
     try {
 
       const marca = await AsyncStorage.getItem('current_marca');
@@ -609,12 +850,16 @@ export default function JobManualsScreen() {
           throw new Error(result?.message || 'No se pudo actualizar el resultado del quiz');
         }
       } else {
-        // Guardar acción offline
+        // Guardar acción offline (misma firma que consume checkJobManualsActionsCache: marcaId obligatorio)
         const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        actions = actions.filter(
+          (a: any) => !(a.type === 'quiz_result' && a.id === manualId && a.empleadoId === empleadoId)
+        );
         actions.push({
           id: manualId,
           type: 'quiz_result',
+          marcaId,
           empleadoId,
           approved,
         });
@@ -855,8 +1100,7 @@ export default function JobManualsScreen() {
     getAllPuestosFromDivision,
   ]);
 
-  const applyPuestosFromTree = () => {
-    // Si está en modo "asignar a todos los puestos de una división"
+  const applyPuestosFromTreeConfirmed = () => {
     if (assignToAllDivision && selectedDivisionForAll) {
       const puestosFromDivision = getAllPuestosFromDivision(selectedDivisionForAll);
       if (puestosFromDivision.length === 0) {
@@ -869,7 +1113,6 @@ export default function JobManualsScreen() {
       return;
     }
 
-    // Modo normal (jerarquía)
     if (filteredPuestosFromTree.length === 0) {
       Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
       return;
@@ -877,6 +1120,13 @@ export default function JobManualsScreen() {
     setSelectedPuestos(filteredPuestosFromTree.map(p => p.id));
     setHasConfirmedPuestos(true);
     setIsSelectedPuestosExpanded(true);
+  };
+
+  const applyPuestosFromTree = () => {
+    Alert.alert('Confirmar', '¿Aplicar la selección de puestos según el filtro actual?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => applyPuestosFromTreeConfirmed() },
+    ]);
   };
 
   const empresaOptions = useMemo(() => structure ?? [], [structure]);
@@ -906,6 +1156,28 @@ export default function JobManualsScreen() {
     return sucursal?.puestos ?? [];
   }, [sucursalOptions, selectedSucursalId]);
 
+  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find(e => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find(c => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find(d => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find(c => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+  const filterPuestoOptionsMemo = useMemo(() => {
+    const sucursal = filterSucursalOptionsMemo.find(s => s.id === filterSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [filterSucursalOptionsMemo, filterSucursalId]);
+
   const puestoNameById = useMemo(() => {
     const map = new Map<number, string>();
     for (const empresa of structure) {
@@ -929,6 +1201,277 @@ export default function JobManualsScreen() {
       .map((id) => ({ id, nombre: puestoNameById.get(id) || `Puesto #${id}` }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [selectedPuestos, puestoNameById]);
+
+  const updClienteOptions = useMemo(() => {
+    const empresa = structure.find(e => e.id === updEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, updEmpresaId]);
+
+  const updDivisionOptions = useMemo(() => {
+    const cliente = updClienteOptions.find(c => c.id === updClienteId);
+    return cliente?.division ?? [];
+  }, [updClienteOptions, updClienteId]);
+
+  const updContratoOptions = useMemo(() => {
+    const division = updDivisionOptions.find(d => d.id === updDivisionId);
+    return division?.contratos ?? [];
+  }, [updDivisionOptions, updDivisionId]);
+
+  const updSucursalOptions = useMemo(() => {
+    const contrato = updContratoOptions.find(c => c.id === updContratoId);
+    return contrato?.sucursales ?? [];
+  }, [updContratoOptions, updContratoId]);
+
+  const updPuestoOptions = useMemo(() => {
+    const sucursal = updSucursalOptions.find(s => s.id === updSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [updSucursalOptions, updSucursalId]);
+
+  const updFilteredPuestosFromTree: Puesto[] = useMemo(() => {
+    if (updAssignToAllDivision && updSelectedDivisionForAll) {
+      return getAllPuestosFromDivision(updSelectedDivisionForAll);
+    }
+    const hasAnySelection =
+      updEmpresaId !== null ||
+      updClienteId !== null ||
+      updDivisionId !== null ||
+      updContratoId !== null ||
+      updSucursalId !== null ||
+      updPuestoId !== null;
+    if (!hasAnySelection) return [];
+    const seen = new Set<number>();
+    const out: Puesto[] = [];
+    for (const empresa of structure) {
+      if (updEmpresaId !== null && empresa.id !== updEmpresaId) continue;
+      for (const cliente of empresa.clientes ?? []) {
+        if (updClienteId !== null && cliente.id !== updClienteId) continue;
+        for (const division of cliente.division ?? []) {
+          if (updDivisionId !== null && division.id !== updDivisionId) continue;
+          for (const contrato of division.contratos ?? []) {
+            if (updContratoId !== null && contrato.id !== updContratoId) continue;
+            for (const sucursal of contrato.sucursales ?? []) {
+              if (updSucursalId !== null && sucursal.id !== updSucursalId) continue;
+              for (const puesto of sucursal.puestos ?? []) {
+                if (updPuestoId !== null && puesto.id !== updPuestoId) continue;
+                if (!seen.has(puesto.id)) {
+                  seen.add(puesto.id);
+                  out.push({ id: puesto.id, nombre: puesto.nombre });
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return out;
+  }, [
+    structure,
+    updEmpresaId,
+    updClienteId,
+    updDivisionId,
+    updContratoId,
+    updSucursalId,
+    updPuestoId,
+    updAssignToAllDivision,
+    updSelectedDivisionForAll,
+    getAllPuestosFromDivision,
+  ]);
+
+  const updSelectedPuestosUi = useMemo(() => {
+    return updSelectedPuestos
+      .map((id) => ({ id, nombre: puestoNameById.get(id) || `Puesto #${id}` }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [updSelectedPuestos, puestoNameById]);
+
+  const resetUpdManualPuestosFormOnly = useCallback(() => {
+    setUpdAssignToAllDivision(false);
+    setUpdSelectedDivisionForAll(null);
+    setUpdEmpresaId(null);
+    setUpdClienteId(null);
+    setUpdDivisionId(null);
+    setUpdContratoId(null);
+    setUpdSucursalId(null);
+    setUpdPuestoId(null);
+    setUpdSelectedPuestos([]);
+    setUpdHasConfirmedPuestos(false);
+    setUpdIsSelectedPuestosExpanded(false);
+  }, []);
+
+  const closeUpdManualPuestosModal = useCallback(() => {
+    setIsUpdManualPuestosModalVisible(false);
+    resetUpdManualPuestosFormOnly();
+    setUpdManualForPuestos(null);
+  }, [resetUpdManualPuestosFormOnly]);
+
+  const toggleUpdPuestoSelection = useCallback((puestoId: number) => {
+    setUpdSelectedPuestos(prev => {
+      if (prev.includes(puestoId)) return prev.filter(id => id !== puestoId);
+      return [...prev, puestoId];
+    });
+  }, []);
+
+  const applyUpdPuestosFromTreeConfirmed = useCallback(() => {
+    if (updAssignToAllDivision && updSelectedDivisionForAll) {
+      const puestosFromDivision = getAllPuestosFromDivision(updSelectedDivisionForAll);
+      if (puestosFromDivision.length === 0) {
+        Alert.alert('Información', 'No se encontraron puestos para la división seleccionada.');
+        return;
+      }
+      setUpdSelectedPuestos(puestosFromDivision.map(p => p.id));
+      setUpdHasConfirmedPuestos(true);
+      setUpdIsSelectedPuestosExpanded(true);
+      return;
+    }
+    if (updFilteredPuestosFromTree.length === 0) {
+      Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
+      return;
+    }
+    setUpdSelectedPuestos(updFilteredPuestosFromTree.map(p => p.id));
+    setUpdHasConfirmedPuestos(true);
+    setUpdIsSelectedPuestosExpanded(true);
+  }, [updAssignToAllDivision, updSelectedDivisionForAll, updFilteredPuestosFromTree, getAllPuestosFromDivision]);
+
+  const applyUpdPuestosFromTree = useCallback(() => {
+    Alert.alert('Confirmar', '¿Aplicar la selección de puestos según el filtro actual?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => applyUpdPuestosFromTreeConfirmed() },
+    ]);
+  }, [applyUpdPuestosFromTreeConfirmed]);
+
+  const openUpdManualPuestosModal = useCallback(
+    (manual: JobManualRemote) => {
+      try {
+        resetUpdManualPuestosFormOnly();
+        setUpdManualForPuestos(manual);
+        setIsUpdManualPuestosModalVisible(true);
+      } catch (e) {
+        console.error('openUpdManualPuestosModal', e);
+        Alert.alert('Error', 'No se pudo abrir el formulario.');
+      }
+    },
+    [resetUpdManualPuestosFormOnly]
+  );
+
+  const submitUpdManualPuestosModal = useCallback(async () => {
+    if (!updManualForPuestos || marcaId == null) return;
+    const ids = Array.from(
+      new Set(updSelectedPuestos.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0))
+    );
+    if (ids.length === 0) {
+      Alert.alert('Validación', 'Selecciona al menos un puesto.');
+      return;
+    }
+    const manual = updManualForPuestos;
+    const listPuestoReload = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+
+    const serverManualId = Number(manual.id);
+    const isLocalOnly = !Number.isFinite(serverManualId) || serverManualId <= 0;
+
+    if (isLocalOnly) {
+      const lid = manual.id_local;
+      if (!lid) {
+        Alert.alert('Error', 'Manual local sin identificador.');
+        return;
+      }
+      try {
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id) === String(lid));
+        if (idx === -1) {
+          Alert.alert('Error', 'No se encontró la creación pendiente de este manual.');
+          return;
+        }
+        const createAction = { ...actions[idx] };
+        let prev: number[] = [];
+        try {
+          const raw = createAction.requestData?.puestos;
+          prev = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+        } catch {
+          prev = [];
+        }
+        const merged = Array.from(
+          new Set([
+            ...prev.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0),
+            ...ids,
+          ])
+        );
+        createAction.requestData = {
+          ...createAction.requestData,
+          puestos: JSON.stringify(merged),
+        };
+        actions[idx] = createAction;
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        Alert.alert('Listo', 'Se actualizaron los puestos en el borrador pendiente de sincronización.');
+        closeUpdManualPuestosModal();
+        await fetchManuals(marcaId, listPuestoReload);
+      } catch (e) {
+        console.error('submitUpdManualPuestosModal local merge', e);
+        Alert.alert('Error', 'No se pudo guardar.');
+      }
+      return;
+    }
+
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      try {
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const mid = Number(manual.id);
+        actions = actions.filter((a: any) => !(a.type === 'append_puestos' && Number(a.manualId) === mid));
+        const action_queue_id = `jm_append_${mid}_${Date.now()}`;
+        actions.push({
+          id: action_queue_id,
+          action_queue_id,
+          type: 'append_puestos',
+          manualId: mid,
+          marcaId,
+          puestos_ids: ids,
+        });
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        Alert.alert('Modo offline', 'Se sincronizarán los nuevos puestos cuando haya conexión.');
+        closeUpdManualPuestosModal();
+      } catch (e) {
+        console.error('submitUpdManualPuestosModal offline queue', e);
+        Alert.alert('Error', 'No se pudo guardar la acción offline.');
+      }
+      return;
+    }
+
+    setIsSubmittingUpdManualPuestos(true);
+    try {
+      const res = await appendJobManualPuestos({
+        manualId: serverManualId,
+        marcaId,
+        puestosIds: ids,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        Alert.alert('Éxito', res.message || 'Puestos actualizados.');
+        closeUpdManualPuestosModal();
+        await fetchManuals(marcaId, listPuestoReload);
+      } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar.');
+      }
+    } catch (err) {
+      console.error('submitUpdManualPuestosModal', err);
+      Alert.alert('Error', 'No se pudo completar la operación.');
+    } finally {
+      setIsSubmittingUpdManualPuestos(false);
+    }
+  }, [
+    updManualForPuestos,
+    updSelectedPuestos,
+    marcaId,
+    roleName,
+    marcaPuestoIdFromMarca,
+    filterPuestoId,
+    closeUpdManualPuestosModal,
+    fetchManuals,
+    refreshAccessToken,
+    logout,
+    getConnectionStatus,
+  ]);
 
   const handleAddFile = async (type: ManualFileLocal['type']) => {
     try {
@@ -1326,81 +1869,6 @@ export default function JobManualsScreen() {
     }
   };
 
-  const handleCreateManual = async () => {
-    // Prevenir múltiples llamadas simultáneas
-    if (isCreatingManual) {
-      return;
-    }
-
-    try {
-      setIsCreatingManual(true);
-
-      if (!marcaId) {
-        Alert.alert('Error', 'No se encontró la marca actual');
-        setIsCreatingManual(false);
-        return;
-      }
-
-      if (!tituloRef.current.trim()) {
-        Alert.alert('Error', 'El título es obligatorio');
-        setIsCreatingManual(false);
-        return;
-      }
-
-      if (!descripcionRef.current.trim()) {
-        Alert.alert('Error', 'La descripción es obligatoria');
-        setIsCreatingManual(false);
-        return;
-      }
-
-      if (!firmaResponsable) {
-        Alert.alert('Error', 'La firma del responsable es obligatoria');
-        setIsCreatingManual(false);
-        return;
-      }
-
-      if (selectedPuestos.length === 0) {
-        Alert.alert('Error', 'Debe seleccionar al menos un puesto');
-        setIsCreatingManual(false);
-        return;
-      }
-
-      // Advertencia si hay más de 100 puestos
-      if (selectedPuestos.length > 100) {
-        return new Promise<void>((resolve) => {
-          Alert.alert(
-            'Advertencia',
-            `Se intentarán guardar ${selectedPuestos.length} puestos. Debido a la cantidad de puestos, el proceso tomará uno o varios minutos. ¿Desea continuar?`,
-            [
-              {
-                text: 'Cancelar',
-                style: 'cancel',
-                onPress: () => {
-                  setIsCreatingManual(false);
-                  resolve();
-                },
-              },
-              {
-                text: 'Continuar',
-                onPress: async () => {
-                  await proceedWithManualCreation();
-                  resolve();
-                },
-              },
-            ]
-          );
-        });
-      }
-
-      await proceedWithManualCreation();
-    } catch (error) {
-      console.error('Error creating job manual:', error);
-      Alert.alert('Error', 'No se pudo crear el manual');
-    } finally {
-      setIsCreatingManual(false);
-    }
-  };
-
   const proceedWithManualCreation = async () => {
     try {
       if (!marcaId) {
@@ -1438,7 +1906,7 @@ export default function JobManualsScreen() {
         ),
       };
 
-      // isCreatingManual ya está establecido en true por handleCreateManual
+      const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
 
       const isConnected = await getConnectionStatus();
 
@@ -1466,9 +1934,8 @@ export default function JobManualsScreen() {
           // Cerrar formulario
           setIsCreating(false);
 
-          // Recargar lista de manuales
           if (marcaId) {
-            await fetchManuals(marcaId);
+            await fetchManuals(marcaId, listPuestoId);
           }
 
           Alert.alert('Éxito', result.message || 'Manual creado correctamente');
@@ -1495,13 +1962,18 @@ export default function JobManualsScreen() {
           questions: quizQuestions,
           minApprovalPercentage: quizMinApprovalPercentage,
         }) : null;
+        const primaryPuestoId = puestosArray[0];
+        const primaryPuestoNombre =
+          (primaryPuestoId != null ? puestoNameById.get(primaryPuestoId) : null) ||
+          puestoActualNombre ||
+          'Puesto';
         cache.push({
           id: 0,
           id_local: localId,
           title: tituloRef.current,
           description: descripcionRef.current,
           quiz: quizStrToStore,
-          puesto: { id: 0, nombre: puestoActualNombre },
+          puesto: { id: primaryPuestoId ?? 0, nombre: primaryPuestoNombre },
           created_by: employee?.id ? String(employee.id) : '-',
           created_at: new Date(horaAccionUse).toISOString(),
           files: filesPayload.map(f => ({
@@ -1538,19 +2010,79 @@ export default function JobManualsScreen() {
         // Cerrar formulario
         setIsCreating(false);
 
-        // Recargar lista de manuales (desde cache)
         if (marcaId) {
-          await fetchManuals(marcaId);
+          await fetchManuals(marcaId, listPuestoId);
         }
       }
     } catch (error) {
       console.error('Error creating job manual:', error);
       Alert.alert('Error', 'No se pudo crear el manual');
       throw error;
+    }
+  };
+
+  const runCreateManualConfirmed = async () => {
+    if (isCreatingManual) return;
+    setIsCreatingManual(true);
+    try {
+      if (!marcaId) {
+        Alert.alert('Error', 'No se encontró la marca actual');
+        return;
+      }
+
+      if (!tituloRef.current.trim()) {
+        Alert.alert('Error', 'El título es obligatorio');
+        return;
+      }
+
+      if (!descripcionRef.current.trim()) {
+        Alert.alert('Error', 'La descripción es obligatoria');
+        return;
+      }
+
+      if (!firmaResponsable) {
+        Alert.alert('Error', 'La firma del responsable es obligatoria');
+        return;
+      }
+
+      if (selectedPuestos.length === 0) {
+        Alert.alert('Error', 'Debe seleccionar al menos un puesto');
+        return;
+      }
+
+      if (selectedPuestos.length > 100) {
+        const go = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Advertencia',
+            `Se intentarán guardar ${selectedPuestos.length} puestos. Debido a la cantidad de puestos, el proceso tomará uno o varios minutos. ¿Desea continuar?`,
+            [
+              { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continuar', onPress: () => resolve(true) },
+            ]
+          );
+        });
+        if (!go) return;
+      }
+
+      await proceedWithManualCreation();
+    } catch (error) {
+      console.error('Error creating job manual:', error);
+      Alert.alert('Error', 'No se pudo crear el manual');
     } finally {
       setIsCreatingManual(false);
     }
   };
+
+  const handleCreateManual = () => {
+    if (isCreatingManual) return;
+    Alert.alert('Confirmar', '¿Desea registrar este manual?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void runCreateManualConfirmed() },
+    ]);
+  };
+
+  /** Texto del botón principal de envío (confirmación previa vía Alert). */
+  const createSubmitButtonLabel = isCreatingManual ? 'Registrando…' : 'Aceptar';
 
   const formatDateLabel = (iso: string) => {
     return convertDateTimestampToLocalString(iso);
@@ -1607,6 +2139,195 @@ export default function JobManualsScreen() {
             <ThemedText style={styles.puestoLabel}>Puesto actual:</ThemedText>
             <ThemedText style={styles.puestoName}>{puestoActualNombre || 'No disponible'}</ThemedText>
           </ThemedView>
+
+          {!isCreating && roleName !== 'OPERATIVO' && (
+            <ThemedView style={styles.filtersMain}>
+              <ThemedView style={styles.filterHeader}>
+                <TouchableOpacity
+                  style={styles.filterToggleButton}
+                  onPress={() => setIsListFiltersExpanded((e) => !e)}
+                >
+                  <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                  <Ionicons
+                    name={isListFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color="#007AFF"
+                  />
+                </TouchableOpacity>
+                {isListFiltersExpanded && (
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => void resetListFiltersFromCurrentMarca()}
+                  >
+                    <Ionicons name="refresh" size={16} color="#FF3B30" />
+                    <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              {isListFiltersExpanded && (
+                <ThemedView style={styles.filterContent}>
+                  {isStructureLoading ? (
+                    <ThemedView style={styles.loadingManualsContainer}>
+                      <ActivityIndicator size="small" color="#007AFF" />
+                      <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                    </ThemedView>
+                  ) : structure.length === 0 ? (
+                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                  ) : (
+                    <>
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={filterEmpresaId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterEmpresaId(next === 0 ? null : next);
+                              setFilterClienteId(null);
+                              setFilterDivisionId(null);
+                              setFilterContratoId(null);
+                              setFilterSucursalId(null);
+                              setFilterPuestoId(null);
+                            }}
+                          >
+                            <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                            {filterEmpresaOptions.map((e) => (
+                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                            selectedValue={filterClienteId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterClienteId(next === 0 ? null : next);
+                              setFilterDivisionId(null);
+                              setFilterContratoId(null);
+                              setFilterSucursalId(null);
+                              setFilterPuestoId(null);
+                            }}
+                          >
+                            <Picker.Item
+                              label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {filterClienteOptionsMemo.map((c) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>División</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                            selectedValue={filterDivisionId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterDivisionId(next === 0 ? null : next);
+                              setFilterContratoId(null);
+                              setFilterSucursalId(null);
+                              setFilterPuestoId(null);
+                            }}
+                          >
+                            <Picker.Item
+                              label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {filterDivisionOptionsMemo.map((d) => (
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                            selectedValue={filterContratoId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterContratoId(next === 0 ? null : next);
+                              setFilterSucursalId(null);
+                              setFilterPuestoId(null);
+                            }}
+                          >
+                            <Picker.Item
+                              label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {filterContratoOptionsMemo.map((c) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                            selectedValue={filterSucursalId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterSucursalId(next === 0 ? null : next);
+                              setFilterPuestoId(null);
+                            }}
+                          >
+                            <Picker.Item
+                              label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {filterSucursalOptionsMemo.map((s) => (
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+
+                      <ThemedView style={styles.filterGroup}>
+                        <ThemedText style={styles.filterLabel}>Puesto *</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={filterSucursalId != null && filterPuestoOptionsMemo.length > 0}
+                            selectedValue={filterPuestoId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setFilterPuestoId(next === 0 ? null : next);
+                            }}
+                          >
+                            <Picker.Item
+                              label={filterSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {filterPuestoOptionsMemo.map((p) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                      </ThemedView>
+                    </>
+                  )}
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
 
           {!isCreating && canCreate && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
@@ -1853,75 +2574,18 @@ export default function JobManualsScreen() {
                       </ThemedView>
 
                       <TouchableOpacity
-                        style={styles.signatureActionButton}
-                        onPress={() => {
-                          const title = quizTempTitle.trim();
-                          if (!title) {
-                            Alert.alert('Error', 'El título de la pregunta es obligatorio');
-                            return;
-                          }
-
-                          const needsOptions = quizTempType === 'multiple_choice' || quizTempType === 'multiple_select' || quizTempType === 'list';
-                          if (needsOptions && quizTempOptions.length === 0) {
-                            Alert.alert('Error', 'Debes agregar al menos una opción');
-                            return;
-                          }
-
-                          if ((quizTempType === 'short' || quizTempType === 'paragraph') && !quizTempAnswer.trim()) {
-                            Alert.alert('Error', 'Debes indicar la respuesta correcta');
-                            return;
-                          }
-
-                          if ((quizTempType === 'multiple_choice' || quizTempType === 'list') && !quizTempAnswer) {
-                            Alert.alert('Error', 'Selecciona la respuesta correcta');
-                            return;
-                          }
-
-                          if (quizTempType === 'multiple_select' && quizTempAnswers.length === 0) {
-                            Alert.alert('Error', 'Selecciona al menos una respuesta correcta');
-                            return;
-                          }
-
-                          const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                          let id = 'q_';
-                          for (let i = 0; i < 8; i++) id += chars.charAt(Math.floor(Math.random() * chars.length));
-
-                          if (!quizTempPoints.trim()) {
-                            Alert.alert('Error', 'El puntaje es obligatorio');
-                            return;
-                          }
-
-                          const pointsValue = parseFloat(quizTempPoints.trim());
-                          if (isNaN(pointsValue) || pointsValue < 0) {
-                            Alert.alert('Error', 'El puntaje debe ser un número válido mayor o igual a 0');
-                            return;
-                          }
-
-                          const newQuestion: QuizQuestion = {
-                            id,
-                            title,
-                            type: quizTempType,
-                            options: needsOptions ? quizTempOptions : undefined,
-                            answer: (quizTempType === 'short' || quizTempType === 'paragraph' || quizTempType === 'multiple_choice' || quizTempType === 'list')
-                              ? (quizTempAnswer.trim() || undefined)
-                              : undefined,
-                            answers: quizTempType === 'multiple_select' ? quizTempAnswers : undefined,
-                            points: pointsValue, // Obligatorio
-                          };
-
-                          setQuizQuestions(prev => [...prev, newQuestion]);
-                          setQuizTempTitle('');
-                          setQuizTempType('short');
-                          setQuizTempOptions([]);
-                          setQuizTempOptionInput('');
-                          setQuizTempAnswer('');
-                          setQuizTempAnswers([]);
-                          setQuizTempPoints('');
-                          setIsQuizModalVisible(false);
-                        }}
+                        style={[styles.signatureActionButton, isSavingQuizQuestion && styles.formButtonDisabled]}
+                        onPress={commitQuizQuestionFromModal}
+                        disabled={isSavingQuizQuestion}
                       >
-                        <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.signatureActionText}>Confirmar</ThemedText>
+                        {isSavingQuizQuestion ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                        )}
+                        <ThemedText style={styles.signatureActionText}>
+                          {isSavingQuizQuestion ? 'Guardando…' : 'Confirmar'}
+                        </ThemedText>
                       </TouchableOpacity>
 
                       <ThemedView style={{ height: 16 }} />
@@ -2504,10 +3168,10 @@ export default function JobManualsScreen() {
                   {isCreatingManual ? (
                     <>
                       <ActivityIndicator size="small" color="#FFFFFF" style={{ marginRight: 8 }} />
-                      <ThemedText style={styles.formButtonText}>Creando manual...</ThemedText>
+                      <ThemedText style={styles.formButtonText}>{createSubmitButtonLabel}</ThemedText>
                     </>
                   ) : (
-                    <ThemedText style={styles.formButtonText}>Guardar</ThemedText>
+                    <ThemedText style={styles.formButtonText}>Aceptar</ThemedText>
                   )}
                 </TouchableOpacity>
               </ThemedView>
@@ -2527,29 +3191,42 @@ export default function JobManualsScreen() {
               </ThemedText>
             ) : (
               manuals.map((manual) => (
-                <TouchableOpacity
+                <ThemedView
                   key={manual.id || manual.id_local || `manual-${manual.title}`}
                   style={styles.manualCard}
-                  onPress={() => {
-                    setSelectedManual(manual);
-                    setViewSignature(null);
-                    setIsSigningManual(false);
-                    setIsViewerVisible(true);
-                  }}
                 >
-                  <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
-                  <ThemedText numberOfLines={2} style={styles.manualDescription}>
-                    {manual.description}
-                  </ThemedText>
-                  <ThemedView style={styles.manualMetaRow}>
-                    <ThemedText style={styles.manualMetaText}>
-                      {manual.puesto?.nombre || puestoActualNombre}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      setSelectedManual(manual);
+                      setViewSignature(null);
+                      setIsSigningManual(false);
+                      setIsViewerVisible(true);
+                    }}
+                  >
+                    <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
+                    <ThemedText numberOfLines={2} style={styles.manualDescription}>
+                      {manual.description}
                     </ThemedText>
-                    <ThemedText style={styles.manualMetaText}>
-                      {manual.files?.length || 0} archivo (s)
-                    </ThemedText>
-                  </ThemedView>
-                </TouchableOpacity>
+                    <ThemedView style={styles.manualMetaRow}>
+                      <ThemedText style={styles.manualMetaText}>
+                        {manual.puesto?.nombre || puestoActualNombre}
+                      </ThemedText>
+                      <ThemedText style={styles.manualMetaText}>
+                        {manual.files?.length || 0} archivo (s)
+                      </ThemedText>
+                    </ThemedView>
+                  </TouchableOpacity>
+                  {roleName !== 'OPERATIVO' && (
+                    <ScalePressButton
+                      style={styles.manualUpdatePuestosButton}
+                      onPress={() => openUpdManualPuestosModal(manual)}
+                    >
+                      <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.manualUpdatePuestosButtonText}>Actualizar puestos</ThemedText>
+                    </ScalePressButton>
+                  )}
+                </ThemedView>
               ))
             )}
           </ThemedView>
@@ -2564,6 +3241,338 @@ export default function JobManualsScreen() {
         onHomePress={handleHomePress}
         currentRoute="JobManuals"
       />
+
+      <Modal
+        visible={isUpdManualPuestosModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeUpdManualPuestosModal}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.updPuestosModalContainer}>
+            <ThemedText style={styles.modalTitle}>Actualizar puestos</ThemedText>
+            <ThemedText style={styles.updPuestosDisclaimer}>
+              Las asignaciones de puestos que ya tenía este manual no se eliminarán; solo se añadirán vínculos
+              nuevos para los puestos que confirmes aquí.
+            </ThemedText>
+            {updManualForPuestos && (
+              <ThemedText style={styles.updPuestosManualTitle} numberOfLines={2}>
+                {updManualForPuestos.title}
+              </ThemedText>
+            )}
+            <ScrollView
+              style={styles.updPuestosScroll}
+              contentContainerStyle={styles.updPuestosScrollContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {isStructureLoading ? (
+                <ThemedView style={styles.loadingManualsContainer}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                </ThemedView>
+              ) : structure.length === 0 ? (
+                <ThemedText style={styles.emptyText}>
+                  No hay estructura en caché. Conéctate o sincroniza para usar la jerarquía de puestos.
+                </ThemedText>
+              ) : (
+                <>
+                  <ThemedView style={styles.checkboxContainer}>
+                    <TouchableOpacity
+                      style={styles.checkboxRow}
+                      onPress={() => {
+                        const next = !updAssignToAllDivision;
+                        setUpdAssignToAllDivision(next);
+                        if (!next) {
+                          setUpdSelectedDivisionForAll(null);
+                          setUpdHasConfirmedPuestos(false);
+                          setUpdIsSelectedPuestosExpanded(false);
+                          setUpdSelectedPuestos([]);
+                        }
+                      }}
+                    >
+                      <Ionicons
+                        name={updAssignToAllDivision ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={updAssignToAllDivision ? '#007AFF' : '#999'}
+                      />
+                      <ThemedText style={styles.checkboxLabel}>
+                        Asignar a todos los puestos de una división
+                      </ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+
+                  {updAssignToAllDivision && (
+                    <ThemedView style={styles.structureGroup}>
+                      <ThemedText style={styles.smallLabel}>División</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={!isStructureLoading}
+                          selectedValue={updSelectedDivisionForAll ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setUpdSelectedDivisionForAll(next === 0 ? null : next);
+                            setUpdHasConfirmedPuestos(false);
+                            setUpdIsSelectedPuestosExpanded(false);
+                            setUpdSelectedPuestos([]);
+                          }}
+                        >
+                          <Picker.Item label="Seleccione división..." value={0} color="#000000" />
+                          <Picker.Item label="Aseo y limpieza" value={5} color="#000000" />
+                          <Picker.Item label="Seguridad" value={4} color="#000000" />
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                  )}
+
+                  {!updAssignToAllDivision && (
+                    <>
+                      <ThemedText style={styles.signatureHintMuted}>
+                        Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se incluirán
+                        todos los puestos debajo.
+                      </ThemedText>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={empresaOptions.length > 0}
+                            selectedValue={updEmpresaId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdEmpresaId(next === 0 ? null : next);
+                              setUpdClienteId(null);
+                              setUpdDivisionId(null);
+                              setUpdContratoId(null);
+                              setUpdSucursalId(null);
+                              setUpdPuestoId(null);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                            {empresaOptions.map((e) => (
+                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={updEmpresaId !== null && updClienteOptions.length > 0}
+                            selectedValue={updClienteId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdClienteId(next === 0 ? null : next);
+                              setUpdDivisionId(null);
+                              setUpdContratoId(null);
+                              setUpdSucursalId(null);
+                              setUpdPuestoId(null);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item
+                              label={updEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {updClienteOptions.map((c) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>División</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={updClienteId !== null && updDivisionOptions.length > 0}
+                            selectedValue={updDivisionId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdDivisionId(next === 0 ? null : next);
+                              setUpdContratoId(null);
+                              setUpdSucursalId(null);
+                              setUpdPuestoId(null);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item
+                              label={updClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {updDivisionOptions.map((d) => (
+                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={updDivisionId !== null && updContratoOptions.length > 0}
+                            selectedValue={updContratoId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdContratoId(next === 0 ? null : next);
+                              setUpdSucursalId(null);
+                              setUpdPuestoId(null);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item
+                              label={updDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {updContratoOptions.map((c) => (
+                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={updContratoId !== null && updSucursalOptions.length > 0}
+                            selectedValue={updSucursalId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdSucursalId(next === 0 ? null : next);
+                              setUpdPuestoId(null);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item
+                              label={updContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {updSucursalOptions.map((s) => (
+                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                      <ThemedView style={styles.structureGroup}>
+                        <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
+                        <ThemedView style={styles.pickerWrapper}>
+                          <Picker
+                            enabled={updSucursalId !== null && updPuestoOptions.length > 0}
+                            selectedValue={updPuestoId ?? 0}
+                            onValueChange={(v) => {
+                              const next = Number(v) || 0;
+                              setUpdPuestoId(next === 0 ? null : next);
+                              setUpdHasConfirmedPuestos(false);
+                              setUpdIsSelectedPuestosExpanded(false);
+                            }}
+                          >
+                            <Picker.Item
+                              label={updSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'}
+                              value={0}
+                              color="#000000"
+                            />
+                            {updPuestoOptions.map((p) => (
+                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                            ))}
+                          </Picker>
+                        </ThemedView>
+                      </ThemedView>
+                    </>
+                  )}
+
+                  <ThemedView style={styles.treeActionsRow}>
+                    <ScalePressButton style={styles.treeActionPrimary} onPress={applyUpdPuestosFromTree}>
+                      <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.treeActionPrimaryText}>Confirmar</ThemedText>
+                    </ScalePressButton>
+                    <ScalePressButton
+                      style={styles.treeActionSecondary}
+                      onPress={() => {
+                        setUpdSelectedPuestos([]);
+                        setUpdHasConfirmedPuestos(false);
+                        setUpdIsSelectedPuestosExpanded(false);
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={18} color="#007AFF" />
+                      <ThemedText style={styles.treeActionSecondaryText}>Limpiar</ThemedText>
+                    </ScalePressButton>
+                  </ThemedView>
+
+                  <ThemedText style={styles.signatureHintMuted}>
+                    Seleccionados: {updSelectedPuestos.length} | En el filtro: {updFilteredPuestosFromTree.length}
+                  </ThemedText>
+
+                  {updHasConfirmedPuestos && updSelectedPuestosUi.length > 0 && (
+                    <ThemedView style={styles.selectedPuestosBox}>
+                      <TouchableOpacity
+                        style={styles.selectedPuestosHeader}
+                        onPress={() => setUpdIsSelectedPuestosExpanded((p) => !p)}
+                      >
+                        <ThemedText style={styles.selectedPuestosHeaderText}>
+                          Puestos seleccionados ({updSelectedPuestosUi.length})
+                        </ThemedText>
+                        <Ionicons
+                          name={updIsSelectedPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+                      {updIsSelectedPuestosExpanded && updSelectedPuestosUi.length <= 150 && (
+                        <ThemedView style={styles.puestosList}>
+                          {updSelectedPuestosUi.map((puesto) => {
+                            const isSel = updSelectedPuestos.includes(puesto.id);
+                            return (
+                              <TouchableOpacity
+                                key={puesto.id}
+                                style={[styles.puestoItem, isSel && styles.puestoItemSelected]}
+                                onPress={() => toggleUpdPuestoSelection(puesto.id)}
+                              >
+                                <ThemedText
+                                  style={[styles.puestoItemText, isSel && styles.puestoItemTextSelected]}
+                                >
+                                  {puesto.nombre}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  )}
+                </>
+              )}
+            </ScrollView>
+
+            <ThemedView style={styles.updPuestosModalActions}>
+              <ScalePressButton
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={closeUpdManualPuestosModal}
+              >
+                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
+              </ScalePressButton>
+              <ScalePressButton
+                style={[styles.modalButton, styles.modalConfirmButton, isSubmittingUpdManualPuestos && { opacity: 0.7 }]}
+                onPress={() => void submitUpdManualPuestosModal()}
+                disabled={isSubmittingUpdManualPuestos}
+              >
+                {isSubmittingUpdManualPuestos ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.modalConfirmButtonText}>Guardar</ThemedText>
+                )}
+              </ScalePressButton>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
 
       {/* QR Scanner (reutilizable) */}
       {QRScannerComponent}
@@ -2604,13 +3613,23 @@ export default function JobManualsScreen() {
                               onPress: async () => {
                                 try {
                                   setIsDeletingManual(true);
+                                  const listPuestoReload =
+                                    roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
                                   const isConnected = await getConnectionStatus();
 
                                   // Si es local sin sincronizar, solo limpiar cache y acciones
                                   if (!selectedManual.id || selectedManual.id === 0 || selectedManual.id_local) {
                                     const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
                                     const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                                    const filtered = actions.filter((a: any) => !(a.id === selectedManual.id_local && a.type === 'create'));
+                                    const lid = selectedManual.id_local;
+                                    const filtered = actions.filter(
+                                      (a: any) =>
+                                        !(
+                                          lid &&
+                                          String(a.id) === String(lid) &&
+                                          (a.type === 'create' || a.type === 'update')
+                                        )
+                                    );
                                     await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(filtered));
 
                                     const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
@@ -2626,7 +3645,7 @@ export default function JobManualsScreen() {
                                     setViewSignature(null);
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId);
+                                      await fetchManuals(marcaId, listPuestoReload);
                                     }
                                     return;
                                   }
@@ -2640,19 +3659,43 @@ export default function JobManualsScreen() {
                                     if (!result.status) {
                                       Alert.alert('Error', result.message || 'No se pudo eliminar el manual');
                                     } else {
+                                      try {
+                                        const as = await AsyncStorage.getItem('job_manuals_actions');
+                                        if (as) {
+                                          const parsed = JSON.parse(as);
+                                          const mid = Number(selectedManual.id);
+                                          const cleaned = Array.isArray(parsed)
+                                            ? parsed.filter(
+                                                (a: any) =>
+                                                  !(
+                                                    a.type === 'append_puestos' &&
+                                                    Number(a.manualId) === mid
+                                                  )
+                                              )
+                                            : parsed;
+                                          await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(cleaned));
+                                        }
+                                      } catch {
+                                        /* ignore */
+                                      }
                                       Alert.alert('Éxito', result.message || 'Manual eliminado');
                                       setIsViewerVisible(false);
                                       setSelectedManual(null);
                                       setViewSignature(null);
                                       setIsSigningManual(false);
                                       if (marcaId) {
-                                        await fetchManuals(marcaId);
+                                        await fetchManuals(marcaId, listPuestoReload);
                                       }
                                     }
                                   } else {
                                     // Agendar acción de borrado
                                     const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
-                                    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                                    let actions = actionsStr ? JSON.parse(actionsStr) : [];
+                                    const mid = Number(selectedManual.id);
+                                    actions = actions.filter(
+                                      (a: any) =>
+                                        !(a.type === 'append_puestos' && Number(a.manualId) === mid)
+                                    );
                                     actions.push({
                                       id: selectedManual.id,
                                       type: 'delete',
@@ -2673,6 +3716,9 @@ export default function JobManualsScreen() {
                                     setSelectedManual(null);
                                     setViewSignature(null);
                                     setIsSigningManual(false);
+                                    if (marcaId) {
+                                      await fetchManuals(marcaId, listPuestoReload);
+                                    }
                                   }
                                 } catch (error) {
                                   console.error('Error deleting manual:', error);
@@ -3349,7 +4395,6 @@ export default function JobManualsScreen() {
                             return;
                           }
                           try {
-                            setIsSigningManual(true);
                             // Si el manual no tiene ID de servidor, no se puede firmar
                             if (!selectedManual.id || selectedManual.id === 0) {
                               Alert.alert('Offline', 'Primero sincroniza el manual para poder firmarlo.');
@@ -3399,19 +4444,23 @@ export default function JobManualsScreen() {
                             const isConnected = await getConnectionStatus();
                             const visualizationFilesStr = buildVisualizationFilesPayload();
 
-                            if (isConnected) {
-                              const proceed = await new Promise<boolean>((resolve) => {
-                                Alert.alert(
-                                  'Confirmar',
-                                  'Vas a firmar el manual y enviar tus respuestas del quiz (si aplica). ¿Deseas continuar?',
-                                  [
-                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
-                                    { text: 'Aceptar', onPress: () => resolve(true) },
-                                  ]
-                                );
-                              });
-                              if (!proceed) return;
+                            const confirmedSign = await new Promise<boolean>((resolve) => {
+                              Alert.alert(
+                                'Confirmar',
+                                isConnected
+                                  ? 'Vas a firmar el manual y enviar tus respuestas del quiz (si aplica). ¿Deseas continuar?'
+                                  : 'Se registrará tu firma y respuestas localmente para sincronizarse cuando haya conexión. ¿Deseas continuar?',
+                                [
+                                  { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+                                  { text: 'Aceptar', onPress: () => resolve(true) },
+                                ]
+                              );
+                            });
+                            if (!confirmedSign) return;
 
+                            setIsSigningManual(true);
+
+                            if (isConnected) {
                               const result = await signJobManual({
                                 id: selectedManual.id,
                                 firma: viewSignature,
@@ -3426,21 +4475,9 @@ export default function JobManualsScreen() {
                                 throw new Error(result.message || 'No se pudo firmar el manual');
                               }
                             } else {
-                              const proceed = await new Promise<boolean>((resolve) => {
-                                Alert.alert(
-                                  'Modo Offline',
-                                  'Se registrará tu firma y respuestas localmente para sincronizarse cuando haya conexión. ¿Deseas continuar?',
-                                  [
-                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
-                                    { text: 'Aceptar', onPress: () => resolve(true) },
-                                  ]
-                                );
-                              });
-                              if (!proceed) return;
-
-                              // Guardar acción offline
                               const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
-                              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                              let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                              actions = actions.filter((a: any) => !(a.type === 'sign' && a.id === selectedManual.id));
                               actions.push({
                                 id: selectedManual.id,
                                 type: 'sign',
@@ -3638,6 +4675,37 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  filtersMain: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    width: '100%',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  filterToggleText: { fontSize: 14, fontWeight: '600', color: '#007AFF' },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    backgroundColor: '#FFECEC',
+  },
+  resetFiltersText: { fontSize: 12, color: '#FF3B30', fontWeight: '600' },
+  filterContent: { padding: 12, backgroundColor: '#F9F9F9', gap: 8 },
+  filterGroup: { marginBottom: 12 },
+  filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#333' },
   formCard: {
     width: '100%',
     borderWidth: 1,
@@ -4114,6 +5182,81 @@ const styles = StyleSheet.create({
   manualMetaText: {
     fontSize: 12,
     color: '#777777',
+  },
+  manualUpdatePuestosButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
+  manualUpdatePuestosButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  updPuestosModalContainer: {
+    width: '100%',
+    maxWidth: 560,
+    maxHeight: '88%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 16,
+    overflow: 'hidden',
+  },
+  updPuestosDisclaimer: {
+    fontSize: 13,
+    color: '#555555',
+    marginBottom: 8,
+    lineHeight: 20,
+  },
+  updPuestosManualTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#007AFF',
+    marginBottom: 10,
+  },
+  updPuestosScroll: {
+    flexGrow: 0,
+    maxHeight: 420,
+    marginBottom: 8,
+  },
+  updPuestosScrollContent: {
+    paddingBottom: 12,
+  },
+  updPuestosModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalCancelButton: {
+    backgroundColor: '#E0E0E0',
+  },
+  modalConfirmButton: {
+    backgroundColor: '#007AFF',
+  },
+  modalCancelButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333333',
+  },
+  modalConfirmButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   modalOverlay: {
     flex: 1,

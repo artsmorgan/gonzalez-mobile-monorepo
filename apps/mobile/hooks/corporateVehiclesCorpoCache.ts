@@ -160,3 +160,37 @@ export async function setBitacoraIdOnVehicleUseInCorpoCache(params: {
 
   if (changed) await writeCache(next);
 }
+
+/**
+ * Tras listar por API: conserva vehículos de otras sucursales y borradores locales de esta sucursal;
+ * sustituye en caché los sincronizados de `sucursalId` por la respuesta del servidor.
+ */
+export async function mergeCorporateVehiclesCorpoCacheForSucursal(
+  sucursalId: number,
+  serverItems: Record<string, any>[]
+): Promise<void> {
+  if (!Number.isFinite(sucursalId) || sucursalId <= 0) return;
+
+  const list = await readCache();
+  const sid = Number(sucursalId);
+
+  const isLocalPending = (v: any) =>
+    !v?.synced ||
+    String(v?.id_local || '').startsWith('local-') ||
+    (typeof v?.id === 'string' && String(v.id).startsWith('local-'));
+
+  const others = list.filter((v: any) => vehicleSucursalId(v) !== sid);
+  const sameBranch = list.filter((v: any) => vehicleSucursalId(v) === sid);
+  const localOnly = sameBranch.filter(isLocalPending);
+
+  const merged = [
+    ...localOnly,
+    ...serverItems.map((v: any) => ({
+      ...v,
+      corpo_id: Number(v.corpo_id ?? v.sucursal_id ?? sid),
+      synced: true,
+    })),
+  ];
+
+  await writeCache([...others, ...merged]);
+}

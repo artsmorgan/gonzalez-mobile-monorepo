@@ -23,6 +23,20 @@ export async function getCurrentMarcaId(): Promise<number | null> {
   }
 }
 
+export async function getCurrentMarcaCorpoId(): Promise<number | null> {
+  const currentMarca = await AsyncStorage.getItem('current_marca');
+  if (!currentMarca) return null;
+  try {
+    const parsed = JSON.parse(currentMarca);
+    const id = parsed?.corpo?.id ?? parsed?.corpo_id;
+    if (typeof id === 'number') return id;
+    const parsedInt = parseInt(String(id), 10);
+    return Number.isNaN(parsedInt) ? null : parsedInt;
+  } catch {
+    return null;
+  }
+}
+
 export async function getIncidentsCache(): Promise<Incident[] | null> {
   const str = await AsyncStorage.getItem(INCIDENTS_CACHE_KEY);
   if (!str) return null;
@@ -35,6 +49,38 @@ export async function getIncidentsCache(): Promise<Incident[] | null> {
 
 export async function setIncidentsCache(incidents: Incident[]): Promise<void> {
   await AsyncStorage.setItem(INCIDENTS_CACHE_KEY, JSON.stringify(incidents));
+}
+
+/** Incidentes visibles para la sucursal/corporación activa (caché u online). */
+export function filterIncidentsByCorpo(incidents: Incident[], corpoId: number | null | undefined): Incident[] {
+  if (corpoId == null || Number.isNaN(Number(corpoId))) return [];
+  const id = Number(corpoId);
+  return incidents.filter((i) => i.corpo_id != null && Number(i.corpo_id) === id);
+}
+
+/**
+ * Tras un GET exitoso: conserva otras `corpo_id` en caché y los borradores locales (`id === 0` + `id_local`)
+ * de esta sucursal; sustituye el resto del slice por la respuesta del servidor.
+ */
+export function mergeIncidentsCacheForCorpo(existing: Incident[], freshFromServer: Incident[], corpoId: number): Incident[] {
+  const cid = Number(corpoId);
+  const freshTagged = freshFromServer.map((i) => ({
+    ...i,
+    corpo_id: i.corpo_id != null ? Number(i.corpo_id) : cid,
+  }));
+
+  const pendingLocalOnly = existing.filter(
+    (e) =>
+      e.corpo_id != null &&
+      Number(e.corpo_id) === cid &&
+      !!e.id_local &&
+      e.id_local !== '' &&
+      e.id === 0,
+  );
+
+  const keepOtherSlices = existing.filter((e) => e.corpo_id == null || Number(e.corpo_id) !== cid);
+
+  return [...keepOtherSlices, ...pendingLocalOnly, ...freshTagged];
 }
 
 export async function getIncidentsClassificationsCache(): Promise<IncidentClassificationOption[] | null> {

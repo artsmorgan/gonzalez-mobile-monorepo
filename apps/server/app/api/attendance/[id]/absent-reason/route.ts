@@ -15,7 +15,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { type, reason } = await req.json();
+        const body = await req.json();
+        const { reason, horaAccion } = body as { reason?: string; horaAccion?: number };
+        if (reason == null || String(reason).trim() === "") {
+            return NextResponse.json({ status: false, message: "Motivo no especificado" }, { status: 200 });
+        }
+        const horaAccionNum = horaAccion != null ? Number(horaAccion) : NaN;
+        if (!Number.isFinite(horaAccionNum)) {
+            return NextResponse.json({ status: false, message: "horaAccion inválida" }, { status: 200 });
+        }
 
         // Obtener siempre la última marca agregada
         const marcaDia = await callDynamicPrisma({
@@ -134,7 +142,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
         else {
             const title = "Motivo de ausencia confirmado";
-            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha confirmado el motivo de ausencia: ${reason}`;
+            const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha confirmado el motivo de ausencia: ${reason} (horaAccion: ${new Date(horaAccionNum).toISOString()})`;
             await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 

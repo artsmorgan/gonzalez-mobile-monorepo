@@ -12,38 +12,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
-    const marcaIdStr = req.nextUrl.searchParams.get("m");
-    if (!marcaIdStr) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
+    if (!corpoIdStr || String(corpoIdStr).trim() === "") {
+      return NextResponse.json({ status: false, message: "Sucursal (corpo) no especificada" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
-    });
-    if (!marcaDia) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
-    }
-    if (!marcaDia.empleadoFijo_id) {
-      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
-    }
-
-    // Obtener la última marca del empleado (simplificado: obtener la más reciente)
-    const lastMarca = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findFirst",
-        where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
-      }
-    });
-    if (!lastMarca) {
-      return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
-    }
-    if (marcaDia.id !== lastMarca.id) {
-      return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
+    const targetCorpoId = parseInt(String(corpoIdStr), 10);
+    if (!Number.isFinite(targetCorpoId) || targetCorpoId <= 0) {
+      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
     }
 
     const rows = await callDynamicPrisma({
@@ -53,8 +29,7 @@ export async function GET(req: NextRequest) {
         table: "e_llave",
         operation: "findMany",
         where: {
-          cliente_id: marcaDia.cliente_id,
-          corpo_id: marcaDia.corpo_id,
+          corpo_id: targetCorpoId,
         },
         include: {
           e_movimiento_llave: {

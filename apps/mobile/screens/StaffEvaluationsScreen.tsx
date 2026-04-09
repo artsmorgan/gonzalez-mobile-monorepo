@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { eventBus } from '@/hooks/eventBus';
 import {
   ActivityIndicator,
   Alert,
@@ -32,15 +33,34 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import SignatureScreen from 'react-native-signature-canvas';
-import { createStaffEvaluation, deleteStaffEvaluation, updateStaffEvaluationSignature } from '@/hooks/staffEvaluationsFunctions';
+import {
+  createStaffEvaluation,
+  deleteStaffEvaluation,
+  updateStaffEvaluationSignature,
+  type StaffEvaluationSignatureField,
+} from '@/hooks/staffEvaluationsFunctions';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import {
+  filterStaffEvaluationsCacheByCorpo,
+  mergeStaffEvaluationsCacheForCorpo,
+} from '@/hooks/staffEvaluationsCacheHelpers';
 
 type StaffEvaluationsNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
   'StaffEvaluations'
 >;
+
+/** Evita recrear arrays en cada render del formulario (estrellas 1–10). */
+const STAR_VALUES_1_TO_10 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
+/** Una sola cadena compartida para WebView del lienzo de firma (SignatureScreen). */
+const SIGNATURE_PAD_WEB_STYLE = `
+  .m-signature-pad--footer {display: none; margin: 0px;}
+  .m-signature-pad {box-shadow: none; border: none;}
+  body,html {width: 100%; height: 100%; background: #ffffff;}
+`;
 
 interface CurrentMarca {
   id: number;
@@ -124,6 +144,74 @@ interface StaffEvaluation {
   firma_empleado?: string | null;
   firma_empleado_manual?: string | null;
   id_local: string;
+  corpo_id?: number;
+  sucursal_id?: number;
+}
+
+function stripQueuedStaffEvalSignatureUpdates(
+  actions: any[],
+  evaluationId: number,
+  field?: StaffEvaluationSignatureField
+): any[] {
+  const id = Number(evaluationId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter((a: any) => {
+    if (a?.type !== 'update') return true;
+    if (Number(a.evaluationId) !== id) return true;
+    if (field != null && a.field !== field) return true;
+    return false;
+  });
+}
+
+function stripQueuedStaffEvalDeletesForId(actions: any[], evaluationId: number): any[] {
+  const id = Number(evaluationId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter((a: any) => !(a?.type === 'delete' && Number(a.id) === id));
+}
+
+function appendOfflineStaffEvalDelete(actions: any[], evaluationId: number): any[] {
+  let next = stripQueuedStaffEvalDeletesForId(actions, evaluationId);
+  next = stripQueuedStaffEvalSignatureUpdates(next, evaluationId);
+  next.push({ id: evaluationId, type: 'delete' });
+  return next;
+}
+
+function appendOfflineStaffEvalSignatureUpdate(
+  actions: any[],
+  params: { evaluationId: number; field: StaffEvaluationSignatureField; value: string | null }
+): any[] {
+  let next = stripQueuedStaffEvalSignatureUpdates(actions, params.evaluationId, params.field);
+  next.push({
+    id: Math.random().toString(36).substring(2, 12),
+    type: 'update',
+    evaluationId: params.evaluationId,
+    field: params.field,
+    value: params.value ?? '',
+  });
+  return next;
+}
+
+async function patchStaffEvalSignatureInCache(
+  evaluationId: number,
+  field: StaffEvaluationSignatureField,
+  value: string | null
+) {
+  const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+  if (!cacheStr) return;
+  try {
+    const cache = JSON.parse(cacheStr);
+    if (!Array.isArray(cache)) return;
+    const patch =
+      field === 'firma_empleado'
+        ? { firma_empleado: value }
+        : { firma_empleado_manual: value };
+    const updated = cache.map((item: StaffEvaluation) =>
+      Number(item.id) === Number(evaluationId) ? { ...item, ...patch } : item
+    );
+    await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updated));
+  } catch {
+    /* ignore */
+  }
 }
 
 type EvaluationTipo = 'Seguridad' | 'Aseo & limpieza' | 'Otros';
@@ -143,6 +231,88 @@ const monthNames = [
   'diciembre',
 ];
 
+type StaffStructureTree = MainStructureEmpresa[];
+
+const getStaffMarcaDivisionIdFromCurrent = (current: any): number | null => {
+  const raw =
+    current?.roleDivision?.division?.id ??
+    current?.role_division?.division?.id ??
+    current?.division?.id ??
+    current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveStaffDivisionIdInTree = (
+  tree: StaffStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null
+): number | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || divisionId == null) return divisionId;
+  const empresa = tree.find((e) => Number(e?.id) === Number(empresaId));
+  const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c) => Number(c?.id) === Number(clienteId));
+  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  if (divisiones.some((d) => Number(d?.id) === Number(divisionId))) return divisionId;
+  return null;
+};
+
+const findStaffContratoIdForSucursalIn = (
+  tree: StaffStructureTree,
+  sucursalId: number | null
+): number | null => {
+  if (sucursalId == null) return null;
+  for (const empresa of tree || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === Number(sucursalId)) {
+              return contrato.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+type StaffHierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  sucursalId: number | null;
+  puestoId: number | null;
+};
+
+/** Jerarquía desde `current_marca` (como MarcarIngresoSalida / Trainings). */
+const buildStaffHierarchyFromCurrentMarca = (current: any, tree: StaffStructureTree): StaffHierarchyPath => {
+  const empresaId = current?.empresa?.id != null ? Number(current.empresa.id) : null;
+  const clienteId = current?.cliente?.id != null ? Number(current.cliente.id) : null;
+  const divisionIdRaw = getStaffMarcaDivisionIdFromCurrent(current);
+  const divisionId = resolveStaffDivisionIdInTree(tree, empresaId, clienteId, divisionIdRaw);
+  const corpoId = current?.corpo?.id != null ? Number(current.corpo.id) : null;
+  let contratoId = current?.contrato?.id != null ? Number(current.contrato.id) : null;
+  if (contratoId == null && corpoId != null) {
+    contratoId = findStaffContratoIdForSucursalIn(tree, corpoId);
+  }
+  const puestoId = current?.puesto?.id != null ? Number(current.puesto.id) : null;
+  return {
+    empresaId,
+    clienteId,
+    divisionId,
+    contratoId,
+    sucursalId: corpoId,
+    puestoId,
+  };
+};
+
+const normFilterPicker = (v: unknown): number | null =>
+  v != null && v !== '' && Number(v) !== 0 ? Number(v) : null;
+
 export default function StaffEvaluationsScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const navigation = useNavigation<StaffEvaluationsNavigationProp>();
@@ -156,7 +326,8 @@ export default function StaffEvaluationsScreen() {
   const [isMenuVisible, setIsMenuVisible] = useState(false);
 
   // Marca / corpo
-  const [isLoading, setIsLoading] = useState(true);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [isListLoading, setIsListLoading] = useState(false);
   const [hasMarca, setHasMarca] = useState<boolean>(false);
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
@@ -164,7 +335,6 @@ export default function StaffEvaluationsScreen() {
   // Datos remotos / cache
   const [evaluaciones, setEvaluaciones] = useState<StaffEvaluation[]>([]);
   const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
-  const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   // Expand / detalles
   const [expandedEvaluations, setExpandedEvaluations] = useState<Set<string>>(new Set());
@@ -209,6 +379,15 @@ export default function StaffEvaluationsScreen() {
   const [filterFechaEvaluacion, setFilterFechaEvaluacion] = useState<string>('');
   const [showFilterFechaPicker, setShowFilterFechaPicker] = useState(false);
 
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+
+  const [isCreateSubmitting, setIsCreateSubmitting] = useState(false);
+  const [deletingEvaluationKey, setDeletingEvaluationKey] = useState<string | null>(null);
+
   // Evaluación dinámica (solo almacenamos respuestas; la estructura se infiere por tipo)
   const [evaluationSections, setEvaluationSections] = useState<EvaluationSection[]>([]);
 
@@ -252,6 +431,7 @@ export default function StaffEvaluationsScreen() {
 
   // Conectividad
   const checkConnection = async (): Promise<boolean> => {
+    //return false; 
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
@@ -287,7 +467,6 @@ export default function StaffEvaluationsScreen() {
   const formatDateLabel = (iso: string) => {
     if (!iso) return '';
     const date_complete = new Date(Number(iso)).toISOString().split('T');
-    console.log('date_complete', date_complete);
     const date = date_complete[0];
     const time = date_complete[1].split('.')[0];
     return `${date} ${time}`;
@@ -352,6 +531,68 @@ export default function StaffEvaluationsScreen() {
       fecha_contratacion: String(emp.fecha_contratacion || ''),
     }));
   }, [plazaNode]);
+
+  const applyHierarchyToFilters = useCallback((current: any, tree: StaffStructureTree) => {
+    if (!current?.empresa?.id) return;
+    const path = buildStaffHierarchyFromCurrentMarca(current, tree);
+    setFilterEmpresaId(path.empresaId);
+    setFilterClienteId(path.clienteId);
+    setFilterDivisionId(path.divisionId);
+    setFilterContratoId(path.contratoId);
+    setFilterCorpoId(path.sucursalId);
+  }, []);
+
+  const filterStructureRoots = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  const filterClientes = useMemo(() => {
+    const empresa = filterStructureRoots.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes || [];
+  }, [filterStructureRoots, filterEmpresaId]);
+  const filterDivisiones = useMemo(() => {
+    const cliente = filterClientes.find((c) => c.id === filterClienteId);
+    return cliente?.division || [];
+  }, [filterClientes, filterClienteId]);
+  const filterContratos = useMemo(() => {
+    const division = filterDivisiones.find((d) => d.id === filterDivisionId);
+    return division?.contratos || [];
+  }, [filterDivisiones, filterDivisionId]);
+  const filterSucursalesList = useMemo(() => {
+    const contrato = filterContratos.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales || [];
+  }, [filterContratos, filterContratoId]);
+
+  const onFilterEmpresaChange = (value: number | string) => {
+    const id = normFilterPicker(value);
+    setFilterEmpresaId(id);
+    setFilterClienteId(null);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    setFilterCorpoId(null);
+  };
+
+  const onFilterClienteChange = (value: number | string) => {
+    const id = normFilterPicker(value);
+    setFilterClienteId(id);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    setFilterCorpoId(null);
+  };
+
+  const onFilterDivisionChange = (value: number | string) => {
+    const id = normFilterPicker(value);
+    setFilterDivisionId(id);
+    setFilterContratoId(null);
+    setFilterCorpoId(null);
+  };
+
+  const onFilterContratoChange = (value: number | string) => {
+    const id = normFilterPicker(value);
+    setFilterContratoId(id);
+    setFilterCorpoId(null);
+  };
+
+  const onFilterCorpoChange = (value: number | string) => {
+    setFilterCorpoId(normFilterPicker(value));
+  };
 
   const initializeSectionsForTipo = (tipo: EvaluationTipo) => {
     tipoEvaluacionRef.current = tipo;
@@ -483,47 +724,6 @@ export default function StaffEvaluationsScreen() {
     }
   };
 
-  const resolveHierarchyByCurrentMarca = useCallback(
-    (mainStructure: MainStructureEmpresa[], current: any) => {
-      const marcaClienteId = current?.cliente?.id ?? current?.cliente_id ?? null;
-      const marcaCorpoId = current?.corpo?.id ?? current?.corpo_id ?? null;
-      const marcaPuestoId = current?.puesto?.id ?? current?.puesto_id ?? null;
-      const marcaPlazaId = current?.plaza?.id ?? current?.plaza_id ?? null;
-
-      for (const empresa of mainStructure) {
-        for (const cliente of empresa.clientes ?? []) {
-          if (marcaClienteId && Number(cliente.id) !== Number(marcaClienteId)) continue;
-          for (const division of cliente.division ?? []) {
-            for (const contrato of division.contratos ?? []) {
-              for (const sucursal of contrato.sucursales ?? []) {
-                if (marcaCorpoId && Number(sucursal.id) !== Number(marcaCorpoId)) continue;
-                for (const puesto of sucursal.puestos ?? []) {
-                  if (marcaPuestoId && Number(puesto.id) !== Number(marcaPuestoId)) continue;
-                  const plazas = puesto.plazas ?? [];
-                  const plaza =
-                    plazas.find((p) => marcaPlazaId && Number(p.id) === Number(marcaPlazaId)) ??
-                    plazas[0] ??
-                    null;
-                  return {
-                    empresaId: empresa.id,
-                    clienteId: cliente.id,
-                    divisionId: division.id,
-                    contratoId: contrato.id,
-                    corpoId: sucursal.id,
-                    puestoId: puesto.id,
-                    plazaId: plaza?.id ?? null,
-                  };
-                }
-              }
-            }
-          }
-        }
-      }
-      return null;
-    },
-    []
-  );
-
   const clearSelectedEmpleadoState = () => {
     setSelectedEmpleadoId(null);
     empleadoIdRef.current = null;
@@ -539,138 +739,188 @@ export default function StaffEvaluationsScreen() {
     setFirmaEmpleadoManual(null);
   };
 
-  const fetchData = useCallback(async () => {
-    try {
-      setIsLoading(true);
+  const listFetchGenRef = useRef(0);
 
+  const bootstrapScreen = useCallback(async () => {
+    setIsBootstrapping(true);
+    try {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         setHasMarca(false);
-        setIsLoading(false);
         return;
       }
-
-      const currentMarca: CurrentMarca = JSON.parse(currentMarcaStr);
-      if (!currentMarca || !currentMarca.id || !currentMarca.corpo?.id) {
+      const currentMarca = JSON.parse(currentMarcaStr);
+      if (!currentMarca?.id) {
         setHasMarca(false);
-        setIsLoading(false);
         return;
       }
-
       setHasMarca(true);
-      setMarcaId(currentMarca.id);
-      setCorpoId(currentMarca.corpo.id);
+      setMarcaId(Number(currentMarca.id));
+      const cor = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
+      setCorpoId(cor != null ? Number(cor) : null);
+
+      const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
+      const tree: StaffStructureTree = structureCacheStr
+        ? (() => {
+            try {
+              const p = JSON.parse(structureCacheStr);
+              return Array.isArray(p) ? p : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+      setStructure(tree);
+      applyHierarchyToFilters(currentMarca, tree);
+    } catch (e) {
+      console.error('bootstrap staff evaluations:', e);
+      setHasMarca(false);
+    } finally {
+      setIsBootstrapping(false);
+    }
+  }, [applyHierarchyToFilters]);
+
+  const fetchEvaluationsForFilterCorpo = useCallback(async () => {
+    const mId = marcaId;
+    const corpo_id = filterCorpoId != null ? Number(filterCorpoId) : null;
+    if (!mId || corpo_id == null || !Number.isFinite(corpo_id) || corpo_id <= 0) {
+      listFetchGenRef.current += 1;
+      setIsListLoading(false);
+      setEvaluaciones([]);
+      return;
+    }
+    const gen = ++listFetchGenRef.current;
+    const isStale = () => gen !== listFetchGenRef.current;
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      setEvaluaciones([]);
+      return;
+    }
+
+    try {
+      if (!isStale()) setIsListLoading(true);
 
       const hasConnection = await checkConnection();
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
+      if (isStale()) return;
 
       if (hasConnection) {
-        setIsStructureLoading(true);
-        /*
-        const structureRes = await authedFetch({
-          url: `${apiUrl}/api/main-structure`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (structureRes && structureRes.ok) {
-          const structureData = await structureRes.json();
-          if (structureData.status && Array.isArray(structureData.structure)) {
-            setStructure(structureData.structure as MainStructureEmpresa[]);
-            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(structureData.structure));
-          } else {
-            setStructure([]);
-          }
-        } else {
-          
-        }
-        */
-        
-        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
-        else setStructure([]);
-        setIsStructureLoading(false);
-
-        // Evaluaciones
         const evalRes = await authedFetch({
-          url: `${apiUrl}/api/evaluation/corpo/${currentMarca.corpo.id}`,
+          url: `${apiUrl}/api/evaluation/corpo/${corpo_id}`,
           init: {
             method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
           },
           refreshAccessToken,
           logout,
         });
         if (!evalRes) return;
-
+        if (isStale()) return;
         if (!evalRes.ok) {
           throw new Error(`HTTP error! status: ${evalRes.status}`);
         }
-
         const evalData = await evalRes.json();
-        if (evalData.status && evalData.evaluaciones) {
-          setEvaluaciones(evalData.evaluaciones as StaffEvaluation[]);
-          await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(evalData.evaluaciones));
+        if (isStale()) return;
+
+        const parseStaffCache = async (): Promise<StaffEvaluation[]> => {
+          const fullCacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+          if (!fullCacheStr) return [];
+          try {
+            const p = JSON.parse(fullCacheStr);
+            return Array.isArray(p) ? p : [];
+          } catch {
+            return [];
+          }
+        };
+
+        const fullCache = await parseStaffCache();
+
+        if (evalData.status && Array.isArray(evalData.evaluaciones)) {
+          const withCorpo = (evalData.evaluaciones as StaffEvaluation[]).map((e) => ({
+            ...e,
+            corpo_id: e.corpo_id ?? e.sucursal_id ?? corpo_id,
+          }));
+          const merged = mergeStaffEvaluationsCacheForCorpo(fullCache, withCorpo, corpo_id);
+          await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(merged));
+          const forList = filterStaffEvaluationsCacheByCorpo(merged, corpo_id) as StaffEvaluation[];
+          setEvaluaciones(forList);
         } else {
-          setEvaluaciones([]);
+          const forList = filterStaffEvaluationsCacheByCorpo(fullCache, corpo_id) as StaffEvaluation[];
+          setEvaluaciones(forList);
         }
       } else {
-        // Offline: cargar desde cache
         const evalCacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+        if (isStale()) return;
         if (evalCacheStr) {
-          setEvaluaciones(JSON.parse(evalCacheStr));
+          try {
+            const all = JSON.parse(evalCacheStr) as StaffEvaluation[];
+            const filtered = filterStaffEvaluationsCacheByCorpo(
+              Array.isArray(all) ? all : [],
+              corpo_id
+            ) as StaffEvaluation[];
+            setEvaluaciones(filtered);
+          } catch {
+            setEvaluaciones([]);
+          }
         } else {
           setEvaluaciones([]);
         }
-        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
-        else setStructure([]);
       }
     } catch (error) {
+      if (isStale()) return;
       console.error('Error fetching staff evaluations:', error);
       try {
         const evalCacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
         if (evalCacheStr) {
-          setEvaluaciones(JSON.parse(evalCacheStr));
+          const all = JSON.parse(evalCacheStr) as StaffEvaluation[];
+          setEvaluaciones(
+            filterStaffEvaluationsCacheByCorpo(Array.isArray(all) ? all : [], corpo_id) as StaffEvaluation[]
+          );
+        } else {
+          setEvaluaciones([]);
         }
-        const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
-      } catch (cacheErr) {
-        console.error('Error loading staff evaluations from cache:', cacheErr);
+      } catch {
+        setEvaluaciones([]);
       }
     } finally {
-      setIsStructureLoading(false);
-      setIsLoading(false);
+      if (!isStale()) setIsListLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, [marcaId, filterCorpoId, refreshAccessToken, logout]);
+
+  const fetchEvaluationsForFilterCorpoRef = useRef<(() => Promise<void>) | null>(null);
+  fetchEvaluationsForFilterCorpoRef.current = fetchEvaluationsForFilterCorpo;
+
+  const reloadEvaluationsList = useCallback(() => {
+    void fetchEvaluationsForFilterCorpoRef.current?.();
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
-      fetchData();
-    }, [fetchData])
+      void bootstrapScreen();
+    }, [bootstrapScreen])
   );
 
   useEffect(() => {
+    if (!marcaId || filterCorpoId == null) {
+      listFetchGenRef.current += 1;
+      setIsListLoading(false);
+      setEvaluaciones([]);
+      return;
+    }
+    void fetchEvaluationsForFilterCorpoRef.current?.();
+  }, [marcaId, filterCorpoId]);
+
+  useEffect(() => {
     const handler = () => {
-      fetchData();
+      if (filterCorpoId != null && marcaId != null) {
+        void fetchEvaluationsForFilterCorpoRef.current?.();
+      }
     };
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { eventBus } = require('@/hooks/eventBus');
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [fetchData]);
+  }, [filterCorpoId, marcaId]);
 
   useEffect(() => {
     if (isRestoringHierarchyRef.current) return;
@@ -728,6 +978,19 @@ export default function StaffEvaluationsScreen() {
     clearSelectedEmpleadoState();
   }, [selectedPlazaId]);
 
+  /** Tras precargar desde `current_marca`, los efectos de cascada deben ver el ref en `true`. Quitar el ref solo cuando ya pasaron (mismo commit). */
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) {
+      isRestoringHierarchyRef.current = false;
+    }
+  }, [
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedCorpoId,
+  ]);
+
   // Cambio de tipo de evaluación
   const handleTipoChange = (tipo: EvaluationTipo) => {
     setTipoEvaluacion(tipo);
@@ -736,7 +999,7 @@ export default function StaffEvaluationsScreen() {
   };
 
   const startCreating = async () => {
-    if (!marcaId || !corpoId) {
+    if (!marcaId) {
       Alert.alert('Error', 'No se encontró la marca actual.');
       return;
     }
@@ -777,28 +1040,32 @@ export default function StaffEvaluationsScreen() {
     if (currentMarcaStr) {
       try {
         const currentMarca = JSON.parse(currentMarcaStr);
-        const resolved = resolveHierarchyByCurrentMarca(structure, currentMarca);
+        const path = buildStaffHierarchyFromCurrentMarca(currentMarca, structure);
         isRestoringHierarchyRef.current = true;
-        if (resolved) {
-          setSelectedEmpresaId(resolved.empresaId);
-          setSelectedClienteId(resolved.clienteId);
-          setSelectedDivisionId(resolved.divisionId);
-          setSelectedContratoId(resolved.contratoId);
-          setSelectedCorpoId(resolved.corpoId);
-          setSelectedPuestoId(resolved.puestoId);
-          setSelectedPlazaId(resolved.plazaId);
+        if (path.empresaId) {
+          setSelectedEmpresaId(path.empresaId);
+          setSelectedClienteId(path.clienteId);
+          setSelectedDivisionId(path.divisionId);
+          setSelectedContratoId(path.contratoId);
+          setSelectedCorpoId(path.sucursalId);
         } else {
           setSelectedEmpresaId(null);
           setSelectedClienteId(null);
           setSelectedDivisionId(null);
           setSelectedContratoId(null);
-          setSelectedCorpoId(currentMarca?.corpo?.id ?? currentMarca?.corpo_id ?? null);
-          setSelectedPuestoId(currentMarca?.puesto?.id ?? currentMarca?.puesto_id ?? null);
-          setSelectedPlazaId(currentMarca?.plaza?.id ?? currentMarca?.plaza_id ?? null);
+          const fallbackCorpo = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
+          setSelectedCorpoId(fallbackCorpo != null ? Number(fallbackCorpo) : null);
         }
-        setTimeout(() => {
-          isRestoringHierarchyRef.current = false;
-        }, 0);
+        setSelectedPuestoId(null);
+        setSelectedPlazaId(null);
+        clearSelectedEmpleadoState();
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (isRestoringHierarchyRef.current) {
+              isRestoringHierarchyRef.current = false;
+            }
+          });
+        });
       } catch {
         isRestoringHierarchyRef.current = false;
         setSelectedEmpresaId(null);
@@ -829,9 +1096,17 @@ export default function StaffEvaluationsScreen() {
     }
   };
 
-  const cancelCreating = () => {
+  const releaseHeavyCreateFormResources = useCallback(() => {
+    setEvaluationSections([]);
+    setFirmaEmpleadoManual(null);
+    setCameraVisible(false);
+    setCurrentQuestionKey(null);
+  }, []);
+
+  const cancelCreating = useCallback(() => {
     setIsCreating(false);
-  };
+    releaseHeavyCreateFormResources();
+  }, [releaseHeavyCreateFormResources]);
 
   const onEmpleadoSelected = (id: number | null) => {
     setSelectedEmpleadoId(id);
@@ -1107,7 +1382,7 @@ export default function StaffEvaluationsScreen() {
     }
   };
 
-  const handleAddSignatureConfirmDigital = async () => {
+  const handleAddSignatureConfirmDigital = () => {
     if (!addSignatureEvaluation || addSignatureType !== 'firma_empleado' || !addSignatureQRValue) {
       Alert.alert('Aviso', 'Escanea un código QR primero.');
       return;
@@ -1116,6 +1391,7 @@ export default function StaffEvaluationsScreen() {
       Alert.alert('Aviso', 'Esta evaluación aún no está sincronizada. No se puede añadir firma.');
       return;
     }
+    if (isAddSignatureSubmitting) return;
     Alert.alert(
       'Confirmar',
       '¿Guardar esta firma digital en el registro?',
@@ -1126,6 +1402,30 @@ export default function StaffEvaluationsScreen() {
           onPress: async () => {
             setIsAddSignatureSubmitting(true);
             try {
+              const hasConnection = await checkConnection();
+              if (!hasConnection) {
+                const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = appendOfflineStaffEvalSignatureUpdate(actions, {
+                  evaluationId: addSignatureEvaluation.id,
+                  field: 'firma_empleado',
+                  value: addSignatureQRValue,
+                });
+                await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
+                await patchStaffEvalSignatureInCache(
+                  addSignatureEvaluation.id,
+                  'firma_empleado',
+                  addSignatureQRValue
+                );
+                Alert.alert(
+                  'Modo offline',
+                  'Firma guardada localmente. Se sincronizará cuando haya conexión.'
+                );
+                closeAddSignatureModal();
+                reloadEvaluationsList();
+                return;
+              }
               const result = await updateStaffEvaluationSignature({
                 evaluationId: addSignatureEvaluation.id,
                 field: 'firma_empleado',
@@ -1135,7 +1435,7 @@ export default function StaffEvaluationsScreen() {
               });
               if (result.status) {
                 closeAddSignatureModal();
-                fetchData();
+                reloadEvaluationsList();
               } else {
                 Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
               }
@@ -1148,6 +1448,51 @@ export default function StaffEvaluationsScreen() {
         },
       ]
     );
+  };
+
+  const submitStaffSignatureManualFromModal = async (sig: string) => {
+    const ev = addSignatureEvaluation;
+    if (!ev || addSignatureType !== 'firma_empleado_manual' || ev.id === 0) return;
+    setIsAddSignatureSubmitting(true);
+    try {
+      const hasConnection = await checkConnection();
+      if (!hasConnection) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = appendOfflineStaffEvalSignatureUpdate(actions, {
+          evaluationId: ev.id,
+          field: 'firma_empleado_manual',
+          value: sig,
+        });
+        await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
+        await patchStaffEvalSignatureInCache(ev.id, 'firma_empleado_manual', sig);
+        Alert.alert(
+          'Modo offline',
+          'Firma guardada localmente. Se sincronizará cuando haya conexión.'
+        );
+        closeAddSignatureModal();
+        reloadEvaluationsList();
+        return;
+      }
+      const result = await updateStaffEvaluationSignature({
+        evaluationId: ev.id,
+        field: 'firma_empleado_manual',
+        value: sig,
+        refreshAccessToken,
+        logout,
+      });
+      if (result.status) {
+        closeAddSignatureModal();
+        reloadEvaluationsList();
+      } else {
+        Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+      }
+    } catch (e) {
+      Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
+    } finally {
+      setIsAddSignatureSubmitting(false);
+    }
   };
 
   const triggerAddSignatureManualRead = () => {
@@ -1164,9 +1509,9 @@ export default function StaffEvaluationsScreen() {
       Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
       return;
     }
-    const ev = addSignatureEvaluation;
-    const field = addSignatureType;
-    if (!ev || field !== 'firma_empleado_manual' || ev.id === 0) return;
+    if (!addSignatureEvaluation || addSignatureType !== 'firma_empleado_manual' || addSignatureEvaluation.id === 0)
+      return;
+    if (isAddSignatureSubmitting) return;
     Alert.alert(
       'Confirmar',
       '¿Guardar esta firma manual en el registro?',
@@ -1174,96 +1519,76 @@ export default function StaffEvaluationsScreen() {
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Aceptar',
-          onPress: async () => {
-            setIsAddSignatureSubmitting(true);
-            try {
-              const result = await updateStaffEvaluationSignature({
-                evaluationId: ev.id,
-                field: 'firma_empleado_manual',
-                value: sig,
-                refreshAccessToken,
-                logout,
-              });
-              if (result.status) {
-                closeAddSignatureModal();
-                fetchData();
-              } else {
-                Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
-              }
-            } catch (e) {
-              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
-            } finally {
-              setIsAddSignatureSubmitting(false);
-            }
-          },
+          onPress: () => void submitStaffSignatureManualFromModal(sig),
         },
       ]
     );
   };
 
-  const updateQuestionField = (
-    sectionIndex: number,
-    questionIndex: number,
-    field: 'title' | 'answear' | 'image' | 'imageOrientation',
-    value: string | null
-  ) => {
-    setEvaluationSections((prev) => {
-      const copy = prev.map((s) => ({
-        ...s,
-        questions: s.questions.map((q) => ({ ...q })),
-      }));
-      const section = copy[sectionIndex];
-      if (!section) return prev;
-      const question = section.questions[questionIndex];
-      if (!question) return prev;
-      (question as any)[field] = value;
-      return copy;
-    });
-  };
+  const updateQuestionField = useCallback(
+    (
+      sectionIndex: number,
+      questionIndex: number,
+      field: 'title' | 'answear' | 'image' | 'imageOrientation',
+      value: string | null
+    ) => {
+      setEvaluationSections((prev) => {
+        const section = prev[sectionIndex];
+        if (!section) return prev;
+        const question = section.questions[questionIndex];
+        if (!question) return prev;
+        if ((question as any)[field] === value) return prev;
+        const newQuestions = section.questions.slice();
+        newQuestions[questionIndex] = { ...question, [field]: value } as EvaluationQuestion;
+        const newSections = prev.slice();
+        newSections[sectionIndex] = { ...section, questions: newQuestions };
+        return newSections;
+      });
+    },
+    []
+  );
 
-  const appendQuestionImage = (
-    sectionIndex: number,
-    questionIndex: number,
-    uri: string,
-    orientation?: 'horizontal' | 'vertical'
-  ) => {
-    setEvaluationSections((prev) => {
-      const copy = prev.map((s) => ({
-        ...s,
-        questions: s.questions.map((q) => ({ ...q })),
-      }));
-      const section = copy[sectionIndex];
-      if (!section) return prev;
-      const question = section.questions[questionIndex];
-      if (!question) return prev;
+  const appendQuestionImage = useCallback(
+    (sectionIndex: number, questionIndex: number, uri: string, orientation?: 'horizontal' | 'vertical') => {
+      setEvaluationSections((prev) => {
+        const section = prev[sectionIndex];
+        if (!section) return prev;
+        const question = section.questions[questionIndex];
+        if (!question) return prev;
 
-      if (!Array.isArray(question.images)) {
-        const initial: string[] = [];
-        if (question.image) initial.push(question.image);
-        question.images = initial;
-      }
-      question.images!.push(uri);
+        const baseImages: string[] = Array.isArray(question.images)
+          ? question.images.slice()
+          : question.image
+            ? [question.image]
+            : [];
+        baseImages.push(uri);
 
-      // Mantener compatibilidad: la primera imagen también se refleja en `image`
-      if (!question.image) {
-        question.image = uri;
-      }
+        const nextImage = question.image ?? uri;
+        const nextOrientation =
+          orientation && !question.imageOrientation ? orientation : question.imageOrientation;
 
-      if (orientation && !question.imageOrientation) {
-        question.imageOrientation = orientation;
-      }
+        const newQuestion: EvaluationQuestion = {
+          ...question,
+          images: baseImages,
+          image: nextImage,
+          imageOrientation: nextOrientation,
+        };
+        const newQuestions = section.questions.slice();
+        newQuestions[questionIndex] = newQuestion;
+        const newSections = prev.slice();
+        newSections[sectionIndex] = { ...section, questions: newQuestions };
+        return newSections;
+      });
+    },
+    []
+  );
 
-      return copy;
-    });
-  };
-
-  const handleStarPress = (
-    sectionIndex: number,
-    questionIndex: number,
-    value: number
-  ) => {
-    updateQuestionField(sectionIndex, questionIndex, 'answear', String(value));
-  };
+  const handleStarPress = useCallback(
+    (sectionIndex: number, questionIndex: number, value: number) => {
+      updateQuestionField(sectionIndex, questionIndex, 'answear', String(value));
+    },
+    [updateQuestionField]
+  );
 
   const openCameraForQuestion = async (sectionIndex: number, questionIndex: number) => {
     if (!permission) {
@@ -1292,8 +1617,8 @@ export default function StaffEvaluationsScreen() {
     try {
       const photo: any = await cameraRef.current.takePictureAsync({
         base64: true,
-        quality: 0.7,
-        skipProcessing: false,
+        quality: Platform.OS === 'android' ? 0.45 : 0.55,
+        skipProcessing: true,
       });
       setCameraVisible(false);
       if (!photo || !photo.base64) {
@@ -1370,125 +1695,167 @@ export default function StaffEvaluationsScreen() {
     return evaluationSections;
   };
 
-  const resetAllFilters = () => {
+  const resetAllFilters = useCallback(async () => {
     setFilterColaboradorNombre('');
     setFilterColaboradorCedula('');
     setFilterEvaluadorNombre('');
     setFilterEvaluadorCedula('');
     setFilterTipo('all');
     setFilterFechaEvaluacion('');
+    try {
+      const raw = await AsyncStorage.getItem('current_marca');
+      let tree: StaffStructureTree = Array.isArray(structure) ? structure : [];
+      if (tree.length === 0) {
+        const s = await AsyncStorage.getItem('main_structure_cache');
+        if (s) {
+          try {
+            const p = JSON.parse(s);
+            tree = Array.isArray(p) ? p : [];
+            setStructure(tree);
+          } catch {
+            tree = [];
+          }
+        }
+      }
+      if (raw && tree.length > 0) {
+        applyHierarchyToFilters(JSON.parse(raw), tree);
+      } else {
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        setFilterCorpoId(null);
+      }
+    } catch {
+      setFilterEmpresaId(null);
+      setFilterClienteId(null);
+      setFilterDivisionId(null);
+      setFilterContratoId(null);
+      setFilterCorpoId(null);
+    }
+  }, [structure, applyHierarchyToFilters]);
+
+  const submitCreateEvaluation = async () => {
+    if (!marcaId || !employee) return;
+    setIsCreateSubmitting(true);
+    try {
+      const sectionsForPayload = buildEvaluationPayloadSections();
+
+      const requestBody = {
+        marca_id: marcaId,
+        corpo_id: selectedCorpoId,
+        puesto_id: selectedPuestoId,
+        plaza_id: selectedPlazaId,
+        nombre_colaborador: nombreColaboradorRef.current,
+        cedula_colaborador: cedulaColaboradorRef.current,
+        empleado_id: empleadoIdRef.current,
+        evaluador_id: employee.id,
+        fecha_ingreso: fechaIngresoRef.current,
+        fecha_evaluacion: fechaEvaluacionRef.current,
+        tipo: tipoEvaluacionRef.current,
+        evaluacion: JSON.stringify(sectionsForPayload),
+        comentarios: comentariosGeneralesRef.current.trim() || '-',
+        firma_evaluador: firmaEvaluadorHash!,
+        firma_empleado: firmaEmpleadoHash ?? null,
+        firma_empleado_manual: firmaEmpleadoManual || null,
+      };
+
+      const hasConnection = await checkConnection();
+
+      if (hasConnection) {
+        const result = await createStaffEvaluation({
+          requestData: requestBody,
+          refreshAccessToken,
+          logout,
+        });
+        if (result.status) {
+          Alert.alert('Éxito', result.message || 'Evaluación creada correctamente');
+          setIsCreating(false);
+          releaseHeavyCreateFormResources();
+          reloadEvaluationsList();
+        } else {
+          Alert.alert('Error', result.message || 'No se pudo crear la evaluación');
+        }
+      } else {
+        const localId = Math.random().toString(36).substring(2, 12);
+        const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = actions.filter(
+          (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+        );
+        actions.push({
+          id: localId,
+          type: 'create',
+          requestData: requestBody,
+        });
+        await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+        const evaluacionCache: StaffEvaluation = {
+          id: 0,
+          empleado: {
+            id: empleadoIdRef.current!,
+            nombre: nombreColaboradorRef.current,
+            cedula: cedulaColaboradorRef.current,
+          },
+          evaluador: {
+            id: Number(employee.id),
+            nombre: nombreEvaluadorRef.current || employee.name || '',
+            cedula: (employee as any).cedula || '',
+          },
+          fecha_ingreso: fechaIngresoRef.current,
+          fecha_evaluacion: fechaEvaluacionRef.current,
+          evaluacion: sectionsForPayload,
+          comentarios: comentariosGeneralesRef.current.trim() || '-',
+          tipo: tipoEvaluacionRef.current,
+          firma_evaluador: firmaEvaluadorHash!,
+          firma_empleado: firmaEmpleadoHash ?? null,
+          firma_empleado_manual: firmaEmpleadoManual || null,
+          id_local: localId,
+          corpo_id: selectedCorpoId ?? undefined,
+        };
+
+        cache.push(evaluacionCache);
+        await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(cache));
+
+        Alert.alert(
+          'Modo offline',
+          'Evaluación registrada localmente. Se sincronizará cuando haya conexión.'
+        );
+        setIsCreating(false);
+        releaseHeavyCreateFormResources();
+        reloadEvaluationsList();
+      }
+    } catch (error) {
+      console.error('Error creating staff evaluation:', error);
+      Alert.alert('Error', 'No se pudo crear la evaluación');
+    } finally {
+      setIsCreateSubmitting(false);
+    }
   };
 
-  const handleCreateEvaluation = async () => {
+  const handleCreateEvaluation = () => {
     if (!marcaId || !employee) {
       Alert.alert('Error', 'No se encontró información necesaria de la marca o del evaluador');
       return;
     }
     if (!validateForm()) return;
-
+    if (isCreateSubmitting) return;
     Alert.alert(
       'Confirmar',
       '¿Estás seguro de que deseas crear esta evaluación de personal?',
       [
         { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Confirmar',
-          onPress: async () => {
-            try {
-              const sectionsForPayload = buildEvaluationPayloadSections();
-
-              const requestBody = {
-                marca_id: marcaId,
-                corpo_id: selectedCorpoId,
-                puesto_id: selectedPuestoId,
-                plaza_id: selectedPlazaId,
-                nombre_colaborador: nombreColaboradorRef.current,
-                cedula_colaborador: cedulaColaboradorRef.current,
-                empleado_id: empleadoIdRef.current,
-                evaluador_id: employee.id,
-                fecha_ingreso: fechaIngresoRef.current,
-                fecha_evaluacion: fechaEvaluacionRef.current,
-                tipo: tipoEvaluacionRef.current,
-                evaluacion: JSON.stringify(sectionsForPayload),
-                comentarios: comentariosGeneralesRef.current.trim() || '-',
-                firma_evaluador: firmaEvaluadorHash!,
-                firma_empleado: firmaEmpleadoHash ?? null,
-                firma_empleado_manual: firmaEmpleadoManual || null,
-              };
-
-              const hasConnection = await checkConnection();
-
-              if (hasConnection) {
-                const result = await createStaffEvaluation({
-                  requestData: requestBody,
-                  refreshAccessToken,
-                  logout,
-                });
-                if (result.status) {
-                  Alert.alert('Éxito', result.message || 'Evaluación creada correctamente');
-                  setIsCreating(false);
-                  fetchData();
-                } else {
-                  Alert.alert('Error', result.message || 'No se pudo crear la evaluación');
-                }
-              } else {
-                const localId = Math.random().toString(36).substring(2, 12);
-                const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: localId,
-                  type: 'create',
-                  requestData: requestBody,
-                });
-                await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
-
-                const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const evaluacionCache: StaffEvaluation = {
-                  id: 0,
-                  empleado: {
-                    id: empleadoIdRef.current!,
-                    nombre: nombreColaboradorRef.current,
-                    cedula: cedulaColaboradorRef.current,
-                  },
-                  evaluador: {
-                    id: Number(employee.id),
-                    nombre: nombreEvaluadorRef.current || employee.name || '',
-                    cedula: (employee as any).cedula || '',
-                  },
-                  fecha_ingreso: fechaIngresoRef.current,
-                  fecha_evaluacion: fechaEvaluacionRef.current,
-                  evaluacion: sectionsForPayload,
-                  comentarios: comentariosGeneralesRef.current.trim() || '-',
-                  tipo: tipoEvaluacionRef.current,
-                  firma_evaluador: firmaEvaluadorHash!,
-                  firma_empleado: firmaEmpleadoHash ?? null,
-                  firma_empleado_manual: firmaEmpleadoManual || null,
-                  id_local: localId,
-                };
-
-                cache.push(evaluacionCache);
-                await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(cache));
-
-                Alert.alert(
-                  'Modo offline',
-                  'Evaluación registrada localmente. Se sincronizará cuando haya conexión.'
-                );
-                setIsCreating(false);
-                setEvaluaciones(cache);
-              }
-            } catch (error) {
-              console.error('Error creating staff evaluation:', error);
-              Alert.alert('Error', 'No se pudo crear la evaluación');
-            }
-          },
-        },
+        { text: 'Aceptar', onPress: () => void submitCreateEvaluation() },
       ]
     );
   };
 
-  const confirmDeleteEvaluation = async (ev: StaffEvaluation) => {
+  const confirmDeleteEvaluation = async (ev: StaffEvaluation, listKey: string) => {
+    setDeletingEvaluationKey(listKey);
     try {
       // Evaluaciones solo locales (sin ID de servidor)
       if (!ev.id || ev.id === 0 || ev.id_local) {
@@ -1512,7 +1879,9 @@ export default function StaffEvaluationsScreen() {
         const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
         if (actionsStr && localId) {
           const actions = JSON.parse(actionsStr);
-          const filteredActions = actions.filter((a: any) => a.id !== localId);
+          const filteredActions = actions.filter(
+            (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+          );
           await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(filteredActions));
         }
 
@@ -1525,13 +1894,9 @@ export default function StaffEvaluationsScreen() {
       if (!hasConnection) {
         // Modo offline: encolar acción y actualizar cache
         const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-        // Agregar acción de delete para este id de evaluación
-        actions.push({
-          id: ev.id,
-          type: 'delete',
-        });
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = appendOfflineStaffEvalDelete(actions, ev.id);
         await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
 
         // Eliminar de cache local
@@ -1540,8 +1905,11 @@ export default function StaffEvaluationsScreen() {
         const filteredCache = cache.filter((item: StaffEvaluation) => item.id !== ev.id);
         await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(filteredCache));
 
-        // Eliminar de estado actual
-        setEvaluaciones(filteredCache);
+        const forList =
+          filterCorpoId != null
+            ? (filterStaffEvaluationsCacheByCorpo(filteredCache, filterCorpoId) as StaffEvaluation[])
+            : filteredCache;
+        setEvaluaciones(forList);
 
         Alert.alert(
           'Modo offline',
@@ -1574,10 +1942,12 @@ export default function StaffEvaluationsScreen() {
     } catch (error) {
       console.error('Error deleting evaluation:', error);
       Alert.alert('Error', 'Ocurrió un error al eliminar la evaluación');
+    } finally {
+      setDeletingEvaluationKey(null);
     }
   };
 
-  const handleDeleteEvaluation = (ev: StaffEvaluation) => {
+  const handleDeleteEvaluation = (ev: StaffEvaluation, listKey: string) => {
     Alert.alert(
       'Eliminar evaluación',
       '¿Estás seguro de que deseas eliminar esta evaluación? Esta acción no se puede deshacer.',
@@ -1586,7 +1956,7 @@ export default function StaffEvaluationsScreen() {
         {
           text: 'Eliminar',
           style: 'destructive',
-          onPress: () => confirmDeleteEvaluation(ev),
+          onPress: () => void confirmDeleteEvaluation(ev, listKey),
         },
       ]
     );
@@ -1705,12 +2075,6 @@ export default function StaffEvaluationsScreen() {
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Estructura *</ThemedText>
-          {isStructureLoading && (
-            <ThemedView style={styles.inlineLoading}>
-              <ActivityIndicator size="small" color="#007AFF" />
-              <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
-            </ThemedView>
-          )}
 
           <ThemedText style={styles.formLabel}>Empresa</ThemedText>
           <ThemedView style={styles.pickerContainer}>
@@ -1934,7 +2298,9 @@ export default function StaffEvaluationsScreen() {
           {evaluationSections.map((section, sIndex) => (
             <ThemedView key={sIndex} style={styles.sectionCard}>
               <ThemedText style={styles.sectionTitle}>{section.title}</ThemedText>
-              {section.questions.map((q, qIndex) => (
+              {section.questions.map((q, qIndex) => {
+                const questionImages = getQuestionImages(q);
+                return (
                 <ThemedView key={qIndex} style={styles.questionCard}>
                   {q.editableTitle ? (
                     <TextInput
@@ -1955,12 +2321,8 @@ export default function StaffEvaluationsScreen() {
                   {(tipoEvaluacion === 'Seguridad' ||
                     tipoEvaluacion === 'Aseo & limpieza') ? (
                     <ThemedView style={styles.starsRow}>
-                      {Array.from({ length: 10 }).map((_, i) => {
-                        const starValue = i + 1;
-                        const current =
-                          parseInt(q.answear || '0', 10) > 0
-                            ? parseInt(q.answear || '0', 10)
-                            : 0;
+                      {STAR_VALUES_1_TO_10.map((starValue) => {
+                        const current = Math.max(0, parseInt(q.answear || '0', 10) || 0);
                         const filled = starValue <= current;
                         return (
                           <TouchableOpacity
@@ -2035,13 +2397,13 @@ export default function StaffEvaluationsScreen() {
                         >
                           {getActionIcon('camera')}
                           <ThemedText style={styles.cameraSmallButtonText}>
-                            {getQuestionImages(q).length > 0
+                            {questionImages.length > 0
                               ? 'Agregar otra imagen'
                               : 'Tomar imagen (opcional)'}
                           </ThemedText>
                         </TouchableOpacity>
-                        {getQuestionImages(q).length > 0 &&
-                          getQuestionImages(q).map((uri, idx) => (
+                        {questionImages.length > 0 &&
+                          questionImages.map((uri, idx) => (
                             <Image
                               key={idx}
                               source={{ uri }}
@@ -2052,12 +2414,14 @@ export default function StaffEvaluationsScreen() {
                                   : styles.questionImagePreviewHorizontal,
                               ]}
                               resizeMode="contain"
+                              {...(Platform.OS === 'android' ? { resizeMethod: 'resize' as const } : {})}
                             />
                           ))}
                       </>
                     )}
                 </ThemedView>
-              ))}
+              );
+              })}
             </ThemedView>
           ))}
         </ThemedView>
@@ -2212,16 +2576,26 @@ export default function StaffEvaluationsScreen() {
         {/* Acciones */}
         <ThemedView style={styles.formActions}>
           <TouchableOpacity
-            style={[styles.formButton, styles.cancelButton]}
+            style={[styles.formButton, styles.cancelButton, isCreateSubmitting && { opacity: 0.7 }]}
             onPress={cancelCreating}
+            disabled={isCreateSubmitting}
           >
             <ThemedText style={styles.formButtonText}>{getActionIcon('cancel')}</ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.formButton, styles.confirmButton]}
+            style={[
+              styles.formButton,
+              styles.confirmButton,
+              isCreateSubmitting && { opacity: 0.7 },
+            ]}
             onPress={handleCreateEvaluation}
+            disabled={isCreateSubmitting}
           >
-            <ThemedText style={styles.formButtonText}>{getActionIcon('confirm')}</ThemedText>
+            {isCreateSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.formButtonText}>{getActionIcon('confirm')}</ThemedText>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -2436,16 +2810,21 @@ export default function StaffEvaluationsScreen() {
         {employee && ev.evaluador.id === Number(employee.id) && (
           <TouchableOpacity
             style={styles.deleteButton}
-            onPress={() => handleDeleteEvaluation(ev)}
+            onPress={() => handleDeleteEvaluation(ev, key)}
+            disabled={deletingEvaluationKey === key}
           >
-            <Ionicons name="trash" size={24} color="#FFFFFF" />
+            {deletingEvaluationKey === key ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <Ionicons name="trash" size={24} color="#FFFFFF" />
+            )}
           </TouchableOpacity>
         )}
       </ThemedView>
     );
   };
 
-  if (isLoading) {
+  if (isBootstrapping) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader
@@ -2454,7 +2833,7 @@ export default function StaffEvaluationsScreen() {
         />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando evaluaciones...</ThemedText>
+          <ThemedText style={styles.loadingText}>Preparando pantalla...</ThemedText>
         </ThemedView>
         <AppFooter />
         <SlideMenu
@@ -2497,7 +2876,12 @@ export default function StaffEvaluationsScreen() {
         onMenuPress={handleMenuPress}
         title="Evaluaciones de personal"
       />
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        removeClippedSubviews={Platform.OS === 'android'}
+      >
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
@@ -2536,6 +2920,81 @@ export default function StaffEvaluationsScreen() {
 
             {isFiltersExpanded && (
               <ThemedView style={styles.filterContent}>
+                <ThemedText style={[styles.filterLabel, { marginBottom: 6 }]}>Ubicación (sucursal)</ThemedText>
+                <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={filterEmpresaId ?? 0}
+                    onValueChange={(v) => onFilterEmpresaChange(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar empresa..." value={0} color="#000000" />
+                    {filterStructureRoots.map((empresa) => (
+                      <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={filterEmpresaId != null}
+                    selectedValue={filterClienteId ?? 0}
+                    onValueChange={(v) => onFilterClienteChange(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar cliente..." value={0} color="#000000" />
+                    {filterClientes.map((cliente) => (
+                      <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={styles.formLabel}>División</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={filterClienteId != null}
+                    selectedValue={filterDivisionId ?? 0}
+                    onValueChange={(v) => onFilterDivisionChange(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar división..." value={0} color="#000000" />
+                    {filterDivisiones.map((division) => (
+                      <Picker.Item key={division.id} label={division.nombre} value={division.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={filterDivisionId != null}
+                    selectedValue={filterContratoId ?? 0}
+                    onValueChange={(v) => onFilterContratoChange(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar contrato..." value={0} color="#000000" />
+                    {filterContratos.map((contrato) => (
+                      <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={styles.formLabel}>Sucursal (Corpo)</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={filterContratoId != null}
+                    selectedValue={filterCorpoId ?? 0}
+                    onValueChange={(v) => onFilterCorpoChange(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccionar sucursal..." value={0} color="#000000" />
+                    {filterSucursalesList.map((sucursal) => (
+                      <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Nombre del colaborador:</ThemedText>
                   <TextInput
@@ -2624,7 +3083,13 @@ export default function StaffEvaluationsScreen() {
 
           {!isCreating && (
             <ThemedView style={styles.listContainer}>
-              {filteredEvaluations.length === 0 ? (
+              {isListLoading && (
+                <ThemedView style={styles.listLoadingBanner}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.listLoadingBannerText}>Actualizando lista...</ThemedText>
+                </ThemedView>
+              )}
+              {filteredEvaluations.length === 0 && !isListLoading ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>
                     No hay evaluaciones de personal registradas
@@ -2703,7 +3168,7 @@ export default function StaffEvaluationsScreen() {
                     ) : (
                       <Ionicons name="checkmark" size={20} color="#000000" />
                     )}
-                    <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
+                    <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
                   </TouchableOpacity>
                 </ThemedView>
               </>
@@ -2712,22 +3177,20 @@ export default function StaffEvaluationsScreen() {
               <>
                 <ThemedText style={styles.signatureModalHint}>Dibuje la firma dentro del recuadro.</ThemedText>
                 <View style={styles.signaturePadBox}>
-                  <SignatureScreen
-                    ref={addSignatureManualRef}
-                    onOK={handleAddSignatureManualRead}
-                    onEmpty={() => {
-                      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-                    }}
-                    descriptionText=""
-                    clearText=""
-                    confirmText=""
-                    webStyle={`
-                      .m-signature-pad--footer {display: none; margin: 0px;}
-                      .m-signature-pad {box-shadow: none; border: none;}
-                      body,html {width: 100%; height: 100%; background: #ffffff;}
-                    `}
-                    key={addSignatureManualKey}
-                  />
+                  {addSignatureModalVisible ? (
+                    <SignatureScreen
+                      ref={addSignatureManualRef}
+                      onOK={handleAddSignatureManualRead}
+                      onEmpty={() => {
+                        Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                      }}
+                      descriptionText=""
+                      clearText=""
+                      confirmText=""
+                      webStyle={SIGNATURE_PAD_WEB_STYLE}
+                      key={addSignatureManualKey}
+                    />
+                  ) : null}
                 </View>
                 <ThemedView style={styles.modalActions}>
                   <TouchableOpacity style={styles.modalClearButton} onPress={closeAddSignatureModal}>
@@ -2743,8 +3206,8 @@ export default function StaffEvaluationsScreen() {
                     ) : (
                       <Ionicons name="checkmark" size={20} color="#000000" />
                     )}
-                    <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
-                  </TouchableOpacity>
+                    <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+                </TouchableOpacity>
                 </ThemedView>
               </>
             )}
@@ -2769,23 +3232,21 @@ export default function StaffEvaluationsScreen() {
             </ThemedView>
             <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
             <View style={styles.signaturePadBox}>
-              <SignatureScreen
-                ref={signatureManualRef}
-                onOK={handleManualSignatureRead}
-                onEmpty={() => {
-                  setIsReadingManualSignature(false);
-                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-                }}
-                descriptionText=""
-                clearText=""
-                confirmText=""
-                webStyle={`
-                  .m-signature-pad--footer {display: none; margin: 0px;}
-                  .m-signature-pad {box-shadow: none; border: none;}
-                  body,html {width: 100%; height: 100%; background: #ffffff;}
-                `}
-                key={signatureManualKey}
-              />
+              {isFirmaManualModalVisible ? (
+                <SignatureScreen
+                  ref={signatureManualRef}
+                  onOK={handleManualSignatureRead}
+                  onEmpty={() => {
+                    setIsReadingManualSignature(false);
+                    Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                  }}
+                  descriptionText=""
+                  clearText=""
+                  confirmText=""
+                  webStyle={SIGNATURE_PAD_WEB_STYLE}
+                  key={signatureManualKey}
+                />
+              ) : null}
             </View>
             <ThemedView style={styles.modalActions}>
               <TouchableOpacity style={styles.modalClearButton} onPress={clearManualSignatureInModal}>
@@ -3235,6 +3696,18 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   listContainer: {},
+  listLoadingBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    marginBottom: 8,
+  },
+  listLoadingBannerText: {
+    fontSize: 13,
+    color: '#007AFF',
+  },
   emptyContainer: {
     padding: 24,
     alignItems: 'center',

@@ -92,35 +92,12 @@ export async function GET(req: NextRequest) {
         }
 
         const lastMarcaObj = lastMarca as any;
-        if (marcaObj.id !== lastMarcaObj.id) {
-            return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
-        }
 
-        const empresa = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_empresa",
-                operation: "findUnique",
-                where: { id: marcaObj.empresa_id },
-            },
-        });
-        if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
-        }
-
-        const cliente = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_cliente",
-                operation: "findUnique",
-                where: { id: marcaObj.cliente_id },
-            },
-        });
-        if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
-        }
+        const corpoIdParam = req.nextUrl.searchParams.get("corpo_id");
+        const effectiveCorpoId =
+            corpoIdParam != null && corpoIdParam !== "" && !isNaN(parseInt(corpoIdParam, 10))
+                ? parseInt(corpoIdParam, 10)
+                : marcaObj.corpo_id;
 
         const corpo = await callDynamicPrisma({
             req,
@@ -128,7 +105,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_sucursal",
                 operation: "findUnique",
-                where: { id: marcaObj.corpo_id },
+                where: { id: effectiveCorpoId },
             },
         });
         if (!corpo) {
@@ -141,7 +118,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_registro_capacitaciones",
                 operation: "findMany",
-                where: { corpo_id: marcaObj.corpo_id },
+                where: { corpo_id: effectiveCorpoId },
             },
         });
         const capacitacionesArray = Array.isArray(capacitaciones) ? capacitaciones : [];
@@ -166,9 +143,52 @@ export async function GET(req: NextRequest) {
             id_local: string,
         }[] = [];
 
-        const empresaObj = empresa as any;
-        const clienteObj = cliente as any;
-        const corpoObj = corpo as any;
+        const empresaCache = new Map<number, any>();
+        const clienteCache = new Map<number, any>();
+        const corpoCache = new Map<number, any>();
+
+        const loadEmpresa = async (id: number) => {
+            if (empresaCache.has(id)) return empresaCache.get(id);
+            const row = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_empresa",
+                    operation: "findUnique",
+                    where: { id },
+                },
+            });
+            empresaCache.set(id, row);
+            return row;
+        };
+        const loadCliente = async (id: number) => {
+            if (clienteCache.has(id)) return clienteCache.get(id);
+            const row = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_cliente",
+                    operation: "findUnique",
+                    where: { id },
+                },
+            });
+            clienteCache.set(id, row);
+            return row;
+        };
+        const loadCorpo = async (id: number) => {
+            if (corpoCache.has(id)) return corpoCache.get(id);
+            const row = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_sucursal",
+                    operation: "findUnique",
+                    where: { id },
+                },
+            });
+            corpoCache.set(id, row);
+            return row;
+        };
 
         for (const capacitacion of capacitacionesArray) {
             const capacitacionObj = capacitacion as any;
@@ -256,19 +276,27 @@ export async function GET(req: NextRequest) {
             }
 
             const fechaValue = capacitacionObj.fecha instanceof Date ? capacitacionObj.fecha : (typeof capacitacionObj.fecha === 'string' ? new Date(capacitacionObj.fecha) : new Date());
+
+            const empresaRow = await loadEmpresa(capacitacionObj.empresa_id);
+            const clienteRow = await loadCliente(capacitacionObj.cliente_id);
+            const corpoRow = await loadCorpo(capacitacionObj.corpo_id);
+            const empresaObj = (empresaRow || {}) as any;
+            const clienteObj = (clienteRow || {}) as any;
+            const corpoObj = (corpoRow || {}) as any;
+
             capacitaciones_return.push({
                 id: capacitacionObj.id,
                 empresa: {
-                    id: empresaObj.id,
-                    nombre: empresaObj.nombre
+                    id: empresaObj.id ?? capacitacionObj.empresa_id,
+                    nombre: empresaObj.nombre ?? "—"
                 },
                 cliente: {
-                    id: clienteObj.id,
-                    nombre: clienteObj.nombre
+                    id: clienteObj.id ?? capacitacionObj.cliente_id,
+                    nombre: clienteObj.nombre ?? "—"
                 },
                 sucursal: {
-                    id: corpoObj.id,
-                    nombre: corpoObj.nombre
+                    id: corpoObj.id ?? capacitacionObj.corpo_id,
+                    nombre: corpoObj.nombre ?? "—"
                 },
                 titulo: capacitacionObj.titulo,
                 descripcion: capacitacionObj.descripcion,
@@ -303,8 +331,12 @@ export async function POST(req: NextRequest) {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
+        const body = await req.json();
         const {
             marca_id,
+            empresa_id: body_empresa_id,
+            cliente_id: body_cliente_id,
+            corpo_id: body_corpo_id,
             titulo,
             descripcion,
             tipo,
@@ -317,7 +349,7 @@ export async function POST(req: NextRequest) {
             fecha,
             empleados,
             puestos
-        } = await req.json();
+        } = body;
 
         console.log("marca_id", marca_id);
         console.log("titulo", titulo);
@@ -379,13 +411,26 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
+        const effectiveEmpresaId =
+            body_empresa_id != null && body_empresa_id !== "" && !isNaN(parseInt(String(body_empresa_id), 10))
+                ? parseInt(String(body_empresa_id), 10)
+                : marcaObj.empresa_id;
+        const effectiveClienteId =
+            body_cliente_id != null && body_cliente_id !== "" && !isNaN(parseInt(String(body_cliente_id), 10))
+                ? parseInt(String(body_cliente_id), 10)
+                : marcaObj.cliente_id;
+        const effectiveCorpoIdPost =
+            body_corpo_id != null && body_corpo_id !== "" && !isNaN(parseInt(String(body_corpo_id), 10))
+                ? parseInt(String(body_corpo_id), 10)
+                : marcaObj.corpo_id;
+
         const empresa = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
                 table: "e_estructura_empresa",
                 operation: "findUnique",
-                where: { id: marcaObj.empresa_id },
+                where: { id: effectiveEmpresaId },
             },
         });
         if (!empresa) {
@@ -398,7 +443,7 @@ export async function POST(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_cliente",
                 operation: "findUnique",
-                where: { id: marcaObj.cliente_id },
+                where: { id: effectiveClienteId },
             },
         });
         if (!cliente) {
@@ -411,7 +456,7 @@ export async function POST(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_sucursal",
                 operation: "findUnique",
-                where: { id: marcaObj.corpo_id },
+                where: { id: effectiveCorpoIdPost },
             },
         });
         if (!corpo) {
@@ -480,7 +525,7 @@ export async function POST(req: NextRequest) {
             });
 
             const desc = `Has recibido la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`;
-            await sendNotificationByEmployee(req, marcaObj.corpo_id, [marcaObj.empleadoFijo_id], "Capacitación recibida", desc, [parseInt(emp)]);
+            await sendNotificationByEmployee(req, effectiveCorpoIdPost, [marcaObj.empleadoFijo_id], "Capacitación recibida", desc, [parseInt(emp)]);
         }
 
         for (const puesto of puestos) {
@@ -535,7 +580,7 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        await sendNotificationByRole(req, marcaObj.corpo_id, [marcaObj.plaza_id], "Capacitación creada", `Se ha registrado la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
+        await sendNotificationByRole(req, effectiveCorpoIdPost, [marcaObj.plaza_id], "Capacitación creada", `Se ha registrado la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
 
         return NextResponse.json({ status: true, message: "Capacitación creada correctamente" }, { status: 200 });
     }

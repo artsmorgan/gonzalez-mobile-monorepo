@@ -25,7 +25,7 @@ export type ListLlaverosResponse = {
 };
 
 type ListParams = {
-  marcaId: number;
+  corpoId: number;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -69,13 +69,17 @@ const requireAuthHandlers = (refreshAccessToken?: () => Promise<boolean>, logout
   };
 };
 
-export async function listLlaveros({ marcaId, refreshAccessToken, logout }: ListParams): Promise<ListLlaverosResponse> {
+export async function listLlaveros({ corpoId, refreshAccessToken, logout }: ListParams): Promise<ListLlaverosResponse> {
   try {
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const cid = parseInt(String(corpoId), 10);
+    if (!Number.isFinite(cid) || cid <= 0) {
+      return { status: false, message: 'corpo_id inválido' };
+    }
 
     const response = await authedFetch({
-      url: `${apiUrl}/api/llaveros?m=${marcaId}`,
+      url: `${apiUrl}/api/llaveros?corpo_id=${encodeURIComponent(String(cid))}`,
       init: {
         method: 'GET',
         headers: {

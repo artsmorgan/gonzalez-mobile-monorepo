@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         sessionId: newSessionId,
       },
       process.env.JWT_SECRET!,
-      { expiresIn: '15m' }
+      { expiresIn: '1d' }
     );
 
     const newRefreshToken = jwt.sign(

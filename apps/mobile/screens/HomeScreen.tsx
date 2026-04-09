@@ -380,6 +380,7 @@ export default function HomeScreen() {
       'activities_actions': 'Actividades',
       'evaluations_actions': 'Evaluaciones',
       'checklist_supervision_actions': 'Checklist de supervisión',
+      'attendance_actions': 'Asistencia (ingreso/salida/ausencia)',
     };
     return labels[key] || key.replace('_actions', '').replace(/_/g, ' ');
   };

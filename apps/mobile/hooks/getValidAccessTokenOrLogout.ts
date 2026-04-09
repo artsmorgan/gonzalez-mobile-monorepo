@@ -42,7 +42,7 @@ export default async function getValidAccessTokenOrLogout({
 
     // Backend entrega `createdAt` y `server_time` en epoch ms.
     // Config está en minutos, así que lo convertimos a ms.
-    const lifetimeMinutes = Number(Constants.expoConfig?.extra?.MINUTES_LIFE_TIME_TOKEN ?? 15);
+    const lifetimeMinutes = Number(Constants.expoConfig?.extra?.MINUTES_LIFE_TIME_TOKEN ?? (24 * 60)); // 24 hours
     const lifetimeMs = lifetimeMinutes * 60 * 1000;
     const createdAtNum = parseInt(String(storedCreatedAt), 10);
     if (!Number.isFinite(createdAtNum)) {

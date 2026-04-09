@@ -1,102 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { toZonedTime, format } from "date-fns-tz";
+import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
-export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
         const puestoIdParam = req.nextUrl.searchParams.get("puesto_id");
-        const puestoIdFromQuery = puestoIdParam ? parseInt(puestoIdParam, 10) : null;
+        const puestoIdToUse = puestoIdParam ? parseInt(String(puestoIdParam), 10) : NaN;
 
-        let puestoIdToUse: number | null = null;
-        let marcaDia: any = null;
-
-        if (puestoIdFromQuery && !Number.isNaN(puestoIdFromQuery) && puestoIdFromQuery > 0) {
-            puestoIdToUse = puestoIdFromQuery;
-        } else {
-            if (!id) {
-                return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
-            }
-
-            marcaDia = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findUnique",
-                    where: { id }
-                }
-            });
-            if (!marcaDia) {
-                return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
-            }
-
-            if (!marcaDia.empleadoFijo_id) {
-                return NextResponse.json(
-                    { status: false, message: "Empleado no encontrado" },
-                    { status: 200 }
-                );
-            }
-            puestoIdToUse = Number(marcaDia.puesto_id);
-        }
-
-        if (marcaDia) {
-            const now = toZonedTime(new Date(), "America/Costa_Rica");
-            const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
-            const currentDate = new Date(now.toISOString().split("T")[0]);
-            const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
-
-            const proximo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findFirst",
-                    where: {
-                        empleadoFijo_id: marcaDia.empleadoFijo_id,
-                        OR: [
-                            { fecha: { gt: now } },
-                            { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
-                        ],
-                    },
-                    orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-                }
-            });
-            let last_marca = null;
-            if (proximo) {
-                const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
-                if (proximoDateTime <= nowPlus15) {
-                    last_marca = proximo;
-                }
-            }
-            if (!last_marca) {
-                last_marca = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_marca_dia",
-                        operation: "findFirst",
-                        where: {
-                            empleadoFijo_id: marcaDia.empleadoFijo_id,
-                            OR: [
-                                { fecha: { lt: now } },
-                                { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
-                            ],
-                        },
-                        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
-                    }
-                });
-            }
-            if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
-            if (marcaDia.id !== last_marca.id) return NextResponse.json({ message: "Hay una nueva marca más reciente" }, { status: 400 });
+        if (!Number.isFinite(puestoIdToUse) || puestoIdToUse <= 0) {
+            return NextResponse.json(
+                { status: false, message: "puesto_id es requerido y debe ser válido" },
+                { status: 200 }
+            );
         }
 
         const puesto = await callDynamicPrisma({
@@ -237,14 +159,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     }
 }
 
-export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
-
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
 
         const {
             marca_id,

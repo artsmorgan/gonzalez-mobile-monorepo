@@ -31,6 +31,47 @@ import {
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import Constants from 'expo-constants';
 
+/** Alcance listado/caché: sucursal (corpo_id). */
+type ChecklistListCorpoScope = { filterCorpoId: number | null };
+
+function makeChecklistCorpoListMatcher(filterCorpoId: number | null): (it: any) => boolean {
+  return (it: any) => {
+    if (filterCorpoId == null) return true;
+    return Number(it?.corpo_id) === Number(filterCorpoId);
+  };
+}
+
+function checklistItemIsPendingLocal(it: any): boolean {
+  if (it?.id_local != null && String(it.id_local).trim() !== '') return true;
+  if (Number(it?.id) === 0) return true;
+  return false;
+}
+
+/** Solo sustituye en caché filas del mismo corpo; conserva otras sucursales y borradores locales. */
+async function mergeChecklistSupervisionServerIntoCache(
+  serverList: ChecklistSupervisionItem[],
+  matchesScope: (it: any) => boolean
+): Promise<ChecklistSupervisionItem[]> {
+  let raw: any[] = [];
+  try {
+    const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
+    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
+    raw = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    raw = [];
+  }
+
+  const preserved = raw.filter((it: any) => !matchesScope(it) || checklistItemIsPendingLocal(it));
+
+  const scopedServer = serverList
+    .filter(matchesScope)
+    .map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+
+  const merged = [...preserved, ...scopedServer] as ChecklistSupervisionItem[];
+  await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(merged));
+  return merged;
+}
+
 type ChecklistSupervisionUI = ChecklistSupervisionItem & { id_local?: string };
 
 // Tipos para estructura jerárquica
@@ -42,6 +83,15 @@ type StructureNode = {
   contratos?: StructureNode[];
   sucursales?: StructureNode[];
   puestos?: StructureNode[];
+};
+
+type HierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  sucursalId: number | null;
+  puestoId: number | null;
 };
 
 // Tipos para evaluación dinámica
@@ -1075,7 +1125,6 @@ export default function ChecklistSupervisionScreen() {
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
-  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
 
   // Mensaje informativo jerarquía (cerrable)
   const [isHierarchyHintVisible, setIsHierarchyHintVisible] = useState(true);
@@ -1084,6 +1133,7 @@ export default function ChecklistSupervisionScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<ChecklistSupervisionUI | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingChecklistId, setDeletingChecklistId] = useState<number | string | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showFechaPicker, setShowFechaPicker] = useState(false);
@@ -1126,6 +1176,88 @@ export default function ChecklistSupervisionScreen() {
 
   // Estados para artículos del puesto
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
+
+  const getMarcaRoleDivisionId = useCallback((currentMarca: any): number | null => {
+    const id = Number(currentMarca?.roleDivision?.division?.id);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }, []);
+
+  const resolveHierarchyByPuestoId = useCallback((tree: StructureNode[], puestoId: number | null | undefined): HierarchyPath | null => {
+    const targetPuestoId = Number(puestoId);
+    if (!Number.isFinite(targetPuestoId) || targetPuestoId <= 0 || !Array.isArray(tree)) return null;
+
+    for (const empresa of tree) {
+      for (const cliente of empresa?.clientes || []) {
+        for (const division of cliente?.division || []) {
+          for (const contrato of division?.contratos || []) {
+            for (const sucursal of contrato?.sucursales || []) {
+              for (const puesto of sucursal?.puestos || []) {
+                if (Number(puesto?.id) === targetPuestoId) {
+                  return {
+                    empresaId: Number(empresa.id),
+                    clienteId: Number(cliente.id),
+                    divisionId: Number(division.id),
+                    contratoId: Number(contrato.id),
+                    sucursalId: Number(sucursal.id),
+                    puestoId: Number(puesto.id),
+                  };
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }, []);
+
+  const buildHierarchyFromCurrentMarca = useCallback((currentMarca: any, tree: StructureNode[]): HierarchyPath | null => {
+    if (!currentMarca) return null;
+
+    const puestoId = Number(currentMarca?.puesto?.id);
+    const byPuesto = resolveHierarchyByPuestoId(tree, puestoId);
+    if (byPuesto) {
+      const roleDivisionId = getMarcaRoleDivisionId(currentMarca);
+      if (roleDivisionId) byPuesto.divisionId = roleDivisionId;
+      return byPuesto;
+    }
+
+    const empresaId = Number(currentMarca?.empresa?.id);
+    const clienteId = Number(currentMarca?.cliente?.id);
+    const divisionId = getMarcaRoleDivisionId(currentMarca) ?? Number(currentMarca?.division?.id);
+    const contratoId = Number(currentMarca?.contrato?.id);
+    const sucursalId = Number(currentMarca?.corpo?.id);
+
+    const toValid = (value: number) => (Number.isFinite(value) && value > 0 ? value : null);
+
+    return {
+      empresaId: toValid(empresaId),
+      clienteId: toValid(clienteId),
+      divisionId: toValid(divisionId),
+      contratoId: toValid(contratoId),
+      sucursalId: toValid(sucursalId),
+      puestoId: toValid(puestoId),
+    };
+  }, [getMarcaRoleDivisionId, resolveHierarchyByPuestoId]);
+
+  const applyFilterHierarchyPath = useCallback((path: HierarchyPath | null) => {
+    if (!path) return;
+    setFilterEmpresaId(path.empresaId);
+    setFilterClienteId(path.clienteId);
+    setFilterDivisionId(path.divisionId);
+    setFilterContratoId(path.contratoId);
+    setFilterCorpoId(path.sucursalId);
+  }, []);
+
+  const applyFormHierarchyPath = useCallback((path: HierarchyPath | null) => {
+    if (!path) return;
+    setSelectedEmpresaId(path.empresaId);
+    setSelectedClienteId(path.clienteId);
+    setSelectedDivisionId(path.divisionId);
+    setSelectedContratoId(path.contratoId);
+    setSelectedCorpoId(path.sucursalId);
+    setSelectedPuestoId(path.puestoId);
+  }, []);
 
   // Nodos computados para estructura jerárquica
   const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -1178,18 +1310,16 @@ export default function ChecklistSupervisionScreen() {
     return contrato?.sucursales || [];
   }, [filterContratos, filterContratoId]);
 
-  const filterPuestos = useMemo(() => {
-    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
-    return sucursal?.puestos || [];
-  }, [filterSucursales, filterCorpoId]);
-
   // Cargar estructura principal
-  const fetchMainStructure = useCallback(async () => {
+  const fetchMainStructure = useCallback(async (): Promise<StructureNode[]> => {
     try {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (cacheStr) {
         const parsed = JSON.parse(cacheStr);
-        if (Array.isArray(parsed)) setStructure(parsed);
+        if (Array.isArray(parsed)) {
+          setStructure(parsed);
+          return parsed;
+        }
       }
       else {
         setStructure([]);
@@ -1224,6 +1354,7 @@ export default function ChecklistSupervisionScreen() {
     } catch (error) {
       console.error('Error fetching main structure:', error);
     }
+    return [];
   }, [refreshAccessToken, logout]);
 
   const getConnectionStatus = async (): Promise<boolean> => {
@@ -1366,36 +1497,63 @@ export default function ChecklistSupervisionScreen() {
     }
   };
 
-  // Cargar checklists
-  const fetchChecklists = useCallback(async () => {
+  const refreshAccessTokenRef = useRef(refreshAccessToken);
+  const logoutRef = useRef(logout);
+  useEffect(() => {
+    refreshAccessTokenRef.current = refreshAccessToken;
+    logoutRef.current = logout;
+  }, [refreshAccessToken, logout]);
+
+  const filterCorpoIdRef = useRef(filterCorpoId);
+  filterCorpoIdRef.current = filterCorpoId;
+
+  // Cargar checklists (caché por corpo al sincronizar; listado solo por sucursal seleccionada o marca)
+  const fetchChecklists = useCallback(async (scopeOverride?: ChecklistListCorpoScope | null) => {
     setIsLoading(true);
     setError(null);
     try {
+      const loadCacheToState = async () => {
+        const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
+        if (!cacheStr) {
+          setChecklists([]);
+          return;
+        }
+        try {
+          const cached = JSON.parse(cacheStr);
+          setChecklists(Array.isArray(cached) ? cached : []);
+        } catch {
+          setChecklists([]);
+        }
+      };
+
+      await loadCacheToState();
+
       const isConnected = await getConnectionStatus();
-
-      // Cargar desde cache primero
-      const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
-      if (cacheStr) {
-        const cached = JSON.parse(cacheStr);
-        if (Array.isArray(cached)) setChecklists(cached);
-      }
-
       if (!isConnected) {
         setIsLoading(false);
         return;
       }
 
+      const scope: ChecklistListCorpoScope =
+        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
+
+      if (scope.filterCorpoId == null) {
+        setIsLoading(false);
+        return;
+      }
+
+      const matchesScope = makeChecklistCorpoListMatcher(scope.filterCorpoId);
+
       const result = await listChecklistSupervision({
-        clienteId: filterClienteId || undefined,
-        corpoId: filterCorpoId || undefined,
-        puestoId: filterPuestoId || undefined,
-        refreshAccessToken,
-        logout,
+        corpoId: scope.filterCorpoId,
+        refreshAccessToken: () => refreshAccessTokenRef.current(),
+        logout: () => logoutRef.current(),
       });
 
       if (result.status && result.data) {
-        setChecklists(result.data);
-        await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(result.data));
+        const list = result.data.map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+        const merged = await mergeChecklistSupervisionServerIntoCache(list, matchesScope);
+        setChecklists(merged as ChecklistSupervisionUI[]);
       } else {
         setError(result.message || 'Error al cargar checklists');
       }
@@ -1404,25 +1562,45 @@ export default function ChecklistSupervisionScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [filterClienteId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+  }, []);
+
+  const fetchChecklistsRef = useRef(fetchChecklists);
+  fetchChecklistsRef.current = fetchChecklists;
 
   useFocusEffect(
     useCallback(() => {
-      fetchMainStructure();
-      fetchChecklists();
+      let cancelled = false;
+      (async () => {
+        const loadedStructure = await fetchMainStructure();
+        let marcaScope: ChecklistListCorpoScope | null = null;
+        try {
+          const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+          const hierarchy = buildHierarchyFromCurrentMarca(currentMarca, loadedStructure);
+          applyFilterHierarchyPath(hierarchy);
+          if (hierarchy?.sucursalId != null) {
+            marcaScope = { filterCorpoId: hierarchy.sucursalId };
+          }
+        } catch {
+          /* ignore */
+        }
+        if (!cancelled) await fetchChecklistsRef.current(marcaScope);
+      })();
+      return () => {
+        cancelled = true;
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
   );
 
   useEffect(() => {
     const handler = () => {
-      fetchChecklists();
+      fetchChecklistsRef.current();
     };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cuando cambia la división seleccionada, cargar evaluación (solo si no estamos editando)
@@ -2005,6 +2183,14 @@ export default function ChecklistSupervisionScreen() {
   const startCreating = async () => {
     await resetForm();
     setEditing(null);
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      const currentMarca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+      const hierarchy = buildHierarchyFromCurrentMarca(currentMarca, structure);
+      applyFormHierarchyPath(hierarchy);
+    } catch {
+      // ignore
+    }
     setIsCreating(true);
   };
 
@@ -2063,35 +2249,18 @@ export default function ChecklistSupervisionScreen() {
       setArticulos([]);
     }
 
-    // Cargar jerarquía basándose en los IDs del registro (después de cargar evaluación)
-    // Buscar empresa que contiene el cliente
-    const empresa = structure.find((e: any) => e.clientes?.some((c: any) => c.id === it.cliente_id));
-    if (empresa) {
-      setSelectedEmpresaId(empresa.id);
+    const resolved = resolveHierarchyByPuestoId(structure, it.puesto_id);
+    if (resolved) {
+      applyFormHierarchyPath(resolved);
+    } else {
+      // Fallback if puesto_id cannot be resolved in structure.
+      const empresa = structure.find((e: any) => e.clientes?.some((c: any) => c.id === it.cliente_id));
+      if (empresa) setSelectedEmpresaId(empresa.id);
+      setSelectedClienteId(it.cliente_id || null);
+      setSelectedDivisionId(it.division_id || null);
+      setSelectedCorpoId(it.corpo_id || null);
+      setSelectedPuestoId(it.puesto_id || null);
     }
-    setSelectedClienteId(it.cliente_id);
-
-    // Buscar la división y contrato basándose en el cliente y corpo_id
-    const cliente = empresa?.clientes?.find((c: any) => c.id === it.cliente_id);
-    if (cliente && cliente.division && cliente.division.length > 0) {
-      // Buscar la división que contiene el corpo_id
-      for (const div of cliente.division) {
-        const contratos = div.contratos || [];
-        for (const contrato of contratos) {
-          const sucursales = contrato.sucursales || [];
-          if (sucursales.some((s: any) => s.id === it.corpo_id)) {
-            // Usar setTimeout para asegurar que editing esté establecido antes de cambiar selectedDivisionId
-            setTimeout(() => {
-              setSelectedDivisionId(div.id);
-              setSelectedContratoId(contrato.id);
-            }, 100);
-            break;
-          }
-        }
-      }
-    }
-    setSelectedCorpoId(it.corpo_id);
-    setSelectedPuestoId(it.puesto_id);
   };
 
   const cancelCreating = async () => {
@@ -2113,7 +2282,7 @@ export default function ChecklistSupervisionScreen() {
     return true;
   };
 
-  const handleSave = async () => {
+  const submitSave = async () => {
     if (!validateForm()) return;
 
     setIsSubmitting(true);
@@ -2122,6 +2291,7 @@ export default function ChecklistSupervisionScreen() {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
+      setIsSubmitting(false);
       return;
     }
 
@@ -2201,16 +2371,19 @@ export default function ChecklistSupervisionScreen() {
             Alert.alert('Error', result.message || 'No se pudo actualizar');
           }
         } else {
-          // Offline: guardar acción
+          // Offline: una sola acción "update" por id de servidor (reemplazar, no apilar).
           const localId = editing.id_local || generateRandomId();
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
-          actions.push({
-            type: 'update',
+          const entry = {
+            type: 'update' as const,
             id: editing.id,
             id_local: localId,
             requestData,
-          });
+          };
+          const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
+          if (uidx !== -1) actions[uidx] = entry;
+          else actions.push(entry);
           await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
 
           // Actualizar cache
@@ -2255,15 +2428,15 @@ export default function ChecklistSupervisionScreen() {
             Alert.alert('Error', result.message || 'No se pudo crear');
           }
         } else {
-          // Offline: guardar acción
-          const localId = generateRandomId();
+          // Offline: crear o re-guardar borrador local (id 0 / solo id_local) sin duplicar la cola
+          const localId =
+            editing?.id_local && String(editing.id_local).length > 0 ? editing.id_local : generateRandomId();
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
-          actions.push({
-            type: 'create',
-            id_local: localId,
-            requestData,
-          });
+          const entry = { type: 'create' as const, id_local: localId, requestData };
+          const existingIdx = actions.findIndex((a: any) => a.type === 'create' && a.id_local === localId);
+          if (existingIdx !== -1) actions[existingIdx] = entry;
+          else actions.push(entry);
           await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
 
           // Agregar a cache
@@ -2287,7 +2460,10 @@ export default function ChecklistSupervisionScreen() {
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
             created_at: new Date(horaAccion).toISOString(),
           };
-          const updated = [...checklists, newItem];
+          const updated =
+            editing?.id_local && String(editing.id_local).length > 0
+              ? checklists.map((c) => (c.id_local === editing.id_local ? newItem : c))
+              : [...checklists, newItem];
           setChecklists(updated);
           await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
 
@@ -2310,6 +2486,22 @@ export default function ChecklistSupervisionScreen() {
     }
   };
 
+  const handleSave = () => {
+    Alert.alert(
+      'Confirmar',
+      editing ? '¿Deseas actualizar este checklist?' : '¿Deseas crear este checklist?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: () => {
+            submitSave();
+          },
+        },
+      ]
+    );
+  };
+
   const handleDelete = async (it: ChecklistSupervisionUI) => {
     Alert.alert('Confirmar', '¿Eliminar este checklist?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -2317,40 +2509,55 @@ export default function ChecklistSupervisionScreen() {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
-          const isConnected = await getConnectionStatus();
-          if (it.id && it.id !== 0 && isConnected) {
-            const result = await deleteChecklistSupervision({
-              id: it.id,
-              refreshAccessToken,
-              logout,
-            });
-            if (result.status) {
-              Alert.alert('Éxito', 'Checklist eliminado correctamente');
-              await fetchChecklists();
-            } else {
-              Alert.alert('Error', result.message || 'No se pudo eliminar');
+          const deleteKey = it.id_local || it.id;
+          setDeletingChecklistId(deleteKey);
+          try {
+            const isConnected = await getConnectionStatus();
+            if (it.id && it.id !== 0 && isConnected) {
+              const result = await deleteChecklistSupervision({
+                id: it.id,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                Alert.alert('Éxito', 'Checklist eliminado correctamente');
+                await fetchChecklists();
+              } else {
+                Alert.alert('Error', result.message || 'No se pudo eliminar');
+              }
+            } else if (it.id && it.id !== 0 && !isConnected) {
+              const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({
+                type: 'delete',
+                id: it.id,
+                id_local: it.id_local,
+              });
+              await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+
+              const updated = checklists.filter((c) => c.id !== it.id);
+              setChecklists(updated);
+              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+              Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
+            } else if (it.id_local) {
+              const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const updatedActions = actions.filter((a: any) => {
+                if (a.type === 'create' && a.id_local === it.id_local) return false;
+                if (a.type === 'update' && a.id_local === it.id_local) return false;
+                return true;
+              });
+              await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
+
+              const updated = checklists.filter((c) => c.id_local !== it.id_local);
+              setChecklists(updated);
+              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+
+              Alert.alert('Éxito', 'Registro pendiente eliminado (no requiere sincronizar borrado en servidor).');
             }
-          } else {
-            // Offline: guardar acción
-            const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({
-              type: 'delete',
-              id: it.id || 0,
-              id_local: it.id_local,
-            });
-            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
-
-            // Eliminar de cache
-            const updated = checklists.filter((c) => {
-              if (it.id && it.id !== 0) return c.id !== it.id;
-              if (it.id_local) return c.id_local !== it.id_local;
-              return false;
-            });
-            setChecklists(updated);
-            await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
-
-            Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
+          } finally {
+            setDeletingChecklistId((prev) => (prev === deleteKey ? null : prev));
           }
         },
       },
@@ -2364,12 +2571,13 @@ export default function ChecklistSupervisionScreen() {
     setFilterDivisionId(null);
     setFilterContratoId(null);
     setFilterCorpoId(null);
-    setFilterPuestoId(null);
   };
 
-  // Filtrar checklists
+  /** Solo filas de la sucursal elegida (filtro o marca); sin sucursal, lista vacía. */
   const filteredChecklists = useMemo(() => {
+    if (filterCorpoId == null) return [];
     return checklists.filter((c) => {
+      if (Number(c.corpo_id) !== Number(filterCorpoId)) return false;
       if (filterSearch) {
         const searchLower = filterSearch.toLowerCase();
         const matchesSearch =
@@ -2379,13 +2587,9 @@ export default function ChecklistSupervisionScreen() {
           (c.puesto?.nombre || '').toLowerCase().includes(searchLower);
         if (!matchesSearch) return false;
       }
-      if (filterClienteId && c.cliente_id !== filterClienteId) return false;
-      if (filterDivisionId && c.division_id !== filterDivisionId) return false;
-      if (filterCorpoId && c.corpo_id !== filterCorpoId) return false;
-      if (filterPuestoId && c.puesto_id !== filterPuestoId) return false;
       return true;
     });
-  }, [checklists, filterSearch, filterClienteId, filterDivisionId, filterCorpoId, filterPuestoId]);
+  }, [checklists, filterSearch, filterCorpoId]);
 
   // Renderizar evaluación dinámica (como StaffEvaluationsScreen)
   const renderEvaluationInput = (input: EvaluationInput, sectionId: string, subsectionId: string) => {
@@ -2729,9 +2933,19 @@ export default function ChecklistSupervisionScreen() {
               <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+          <TouchableOpacity
+            style={[styles.listItemButton, styles.deleteButton, deletingChecklistId === (it.id_local || it.id) && styles.buttonDisabled]}
+            onPress={() => handleDelete(it)}
+            disabled={deletingChecklistId === (it.id_local || it.id)}
+          >
+            {deletingChecklistId === (it.id_local || it.id) ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -2782,7 +2996,7 @@ export default function ChecklistSupervisionScreen() {
                       style={styles.searchInput}
                       value={filterSearch}
                       onChangeText={setFilterSearch}
-                      placeholder="Cliente, Sucursal, Puesto..."
+                      placeholder="Texto en registro (ejecutivo, cliente, sucursal…)"
                       placeholderTextColor="#999"
                     />
                   </ThemedView>
@@ -2799,7 +3013,6 @@ export default function ChecklistSupervisionScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
-                          setFilterPuestoId(null);
                         }}
                         style={styles.picker}
                       >
@@ -2822,7 +3035,6 @@ export default function ChecklistSupervisionScreen() {
                             setFilterDivisionId(null);
                             setFilterContratoId(null);
                             setFilterCorpoId(null);
-                            setFilterPuestoId(null);
                           }}
                           style={styles.picker}
                         >
@@ -2845,7 +3057,6 @@ export default function ChecklistSupervisionScreen() {
                             setFilterDivisionId(value && value !== '' ? Number(value) : null);
                             setFilterContratoId(null);
                             setFilterCorpoId(null);
-                            setFilterPuestoId(null);
                           }}
                           style={styles.picker}
                         >
@@ -2867,7 +3078,6 @@ export default function ChecklistSupervisionScreen() {
                           onValueChange={(value) => {
                             setFilterContratoId(value && value !== '' ? Number(value) : null);
                             setFilterCorpoId(null);
-                            setFilterPuestoId(null);
                           }}
                           style={styles.picker}
                         >
@@ -2887,8 +3097,11 @@ export default function ChecklistSupervisionScreen() {
                         <Picker
                           selectedValue={filterCorpoId || ''}
                           onValueChange={(value) => {
-                            setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                            setFilterPuestoId(null);
+                            const id = value && value !== '' ? Number(value) : null;
+                            setFilterCorpoId(id);
+                            if (id != null) {
+                              fetchChecklistsRef.current({ filterCorpoId: id });
+                            }
                           }}
                           style={styles.picker}
                         >
@@ -2900,24 +3113,9 @@ export default function ChecklistSupervisionScreen() {
                       </View>
                     </ThemedView>
                   )}
-
-                  {filterCorpoId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={filterPuestoId || ''}
-                          onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                          {filterPuestos.map((p: any) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
+                  <ThemedText style={styles.filterHintMuted}>
+                    Elija sucursal para ver y sincronizar registros. El puesto solo aplica en el formulario de nuevo/editar.
+                  </ThemedText>
                 </ThemedView>
               )}
             </ThemedView>
@@ -3482,7 +3680,7 @@ export default function ChecklistSupervisionScreen() {
                   ) : (
                     <>
                       <Ionicons name="save" size={18} color="#fff" />
-                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                      <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
                     </>
                   )}
                 </TouchableOpacity>
@@ -3499,7 +3697,11 @@ export default function ChecklistSupervisionScreen() {
                 </ThemedView>
               ) : filteredChecklists.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay registros</ThemedText>
+                  <ThemedText style={styles.emptyText}>
+                    {filterCorpoId == null
+                      ? 'Seleccione una sucursal en los filtros (o use la marca actual al entrar) para ver registros.'
+                      : 'No hay registros para esta sucursal'}
+                  </ThemedText>
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>
@@ -3978,6 +4180,7 @@ const styles = StyleSheet.create({
   filterGroupSearch: { marginBottom: 12 },
   filterGroup: { marginBottom: 12 },
   filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 6 },
+  filterHintMuted: { fontSize: 12, color: '#666', marginTop: 8, lineHeight: 18 },
   searchInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',

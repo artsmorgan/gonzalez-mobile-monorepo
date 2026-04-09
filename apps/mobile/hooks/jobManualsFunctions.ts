@@ -9,7 +9,7 @@ type CreateJobManualParams = {
 };
 
 type ListJobManualsParams = {
-  marcaId: number;
+  puestoId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 };
@@ -74,8 +74,8 @@ export const createJobManual = async ({
   return data;
 };
 
-export const listJobManualsByMarca = async ({
-  marcaId,
+export const listJobManualsByPuesto = async ({
+  puestoId,
   refreshAccessToken,
   logout,
 }: ListJobManualsParams): Promise<any> => {
@@ -84,8 +84,13 @@ export const listJobManualsByMarca = async ({
     throw new Error('Server URL not configured');
   }
 
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return { status: false, message: 'puesto_id inválido', manuals: [] };
+  }
+
   const response = await authedFetch({
-    url: `${apiUrl}/api/job-manuals?m=${marcaId}`,
+    url: `${apiUrl}/api/job-manuals?puesto_id=${pid}`,
     init: {
       method: 'GET',
       headers: {
@@ -167,6 +172,44 @@ export const signJobManual = async ({
 
   const data = await response.json();
   return data;
+};
+
+export const appendJobManualPuestos = async ({
+  manualId,
+  marcaId,
+  puestosIds,
+  refreshAccessToken,
+  logout,
+}: {
+  manualId: number;
+  marcaId: number;
+  puestosIds: number[];
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<any> => {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) {
+    throw new Error('Server URL not configured');
+  }
+
+  const response = await authedFetch({
+    url: `${apiUrl}/api/job-manuals/${manualId}/puestos`,
+    init: {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ marca_id: marcaId, puestos_ids: puestosIds }),
+    },
+    refreshAccessToken,
+    logout,
+  });
+
+  if (!response) {
+    return { status: false, message: 'Sesión expirada' };
+  }
+
+  return await response.json();
 };
 
 export const putJobManualQuizResult = async ({

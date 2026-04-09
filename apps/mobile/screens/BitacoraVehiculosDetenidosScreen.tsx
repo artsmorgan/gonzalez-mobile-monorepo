@@ -7,6 +7,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   TouchableOpacity,
   View,
@@ -490,7 +491,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<BitacoraVehiculoDetenidoItem | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingBitacoraKey, setDeletingBitacoraKey] = useState<string | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+
+  const getBitacoraRowKey = (item: BitacoraVehiculoDetenidoItem) =>
+    item.id_local ? `local:${item.id_local}` : `id:${item.id}`;
 
   const [tipo, setTipo] = useState<TipoBitacora>('Vehículo');
   const tipoRef = useRef<TipoBitacora>('Vehículo');
@@ -635,6 +640,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const renderBitacoraItem = (b: BitacoraVehiculoDetenidoItem, index: number) => {
+    const rowKey = getBitacoraRowKey(b);
+    const isDeletingThis = deletingBitacoraKey === rowKey;
     const key =
       b.id !== 0
         ? `bit-${b.id}`
@@ -755,11 +762,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
             <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.listItemButton, styles.deleteButton]}
+            style={[styles.listItemButton, styles.deleteButton, isDeletingThis && styles.buttonDisabled]}
             onPress={() => handleDelete(b)}
+            disabled={isDeletingThis}
           >
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+            {isDeletingThis ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -2016,20 +2030,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
     await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
   };
 
-  const handleSave = async () => {
+  const executeSave = async () => {
     if (!employee) return;
-    if (!validateForm()) return;
-
-    const horaAccion = await getHoraAccion();
-    if (!horaAccion) {
-      Alert.alert('Error', 'No se pudo obtener la hora');
-      return;
-    }
 
     setIsSubmitting(true);
     setSubmitResponse(null);
 
     try {
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
+
       const requestData = await buildPayload();
       const isConnected = await getConnectionStatus();
 
@@ -2136,10 +2149,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
         return;
       }
 
-      // Offline update
+      // Offline update: reemplazar "update" pendiente del mismo id (no apilar).
       const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({ id: editing.id, type: 'update', requestData });
+      const entry = { id: editing.id, type: 'update' as const, requestData };
+      const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
+      if (uidx !== -1) actions[uidx] = entry;
+      else actions.push(entry);
       await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
 
       const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
@@ -2159,69 +2175,90 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   };
 
-  const handleDelete = async (item: BitacoraVehiculoDetenidoItem) => {
+  const handleSave = () => {
+    if (!employee) return;
+    if (!validateForm()) return;
+    const isCreate = !editing || !editing.id || editing.id === 0;
+    Alert.alert(
+      isCreate ? 'Confirmar registro' : 'Confirmar modificación',
+      isCreate
+        ? '¿Deseas crear esta bitácora con los datos ingresados?'
+        : '¿Deseas guardar los cambios en esta bitácora?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: () => void executeSave() },
+      ]
+    );
+  };
+
+  const executeDelete = async (item: BitacoraVehiculoDetenidoItem) => {
+    const rowKey = getBitacoraRowKey(item);
+    setDeletingBitacoraKey(rowKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      if (item.id === 0 && item.id_local) {
+        const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const updatedCache = cache.filter((b: any) => b.id_local !== item.id_local);
+        await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
+        setBitacoras(updatedCache);
+
+        const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const updatedActions = actions.filter((a: any) => !(a.type === 'create' && a.id === item.id_local));
+        await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+
+        const evStr = await AsyncStorage.getItem('evaluations_actions');
+        if (evStr) {
+          const ev = JSON.parse(evStr);
+          const nextEv = ev.filter(
+            (e: any) =>
+              !(
+                e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
+                e.action === 'create' &&
+                e.id === item.id_local
+              )
+          );
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEv));
+        }
+        Alert.alert('Éxito', 'Registro eliminado localmente');
+        return;
+      }
+
+      if (isConnected) {
+        const res = await deleteBitacoraVehiculoDetenido({ id: item.id, refreshAccessToken, logout });
+        if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+        await fetchBitacoras();
+        Alert.alert('Éxito', 'Registro eliminado correctamente');
+        return;
+      }
+
+      const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({ id: item.id, type: 'delete' });
+      await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
+
+      const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const updatedCache = cache.filter((b: any) => b.id !== item.id);
+      await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
+      setBitacoras(updatedCache);
+      Alert.alert('Modo offline', 'Registro eliminado localmente. Se sincronizará cuando haya conexión.');
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudo eliminar');
+    } finally {
+      setDeletingBitacoraKey(null);
+    }
+  };
+
+  const handleDelete = (item: BitacoraVehiculoDetenidoItem) => {
+    if (deletingBitacoraKey) return;
     Alert.alert('Eliminar', '¿Deseas eliminar este registro?', [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Eliminar',
+        text: 'Aceptar',
         style: 'destructive',
-        onPress: async () => {
-          try {
-            const isConnected = await getConnectionStatus();
-            if (item.id === 0 && item.id_local) {
-              // remove local
-              const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-              const cache = cacheStr ? JSON.parse(cacheStr) : [];
-              const updatedCache = cache.filter((b: any) => b.id_local !== item.id_local);
-              await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-              setBitacoras(updatedCache);
-
-              const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-              const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              const updatedActions = actions.filter((a: any) => !(a.type === 'create' && a.id === item.id_local));
-              await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
-
-              const evStr = await AsyncStorage.getItem('evaluations_actions');
-              if (evStr) {
-                const ev = JSON.parse(evStr);
-                const nextEv = ev.filter(
-                  (e: any) =>
-                    !(
-                      e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
-                      e.action === 'create' &&
-                      e.id === item.id_local
-                    )
-                );
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEv));
-              }
-              Alert.alert('Éxito', 'Registro eliminado localmente');
-              return;
-            }
-
-            if (isConnected) {
-              const res = await deleteBitacoraVehiculoDetenido({ id: item.id, refreshAccessToken, logout });
-              if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
-              await fetchBitacoras();
-              Alert.alert('Éxito', 'Registro eliminado correctamente');
-              return;
-            }
-
-            // Offline delete
-            const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({ id: item.id, type: 'delete' });
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
-
-            const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-            const cache = cacheStr ? JSON.parse(cacheStr) : [];
-            const updatedCache = cache.filter((b: any) => b.id !== item.id);
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-            setBitacoras(updatedCache);
-            Alert.alert('Modo offline', 'Registro eliminado localmente. Se sincronizará cuando haya conexión.');
-          } catch (e: any) {
-            Alert.alert('Error', e.message || 'No se pudo eliminar');
-          }
-        },
+        onPress: () => void executeDelete(item),
       },
     ]);
   };
@@ -3151,10 +3188,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   {isSubmitting ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <>
-                      <Ionicons name="save" size={18} color="#fff" />
-                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
-                    </>
+                    <View style={styles.formActionSaveInner}>
+                      <Ionicons name="checkmark-sharp" size={18} color="#fff" />
+                      <Text style={styles.formActionSaveText}>Aceptar</Text>
+                    </View>
                   )}
                 </TouchableOpacity>
               </ThemedView>
@@ -3730,7 +3767,14 @@ const styles = StyleSheet.create({
   formActionSave: {
     backgroundColor: '#007AFF',
   },
-  formActionSaveText: { color: '#fff', fontWeight: '800' },
+  formActionSaveInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
+  formActionSaveText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
   buttonDisabled: {
     opacity: 0.6,
   },

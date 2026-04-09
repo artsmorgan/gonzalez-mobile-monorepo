@@ -54,6 +54,102 @@ type MainStructureClienteNode = { id: number; nombre: string; division: MainStru
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
+/** Solo `current_marca.roleDivision.division.id` (MarcaIngresoSalida). */
+function getMarcaRoleDivisionId(current: any): number | null {
+  const idRaw = current?.roleDivision?.division?.id;
+  if (idRaw == null || idRaw === '') return null;
+  const n = Number(idRaw);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Confirma que el id exista bajo empresa/cliente en main_structure; si no hay árbol o ramas, devuelve el mismo id. */
+function resolveDivisionIdInStructure(
+  structure: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(divisionId)) return null;
+  if (!empresaId || !clienteId || !Array.isArray(structure)) return Number(divisionId);
+  const empresa = structure.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions: any[] = Array.isArray(cliente?.division) ? cliente.division : [];
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+function resolveMarcaDivisionIdForTree(currentMarca: any, structure: MainStructureTree): number | null {
+  const divisionId = getMarcaRoleDivisionId(currentMarca);
+  if (divisionId == null) return null;
+  const empresaIdRaw = currentMarca?.empresa?.id ?? currentMarca?.empresa_id;
+  const clienteIdRaw = currentMarca?.cliente?.id ?? currentMarca?.cliente_id;
+  const empresaId = empresaIdRaw != null && empresaIdRaw !== '' ? Number(empresaIdRaw) : null;
+  const clienteId = clienteIdRaw != null && clienteIdRaw !== '' ? Number(clienteIdRaw) : null;
+  return resolveDivisionIdInStructure(
+    structure,
+    empresaId != null && Number.isFinite(empresaId) ? empresaId : null,
+    clienteId != null && Number.isFinite(clienteId) ? clienteId : null,
+    divisionId,
+  );
+}
+
+/**
+ * Alcance de listado: misma jerarquía que `fetchRecords` (filtro explícito o `current_marca`).
+ * La lista principal se identifica sobre todo por `corpo_id` (sucursal), junto con empresa → cliente → división → contrato cuando aplica.
+ */
+type ActaEntregaFetchScope = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  corpoId: number | null;
+};
+
+/** Igual que el filtrado de `localRecords` en `fetchRecords` (offline / vista). */
+function actaEntregaRecordMatchesFetchScope(r: any, scope: ActaEntregaFetchScope): boolean {
+  const { empresaId, clienteId, divisionId, contratoId, corpoId } = scope;
+  if (empresaId && Number(r.empresa_id) !== Number(empresaId)) return false;
+  if (clienteId && Number(r.cliente_id) !== Number(clienteId)) return false;
+  if (divisionId && Number(r.division_id) !== Number(divisionId)) return false;
+  if (contratoId && Number(r.contrato_id) !== Number(contratoId)) return false;
+  if (corpoId && Number(r.corpo_id) !== Number(corpoId)) return false;
+  return true;
+}
+
+/**
+ * Con respuesta del servidor (online): en `evaluations_cache` solo se sustituyen actas del mismo
+ * alcance jerárquico que la búsqueda; se conservan actas de otras sucursas/rutas y los borradores
+ * pendientes (`synced === false`) del alcance actual.
+ */
+async function mergeActaEntregaServerIntoEvaluationsCache(
+  serverRecords: ActaEntregaProducto[],
+  scope: ActaEntregaFetchScope
+): Promise<void> {
+  let raw: any[] = [];
+  try {
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
+    raw = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    raw = [];
+  }
+
+  const preserved = raw.filter((it: any) => {
+    if (it?.type !== 'acta_entrega_producto') return true;
+    if (!actaEntregaRecordMatchesFetchScope(it, scope)) return true;
+    if (it.synced === false) return true;
+    return false;
+  });
+
+  const fromServer = serverRecords.map((r) => ({
+    ...(r as Record<string, unknown>),
+    type: 'acta_entrega_producto',
+    synced: true,
+  }));
+
+  await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...preserved, ...fromServer]));
+}
+
 type DetalleItem = {
   id_local: string;
   descripcion: string;
@@ -130,6 +226,92 @@ const formatDateStringDMY = (value?: any) => {
   }
 };
 
+const TIPO_ENTREGA_DEFAULT = '-';
+
+/** Fecha local sin hora (evita valores inválidos → RangeError al llamar toISOString). */
+function parseDateInputToLocalDate(value: unknown, fallback: Date): Date {
+  const atLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const fb = !fallback || Number.isNaN(fallback.getTime()) ? new Date() : fallback;
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return atLocalDay(value);
+  }
+  if (value == null || value === '') return atLocalDay(fb);
+
+  const s = String(value).trim();
+  const head = s.includes('T') ? s.split('T')[0] : s;
+  const isoParts = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(head);
+  if (isoParts) {
+    const y = parseInt(isoParts[1], 10);
+    const mo = parseInt(isoParts[2], 10);
+    const d = parseInt(isoParts[3], 10);
+    const dt = new Date(y, mo - 1, d);
+    if (!Number.isNaN(dt.getTime())) return dt;
+  }
+
+  const t = Date.parse(s);
+  if (Number.isFinite(t)) {
+    const dt = new Date(t);
+    if (!Number.isNaN(dt.getTime())) return atLocalDay(dt);
+  }
+  return atLocalDay(fb);
+}
+
+/** ISO desde solo-fecha (mediodía local para el backend, sin hora elegida por el usuario). */
+function dateOnlyToIsoString(d: Date): string {
+  if (!d || Number.isNaN(d.getTime())) return new Date().toISOString();
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const day = d.getDate();
+  return new Date(y, m, day, 12, 0, 0, 0).toISOString();
+}
+
+function formatDateOnlyLabel(d: Date, fallbackLabel = '—'): string {
+  if (!d || Number.isNaN(d.getTime())) return fallbackLabel;
+  try {
+    return convertDateTimestampToLocalString(dateOnlyToIsoString(d), false);
+  } catch {
+    return fallbackLabel;
+  }
+}
+
+/** Epoch en firma responsable (getHoraAccion / servidor); evita RangeError en toISOString / convertDateTimestampToLocalString. */
+function safeFirmaTimestampLabel(raw: string | undefined): string {
+  if (raw == null || raw === '') return 'N/A';
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n)) return 'N/A';
+  let ms = n;
+  if (n > 0 && n < 1e12) ms = n * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return 'N/A';
+  try {
+    return convertDateTimestampToLocalString(d.toISOString()) || 'N/A';
+  } catch {
+    return 'N/A';
+  }
+}
+
+/** Ms desde getHoraAccion; si falta o es inválido, hora local (evita NaN → RangeError en toISOString). */
+async function getHoraAccionSafeMs(): Promise<number> {
+  try {
+    const t = await getHoraAccion();
+    return typeof t === 'number' && Number.isFinite(t) ? t : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+function epochMsToIsoSafe(ms: number): string {
+  if (!Number.isFinite(ms)) return new Date().toISOString();
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return new Date().toISOString();
+  try {
+    return d.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 const signatureWebStyle = `
   .m-signature-pad {box-shadow: none; border: none;}
   .m-signature-pad--body {border: 1px solid #e0e0e0;}
@@ -159,6 +341,7 @@ export default function ActaEntregaProductosScreen() {
   const [editingRecord, setEditingRecord] = useState<ActaEntregaProducto | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+  const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
 
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -180,6 +363,10 @@ export default function ActaEntregaProductosScreen() {
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
   const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  /** Precarga de filtros desde la marca una vez por visita (no se reaplica si cambia `structure`). */
+  const filtersMarcaAppliedOnceRef = useRef(false);
+  /** El usuario pulsó "Limpiar Filtros": no volver a precargar jerarquía hasta la próxima entrada a la pantalla. */
+  const userClearedHierarchyFiltersRef = useRef(false);
 
   // Estructura jerárquica
   const [structure, setStructure] = useState<MainStructureTree>([]);
@@ -194,7 +381,6 @@ export default function ActaEntregaProductosScreen() {
 
   // Form
   const [fecha, setFecha] = useState<Date>(new Date());
-  const [tipoEntrega, setTipoEntrega] = useState('');
   const [mensual, setMensual] = useState('');
   const [observaciones, setObservaciones] = useState('');
 
@@ -229,8 +415,7 @@ export default function ActaEntregaProductosScreen() {
   const [signatureKey, setSignatureKey] = useState(0);
   const [signatureTarget, setSignatureTarget] = useState<'entrega' | 'recibe'>('entrega');
 
-  // Date pickers
-  const [showFechaPicker, setShowFechaPicker] = useState(false);
+  // Date pickers (solo fecha, sin hora)
   const [showFechaEntregaPicker, setShowFechaEntregaPicker] = useState(false);
   const [showFechaRecibePicker, setShowFechaRecibePicker] = useState(false);
 
@@ -342,17 +527,16 @@ export default function ActaEntregaProductosScreen() {
   }, [isAuthenticated, isLoading, navigation]);
 
   const resetForm = (horaAccion: number) => {
-    setFecha(new Date(horaAccion));
-    setTipoEntrega('');
+    setFecha(parseDateInputToLocalDate(new Date(horaAccion), new Date()));
     setMensual('');
     setObservaciones('');
     setNombreEntrega('');
     setCedulaEntrega('');
-    setFechaEntrega(new Date(horaAccion));
+    setFechaEntrega(parseDateInputToLocalDate(new Date(horaAccion), new Date()));
     setFirmaEntrega('');
     setNombreRecibe('');
     setCedulaRecibe('');
-    setFechaRecibe(new Date(horaAccion));
+    setFechaRecibe(parseDateInputToLocalDate(new Date(horaAccion), new Date()));
     setFirmaRecibe('');
     setFirmaResponsableHash('');
     setDetalleItems([]);
@@ -398,11 +582,7 @@ export default function ActaEntregaProductosScreen() {
 
       const decoded: any = jwtDecode(token);
       const sessionId = decoded.sessionId || 'unknown';
-      const timestamp = await getHoraAccion();
-      if (!timestamp) {
-        Alert.alert('Error', 'No se pudo obtener la hora');
-        return null;
-      }
+      const timestamp = await getHoraAccionSafeMs();
 
       const { latitude, longitude } = location.coords;
       const empleadoId = String(employee.id);
@@ -649,6 +829,7 @@ export default function ActaEntregaProductosScreen() {
       if (!currentMarca) {
         setMarcaEmpresaId(null);
         setMarcaClienteId(null);
+        setMarcaDivisionId(null);
         setMarcaContratoId(null);
         setMarcaCorpoId(null);
         return null;
@@ -656,12 +837,12 @@ export default function ActaEntregaProductosScreen() {
       const current = JSON.parse(currentMarca);
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      const divisionIdRaw = current?.division?.id ?? current?.division_id;
       const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const divId = getMarcaRoleDivisionId(current);
       setMarcaEmpresaId(empresaIdRaw ? Number(empresaIdRaw) : null);
       setMarcaClienteId(clienteIdRaw ? Number(clienteIdRaw) : null);
-      setMarcaDivisionId(divisionIdRaw ? Number(divisionIdRaw) : null);
+      setMarcaDivisionId(divId);
       setMarcaContratoId(contratoIdRaw ? Number(contratoIdRaw) : null);
       setMarcaCorpoId(corpoIdRaw ? Number(corpoIdRaw) : null);
       return current;
@@ -688,15 +869,33 @@ export default function ActaEntregaProductosScreen() {
         }
       }
       const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        setIsStructureLoading(false);
-        return;
+      if (!isConnected) return;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) return;
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response?.ok) return;
+      const data = await response.json().catch(() => ({}));
+      if (data.status && Array.isArray(data.structure)) {
+        setStructure(data.structure);
+        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
+        if (data.created_at != null && data.created_at !== undefined) {
+          await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+        }
       }
-      // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
+    } catch (e) {
+      console.error('ActaEntrega fetchMainStructure:', e);
     } finally {
       setIsStructureLoading(false);
     }
-  }, []);
+  }, [logout, refreshAccessToken]);
 
   const fetchRecords = useCallback(async () => {
     setIsLoadingData(true);
@@ -716,13 +915,21 @@ export default function ActaEntregaProductosScreen() {
       // Obtener IDs de current_marca directamente sin usar estados
       const empresaIdRaw = currentMarca?.empresa?.id ?? currentMarca?.empresa_id;
       const clienteIdRaw = currentMarca?.cliente?.id ?? currentMarca?.cliente_id;
-      const divisionIdRaw = currentMarca?.division?.id ?? currentMarca?.division_id;
       const contratoIdRaw = currentMarca?.contrato?.id ?? currentMarca?.contrato_id;
       const corpoIdRaw = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
 
+      let structureForDivision: MainStructureTree = [];
+      try {
+        const structStr = await AsyncStorage.getItem('main_structure_cache');
+        const parsed = structStr ? JSON.parse(structStr) : [];
+        if (Array.isArray(parsed)) structureForDivision = parsed;
+      } catch {
+        structureForDivision = [];
+      }
+      const divisionIdFromMarca = resolveMarcaDivisionIdForTree(currentMarca, structureForDivision);
+
       const empresaIdFromMarca = empresaIdRaw ? Number(empresaIdRaw) : null;
       const clienteIdFromMarca = clienteIdRaw ? Number(clienteIdRaw) : null;
-      const divisionIdFromMarca = divisionIdRaw ? Number(divisionIdRaw) : null;
       const contratoIdFromMarca = contratoIdRaw ? Number(contratoIdRaw) : null;
       const corpoIdFromMarca = corpoIdRaw ? Number(corpoIdRaw) : null;
 
@@ -797,7 +1004,16 @@ export default function ActaEntregaProductosScreen() {
       }
 
       const serverRecords: ActaEntregaProducto[] = Array.isArray(res.data) ? res.data : [];
-      // merge: server + local no sincronizados
+      const scope: ActaEntregaFetchScope = {
+        empresaId,
+        clienteId,
+        divisionId,
+        contratoId,
+        corpoId,
+      };
+      await mergeActaEntregaServerIntoEvaluationsCache(serverRecords, scope);
+
+      // merge en pantalla: servidor + locales no sincronizados del alcance
       const unsyncedIds = new Set(unsynced.map((r) => String(r.id || r.id_local || '')));
       const filteredServer = serverRecords.filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
       setRecords([...unsynced, ...filteredServer]);
@@ -808,6 +1024,11 @@ export default function ActaEntregaProductosScreen() {
       setIsLoadingData(false);
     }
   }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
+
+  const fetchRecordsRef = useRef(fetchRecords);
+  useEffect(() => {
+    fetchRecordsRef.current = fetchRecords;
+  }, [fetchRecords]);
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -865,56 +1086,81 @@ export default function ActaEntregaProductosScreen() {
     return contrato?.sucursales || [];
   }, [formDivisiones, formDivisionId, formContratoId]);
 
-  // Inicializar filtros jerárquicos con current_marca
+  // Precarga de filtros desde current_marca al entrar (una vez); ignorar nuevas referencias de `structure` tras limpiar filtros
   useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    // Solo inicializar si los filtros no están establecidos
-    if (marcaEmpresaId && filterEmpresaId === null) setFilterEmpresaId(marcaEmpresaId);
-    if (marcaClienteId && filterClienteId === null) setFilterClienteId(marcaClienteId);
-    if (marcaContratoId && filterContratoId === null) setFilterContratoId(marcaContratoId);
-    if (marcaCorpoId && filterCorpoId === null) setFilterCorpoId(marcaCorpoId);
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaCorpoId, filterEmpresaId, filterClienteId, filterContratoId, filterCorpoId]);
+    if (!structure?.length) return;
+    if (userClearedHierarchyFiltersRef.current || filtersMarcaAppliedOnceRef.current) return;
+    if (marcaEmpresaId == null && marcaClienteId == null) {
+      filtersMarcaAppliedOnceRef.current = true;
+      return;
+    }
 
-  // Inicializar jerarquía del formulario con current_marca
+    const divisionResolved = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
+
+    if (marcaEmpresaId != null) setFilterEmpresaId(marcaEmpresaId);
+    if (marcaClienteId != null) setFilterClienteId(marcaClienteId);
+    if (divisionResolved != null) setFilterDivisionId(divisionResolved);
+    if (marcaContratoId != null) setFilterContratoId(marcaContratoId);
+    if (marcaCorpoId != null) setFilterCorpoId(marcaCorpoId);
+
+    filtersMarcaAppliedOnceRef.current = true;
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId]);
+
+  // Inicializar jerarquía del formulario con current_marca (división por nombre/id en árbol)
   useEffect(() => {
     if (!structure || structure.length === 0) return;
     if (!isCreating && !editingRecord) {
-      // Solo inicializar si no estamos creando o editando
+      const divisionResolved = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
       if (marcaEmpresaId && formEmpresaId === null) setFormEmpresaId(marcaEmpresaId);
       if (marcaClienteId && formClienteId === null) setFormClienteId(marcaClienteId);
-      if (marcaDivisionId && formDivisionId === null) setFormDivisionId(marcaDivisionId);
+      if (divisionResolved != null && formDivisionId === null) setFormDivisionId(divisionResolved);
       if (marcaContratoId && formContratoId === null) setFormContratoId(marcaContratoId);
       if (marcaCorpoId && formCorpoId === null) setFormCorpoId(marcaCorpoId);
     }
   }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, isCreating, editingRecord, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]);
 
-  // Trigger fetch cuando cambien los filtros jerárquicos
+  // Recargar listado solo cuando cambia la sucursal (corpo_id) seleccionada en el filtro
   useEffect(() => {
-    if (structure && structure.length > 0 && (filterEmpresaId || filterClienteId || filterDivisionId || filterContratoId || filterCorpoId)) {
-      fetchRecords();
-    }
+    if (!structure || structure.length === 0) return;
+    if (filterCorpoId == null) return;
+    fetchRecords();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, structure]);
+  }, [filterCorpoId, structure.length]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchMainStructure();
-      loadMarcaContext();
-      fetchRecords();
-      eventBus.on('connectionRestored', fetchRecords);
-      return () => eventBus.off('connectionRestored', fetchRecords);
-    }, [fetchRecords, fetchMainStructure, loadMarcaContext])
+      // No incluir fetchRecords en dependencias: al cambiar filtros se recrea y React Navigation
+      // volvería a ejecutar este callback, reseteando los refs y precargando jerarquía otra vez.
+      filtersMarcaAppliedOnceRef.current = false;
+      userClearedHierarchyFiltersRef.current = false;
+      let cancelled = false;
+      (async () => {
+        await loadMarcaContext();
+        if (cancelled) return;
+        await fetchMainStructure();
+        if (cancelled) return;
+        await fetchRecordsRef.current();
+      })();
+      const onConnectionRestored = () => {
+        fetchRecordsRef.current();
+      };
+      eventBus.on('connectionRestored', onConnectionRestored);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', onConnectionRestored);
+      };
+    }, [fetchMainStructure, loadMarcaContext])
   );
 
   const startCreating = async () => {
-    const horaAccion = await getHoraAccion();
+    const horaAccion = await getHoraAccionSafeMs();
     resetForm(horaAccion);
     setIsCreating(true);
     setEditingRecord(null);
   };
 
   const cancelCreating = async () => {
-    const horaAccion = await getHoraAccion();
+    const horaAccion = await getHoraAccionSafeMs();
     setIsCreating(false);
     resetForm(horaAccion);
   };
@@ -922,7 +1168,7 @@ export default function ActaEntregaProductosScreen() {
   const startEditing = async (record: ActaEntregaProducto) => {
     setIsCreating(false);
     setEditingRecord(record);
-    const horaAccion = await getHoraAccion();
+    const horaAccion = await getHoraAccionSafeMs();
 
     // Cargar IDs jerárquicos del registro
     setFormEmpresaId(record.empresa_id ? Number(record.empresa_id) : null);
@@ -931,19 +1177,18 @@ export default function ActaEntregaProductosScreen() {
     setFormContratoId(record.contrato_id ? Number(record.contrato_id) : null);
     setFormCorpoId(record.corpo_id ? Number(record.corpo_id) : null);
 
-    setFecha(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
-    setTipoEntrega(record.tipo_entrega || '');
+    setFecha(parseDateInputToLocalDate(record.fecha, new Date(horaAccion)));
     setMensual(record.mensual || '');
     setObservaciones(record.observaciones || '');
 
     setNombreEntrega(record.nombre_entrega || '');
     setCedulaEntrega(record.cedula_entrega || '');
-    setFechaEntrega(record.fecha_entrega ? new Date(record.fecha_entrega) : new Date(horaAccion));
+    setFechaEntrega(parseDateInputToLocalDate(record.fecha_entrega, new Date(horaAccion)));
     setFirmaEntrega(formatSignatureForDisplay(record.firma_entrega) || '');
 
     setNombreRecibe(record.nombre_recibe || '');
     setCedulaRecibe(record.cedula_recibe || '');
-    setFechaRecibe(record.fecha_recibe ? new Date(record.fecha_recibe) : new Date(horaAccion));
+    setFechaRecibe(parseDateInputToLocalDate(record.fecha_recibe, new Date(horaAccion)));
     setFirmaRecibe(formatSignatureForDisplay(record.firma_recibe) || '');
 
     setFirmaResponsableHash(record.firma_responsable || '');
@@ -976,12 +1221,11 @@ export default function ActaEntregaProductosScreen() {
 
   const cancelEditing = async () => {
     setEditingRecord(null);
-    const horaAccion = await getHoraAccion();
+    const horaAccion = await getHoraAccionSafeMs();
     resetForm(horaAccion);
   };
 
   const validateForm = () => {
-    if (!tipoEntrega.trim()) return 'Tipo de entrega es obligatorio';
     if (!formEmpresaId) return 'Empresa es obligatoria';
     if (!formClienteId) return 'Cliente es obligatorio';
     if (!formDivisionId) return 'División es obligatoria';
@@ -1006,13 +1250,10 @@ export default function ActaEntregaProductosScreen() {
     const validation = validateForm();
     if (validation) return Alert.alert('Error', validation);
 
-    console.log(fechaEntrega);
-    console.log(fechaRecibe);
-
     Alert.alert('Confirmar', '¿Deseas guardar el acta?', [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Confirmar',
+        text: 'Aceptar',
         onPress: async () => {
           setIsSubmitting(true);
           setSubmitResponse(null);
@@ -1024,17 +1265,17 @@ export default function ActaEntregaProductosScreen() {
               division_id: formDivisionId ?? undefined,
               contrato_id: formContratoId ?? undefined,
               corpo_id: formCorpoId ?? undefined,
-              tipo_entrega: tipoEntrega.trim(),
+              tipo_entrega: TIPO_ENTREGA_DEFAULT,
               mensual: mensual.trim(),
               detalle: buildDetalleJson(),
               observaciones: observaciones.trim(),
               nombre_entrega: nombreEntrega.trim(),
               cedula_entrega: cedulaEntrega.trim(),
-              fecha_entrega: fechaEntrega.toISOString(),
+              fecha_entrega: dateOnlyToIsoString(fechaEntrega),
               firma_entrega: firmaEntrega,
               nombre_recibe: nombreRecibe.trim(),
               cedula_recibe: cedulaRecibe.trim(),
-              fecha_recibe: fechaRecibe.toISOString(),
+              fecha_recibe: dateOnlyToIsoString(fechaRecibe),
               firma_recibe: firmaRecibe,
               firma_responsable: firmaResponsableHash.trim(),
               imagenes: buildImagenesJson(),
@@ -1070,13 +1311,13 @@ export default function ActaEntregaProductosScreen() {
 
             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
-            const horaAccion = await getHoraAccion();
+            const horaAccion = await getHoraAccionSafeMs();
 
             const newCacheRecord: ActaEntregaProducto = {
               id: '',
               id_local: localId,
               synced: false,
-              fecha: new Date(horaAccion).toISOString(),
+              fecha: epochMsToIsoSafe(horaAccion),
               empresa_id: requestData.empresa_id,
               cliente_id: requestData.cliente_id,
               division_id: requestData.division_id,
@@ -1128,7 +1369,7 @@ export default function ActaEntregaProductosScreen() {
     Alert.alert('Confirmar', '¿Deseas actualizar el acta?', [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Confirmar',
+        text: 'Aceptar',
         onPress: async () => {
           setIsSubmitting(true);
           setSubmitResponse(null);
@@ -1139,17 +1380,17 @@ export default function ActaEntregaProductosScreen() {
               division_id: formDivisionId,
               contrato_id: formContratoId,
               corpo_id: formCorpoId,
-              tipo_entrega: tipoEntrega.trim(),
+              tipo_entrega: TIPO_ENTREGA_DEFAULT,
               mensual: mensual.trim(),
               detalle: buildDetalleJson(),
               observaciones: observaciones.trim(),
               nombre_entrega: nombreEntrega.trim(),
               cedula_entrega: cedulaEntrega.trim(),
-              fecha_entrega: fechaEntrega.toISOString(),
+              fecha_entrega: dateOnlyToIsoString(fechaEntrega),
               firma_entrega: firmaEntrega,
               nombre_recibe: nombreRecibe.trim(),
               cedula_recibe: cedulaRecibe.trim(),
-              fecha_recibe: fechaRecibe.toISOString(),
+              fecha_recibe: dateOnlyToIsoString(fechaRecibe),
               firma_recibe: firmaRecibe,
               firma_responsable: firmaResponsableHash.trim(),
               ...(photosDirty ? { imagenes: buildImagenesJson() } : {}),
@@ -1177,10 +1418,31 @@ export default function ActaEntregaProductosScreen() {
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
 
             if (isLocal) {
-              // actualizar acción create existente
-              const idx = actions.findIndex((a: any) => a.id === editingRecord.id_local && a.action === 'create' && a.type === 'acta_entrega_producto');
-              if (idx !== -1) actions[idx] = { ...actions[idx], payload: { ...actions[idx].payload, ...requestData } };
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              // Borrador: fusionar en el "create" pendiente; no encolar "update" con id local.
+              const lid = String(editingRecord.id_local);
+              let next = actions.filter(
+                (a: any) =>
+                  !(
+                    a.type === 'acta_entrega_producto' &&
+                    a.action === 'update' &&
+                    String(a.id) === lid
+                  )
+              );
+              const idx = next.findIndex(
+                (a: any) => a.id === editingRecord.id_local && a.action === 'create' && a.type === 'acta_entrega_producto'
+              );
+              if (idx !== -1) {
+                next[idx] = { ...next[idx], payload: { ...next[idx].payload, ...requestData } };
+              } else {
+                next.push({
+                  id: editingRecord.id_local,
+                  action: 'create',
+                  type: 'acta_entrega_producto',
+                  payload: { ...requestData },
+                  synced: false,
+                });
+              }
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
             } else {
               const filtered = actions.filter((a: any) => !(a.id === editingRecord.id && a.action === 'update' && a.type === 'acta_entrega_producto'));
               filtered.push({ id: editingRecord.id, action: 'update', type: 'acta_entrega_producto', payload: requestData, synced: false });
@@ -1218,13 +1480,17 @@ export default function ActaEntregaProductosScreen() {
     ]);
   };
 
+  const getRecordKey = (r: ActaEntregaProducto) => String(r.id ?? r.id_local ?? '');
+
   const deleteHandler = async (record: ActaEntregaProducto) => {
+    const recordKey = getRecordKey(record);
     Alert.alert('Confirmar', '¿Deseas eliminar este acta?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
+          setDeletingRecordKey(recordKey);
           try {
             const isConnected = await getConnectionStatus();
             const isLocal = record.id_local && String(record.id_local).startsWith('local-');
@@ -1240,12 +1506,19 @@ export default function ActaEntregaProductosScreen() {
               return;
             }
 
-            // Offline: crear acción delete o remover acción create si era local
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
 
             if (isLocal) {
-              const updatedActions = actions.filter((a: any) => !(a.id === record.id_local && a.type === 'acta_entrega_producto'));
+              const lid = String(record.id_local);
+              const updatedActions = actions.filter(
+                (a: any) =>
+                  !(
+                    a.type === 'acta_entrega_producto' &&
+                    (a.action === 'create' || a.action === 'update') &&
+                    String(a.id) === lid
+                  )
+              );
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
             } else {
               const filtered = actions.filter((a: any) => !(a.id === record.id && a.action === 'delete' && a.type === 'acta_entrega_producto'));
@@ -1268,6 +1541,8 @@ export default function ActaEntregaProductosScreen() {
           } catch (e) {
             console.error('Error deleting acta:', e);
             Alert.alert('Error', 'No se pudo eliminar el acta');
+          } finally {
+            setDeletingRecordKey(null);
           }
         },
       },
@@ -1389,12 +1664,21 @@ export default function ActaEntregaProductosScreen() {
           <ThemedView key={String(r.id || r.id_local)} style={styles.listItem}>
             <ThemedView style={styles.listItemHeader}>
               <ThemedView style={styles.listItemContent}>
-                <ThemedText style={styles.listItemTitle}>{r.tipo_entrega || 'N/A'}</ThemedText>
+                <ThemedText style={styles.listItemTitle}>{(r.nombre_entrega || '').trim() || 'Sin nombre entrega'}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>Mensual: {r.mensual || ''}</ThemedText>
                 <ThemedText style={styles.listItemSubtitle}>
-                  Fecha: {convertDateTimestampToLocalString(new Date(r.fecha || r.fecha_entrega).toISOString())}
+                  Fecha: {formatDateStringDMY(r.fecha || r.fecha_entrega)}
                 </ThemedText>
-                <ThemedText style={styles.listItemSubtitle}>Cantidad de productos: {r.detalle ? JSON.parse(r.detalle).length : 0}</ThemedText>
+                <ThemedText style={styles.listItemSubtitle}>
+                  Cantidad de productos:{' '}
+                  {(() => {
+                    try {
+                      return r.detalle ? JSON.parse(r.detalle).length : 0;
+                    } catch {
+                      return 0;
+                    }
+                  })()}
+                </ThemedText>
               </ThemedView>
             </ThemedView>
 
@@ -1417,8 +1701,16 @@ export default function ActaEntregaProductosScreen() {
                   <Ionicons name="list-outline" size={18} color="#FFFFFF" />
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)}>
-                <Ionicons name="trash" size={18} color="#FFFFFF" />
+              <TouchableOpacity
+                style={[styles.listItemButton, styles.deleteButton, deletingRecordKey !== null && styles.buttonDisabled]}
+                onPress={() => deleteHandler(r)}
+                disabled={deletingRecordKey !== null}
+              >
+                {deletingRecordKey === getRecordKey(r) ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                )}
               </TouchableOpacity>
             </ThemedView>
           </ThemedView>
@@ -1531,7 +1823,7 @@ export default function ActaEntregaProductosScreen() {
             </ThemedView>
           )}
 
-          {hasCurrentMarca && !isCreating && !editingRecord && !isLoadingData && (
+          {hasCurrentMarca && !isCreating && !editingRecord && (
             <ThemedView style={styles.filtersContainer}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -1554,6 +1846,7 @@ export default function ActaEntregaProductosScreen() {
                         onValueChange={(value) => {
                           setFilterEmpresaId(value && value !== '' ? Number(value) : null);
                           setFilterClienteId(null);
+                          setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
                         }}
@@ -1656,11 +1949,15 @@ export default function ActaEntregaProductosScreen() {
                   <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={() => {
+                      userClearedHierarchyFiltersRef.current = true;
                       setFilterEmpresaId(null);
                       setFilterClienteId(null);
                       setFilterDivisionId(null);
                       setFilterContratoId(null);
                       setFilterCorpoId(null);
+                      setTimeout(() => {
+                        fetchRecords();
+                      }, 0);
                     }}
                   >
                     <ThemedText style={styles.resetFiltersText}>Limpiar Filtros</ThemedText>
@@ -1672,12 +1969,6 @@ export default function ActaEntregaProductosScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={[styles.vehicleCard, styles.formCard]}>
-              {/* Tipo entrega */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Tipo de entrega *</ThemedText>
-                <TextInput style={styles.formInput} value={tipoEntrega} onChangeText={setTipoEntrega} placeholder="Tipo de entrega" placeholderTextColor="#999" />
-              </ThemedView>
-
               {/* Jerarquía del formulario */}
               <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
 
@@ -1830,17 +2121,17 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha entrega *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaEntregaPicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(Number(fechaEntrega)).toISOString())}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{formatDateOnlyLabel(fechaEntrega)}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaEntregaPicker && (
                   <DateTimePicker
-                    value={fechaEntrega}
+                    value={Number.isNaN(fechaEntrega.getTime()) ? new Date() : fechaEntrega}
                     mode="date"
                     display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     onChange={(_, d) => {
                       if (Platform.OS === 'android') setShowFechaEntregaPicker(false);
-                      if (d) setFechaEntrega(d);
+                      if (d) setFechaEntrega(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
                     }}
                   />
                 )}
@@ -1876,17 +2167,17 @@ export default function ActaEntregaProductosScreen() {
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Fecha recibe *</ThemedText>
                 <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaRecibePicker(true)}>
-                  <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(fechaRecibe).toISOString())}</ThemedText>
+                  <ThemedText style={styles.dateButtonText}>{formatDateOnlyLabel(fechaRecibe)}</ThemedText>
                   <Ionicons name="calendar" size={18} color="#007AFF" />
                 </TouchableOpacity>
                 {showFechaRecibePicker && (
                   <DateTimePicker
-                    value={fechaRecibe}
+                    value={Number.isNaN(fechaRecibe.getTime()) ? new Date() : fechaRecibe}
                     mode="date"
                     display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                     onChange={(_, d) => {
                       if (Platform.OS === 'android') setShowFechaRecibePicker(false);
-                      if (d) setFechaRecibe(d);
+                      if (d) setFechaRecibe(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
                     }}
                   />
                 )}
@@ -1947,7 +2238,7 @@ export default function ActaEntregaProductosScreen() {
                             <ThemedText style={styles.signatureInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                             <ThemedText style={styles.signatureInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                            <ThemedText style={styles.signatureInfoValue}>Hora: {convertDateTimestampToLocalString(new Date(info.timestamp).toISOString()) || 'N/A'}</ThemedText>
+                            <ThemedText style={styles.signatureInfoValue}>Hora: {safeFirmaTimestampLabel(info.timestamp)}</ThemedText>
                           </>
                         );
                       })()}
@@ -1979,7 +2270,7 @@ export default function ActaEntregaProductosScreen() {
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
                     <ThemedText style={styles.confirmButtonText}>
-                      <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                      <Ionicons name="checkmark" size={18} color="#FFFFFF" /> Aceptar
                     </ThemedText>
                   )}
                 </TouchableOpacity>
@@ -2162,7 +2453,7 @@ export default function ActaEntregaProductosScreen() {
                                             {(() => {
                                               const info = decodeFirmaHash(created.firma_responsable);
                                               return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`
+                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${safeFirmaTimestampLabel(info.timestamp)}`
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
@@ -2209,7 +2500,7 @@ export default function ActaEntregaProductosScreen() {
                                       {isResponsableSignatureField && (() => {
                                         const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
                                         if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
+                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${safeFirmaTimestampLabel(info.timestamp)}`;
                                       })()}
                                     </ThemedText>
 

@@ -352,6 +352,7 @@ export async function POST(req: NextRequest) {
         const responsableObj = responsable as any;
 
         const fechaDate = fecha instanceof Date ? fecha : new Date(fecha);
+        const createdAtStamp = toZonedTime(new Date(), "America/Costa_Rica");
         const encuesta = await callDynamicPrisma({
             req,
             data: {
@@ -367,7 +368,7 @@ export async function POST(req: NextRequest) {
                     responsable_id: responsableObj.id,
                     empresa_evaluado: empresa_evaluada,
                     firma_responsable: firma_responsable,
-                    created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                    created_at: createdAtStamp.toISOString(),
                     fecha: fechaDate.toISOString(),
                     evaluaciones: evaluaciones,
                     nombre_evaluado: persona_evaluada,
@@ -383,6 +384,47 @@ export async function POST(req: NextRequest) {
         });
 
         if (encuesta) {
+            const encuestaObj = encuesta as any;
+            const createdByNum = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "c_encuesta_cliente",
+                        registro_id: encuestaObj.id,
+                        cambios: JSON.stringify([{
+                            prop: "__created__",
+                            before: null,
+                            after: {
+                                id: encuestaObj.id,
+                                empresa_id: empresaObj.id,
+                                cliente_id: clienteObj.id,
+                                corpo_id: corpoObj.id,
+                                puesto_id: puestoObj.id,
+                                division_id: divisionObj.id,
+                                responsable_id: responsableObj.id,
+                                fecha: fechaDate.toISOString(),
+                                evaluaciones: encuestaObj.evaluaciones ?? evaluaciones,
+                                firma_responsable: encuestaObj.firma_responsable ?? firma_responsable,
+                                nombre_evaluado: encuestaObj.nombre_evaluado ?? persona_evaluada,
+                                cedula_evaluado: encuestaObj.cedula_evaluado ?? cedula_persona_evaluada,
+                                telefono_evaluado: encuestaObj.telefono_evaluado ?? telefono_persona_evaluada,
+                                email_evaluado: encuestaObj.email_evaluado ?? email_persona_evaluada,
+                                firma_evaluado: encuestaObj.firma_evaluado ?? null,
+                                nombre_responsable: encuestaObj.nombre_responsable ?? nombre_responsable,
+                                cedula_responsable: encuestaObj.cedula_responsable ?? cedula_responsable,
+                                empresa_evaluado: encuestaObj.empresa_evaluado ?? empresa_evaluada,
+                                observaciones: encuestaObj.observaciones ?? observaciones,
+                            },
+                        }]),
+                        created_at: createdAtStamp.toISOString(),
+                        created_by: createdByNum,
+                    },
+                },
+            });
             const evaluaciones_json = JSON.parse(evaluaciones);
             let evaluaciones_html = "";
             for (const item of evaluaciones_json) {

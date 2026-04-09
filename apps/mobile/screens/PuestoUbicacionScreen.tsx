@@ -43,6 +43,93 @@ type MainStructureClienteNode = { id: number; nombre: string; division: MainStru
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
+type HierarchyIds = {
+    empresaId: number;
+    clienteId: number;
+    divisionId: number;
+    contratoId: number;
+    corpoId: number;
+    puestoId: number;
+};
+
+function numOrNull(v: unknown): number | null {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
+/** Recorre main_structure_cache para completar la cadena empresa → puesto (como en SatisfactionSurveysScreen). */
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyIds | null {
+    const pid = Number(puestoId);
+    for (const empresa of structureArr || []) {
+        for (const cliente of empresa.clientes || []) {
+            for (const division of cliente.division || []) {
+                for (const contrato of division.contratos || []) {
+                    for (const sucursal of contrato.sucursales || []) {
+                        for (const puesto of sucursal.puestos || []) {
+                            if (Number(puesto.id) === pid) {
+                                return {
+                                    empresaId: empresa.id,
+                                    clienteId: cliente.id,
+                                    divisionId: division.id,
+                                    contratoId: contrato.id,
+                                    corpoId: sucursal.id,
+                                    puestoId: puesto.id,
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+/** IDs desde current_marca (anidado o plano, como MarcarIngresoSalida / NotesScreen) y refuerzo con el árbol en caché. */
+function resolveMarcaIdsFromCurrentMarca(
+    structure: MainStructureTree,
+    current: Record<string, unknown> | null
+): {
+    empresaId: number | null;
+    clienteId: number | null;
+    divisionId: number | null;
+    contratoId: number | null;
+    corpoId: number | null;
+    puestoId: number | null;
+} {
+    if (!current) {
+        return {
+            empresaId: null,
+            clienteId: null,
+            divisionId: null,
+            contratoId: null,
+            corpoId: null,
+            puestoId: null,
+        };
+    }
+    const c = current as Record<string, any>;
+    let empresaId = numOrNull(c?.empresa?.id ?? c?.empresa_id);
+    let clienteId = numOrNull(c?.cliente?.id ?? c?.cliente_id);
+    let divisionId = numOrNull(c?.roleDivision?.division?.id ?? c?.division_id);
+    let contratoId = numOrNull(c?.contrato?.id ?? c?.contrato_id);
+    let corpoId = numOrNull(c?.corpo?.id ?? c?.corpo_id);
+    let puestoId = numOrNull(c?.puesto?.id ?? c?.puesto_id);
+
+    if (puestoId && Array.isArray(structure) && structure.length > 0) {
+        const found = findHierarchyByPuestoIn(structure, puestoId);
+        if (found) {
+            empresaId = empresaId ?? found.empresaId;
+            clienteId = clienteId ?? found.clienteId;
+            divisionId = divisionId ?? found.divisionId;
+            contratoId = contratoId ?? found.contratoId;
+            corpoId = corpoId ?? found.corpoId;
+        }
+    }
+
+    return { empresaId, clienteId, divisionId, contratoId, corpoId, puestoId };
+}
+
 export default function PuestoUbicacionScreen() {
     const { employee, refreshAccessToken, logout } = useAuth();
     const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -72,13 +159,10 @@ export default function PuestoUbicacionScreen() {
     const [isUpdating, setIsUpdating] = useState(false);
     const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-    // IDs de current_marca para inicialización
-    const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
-    const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
-    const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
-    const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
-    const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
-    const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+    /** Snapshot de AsyncStorage current_marca; se combina con main_structure_cache al aplicar filtros. */
+    const currentMarcaRef = useRef<Record<string, unknown> | null>(null);
+    /** Se incrementa en cada foco para volver a aplicar la jerarquía desde current_marca. */
+    const [marcaHierarchyRevision, setMarcaHierarchyRevision] = useState(0);
 
     const getConnectionStatus = async (): Promise<boolean> => {
         const networkState = await Network.getNetworkStateAsync();
@@ -201,21 +285,18 @@ export default function PuestoUbicacionScreen() {
         }
     }, [refreshAccessToken, logout]);
 
-    // Cargar contexto de marca actual
+    // Cargar current_marca (misma forma que InductionTourRecordScreen / objeto marca de MarcarIngresoSalida)
     const loadMarcaContext = useCallback(async () => {
         try {
-            const currentMarca = await AsyncStorage.getItem('current_marca');
-            if (currentMarca) {
-                const marcaData = JSON.parse(currentMarca);
-                setMarcaEmpresaId(marcaData.empresa_id || null);
-                setMarcaClienteId(marcaData.cliente_id || null);
-                setMarcaDivisionId(marcaData.roleDivision?.division?.id || null);
-                setMarcaContratoId(marcaData.contrato_id || null);
-                setMarcaCorpoId(marcaData.corpo_id || null);
-                setMarcaPuestoId(marcaData.puesto_id || null);
+            const raw = await AsyncStorage.getItem('current_marca');
+            if (!raw || raw.trim() === '') {
+                currentMarcaRef.current = null;
+                return;
             }
+            currentMarcaRef.current = JSON.parse(raw) as Record<string, unknown>;
         } catch (error) {
             console.error('Error loading marca context:', error);
+            currentMarcaRef.current = null;
         }
     }, []);
 
@@ -247,16 +328,19 @@ export default function PuestoUbicacionScreen() {
         return sucursal?.puestos || [];
     }, [filterSucursales, filterCorpoId]);
 
-    // Inicializar filtros con current_marca
+    // Al entrar a la pantalla: aplicar jerarquía del puesto de asistencia (current_marca) sobre el árbol en caché
     useEffect(() => {
+        if (!marcaHierarchyRevision) return;
         if (!structure || structure.length === 0) return;
-        if (marcaEmpresaId && !filterEmpresaId) setFilterEmpresaId(marcaEmpresaId);
-        if (marcaClienteId && !filterClienteId) setFilterClienteId(marcaClienteId);
-        if (marcaDivisionId && !filterDivisionId) setFilterDivisionId(marcaDivisionId);
-        if (marcaContratoId && !filterContratoId) setFilterContratoId(marcaContratoId);
-        if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
-        if (marcaPuestoId && !filterPuestoId) setFilterPuestoId(marcaPuestoId);
-    }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
+
+        const ids = resolveMarcaIdsFromCurrentMarca(structure, currentMarcaRef.current);
+        setFilterEmpresaId(ids.empresaId);
+        setFilterClienteId(ids.clienteId);
+        setFilterDivisionId(ids.divisionId);
+        setFilterContratoId(ids.contratoId);
+        setFilterCorpoId(ids.corpoId);
+        setFilterPuestoId(ids.puestoId);
+    }, [structure, marcaHierarchyRevision]);
 
     // Cargar datos del puesto cuando se selecciona
     useEffect(() => {
@@ -323,7 +407,6 @@ export default function PuestoUbicacionScreen() {
         return () => clearInterval(interval);
     }, [filterPuestoId, getDeviceLocation]);
 
-    // Actualizar ubicación del puesto
     const updatePuestoUbicacion = useCallback(async () => {
         if (!filterPuestoId) {
             Alert.alert('Error', 'Por favor selecciona un puesto');
@@ -384,13 +467,13 @@ export default function PuestoUbicacionScreen() {
                 const id_local = `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                const puestoNum = Number(filterPuestoId);
+                const isSamePuestoAction = (a: any) =>
+                    a?.type === 'puesto_ubicacion' && Number(a?.puesto_id) === puestoNum;
 
-                // Eliminar acciones anteriores para este puesto
-                const filteredActions = actions.filter(
-                    (a: any) => !(a.puesto_id === filterPuestoId && a.type === 'puesto_ubicacion')
-                );
+                // Un solo pending update por puesto (reemplaza el anterior, sin apilar)
+                const filteredActions = actions.filter((a: any) => !isSamePuestoAction(a));
 
-                // Agregar nueva acción
                 filteredActions.push({
                     id: id_local,
                     puesto_id: filterPuestoId,
@@ -408,7 +491,9 @@ export default function PuestoUbicacionScreen() {
                 // Actualizar cache local
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                const updatedCache = cache.filter((item: any) => !(item.puesto_id === filterPuestoId && item.type === 'puesto_ubicacion'));
+                const updatedCache = cache.filter(
+                    (item: any) => !(item.type === 'puesto_ubicacion' && Number(item?.puesto_id) === puestoNum)
+                );
                 updatedCache.push({
                     id_local,
                     puesto_id: filterPuestoId,
@@ -438,6 +523,31 @@ export default function PuestoUbicacionScreen() {
             setIsUpdating(false);
         }
     }, [filterPuestoId, deviceLocation, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache]);
+
+    const requestConfirmAndUpdateUbicacion = useCallback(() => {
+        if (!filterPuestoId) {
+            Alert.alert('Error', 'Por favor selecciona un puesto');
+            return;
+        }
+        if (!deviceLocation) {
+            Alert.alert('Error', 'Por favor obtén la ubicación del dispositivo primero');
+            return;
+        }
+
+        Alert.alert(
+            'Confirmar ubicación',
+            '¿Deseas actualizar la ubicación del puesto con las coordenadas actuales del dispositivo?',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Aceptar',
+                    onPress: () => {
+                        void updatePuestoUbicacion();
+                    },
+                },
+            ]
+        );
+    }, [filterPuestoId, deviceLocation, updatePuestoUbicacion]);
 
     // Sincronizar acciones offline cuando se restaura la conexión
     useEffect(() => {
@@ -494,7 +604,9 @@ export default function PuestoUbicacionScreen() {
                             }
 
                             // Marcar como sincronizado
-                            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'puesto_ubicacion'));
+                            actions = actions.filter(
+                                (a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'puesto_ubicacion')
+                            );
                             await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
                             // Actualizar cache
@@ -528,8 +640,17 @@ export default function PuestoUbicacionScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            loadMarcaContext();
-            fetchMainStructure();
+            let cancelled = false;
+            (async () => {
+                await loadMarcaContext();
+                if (cancelled) return;
+                await fetchMainStructure();
+                if (cancelled) return;
+                setMarcaHierarchyRevision((r) => r + 1);
+            })();
+            return () => {
+                cancelled = true;
+            };
         }, [loadMarcaContext, fetchMainStructure])
     );
 
@@ -764,7 +885,7 @@ export default function PuestoUbicacionScreen() {
                                 <ThemedView style={styles.formActions}>
                                     <TouchableOpacity
                                         style={[styles.formActionButton, styles.formActionSave, isUpdating && styles.buttonDisabled]}
-                                        onPress={updatePuestoUbicacion}
+                                        onPress={requestConfirmAndUpdateUbicacion}
                                         disabled={isUpdating}
                                     >
                                         {isUpdating ? (
@@ -772,7 +893,7 @@ export default function PuestoUbicacionScreen() {
                                         ) : (
                                             <>
                                                 <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                                                <ThemedText style={styles.formActionSaveText}>Actualizar Ubicación del Puesto</ThemedText>
+                                                <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
                                             </>
                                         )}
                                     </TouchableOpacity>

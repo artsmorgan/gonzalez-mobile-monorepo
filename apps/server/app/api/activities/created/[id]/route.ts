@@ -24,7 +24,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       frecuencia,
       es_revision_equipo,
       firma_responsable,
-      puestos_ids,
     } = await req.json();
 
     if (
@@ -33,9 +32,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       !fecha_inicio ||
       !frecuencia ||
       es_revision_equipo === undefined ||
-      !firma_responsable ||
-      !Array.isArray(puestos_ids) ||
-      puestos_ids.length === 0
+      !firma_responsable
     ) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
@@ -72,31 +69,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
 
-    await callDynamicPrisma({
-      req,
-      data: {
-        action: "DELETE",
-        table: "e_actividades_puesto",
-        operation: "deleteMany",
-        many: true,
-        where: { actividad_id: actividadId },
-      },
-    });
-
-    const uniquePuestos = Array.from(
-      new Set(puestos_ids.map((p: any) => Number(p)).filter((v: number) => Number.isFinite(v) && v > 0))
-    );
-    for (const puestoId of uniquePuestos) {
-      await callDynamicPrisma({
-        req,
-        data: {
-          action: "POST",
-          table: "e_actividades_puesto",
-          data: { actividad_id: actividadId, puesto_id: puestoId },
-        },
-      });
-    }
-
     const createdBy = payload?.id ? Number(payload.id) : 0;
     await callDynamicPrisma({
       req,
@@ -124,7 +96,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 fecha_fin: fecha_fin || fecha_inicio,
                 frecuencia,
                 es_revision_equipo,
-                puestos_ids: uniquePuestos,
               },
             },
           ]),

@@ -20,6 +20,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
 import { jwtDecode } from 'jwt-decode';
+import { Picker } from '@react-native-picker/picker';
 
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -45,6 +46,83 @@ import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampT
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
 
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+type MainStructureSucursalNode = { id: number; nombre: string; puestos?: { id: number; nombre: string }[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+type HierarchyCorpoIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+};
+
+function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number): HierarchyCorpoIds | null {
+  const cid = Number(corpoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return {
+                empresaId: empresa.id,
+                clienteId: cliente.id,
+                divisionId: division.id,
+                contratoId: contrato.id,
+                corpoId: sucursal.id,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** ID sucursal en caché o API (`corpo_id` o `sucursal_id`). */
+function docRecordSucursalId(d: any): number {
+  return Number(d?.corpo_id ?? d?.sucursal_id ?? 0);
+}
+
+type MarcaSnapshot = {
+  current: Record<string, any>;
+  roleName: string | null;
+  isOperativo: boolean;
+  marcaDivisionId: number | null;
+  marcaCorpoId: number | null;
+  marcaClienteId: number | null;
+  marcaEmpresaId: number | null;
+  filterEmpresaId: number | null;
+  filterClienteId: number | null;
+  filterDivisionId: number | null;
+  filterContratoId: number | null;
+  filterSucursalId: number | null;
+};
+
 export default function DocumentosEntregadosScreen() {
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
@@ -58,6 +136,29 @@ export default function DocumentosEntregadosScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
+
+  const [roleName, setRoleName] = useState<RoleName>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
 
   const [docs, setDocs] = useState<DocUI[]>([]);
 
@@ -75,6 +176,7 @@ export default function DocumentosEntregadosScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<DocUI | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingDocKey, setDeletingDocKey] = useState<string | number | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   const [fecha, setFecha] = useState('');
@@ -149,6 +251,7 @@ export default function DocumentosEntregadosScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
@@ -221,89 +324,338 @@ export default function DocumentosEntregadosScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const loadMarcaContext = async () => {
-    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-    if (!currentMarcaStr) {
-      setHasCurrentMarca(false);
-      return null;
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
+        setMarcaEmpresaId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+        const divId = numOrNull(divIdRaw);
+        const corpoId = numOrNull(corpoIdRaw);
+        const clienteId = numOrNull(clienteIdRaw);
+        const empresaId = numOrNull(empresaIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? (role as RoleName) : null;
+
+        setMarcaDivisionId(divId);
+        setMarcaCorpoId(corpoId);
+        setMarcaClienteId(clienteId);
+        setMarcaEmpresaId(empresaId);
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaDivisionId: divId,
+          marcaCorpoId: corpoId,
+          marcaClienteId: clienteId,
+          marcaEmpresaId: empresaId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        return null;
+      }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+      setFilterSucursalId(fs);
+      filterSucursalIdRef.current = fs;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (documentos entregados):', e);
     }
-    const current = JSON.parse(currentMarcaStr);
-    if (!current?.id) {
-      setHasCurrentMarca(false);
-      return null;
+  }, []);
+
+  const applyCurrentMarcaToCreateHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') return;
+
+      setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
+      setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateHierarchy (documentos entregados):', e);
     }
-    setHasCurrentMarca(true);
-    return current;
+  }, []);
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      if (cacheStr) {
+        try {
+          const parsed = JSON.parse(cacheStr);
+          if (Array.isArray(parsed)) setStructure(parsed);
+          else setStructure([]);
+        } catch {
+          setStructure([]);
+        }
+      }
+    } catch (e) {
+      console.error('Error loading main structure (documentos entregados):', e);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
+
+  const selectedEmpresaNode = useMemo(() => {
+    if (selectedEmpresaId === null) return null;
+    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+  }, [structure, selectedEmpresaId]);
+
+  const clienteOptions = useMemo(() => {
+    if (!selectedEmpresaNode) return [];
+    return (selectedEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [selectedEmpresaNode]);
+
+  const selectedClienteNode = useMemo(() => {
+    if (!selectedEmpresaNode || selectedClienteId === null) return null;
+    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+  }, [selectedEmpresaNode, selectedClienteId]);
+
+  const divisionOptions = useMemo(() => {
+    if (!selectedClienteNode) return [];
+    return (selectedClienteNode.division || []).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [selectedClienteNode]);
+
+  const selectedDivisionNode = useMemo(() => {
+    if (!selectedClienteNode || selectedDivisionId === null) return null;
+    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
+  }, [selectedClienteNode, selectedDivisionId]);
+
+  const contratoOptions = useMemo(() => {
+    if (!selectedDivisionNode) return [];
+    return (selectedDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [selectedDivisionNode]);
+
+  const selectedContratoNode = useMemo(() => {
+    if (!selectedDivisionNode || selectedContratoId === null) return null;
+    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+  }, [selectedDivisionNode, selectedContratoId]);
+
+  const sucursalOptions = useMemo(() => {
+    if (!selectedContratoNode) return [];
+    return (selectedContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [selectedContratoNode]);
+
+  const handleEmpresaChange = (empresaId: number | null) => {
+    setSelectedEmpresaId(empresaId);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
   };
 
-  const fetchDocumentTypes = async () => {
+  const handleClienteChange = (clienteId: number | null) => {
+    setSelectedClienteId(clienteId);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+  };
+
+  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const fetchDocumentTypes = useCallback(async () => {
     const res = await getDocumentTypes({ refreshAccessToken, logout });
     if (res.status && Array.isArray(res.documentTypes)) {
       setDocumentTypes(res.documentTypes as any);
     } else {
       setDocumentTypes([]);
     }
-  };
+  }, [refreshAccessToken, logout]);
 
-  const fetchDocs = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      const current = await loadMarcaContext();
-      if (!current) {
-        setIsLoading(false);
-        return;
-      }
+  const runFetchDocs = useCallback(
+    async (snap: MarcaSnapshot) => {
+      try {
+        setIsLoading(true);
+        setError(null);
 
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
+        await fetchMainStructure();
+
+        const corpoId = snap.isOperativo ? snap.marcaCorpoId : (snap.filterSucursalId ?? snap.marcaCorpoId);
+
+        if (!corpoId || corpoId <= 0) {
+          setError(
+            snap.isOperativo
+              ? 'No se encontró el ID de la sucursal (corpo) en la marca actual'
+              : 'Seleccione sucursal en el filtro o defina la sucursal en la marca actual'
+          );
+          setDocs([]);
+          return;
+        }
+
+        const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
+        const allCache: DocUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+        const sid = Number(corpoId);
+        const localByCorpo = Array.isArray(allCache)
+          ? allCache.filter((d: any) => docRecordSucursalId(d) === sid)
+          : [];
+
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) {
+          setDocs(localByCorpo);
+          return;
+        }
+
         const res = await listDocumentosEntregados({
-          marcaId: current.id,
+          corpoId,
           refreshAccessToken,
           logout,
         });
-        if (res.status) {
-          const list = (res.data || []).map((it: any) => ({ ...it, id_local: it.id_local || '' }));
-          setDocs(list);
-          console.log(1);
-          await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(list));
-        } else {
+
+        if (!res.status) {
           setError(res.message || 'Error al cargar documentos entregados');
-          const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
-          if (cacheStr) setDocs(JSON.parse(cacheStr));
-          console.log(2);
+          setDocs(localByCorpo);
+          return;
         }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
-        if (cacheStr) setDocs(JSON.parse(cacheStr));
-        console.log(3);
+
+        const serverList = (res.data || []).map((it: any) => ({
+          ...it,
+          corpo_id: Number(it.corpo_id ?? it.sucursal_id ?? corpoId),
+          id_local: it.id_local || '',
+        }));
+        const localOnly = localByCorpo.filter((d: any) => d.id_local || d.id === 0);
+        const merged: DocUI[] = [...localOnly, ...serverList];
+
+        setDocs(merged);
+
+        const withoutThis = Array.isArray(allCache)
+          ? allCache.filter((d: any) => docRecordSucursalId(d) !== sid)
+          : [];
+        await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify([...withoutThis, ...merged]));
+      } catch (e: any) {
+        setError(e.message || 'Error al cargar documentos entregados');
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e: any) {
-      setError(e.message || 'Error al cargar documentos entregados');
-      console.log(e);
-      console.log(4);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+    },
+    [fetchMainStructure, refreshAccessToken, logout]
+  );
+
+  const fetchRecords = useCallback(async () => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap) return;
+    await runFetchDocs({
+      ...snap,
+      filterSucursalId: filterSucursalIdRef.current,
+    });
+  }, [syncMarcaFromStorage, runFetchDocs]);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchDocs();
-      fetchDocumentTypes();
-    }, [])
+      let cancelled = false;
+      void (async () => {
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          if (cancelled) return;
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+          if (snap) await runFetchDocs(snap);
+          else await fetchRecords();
+        } else {
+          await fetchRecords();
+        }
+      })();
+      void fetchDocumentTypes();
+      void fetchMainStructure();
+      const handler = () => {
+        void fetchRecords();
+        void fetchDocumentTypes();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, runFetchDocs, fetchRecords, fetchDocumentTypes, fetchMainStructure])
   );
-
-  useEffect(() => {
-    const handler = () => {
-      fetchDocs();
-      fetchDocumentTypes();
-    };
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
 
   const resetForm = async () => {
     const horaAccion = await getHoraAccion();
@@ -324,6 +676,8 @@ export default function DocumentosEntregadosScreen() {
     resetForm();
     setEditing(null);
     setIsCreating(true);
+    void applyCurrentMarcaToCreateHierarchy();
+    void fetchMainStructure();
   };
 
   const startEditing = async (it: DocUI) => {
@@ -332,6 +686,31 @@ export default function DocumentosEntregadosScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
+    if (roleName != null && roleName !== 'OPERATIVO' && structure.length) {
+      const h = findHierarchyByCorpoIn(structure, Number(it.corpo_id));
+      if (h) {
+        setSelectedEmpresaId(h.empresaId);
+        setSelectedClienteId(h.clienteId);
+        setSelectedDivisionId(h.divisionId);
+        setSelectedContratoId(h.contratoId);
+        setSelectedSucursalId(h.corpoId);
+      } else {
+        const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === it.cliente_id)) ?? null;
+        if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+        setSelectedClienteId(it.cliente_id);
+        setSelectedDivisionId(null);
+        setSelectedContratoId(null);
+        setSelectedSucursalId(null);
+      }
+    } else if (roleName != null && roleName !== 'OPERATIVO') {
+      const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === it.cliente_id)) ?? null;
+      if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+      setSelectedClienteId(it.cliente_id);
+      setSelectedDivisionId(null);
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+    }
+
     setEditing(it);
     setIsCreating(true);
     setFecha(it.fecha ? String(it.fecha).split('T')[0] : dateToLocalString(new Date(horaAccion)));
@@ -394,6 +773,35 @@ export default function DocumentosEntregadosScreen() {
   };
 
   const validateForm = () => {
+    if (!hasCurrentMarca) {
+      Alert.alert('Error', 'Debes tener una marca activa para usar este módulo.');
+      return false;
+    }
+    if (roleName == null) {
+      Alert.alert('Error', 'Cargando contexto de marca...');
+      return false;
+    }
+    if (!editing) {
+      if (roleName === 'OPERATIVO') {
+        if (!marcaClienteId || !marcaCorpoId) {
+          Alert.alert('Error', 'No se pudo determinar cliente o sucursal desde la marca actual');
+          return false;
+        }
+      } else {
+        if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
+          Alert.alert('Error', 'Empresa, Cliente y Sucursal son obligatorios');
+          return false;
+        }
+        if (!selectedDivisionId) {
+          Alert.alert('Error', 'División es obligatoria');
+          return false;
+        }
+        if (!selectedContratoId) {
+          Alert.alert('Error', 'Contrato es obligatorio');
+          return false;
+        }
+      }
+    }
     const required = [
       { label: 'Fecha', v: fecha },
       { label: 'Nombre oficial que entrega', v: nombreEntrega },
@@ -414,10 +822,27 @@ export default function DocumentosEntregadosScreen() {
   };
 
   const buildPayload = async () => {
-    const current = await loadMarcaContext();
-    if (!current?.id) throw new Error('Marca no encontrada');
+    let clienteId: number;
+    let corpoId: number;
+    if (editing) {
+      clienteId = Number(editing.cliente_id);
+      corpoId = Number(editing.corpo_id);
+      if (!Number.isFinite(clienteId) || clienteId <= 0 || !Number.isFinite(corpoId) || corpoId <= 0) {
+        throw new Error('El registro no tiene cliente o sucursal válidos');
+      }
+    } else if (roleName === 'OPERATIVO') {
+      clienteId = Number(marcaClienteId ?? 0);
+      corpoId = Number(marcaCorpoId ?? 0);
+      if (!clienteId || !corpoId) throw new Error('Cliente o sucursal no definidos en la marca');
+    } else {
+      clienteId = Number(selectedClienteId ?? 0);
+      corpoId = Number(selectedSucursalId ?? 0);
+      if (!clienteId || !corpoId) throw new Error('Seleccione cliente y sucursal en la jerarquía');
+    }
+
     return {
-      marca_id: current.id,
+      cliente_id: clienteId,
+      corpo_id: corpoId,
       fecha,
       nombre_oficial_entrega: nombreEntrega,
       nombre_oficial_recibe: nombreRecibe,
@@ -426,6 +851,20 @@ export default function DocumentosEntregadosScreen() {
       firma_representante_cliente: firmaCliente,
       firma_responsable: firmaResponsable,
     };
+  };
+
+  const persistDocsBranchCache = async (corpoId: number, branchDocs: DocUI[]) => {
+    const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
+    const allCache: DocUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+    const sid = Number(corpoId);
+    const without = Array.isArray(allCache)
+      ? allCache.filter((d: any) => docRecordSucursalId(d) !== sid)
+      : [];
+    const normalizedBranch = branchDocs.map((d: any) => ({
+      ...d,
+      corpo_id: Number(d.corpo_id ?? d.sucursal_id ?? sid),
+    }));
+    await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify([...without, ...normalizedBranch]));
   };
 
   // offline actions (igual patrón que otros módulos)
@@ -440,7 +879,10 @@ export default function DocumentosEntregadosScreen() {
     const actionsStr = await AsyncStorage.getItem('documentos_entregados_actions');
     if (!actionsStr) return;
     const actions = JSON.parse(actionsStr) || [];
-    const updated = actions.filter((a: any) => a.id !== localId);
+    const updated = actions.filter(
+      (a: any) =>
+        !(String(a.id) === String(localId) && (a.type === 'create' || a.type === 'update'))
+    );
     await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updated));
   };
 
@@ -463,7 +905,7 @@ export default function DocumentosEntregadosScreen() {
     return false;
   };
 
-  const handleSave = async () => {
+  const submitSave = async () => {
     if (!employee) return;
     if (!validateForm()) return;
 
@@ -479,26 +921,9 @@ export default function DocumentosEntregadosScreen() {
         if (isConnected) {
           const res = await createDocumentoEntregado({ requestData: payload, refreshAccessToken, logout });
           if (res.status && res.id != null) {
-            const newItem: DocUI = {
-              id: Number(res.id),
-              id_local: '',
-              cliente_id: 0,
-              corpo_id: 0,
-              fecha: payload.fecha,
-              nombre_oficial_entrega: payload.nombre_oficial_entrega,
-              nombre_oficial_recibe: payload.nombre_oficial_recibe,
-              tipo_documento: payload.tipo_documento,
-              descripcion: payload.descripcion,
-              firma_representante_cliente: payload.firma_representante_cliente ?? '',
-              firma_responsable: payload.firma_responsable ?? '',
-            };
-            const nextList = [newItem, ...docs];
-            setDocs(nextList);
-            console.log(5);
-            await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(nextList));
             Alert.alert('Éxito', res.message || 'Documento entregado creado correctamente');
             setIsCreating(false);
-            await fetchDocs();
+            await fetchRecords();
           } else {
             Alert.alert('Error', res.message || 'No se pudo crear el documento');
           }
@@ -507,8 +932,8 @@ export default function DocumentosEntregadosScreen() {
           const localItem: DocUI = {
             id: 0,
             id_local: localId,
-            cliente_id: 0,
-            corpo_id: 0,
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
             fecha: payload.fecha,
             nombre_oficial_entrega: payload.nombre_oficial_entrega,
             nombre_oficial_recibe: payload.nombre_oficial_recibe,
@@ -519,8 +944,7 @@ export default function DocumentosEntregadosScreen() {
           };
           const next = [localItem, ...docs];
           setDocs(next);
-          console.log(6);
-          await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+          await persistDocsBranchCache(payload.corpo_id, next);
           await upsertAction({ type: 'create', id: localId, requestData: payload });
           Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
@@ -536,7 +960,7 @@ export default function DocumentosEntregadosScreen() {
           Alert.alert('Éxito', res.message || 'Documento entregado actualizado correctamente');
           setIsCreating(false);
           setEditing(null);
-          await fetchDocs();
+          await fetchRecords();
         } else {
           Alert.alert('Error', res.message || 'No se pudo actualizar el documento');
         }
@@ -557,12 +981,23 @@ export default function DocumentosEntregadosScreen() {
           };
         });
         setDocs(next);
-        console.log(7);
-        await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+        const branchCorpo = Number(payload.corpo_id);
+        if (Number.isFinite(branchCorpo) && branchCorpo > 0) {
+          await persistDocsBranchCache(branchCorpo, next);
+        }
 
         if (editing.id_local) {
-          const updated = await updateCreateActionForLocalId(editing.id_local, payload);
-          if (!updated) await upsertAction({ type: 'create', id: editing.id_local, requestData: payload });
+          const actionsStr = await AsyncStorage.getItem('documentos_entregados_actions');
+          let docActions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+          const lid = String(editing.id_local);
+          docActions = docActions.filter((a: any) => !(a.type === 'update' && String(a.id) === lid));
+          const ci = docActions.findIndex((a: any) => a.type === 'create' && a.id === editing.id_local);
+          if (ci !== -1) {
+            docActions[ci] = { ...docActions[ci], requestData: payload };
+          } else {
+            docActions.push({ type: 'create', id: editing.id_local, requestData: payload });
+          }
+          await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(docActions));
         } else {
           await upsertAction({ type: 'update', id: editing.id, requestData: payload });
         }
@@ -579,9 +1014,29 @@ export default function DocumentosEntregadosScreen() {
     }
   };
 
+  const handleSave = () => {
+    Alert.alert(
+      'Confirmar',
+      editing ? '¿Deseas actualizar este registro?' : '¿Deseas crear este registro?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: () => {
+            submitSave();
+          },
+        },
+      ]
+    );
+  };
+
   const handleDelete = async (it: DocUI) => {
-    const current = await loadMarcaContext();
-    if (!current?.id) return;
+    const cid = Number(it.cliente_id);
+    const sid = Number(it.corpo_id);
+    if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(sid) || sid <= 0) {
+      Alert.alert('Error', 'El registro no tiene cliente o sucursal válidos para eliminar.');
+      return;
+    }
 
     Alert.alert('Confirmar', '¿Deseas eliminar este registro?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -589,33 +1044,43 @@ export default function DocumentosEntregadosScreen() {
         text: 'Eliminar',
         style: 'destructive',
         onPress: async () => {
+          const rowKey = it.id !== 0 ? `doc-${it.id}` : it.id_local ? `doc-${it.id_local}` : `doc-${it.id}`;
+          setDeletingDocKey(rowKey);
           const isConnected = await getConnectionStatus();
 
-          // local-only
-          if (it.id_local || it.id === 0) {
-            const next = docs.filter((x) => x.id_local !== it.id_local);
-            setDocs(next);
-            console.log(8);
-            await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
-            if (it.id_local) await removeActionsForLocalId(it.id_local);
-            return;
-          }
-
-          if (isConnected) {
-            const res = await deleteDocumentoEntregado({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
-            if (res.status) {
-              Alert.alert('Éxito', 'Documento eliminado correctamente');
-              await fetchDocs();
-            } else {
-              Alert.alert('Error', res.message || 'No se pudo eliminar el documento');
+          try {
+            // local-only
+            if (it.id_local || it.id === 0) {
+              const next = docs.filter((x) => x.id_local !== it.id_local);
+              setDocs(next);
+              await persistDocsBranchCache(sid, next);
+              if (it.id_local) await removeActionsForLocalId(it.id_local);
+              return;
             }
-          } else {
-            const next = docs.filter((x) => x.id !== it.id);
-            setDocs(next);
-            console.log(9);
-            await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
-            await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
-            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+
+            if (isConnected) {
+              const res = await deleteDocumentoEntregado({
+                id: it.id,
+                corpoId: sid,
+                clienteId: cid,
+                refreshAccessToken,
+                logout,
+              });
+              if (res.status) {
+                Alert.alert('Éxito', 'Documento eliminado correctamente');
+                await fetchRecords();
+              } else {
+                Alert.alert('Error', res.message || 'No se pudo eliminar el documento');
+              }
+            } else {
+              const next = docs.filter((x) => x.id !== it.id);
+              setDocs(next);
+              await persistDocsBranchCache(sid, next);
+              await upsertAction({ type: 'delete', id: it.id, corpoId: sid, clienteId: cid });
+              Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+            }
+          } finally {
+            setDeletingDocKey((prev) => (prev === rowKey ? null : prev));
           }
         },
       },
@@ -625,6 +1090,10 @@ export default function DocumentosEntregadosScreen() {
   const resetAllFilters = () => {
     setFilterSearch('');
     setFilterFecha('');
+    void (async () => {
+      await resetListFiltersFromCurrentMarca();
+      await fetchRecords();
+    })();
   };
 
   const filteredDocs = useMemo(() => {
@@ -780,9 +1249,19 @@ export default function DocumentosEntregadosScreen() {
               <ThemedText style={styles.rowButtonText}>Cambios</ThemedText>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={[styles.rowButton, styles.deleteButton]} onPress={() => handleDelete(it)}>
-            <Ionicons name="trash" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
+          <TouchableOpacity
+            style={[styles.rowButton, styles.deleteButton, deletingDocKey === key && styles.buttonDisabled]}
+            onPress={() => handleDelete(it)}
+            disabled={deletingDocKey === key}
+          >
+            {deletingDocKey === key ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
+              </>
+            )}
           </TouchableOpacity>
         </ThemedView>
       </ThemedView>
@@ -817,7 +1296,12 @@ export default function DocumentosEntregadosScreen() {
                   <Ionicons name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
                 </TouchableOpacity>
                 {isFiltersExpanded && (
-                  <TouchableOpacity style={styles.resetFiltersButton} onPress={resetAllFilters}>
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => {
+                      resetAllFilters();
+                    }}
+                  >
                     <Ionicons name="refresh" size={16} color="#FF3B30" />
                     <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
                   </TouchableOpacity>
@@ -825,6 +1309,150 @@ export default function DocumentosEntregadosScreen() {
               </ThemedView>
               {isFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
+                  {roleName != null && roleName !== 'OPERATIVO' ? (
+                    <>
+                      {isStructureLoading ? (
+                        <ThemedView style={styles.inlineLoading}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                        </ThemedView>
+                      ) : structure.length === 0 ? (
+                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      ) : (
+                        <>
+                          <ThemedText style={styles.filterHierarchyTitle}>Jerarquía (lista)</ThemedText>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterEmpresaId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterEmpresaId(next === 0 ? null : next);
+                                  setFilterClienteId(null);
+                                  setFilterDivisionId(null);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                                {filterEmpresaOptions.map((e) => (
+                                  <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                                selectedValue={filterClienteId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterClienteId(next === 0 ? null : next);
+                                  setFilterDivisionId(null);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterClienteOptionsMemo.map((c) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>División</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                                selectedValue={filterDivisionId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterDivisionId(next === 0 ? null : next);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterDivisionOptionsMemo.map((d) => (
+                                  <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                                selectedValue={filterContratoId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterContratoId(next === 0 ? null : next);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterContratoOptionsMemo.map((c) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                                selectedValue={filterSucursalId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  const nextSuc = next === 0 ? null : next;
+                                  filterSucursalIdRef.current = nextSuc;
+                                  setFilterSucursalId(nextSuc);
+                                  void fetchRecords();
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterSucursalOptionsMemo.map((s) => (
+                                  <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        </>
+                      )}
+                    </>
+                  ) : null}
+
                   <ThemedView style={styles.filterGroup}>
                     <ThemedText style={styles.filterLabel}>Buscar (tipo/nombres/desc):</ThemedText>
                     <TextInput
@@ -860,6 +1488,119 @@ export default function DocumentosEntregadosScreen() {
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
 
+              {isStructureLoading ? (
+                <ThemedView style={styles.inlineLoading}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                </ThemedView>
+              ) : null}
+
+              {roleName != null && roleName !== 'OPERATIVO' ? (
+                <>
+                  <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
+
+                  <ThemedText style={styles.label}>Empresa *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedEmpresaId ?? 0}
+                      onValueChange={(v) => handleEmpresaChange(Number(v) || null)}
+                      enabled={!editing}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                      {empresaOptions.map((e) => (
+                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <ThemedText style={styles.label}>Cliente *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedClienteId ?? 0}
+                      onValueChange={(v) => handleClienteChange(Number(v) || null)}
+                      enabled={!editing && selectedEmpresaId !== null && clienteOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {clienteOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <ThemedText style={styles.label}>División *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedDivisionId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || null;
+                        setSelectedDivisionId(next);
+                        setSelectedContratoId(null);
+                        setSelectedSucursalId(null);
+                      }}
+                      enabled={!editing && selectedClienteId !== null && divisionOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {divisionOptions.map((d) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <ThemedText style={styles.label}>Contrato *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedContratoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || null;
+                        setSelectedContratoId(next);
+                        setSelectedSucursalId(null);
+                      }}
+                      enabled={!editing && selectedDivisionId !== null && contratoOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {contratoOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+
+                  <ThemedText style={styles.label}>Sucursal *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedSucursalId ?? 0}
+                      onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
+                      enabled={!editing && selectedContratoId !== null && sucursalOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {sucursalOptions.map((s) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </>
+              ) : null}
+
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
                 <ThemedText style={styles.dateButtonText}>{fecha ? convertDateTimestampToLocalString(new Date(fecha).toISOString(), false) : 'Seleccionar fecha'}</ThemedText>
@@ -873,10 +1614,18 @@ export default function DocumentosEntregadosScreen() {
               <TextInput style={styles.input} placeholder="Nombre" placeholderTextColor="#999" value={nombreRecibe} onChangeText={setNombreRecibe} />
 
               <ThemedText style={styles.label}>Tipo de documento *</ThemedText>
-              <TouchableOpacity style={styles.selectButton} onPress={() => setIsDocTypeModalVisible(true)}>
-                <ThemedText style={styles.selectButtonText}>{tipoDocumento || 'Seleccionar tipo de documento'}</ThemedText>
-                <Ionicons name="chevron-down" size={18} color="#007AFF" />
-              </TouchableOpacity>
+              <View style={styles.selectButton}>
+                <Picker
+                  selectedValue={tipoDocumento}
+                  onValueChange={(value) => setTipoDocumento(String(value || ''))}
+                  style={styles.selectPicker}
+                >
+                  <Picker.Item label="Seleccionar tipo de documento" value="" color="#000000" />
+                  {documentTypes.map((t) => (
+                    <Picker.Item key={String(t.id)} label={t.nombre} value={t.nombre} color="#000000" />
+                  ))}
+                </Picker>
+              </View>
 
               <ThemedText style={styles.label}>Descripción *</ThemedText>
               <TextInput
@@ -977,7 +1726,7 @@ export default function DocumentosEntregadosScreen() {
                   ) : (
                     <>
                       <Ionicons name="save" size={18} color="#fff" />
-                      <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                      <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
                     </>
                   )}
                 </TouchableOpacity>
@@ -1320,7 +2069,19 @@ const styles = StyleSheet.create({
   resetFiltersText: { fontSize: 12, color: '#FF3B30', fontWeight: '600' },
   filterContent: { padding: 12, backgroundColor: '#F9F9F9', gap: 8 },
   filterGroup: { marginBottom: 8, backgroundColor: '#F9F9F9' },
+  filterHierarchyTitle: { fontSize: 14, fontWeight: '800', marginBottom: 8, color: '#007AFF' },
   filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#000' },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  picker: { width: '100%', color: '#000000' },
+  inlineLoading: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  inlineLoadingText: { fontSize: 13, color: '#666' },
   searchInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',
@@ -1358,15 +2119,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
+    backgroundColor: '#F9F9F9',
+    marginBottom: 12,
+    minHeight: 50,
+    overflow: 'hidden',
   },
   selectButtonText: { color: '#000', fontWeight: '600' },
+  selectPicker: {
+    width: '100%',
+    height: 50,
+    color: '#000000',
+  },
 
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
 

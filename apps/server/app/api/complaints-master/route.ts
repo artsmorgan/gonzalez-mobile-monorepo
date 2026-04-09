@@ -50,6 +50,7 @@ export async function POST(req: NextRequest) {
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
+        const body = await req.json();
         const {
             marca_id,
             sociedad,
@@ -71,7 +72,19 @@ export async function POST(req: NextRequest) {
             accion_correctiva_preventiva,
             firma_responsable,
             archivos,
-        } = await req.json();
+            empresa_id: bodyEmpresaId,
+            cliente_id: bodyClienteId,
+            contrato_id: bodyContratoId,
+            corpo_id: bodyCorpoId,
+            puesto_id: bodyPuestoId,
+            plaza_id: bodyPlazaId,
+        } = body;
+
+        const pickNumericId = (value: unknown, fallback: number): number => {
+            const n = parseInt(String(value ?? ""), 10);
+            if (Number.isFinite(n) && n > 0) return n;
+            return fallback;
+        };
 
         if (!marca_id) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
@@ -100,7 +113,14 @@ export async function POST(req: NextRequest) {
         }
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
-        // Autocompletar campos desde la marca
+        const empresa_id = pickNumericId(bodyEmpresaId, marcaDiaObj.empresa_id);
+        const cliente_id = pickNumericId(bodyClienteId, marcaDiaObj.cliente_id);
+        const contrato_id = pickNumericId(bodyContratoId, marcaDiaObj.contrato_id);
+        const corpo_id = pickNumericId(bodyCorpoId, marcaDiaObj.corpo_id);
+        const puesto_id = pickNumericId(bodyPuestoId, marcaDiaObj.puesto_id);
+        const plaza_id = pickNumericId(bodyPlazaId, marcaDiaObj.plaza_id);
+
+        // Autocompletar campos desde la marca; el cliente puede sobreescribir empresa…corpo y puesto/plaza vía body
         const new_record = await callDynamicPrisma({
             req,
             data: {
@@ -108,12 +128,12 @@ export async function POST(req: NextRequest) {
                 table: "c_maestro_quejas",
                 operation: "create",
                 data: {
-                    empresa_id: marcaDiaObj.empresa_id,
-                    cliente_id: marcaDiaObj.cliente_id,
-                    contrato_id: marcaDiaObj.contrato_id,
-                    corpo_id: marcaDiaObj.corpo_id,
-                    puesto_id: marcaDiaObj.puesto_id,
-                    plaza_id: marcaDiaObj.plaza_id,
+                    empresa_id,
+                    cliente_id,
+                    contrato_id,
+                    corpo_id,
+                    puesto_id,
+                    plaza_id,
                     sociedad: String(sociedad ?? ""),
                     nombre_realiza_queja: String(nombre_realiza_queja ?? ""),
                     cliente: String(cliente ?? ""),
@@ -199,7 +219,7 @@ export async function POST(req: NextRequest) {
                 action: "GET",
                 table: "e_estructura_sucursal",
                 operation: "findUnique",
-                where: { id: marcaDiaObj.corpo_id },
+                where: { id: corpo_id },
             },
         });
 
@@ -208,7 +228,7 @@ export async function POST(req: NextRequest) {
             const fecha_string = created_at.toISOString().split("T")[0];
             const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
             const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursalObj.nombre} de la empresa ${cliente} el día ${fecha_string} a las ${hora_string}`;
-            await sendNotificationByRole(req, marcaDiaObj.corpo_id, [marcaDiaObj.plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(req, corpo_id, [plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         // Registrar cambio de creación

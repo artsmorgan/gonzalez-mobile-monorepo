@@ -102,9 +102,7 @@ export async function GET(req: NextRequest) {
       if (!lastMarca) {
         return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
       }
-      if (marcaDia.id !== lastMarca.id) {
-        return NextResponse.json({ status: false, message: "Hay una nueva marca más reciente" }, { status: 200 });
-      }
+
 
       empresaId = marcaDia.empresa_id;
       clienteId = marcaDia.cliente_id;

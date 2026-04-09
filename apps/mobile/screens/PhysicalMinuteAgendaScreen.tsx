@@ -36,6 +36,10 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
+import {
+  filterAgendaFromEvaluationsCacheByPuesto,
+  mergeEvaluationsCacheAgendaMinutaForPuesto,
+} from '@/hooks/agendaMinutaCacheHelpers';
 import authedFetch from '@/hooks/authedFetch';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
@@ -47,6 +51,7 @@ type StructureCliente = { id: number; nombre: string; division?: StructureDivisi
 type StructureContrato = { id: number; nombre: string; sucursales?: any[] };
 type StructureSucursal = { id: number; nombre: string; nro_sucursal?: string | number; puestos?: any[] };
 type StructurePuesto = { id: number; nombre: string; codigo?: string | number };
+type StructureTree = StructureEmpresa[];
 
 type AgendaMinutaRecord = {
   id: number | string;
@@ -93,6 +98,56 @@ type AcuerdosPayload = {
 };
 
 const generateRandomId = (): string => `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+const AGENDA_EVAL_TYPES = new Set(['agenda_minuta', 'physical_minute_agenda']);
+
+function isAgendaEvalAction(a: any): boolean {
+  return !!(a && AGENDA_EVAL_TYPES.has(a.type));
+}
+
+/** True si el registro ya tiene id de servidor (> 0). Borradores locales usan id '' / no numérico. */
+function hasAgendaMinutaServerId(r: { id?: number | string | null } | null | undefined): boolean {
+  if (!r) return false;
+  const n = Number(r.id);
+  return Number.isFinite(n) && n > 0;
+}
+
+async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, payload: any) {
+  const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+  if (!Array.isArray(actions)) actions = [];
+  actions = actions.filter(
+    (a: any) =>
+      !(
+        isAgendaEvalAction(a) &&
+        a.action === 'update' &&
+        (String(a.id) === String(localId) || String(a.id_local) === String(localId))
+      )
+  );
+  const idx = actions.findIndex(
+    (a: any) => isAgendaEvalAction(a) && a.action === 'create' && String(a.id) === String(localId)
+  );
+  if (idx !== -1) {
+    const prev = actions[idx].payload || {};
+    actions[idx] = {
+      ...actions[idx],
+      id_local: localId,
+      type: 'agenda_minuta',
+      payload: { ...prev, ...payload },
+      synced: false,
+    };
+  } else {
+    actions.push({
+      id: localId,
+      id_local: localId,
+      action: 'create',
+      type: 'agenda_minuta',
+      payload,
+      synced: false,
+    });
+  }
+  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+}
 
 const getConnectionStatus = async (): Promise<boolean> => {
   const networkState = await Network.getNetworkStateAsync();
@@ -211,6 +266,56 @@ const decodeFirmaHash = (hash?: string | null) => {
   }
 };
 
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw = current?.roleDivision?.division?.id
+    ?? current?.role_division?.division?.id
+    ?? current?.division?.id
+    ?? current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveDivisionIdInStructure = (
+  tree: StructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null
+): number | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || divisionId == null) return divisionId;
+  const empresa = tree.find((e: any) => Number(e?.id) === Number(empresaId));
+  const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  const cliente = clientes.find((c: any) => Number(c?.id) === Number(clienteId));
+  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  if (divisiones.some((d: any) => Number(d?.id) === Number(divisionId))) return divisionId;
+  return null;
+};
+
+const resolveHierarchyByPuestoId = (tree: StructureTree, puestoId: number | null) => {
+  if (!Array.isArray(tree) || tree.length === 0 || puestoId == null) return null;
+  for (const empresa of tree as any[]) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            const puestos = Array.isArray(sucursal?.puestos) ? sucursal.puestos : [];
+            if (puestos.some((p: any) => Number(p?.id) === Number(puestoId))) {
+              return {
+                empresaId: Number(empresa?.id),
+                clienteId: Number(cliente?.id),
+                divisionId: Number(division?.id),
+                contratoId: Number(contrato?.id),
+                sucursalId: Number(sucursal?.id),
+                puestoId: Number(puestoId),
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
 export default function PhysicalMinuteAgendaScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const navigation = useNavigation<PhysicalMinuteAgendaScreenNavigationProp>();
@@ -234,9 +339,13 @@ export default function PhysicalMinuteAgendaScreen() {
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
 
   // IDs de current_marca para inicialización
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+  const [roleName, setRoleName] = useState<string | null>(null);
 
   // structure
   const [structure, setStructure] = useState<any[]>([]);
@@ -248,11 +357,30 @@ export default function PhysicalMinuteAgendaScreen() {
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
   const isRestoringHierarchyRef = useRef(false);
+  const pendingCreateHierarchyRef = useRef<{
+    empresaId: number | null;
+    clienteId: number | null;
+    divisionId: number | null;
+    contratoId: number | null;
+    sucursalId: number | null;
+    puestoId: number | null;
+  } | null>(null);
+  const isApplyingCreateHierarchyRef = useRef(false);
+  const pendingEditHierarchyRef = useRef<{
+    empresaId: number | null;
+    clienteId: number | null;
+    divisionId: number | null;
+    contratoId: number | null;
+    sucursalId: number | null;
+    puestoId: number | null;
+  } | null>(null);
+  const isApplyingEditHierarchyRef = useRef(false);
 
   // create/edit mode
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<AgendaMinutaRecord | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
   // form
@@ -339,57 +467,85 @@ export default function PhysicalMinuteAgendaScreen() {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
       setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
       setMarcaClienteId(null);
+      setMarcaDivisionId(null);
+      setMarcaContratoId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
+      setRoleName(null);
       return null;
     }
     try {
       const current = JSON.parse(currentMarcaStr);
       if (!current?.id) {
         setHasCurrentMarca(false);
+        setMarcaEmpresaId(null);
         setMarcaClienteId(null);
+        setMarcaDivisionId(null);
+        setMarcaContratoId(null);
         setMarcaCorpoId(null);
         setMarcaPuestoId(null);
+        setRoleName(null);
         return null;
       }
       setHasCurrentMarca(true);
 
-      // Obtener IDs de cliente, corpo y puesto de current_marca
+      const rnRaw =
+        current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+      setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
+
+      // Obtener IDs jerárquicos de current_marca (incluye roleDivision.division.id)
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
       const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+      const divisionIdRaw = getMarcaRoleDivisionId(current);
 
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
       setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
+      setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
       setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
       setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
 
       return current;
     } catch {
       setHasCurrentMarca(false);
+      setMarcaEmpresaId(null);
       setMarcaClienteId(null);
+      setMarcaDivisionId(null);
+      setMarcaContratoId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
+      setRoleName(null);
       return null;
     }
   };
 
-  const fetchMainStructure = useCallback(async () => {
+  const fetchMainStructure = useCallback(async (): Promise<StructureTree> => {
     setIsStructureLoading(true);
     try {
       const cacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (cacheStr) {
         try {
           const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-          else setStructure([]);
+          if (Array.isArray(parsed)) {
+            setStructure(parsed);
+            return parsed as StructureTree;
+          }
+          setStructure([]);
+          return [];
         } catch {
           // ignore
           setStructure([]);
+          return [];
         }
       }
       else {
         setStructure([]);
+        return [];
       }
       /*
       const isConnected = await getConnectionStatus();
@@ -420,10 +576,153 @@ export default function PhysicalMinuteAgendaScreen() {
       */
     } catch (e) {
       console.error('Error fetching main structure for agenda-minuta:', e);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
   }, [refreshAccessToken, logout]);
+
+  const applyHierarchyFiltersFromMarca = useCallback((current: any, tree: StructureTree) => {
+    if (!current) return;
+    const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+    const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+    const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+    const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+    const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+    const divisionIdRaw = getMarcaRoleDivisionId(current);
+
+    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
+    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
+    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
+    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null;
+    const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
+
+    // Importante: setear de padre a hijo para no disparar limpiezas en cascada.
+    setFilterEmpresaId(empresaId);
+    setFilterClienteId(clienteId);
+    setFilterDivisionId(divisionId);
+    setFilterContratoId(contratoId);
+    setFilterCorpoId(corpoId);
+    setFilterPuestoId(puestoId);
+  }, []);
+
+  const applyHierarchyFormFromMarca = useCallback((current: any, tree: StructureTree) => {
+    if (!current) return;
+    const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+    const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+    const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+    const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+    const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+    const divisionIdRaw = getMarcaRoleDivisionId(current);
+
+    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
+    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
+    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
+    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null;
+    const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
+
+    pendingCreateHierarchyRef.current = {
+      empresaId,
+      clienteId,
+      divisionId,
+      contratoId,
+      sucursalId: corpoId,
+      puestoId,
+    };
+    isApplyingCreateHierarchyRef.current = true;
+    isRestoringHierarchyRef.current = true;
+    setSelectedEmpresaId(empresaId);
+  }, []);
+
+  useEffect(() => {
+    const pending = pendingCreateHierarchyRef.current;
+    if (!pending || !isApplyingCreateHierarchyRef.current) return;
+    if (!isCreating || !!editingRecord) return;
+
+    if ((pending.empresaId ?? null) !== (selectedEmpresaId ?? null)) {
+      setSelectedEmpresaId(pending.empresaId ?? null);
+      return;
+    }
+    if ((pending.clienteId ?? null) !== (selectedClienteId ?? null)) {
+      setSelectedClienteId(pending.clienteId ?? null);
+      return;
+    }
+    if ((pending.divisionId ?? null) !== (selectedDivisionId ?? null)) {
+      setSelectedDivisionId(pending.divisionId ?? null);
+      return;
+    }
+    if ((pending.contratoId ?? null) !== (selectedContratoId ?? null)) {
+      setSelectedContratoId(pending.contratoId ?? null);
+      return;
+    }
+    if ((pending.sucursalId ?? null) !== (selectedSucursalId ?? null)) {
+      setSelectedSucursalId(pending.sucursalId ?? null);
+      return;
+    }
+    if ((pending.puestoId ?? null) !== (selectedPuestoId ?? null)) {
+      setSelectedPuestoId(pending.puestoId ?? null);
+      return;
+    }
+
+    pendingCreateHierarchyRef.current = null;
+    isApplyingCreateHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+  }, [
+    isCreating,
+    editingRecord,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
+
+  useEffect(() => {
+    const pending = pendingEditHierarchyRef.current;
+    if (!pending || !isApplyingEditHierarchyRef.current) return;
+    if (!isCreating || !editingRecord) return;
+
+    if ((pending.empresaId ?? null) !== (selectedEmpresaId ?? null)) {
+      setSelectedEmpresaId(pending.empresaId ?? null);
+      return;
+    }
+    if ((pending.clienteId ?? null) !== (selectedClienteId ?? null)) {
+      setSelectedClienteId(pending.clienteId ?? null);
+      return;
+    }
+    if ((pending.divisionId ?? null) !== (selectedDivisionId ?? null)) {
+      setSelectedDivisionId(pending.divisionId ?? null);
+      return;
+    }
+    if ((pending.contratoId ?? null) !== (selectedContratoId ?? null)) {
+      setSelectedContratoId(pending.contratoId ?? null);
+      return;
+    }
+    if ((pending.sucursalId ?? null) !== (selectedSucursalId ?? null)) {
+      setSelectedSucursalId(pending.sucursalId ?? null);
+      return;
+    }
+    if ((pending.puestoId ?? null) !== (selectedPuestoId ?? null)) {
+      setSelectedPuestoId(pending.puestoId ?? null);
+      return;
+    }
+
+    pendingEditHierarchyRef.current = null;
+    isApplyingEditHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+  }, [
+    isCreating,
+    editingRecord,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
 
   // Nodos computados para estructura jerárquica de filtros
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -691,9 +990,18 @@ export default function PhysicalMinuteAgendaScreen() {
     setEditingRecord(null);
     setIsCreating(true);
     resetForm(horaAccion);
+    const current = await loadMarcaContext();
+    if (!current) return;
+    const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+    applyHierarchyFormFromMarca(current, tree);
   };
 
   const cancelCreateOrEdit = () => {
+    pendingCreateHierarchyRef.current = null;
+    isApplyingCreateHierarchyRef.current = false;
+    pendingEditHierarchyRef.current = null;
+    isApplyingEditHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
     setIsCreating(false);
     setEditingRecord(null);
   };
@@ -704,20 +1012,28 @@ export default function PhysicalMinuteAgendaScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora de acción');
       return;
     }
+    pendingCreateHierarchyRef.current = null;
+    isApplyingCreateHierarchyRef.current = false;
+    pendingEditHierarchyRef.current = null;
+    isApplyingEditHierarchyRef.current = false;
     setIsCreating(true);
     setEditingRecord(r);
 
     const { meta } = parseAcuerdosPayload(r.acuerdos);
+    const puestoIdFromRecord = Number(meta?.puesto_id ?? r.puesto_id ?? 0) || null;
+    const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+    const pathByPuesto = resolveHierarchyByPuestoId(tree, puestoIdFromRecord);
+    pendingEditHierarchyRef.current = {
+      empresaId: (pathByPuesto?.empresaId ?? meta?.empresa_id ?? null) as any,
+      clienteId: (pathByPuesto?.clienteId ?? meta?.cliente_id ?? r.cliente_id ?? null) as any,
+      divisionId: (pathByPuesto?.divisionId ?? meta?.division_id ?? null) as any,
+      contratoId: (pathByPuesto?.contratoId ?? meta?.contrato_id ?? null) as any,
+      sucursalId: (pathByPuesto?.sucursalId ?? meta?.sucursal_id ?? r.corpo_id ?? null) as any,
+      puestoId: (pathByPuesto?.puestoId ?? meta?.puesto_id ?? r.puesto_id ?? null) as any,
+    };
+    isApplyingEditHierarchyRef.current = true;
     isRestoringHierarchyRef.current = true;
-    setSelectedEmpresaId((meta?.empresa_id ?? null) as any);
-    setSelectedClienteId((meta?.cliente_id ?? r.cliente_id ?? null) as any);
-    setSelectedDivisionId((meta?.division_id ?? null) as any);
-    setSelectedContratoId((meta?.contrato_id ?? null) as any);
-    setSelectedSucursalId((meta?.sucursal_id ?? r.corpo_id ?? null) as any);
-    setSelectedPuestoId((meta?.puesto_id ?? r.puesto_id ?? null) as any);
-    setTimeout(() => {
-      isRestoringHierarchyRef.current = false;
-    }, 0);
+    setSelectedEmpresaId(pendingEditHierarchyRef.current.empresaId);
 
     setNumero(String(r.numero ?? ''));
     setTitulo(String(r.titulo ?? ''));
@@ -928,9 +1244,47 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const fetchRecords = useCallback(async () => {
+    let searchPuestoIdNum: number | null = null;
     try {
       setIsLoading(true);
       setError(null);
+
+      let currentMarca: any = null;
+      try {
+        const raw = await AsyncStorage.getItem('current_marca');
+        if (raw) currentMarca = JSON.parse(raw);
+      } catch {
+        currentMarca = null;
+      }
+      const rn =
+        currentMarca?.roleDivision?.role?.nombre ??
+        currentMarca?.role_division?.role?.nombre ??
+        null;
+      const isOperativoUser = rn === 'OPERATIVO';
+
+      if (isOperativoUser && currentMarca) {
+        const p = Number(currentMarca?.puesto?.id ?? currentMarca?.puesto_id);
+        searchPuestoIdNum = Number.isFinite(p) && p > 0 ? p : null;
+      } else {
+        const p = Number(filterPuestoId);
+        searchPuestoIdNum = Number.isFinite(p) && p > 0 ? p : null;
+      }
+
+      const parseEvaluationsCacheArray = async (): Promise<any[]> => {
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        if (!cacheStr) return [];
+        try {
+          const p = JSON.parse(cacheStr);
+          return Array.isArray(p) ? p : [];
+        } catch {
+          return [];
+        }
+      };
+
+      if (searchPuestoIdNum == null) {
+        setRecords([]);
+        return;
+      }
 
       const isConnected = await getConnectionStatus();
       if (isConnected) {
@@ -939,14 +1293,8 @@ export default function PhysicalMinuteAgendaScreen() {
           throw new Error('Server URL not configured');
         }
 
-        // Construir parámetros de filtro (jerarquía completa)
         const params = new URLSearchParams();
-        if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
-        if (filterClienteId) params.append('cliente_id', String(filterClienteId));
-        if (filterDivisionId) params.append('division_id', String(filterDivisionId));
-        if (filterContratoId) params.append('contrato_id', String(filterContratoId));
-        if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
-        if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
+        params.append('puesto_id', String(searchPuestoIdNum));
 
         const response = await authedFetch({
           url: `${apiUrl}/api/agenda-minuta?${params.toString()}`,
@@ -966,24 +1314,61 @@ export default function PhysicalMinuteAgendaScreen() {
         }
 
         const data = await response.json();
-        if (data.status && data.data) {
-          setRecords(data.data as AgendaMinutaRecord[]);
+        const fullCache = await parseEvaluationsCacheArray();
+
+        if (data.status && Array.isArray(data.data)) {
+          const merged = mergeEvaluationsCacheAgendaMinutaForPuesto(fullCache, data.data, searchPuestoIdNum);
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
+          const forList = filterAgendaFromEvaluationsCacheByPuesto(merged, searchPuestoIdNum);
+          setRecords(forList as AgendaMinutaRecord[]);
         } else {
-          setRecords([]);
+          const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, searchPuestoIdNum);
+          setRecords(forList as AgendaMinutaRecord[]);
         }
       } else {
-        // Offline: cargar desde cache
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        setRecords(cache.filter((item: any) => item.type === 'agenda_minuta'));
+        const fullCache = await parseEvaluationsCacheArray();
+        const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, searchPuestoIdNum);
+        setRecords(forList as AgendaMinutaRecord[]);
       }
     } catch (err) {
       console.error('Error fetching agenda minuta:', err);
       setError('Error al cargar la agenda minuta');
       try {
+        let currentMarcaCatch: any = null;
+        try {
+          const raw = await AsyncStorage.getItem('current_marca');
+          if (raw) currentMarcaCatch = JSON.parse(raw);
+        } catch {
+          currentMarcaCatch = null;
+        }
+        const rnCatch =
+          currentMarcaCatch?.roleDivision?.role?.nombre ??
+          currentMarcaCatch?.role_division?.role?.nombre ??
+          null;
+        const isOperativoCatch = rnCatch === 'OPERATIVO';
+        let pidCatch: number | null = searchPuestoIdNum;
+        if (pidCatch == null) {
+          if (isOperativoCatch && currentMarcaCatch) {
+            const p = Number(currentMarcaCatch?.puesto?.id ?? currentMarcaCatch?.puesto_id);
+            pidCatch = Number.isFinite(p) && p > 0 ? p : null;
+          } else {
+            const p = Number(filterPuestoId);
+            pidCatch = Number.isFinite(p) && p > 0 ? p : null;
+          }
+        }
+
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        setRecords(cache.filter((item: any) => item.type === 'agenda_minuta'));
+        let fullCache: any[] = [];
+        if (cacheStr) {
+          try {
+            const p = JSON.parse(cacheStr);
+            if (Array.isArray(p)) fullCache = p;
+          } catch {
+            /* ignore */
+          }
+        }
+        const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, pidCatch);
+        setRecords(forList as AgendaMinutaRecord[]);
       } catch {
         // ignore
       }
@@ -997,25 +1382,14 @@ export default function PhysicalMinuteAgendaScreen() {
     useCallback(() => {
       (async () => {
         const current = await loadMarcaContext();
-        await fetchMainStructure();
-        // Inicializar filtros con valores de current_marca después de cargar
-        if (current) {
-          const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-          const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-
-          if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-            setFilterClienteId(Number(clienteIdRaw));
-          }
-          if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-            setFilterCorpoId(Number(corpoIdRaw));
-          }
-          if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
-            setFilterPuestoId(Number(puestoIdRaw));
-          }
+        const tree = await fetchMainStructure();
+        const rn =
+          current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+        if (current && rn !== 'OPERATIVO') {
+          applyHierarchyFiltersFromMarca(current, tree);
         }
       })();
-    }, [])
+    }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
   );
 
   // Recargar registros cuando cambian los filtros de cualquier nivel de la jerarquía
@@ -1127,7 +1501,7 @@ export default function PhysicalMinuteAgendaScreen() {
     };
   };
 
-  const saveHandler = async () => {
+  const submitCreateOrEdit = async () => {
     setIsSubmitting(true);
     setSubmitResponse(null);
 
@@ -1135,7 +1509,7 @@ export default function PhysicalMinuteAgendaScreen() {
       const payload = buildRequestPayload();
       const isConnected = await getConnectionStatus();
 
-      if (editingRecord && editingRecord.id) {
+      if (editingRecord && hasAgendaMinutaServerId(editingRecord)) {
         if (isConnected) {
           const res = await updateAgendaMinuta({
             id: editingRecord.id,
@@ -1152,31 +1526,47 @@ export default function PhysicalMinuteAgendaScreen() {
             return;
           }
 
-          // fallback offline on 503
           const msg = String(res.message || '');
-          if (msg.includes('503')) {
-            // queue offline update
-          } else {
+          if (!msg.includes('503')) {
             Alert.alert('Error', res.message || 'No se pudo actualizar');
             setIsSubmitting(false);
             return;
           }
         }
 
-        const localId = String(editingRecord.id_local || generateRandomId());
+        const queueKey = String(editingRecord.id_local || `srv-upd-${editingRecord.id}`);
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({ id: localId, action: 'update', type: 'agenda_minuta', payload, synced: false, remote_id: editingRecord.id });
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        actions = actions.filter(
+          (a: any) =>
+            !(
+              isAgendaEvalAction(a) &&
+              a.action === 'update' &&
+              String(a.id) === String(queueKey)
+            )
+        );
+        actions.push({
+          id: queueKey,
+          action: 'update',
+          type: 'agenda_minuta',
+          payload,
+          synced: false,
+          remote_id: editingRecord.id,
+        });
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const updatedCache = cache.map((it: any) => {
-          if ((it.id === editingRecord.id || it.id_local === localId) && it.type === 'agenda_minuta') {
+          if (
+            (it.id === editingRecord.id || it.id_local === queueKey || it.id_local === editingRecord.id_local) &&
+            it.type === 'agenda_minuta'
+          ) {
             return {
               ...it,
               ...payload,
-              id_local: localId,
+              id_local: queueKey,
               synced: false,
               type: 'agenda_minuta',
             };
@@ -1185,6 +1575,51 @@ export default function PhysicalMinuteAgendaScreen() {
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
         Alert.alert('Éxito', 'Actualizado offline. Se sincronizará cuando haya conexión.');
+        setTimeout(() => {
+          cancelCreateOrEdit();
+          fetchRecords();
+        }, 2000);
+        return;
+      }
+
+      if (editingRecord && !hasAgendaMinutaServerId(editingRecord)) {
+        if (isConnected) {
+          const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
+          if (res.status) {
+            Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
+            setTimeout(() => {
+              cancelCreateOrEdit();
+              fetchRecords();
+            }, 2000);
+          } else {
+            Alert.alert('Error', res.message || 'No se pudo guardar');
+          }
+          return;
+        }
+
+        const draftLocalId = editingRecord.id_local;
+        if (!draftLocalId) {
+          Alert.alert('Error', 'Registro local sin id_local');
+          return;
+        }
+        await mergeOrPushAgendaMinutaCreateEvaluationsActions(draftLocalId, payload);
+
+        const cacheStrDraft = await AsyncStorage.getItem('evaluations_cache');
+        const cacheDraft = cacheStrDraft ? JSON.parse(cacheStrDraft) : [];
+        const updatedCacheDraft = cacheDraft.map((it: any) => {
+          if (it.id_local === draftLocalId && it.type === 'agenda_minuta') {
+            return {
+              ...it,
+              ...payload,
+              id_local: draftLocalId,
+              synced: false,
+              type: 'agenda_minuta',
+            };
+          }
+          return it;
+        });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCacheDraft));
+        Alert.alert('Éxito', 'Agenda minuta actualizada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           cancelCreateOrEdit();
           fetchRecords();
@@ -1208,10 +1643,7 @@ export default function PhysicalMinuteAgendaScreen() {
       }
 
       const localId = generateRandomId();
-      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({ id: localId, action: 'create', type: 'agenda_minuta', payload, synced: false });
-      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      await mergeOrPushAgendaMinutaCreateEvaluationsActions(localId, payload);
 
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
       const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1256,6 +1688,18 @@ export default function PhysicalMinuteAgendaScreen() {
     }
   };
 
+  const saveHandler = () => {
+    if (isSubmitting) return;
+    const title = editingRecord ? 'Confirmar actualización' : 'Confirmar creación';
+    const message = editingRecord
+      ? '¿Deseas actualizar esta agenda minuta?'
+      : '¿Deseas crear esta agenda minuta?';
+    Alert.alert(title, message, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: submitCreateOrEdit },
+    ]);
+  };
+
   const deleteHandler = async (r: AgendaMinutaRecord) => {
     Alert.alert('Confirmar', '¿Eliminar agenda minuta?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -1264,8 +1708,10 @@ export default function PhysicalMinuteAgendaScreen() {
         style: 'destructive',
         onPress: async () => {
           try {
+            const itemId = String(r.id || r.id_local || '');
+            setDeletingRecordId(itemId);
             const isConnected = await getConnectionStatus();
-            if (isConnected && r.id) {
+            if (isConnected && hasAgendaMinutaServerId(r)) {
               const res = await deleteAgendaMinuta({ id: r.id, refreshAccessToken, logout });
               if (res.status) {
                 Alert.alert('Éxito', 'Eliminado');
@@ -1274,20 +1720,58 @@ export default function PhysicalMinuteAgendaScreen() {
               }
             }
 
-            const localId = String(r.id_local || generateRandomId());
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-            const actions = actionsStr ? JSON.parse(actionsStr) : [];
-            actions.push({ id: localId, action: 'delete', type: 'agenda_minuta', payload: { id: r.id }, synced: false });
+            let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+            if (!Array.isArray(actions)) actions = [];
+
+            if (!hasAgendaMinutaServerId(r) && r.id_local) {
+              actions = actions.filter(
+                (a: any) =>
+                  !(
+                    isAgendaEvalAction(a) &&
+                    (a.action === 'create' || a.action === 'update') &&
+                    (String(a.id) === String(r.id_local) || String(a.id_local) === String(r.id_local))
+                  )
+              );
+            } else if (hasAgendaMinutaServerId(r)) {
+              const rid = String(r.id);
+              actions = actions.filter(
+                (a: any) =>
+                  !(
+                    isAgendaEvalAction(a) &&
+                    a.action === 'update' &&
+                    (String(a.id) === rid || String(a.remote_id) === rid || Number(a.remote_id) === Number(r.id))
+                  )
+              );
+              actions = actions.filter(
+                (a: any) =>
+                  !(isAgendaEvalAction(a) && a.action === 'delete' && (String(a.id) === rid || String(a.remote_id) === rid))
+              );
+              actions.push({
+                id: rid,
+                action: 'delete',
+                type: 'agenda_minuta',
+                payload: { id: r.id },
+                remote_id: r.id,
+                synced: false,
+              });
+            }
+
             await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
-            const updatedCache = cache.filter((it: any) => !(it.type === 'agenda_minuta' && (it.id_local === localId || it.id === r.id)));
+            const updatedCache = cache.filter(
+              (it: any) => !(it.type === 'agenda_minuta' && (it.id_local === r.id_local || it.id === r.id))
+            );
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
             Alert.alert('Modo Offline', 'Eliminado offline. Se sincronizará cuando haya conexión.');
             fetchRecords();
           } catch (e: any) {
             Alert.alert('Error', e?.message || 'No se pudo eliminar');
+          } finally {
+            const itemId = String(r.id || r.id_local || '');
+            setDeletingRecordId((prev) => (prev === itemId ? null : prev));
           }
         },
       },
@@ -1475,9 +1959,20 @@ export default function PhysicalMinuteAgendaScreen() {
                       <ThemedText style={styles.buttonText}>Cambios</ThemedText>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity style={[styles.listItemButton, styles.deleteButton]} onPress={() => deleteHandler(r)} activeOpacity={0.85}>
-                    <Ionicons name="trash" size={18} color="#FFFFFF" />
-                    <ThemedText style={styles.buttonText}>Eliminar</ThemedText>
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.deleteButton, deletingRecordId === itemKey && styles.disabledButton]}
+                    onPress={() => deleteHandler(r)}
+                    activeOpacity={0.85}
+                    disabled={deletingRecordId === itemKey}
+                  >
+                    {deletingRecordId === itemKey ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Ionicons name="trash" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.buttonText}>Eliminar</ThemedText>
+                      </>
+                    )}
                   </TouchableOpacity>
                 </ThemedView>
               </ThemedView>
@@ -1504,90 +1999,100 @@ export default function PhysicalMinuteAgendaScreen() {
 
             <ThemedText style={styles.formSectionTitle}>Jerarquía</ThemedText>
 
-            <ThemedText style={styles.label}>Empresa</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker selectedValue={selectedEmpresaId} onValueChange={(v) => setSelectedEmpresaId(v)} style={styles.picker}>
-                <Picker.Item label="Seleccione empresa" value={null} color="#000000" />
-                {empresaOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+            {roleName == null ? (
+              <ThemedText style={[styles.label, { opacity: 0.7 }]}>Cargando contexto de marca...</ThemedText>
+            ) : roleName === 'OPERATIVO' ? (
+              <ThemedText style={[styles.label, { opacity: 0.75, marginBottom: 8 }]}>
+                La ubicación (empresa, cliente, división, contrato, sucursal y puesto) se define desde tu marca actual.
+              </ThemedText>
+            ) : (
+              <>
+                <ThemedText style={styles.label}>Empresa</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker selectedValue={selectedEmpresaId} onValueChange={(v) => setSelectedEmpresaId(v)} style={styles.picker}>
+                    <Picker.Item label="Seleccione empresa" value={null} color="#000000" />
+                    {empresaOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
 
-            <ThemedText style={styles.label}>Cliente</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedClienteId}
-                enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                onValueChange={(v) => setSelectedClienteId(v)}
-                style={styles.picker}
-              >
-                <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} color="#000000" />
-                {clienteOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+                <ThemedText style={styles.label}>Cliente</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={selectedClienteId}
+                    enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
+                    onValueChange={(v) => setSelectedClienteId(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} color="#000000" />
+                    {clienteOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
 
-            <ThemedText style={styles.label}>División</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedDivisionId}
-                enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                onValueChange={(v) => setSelectedDivisionId(v)}
-                style={styles.picker}
-              >
-                <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} color="#000000" />
-                {divisionOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+                <ThemedText style={styles.label}>División</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={selectedDivisionId}
+                    enabled={selectedClienteId !== null && divisionOptions.length > 0}
+                    onValueChange={(v) => setSelectedDivisionId(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} color="#000000" />
+                    {divisionOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
 
-            <ThemedText style={styles.label}>Contrato</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedContratoId}
-                enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                onValueChange={(v) => setSelectedContratoId(v)}
-                style={styles.picker}
-              >
-                <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} color="#000000" />
-                {contratoOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+                <ThemedText style={styles.label}>Contrato</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={selectedContratoId}
+                    enabled={selectedDivisionId !== null && contratoOptions.length > 0}
+                    onValueChange={(v) => setSelectedContratoId(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} color="#000000" />
+                    {contratoOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
 
-            <ThemedText style={styles.label}>Sucursal</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedSucursalId}
-                enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                onValueChange={(v) => setSelectedSucursalId(v)}
-                style={styles.picker}
-              >
-                <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} color="#000000" />
-                {sucursalOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+                <ThemedText style={styles.label}>Sucursal</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={selectedSucursalId}
+                    enabled={selectedContratoId !== null && sucursalOptions.length > 0}
+                    onValueChange={(v) => setSelectedSucursalId(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} color="#000000" />
+                    {sucursalOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
 
-            <ThemedText style={styles.label}>Puesto</ThemedText>
-            <View style={styles.pickerWrapper}>
-              <Picker
-                selectedValue={selectedPuestoId}
-                enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                onValueChange={(v) => setSelectedPuestoId(v)}
-                style={styles.picker}
-              >
-                <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} color="#000000" />
-                {puestoOptions.map((o) => (
-                  <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
+                <ThemedText style={styles.label}>Puesto</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={selectedPuestoId}
+                    enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                    onValueChange={(v) => setSelectedPuestoId(v)}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} color="#000000" />
+                    {puestoOptions.map((o) => (
+                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
+              </>
+            )}
 
             <ThemedText style={styles.formSectionTitle}>Datos</ThemedText>
 
@@ -1824,11 +2329,27 @@ export default function PhysicalMinuteAgendaScreen() {
             )}
 
             <ThemedView style={styles.actionButtons}>
-              <TouchableOpacity style={[styles.listItemButton, styles.saveButton]} onPress={saveHandler} activeOpacity={0.85}>
-                <Ionicons name="save" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.buttonText}>{editingRecord ? 'Actualizar' : 'Guardar'}</ThemedText>
+              <TouchableOpacity
+                style={[styles.listItemButton, styles.saveButton, isSubmitting && styles.disabledButton]}
+                onPress={saveHandler}
+                activeOpacity={0.85}
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="save" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.buttonText}>Aceptar</ThemedText>
+                  </>
+                )}
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.listItemButton, styles.cancelButton]} onPress={cancelCreateOrEdit} activeOpacity={0.85}>
+              <TouchableOpacity
+                style={[styles.listItemButton, styles.cancelButton]}
+                onPress={cancelCreateOrEdit}
+                activeOpacity={0.85}
+                disabled={isSubmitting}
+              >
                 <Ionicons name="close" size={18} color="#FFFFFF" />
                 <ThemedText style={styles.buttonText}>Cancelar</ThemedText>
               </TouchableOpacity>
@@ -2048,8 +2569,8 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
             </ThemedView>
 
-      {/* Filtros */}
-      {(
+      {/* Filtros jerárquicos: solo si el rol no es OPERATIVO */}
+      {roleName != null && roleName !== 'OPERATIVO' && (
               <ThemedView style={styles.filtersMain}>
                 <ThemedView style={styles.filterHeader}>
                   <TouchableOpacity
@@ -2462,6 +2983,7 @@ const styles = StyleSheet.create({
   deleteButton: { backgroundColor: '#FF3B30' },
   saveButton: { backgroundColor: '#007AFF' },
   cancelButton: { backgroundColor: '#8E8E93' },
+  disabledButton: { opacity: 0.65 },
   buttonText: { color: '#FFFFFF', fontSize: 14, fontWeight: '800' },
   buttonDisabled: {
     opacity: 0.6,

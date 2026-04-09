@@ -1,10 +1,10 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
 
 interface saveAbsentReasonParams {
     reason: string;
     marcaId: number;
+    horaAccion: number;
     refreshAccessToken?: () => Promise<boolean>;
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
@@ -12,6 +12,7 @@ interface saveAbsentReasonParams {
 export default async function saveAbsentReason({
     reason,
     marcaId,
+    horaAccion,
     refreshAccessToken,
     logout
 }: saveAbsentReasonParams) {
@@ -33,6 +34,10 @@ export default async function saveAbsentReason({
             throw new Error('Marca ID not found');
         }
 
+        if (!horaAccion || !Number.isFinite(Number(horaAccion))) {
+            throw new Error('horaAccion not found');
+        }
+
         const response = await authedFetch({
             url: `${apiUrl}/api/attendance/${marcaId}/absent-reason`,
             init: {
@@ -40,7 +45,7 @@ export default async function saveAbsentReason({
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ reason }),
+                body: JSON.stringify({ reason, horaAccion }),
             },
             refreshAccessToken,
             logout,
@@ -55,10 +60,6 @@ export default async function saveAbsentReason({
         }
 
         const data = await response.json();
-
-        if (data.status) {
-            await AsyncStorage.removeItem('absent_reason_cache');
-        }
 
         return data;
     } catch (error) {

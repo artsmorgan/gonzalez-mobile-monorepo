@@ -38,8 +38,15 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'lunchtime_actions',
         'notes_actions',
         'activities_actions',
+        'incidents_actions',
+        'incident_contributions_actions',
         'evaluations_actions',
         'checklist_supervision_actions',
+        'surveys_actions',
+        'trainings_actions',
+        'evaluations_staff_actions',
+        'voice_notes_actions',
+        'attendance_actions',
     ];
 
     // Obtener todas las acciones pendientes

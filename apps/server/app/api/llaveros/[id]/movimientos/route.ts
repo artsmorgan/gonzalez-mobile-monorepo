@@ -13,12 +13,27 @@ function parseDateOnly(value: any): Date | null {
     return d;
 }
 
-function parseTimeOnly(value: any): Date | null {
-    if (!value) return null;
-    const s = String(value);
-    const d = s.includes("T") ? new Date(s) : new Date(`1970-01-01T${s}`);
-    if (isNaN(d.getTime())) return null;
-    return d;
+function normalizeHoraMovimientoInput(value: any): { ok: true; horaNormalized: string } | { ok: false } {
+    if (value == null || String(value).trim() === "") return { ok: false };
+    let s = String(value).trim();
+    if (s.includes("T")) {
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) {
+            const hh = String(d.getUTCHours()).padStart(2, "0");
+            const mm = String(d.getUTCMinutes()).padStart(2, "0");
+            const ss = String(d.getUTCSeconds()).padStart(2, "0");
+            return { ok: true, horaNormalized: `1970-01-01T${hh}:${mm}:${ss}.000Z` };
+        }
+        s = s.split("T")[1]?.split(".")[0] || "";
+    }
+    const parts = s.split(":");
+    if (parts.length < 2) return { ok: false };
+    const h = String(parseInt(parts[0], 10) || 0).padStart(2, "0");
+    const m = String(parseInt(parts[1], 10) || 0).padStart(2, "0");
+    const sec = String(parseInt(parts[2] ?? "0", 10) || 0).padStart(2, "0");
+    const tryD = new Date(`1970-01-01T${h}:${m}:${sec}`);
+    if (isNaN(tryD.getTime())) return { ok: false };
+    return { ok: true, horaNormalized: `1970-01-01T${h}:${m}:${sec}.000Z` };
 }
 
 async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
@@ -40,7 +55,6 @@ async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
         }
     });
     if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
-    if (marcaDia.id !== lastMarca.id) return { ok: false as const, marcaDia: null, message: "Hay una nueva marca más reciente" };
     return { ok: true as const, marcaDia, message: "" };
 }
 
@@ -130,11 +144,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
 
         const fechaDate = parseDateOnly(fecha);
-        const horaDate = parseTimeOnly(hora);
-        if (!fechaDate || !horaDate) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
-
-        const horaRaw = String(hora ?? "").trim();
-        const horaNormalized = '1970-01-01T' + horaRaw + '.000Z';
+        const horaNormRes = normalizeHoraMovimientoInput(hora);
+        if (!fechaDate || !horaNormRes.ok) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 500 });
+        const horaNormalized = horaNormRes.horaNormalized;
 
         const requiredStrings = [
             nombre_persona_recibe,
@@ -228,6 +240,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         });
 
         // Crear automáticamente movimientos de llave para llaves con cantidad_copias === 1
+        const llaveMovements: { llave_id: number; id: number }[] = [];
         try {
             const llavesEnLlavero = await callDynamicPrisma({
                 req,
@@ -260,8 +273,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                     }
 
                     if (llave && llave.cantidad_copias === 1) {
-                        // Crear movimiento de llave con los mismos datos del movimiento de llavero
-                        await callDynamicPrisma({
+                        // Crear movimiento de llave con los mismos datos del movimiento de llavero (misma normalización de hora que POST /api/llaves/[id]/movimientos)
+                        const movCreado = await callDynamicPrisma({
                             req,
                             data: {
                                 action: "POST",
@@ -273,7 +286,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                                     departamento: String(departamento),
                                     telefono: String(telefono),
                                     fecha: fechaDate.toISOString(),
-                                    hora: horaDate.toISOString(),
+                                    hora: horaNormalized,
                                     firma_entrega:
                                         firma_entrega != null && typeof firma_entrega === "string" && firma_entrega.trim().length > 0
                                             ? firma_entrega.trim()
@@ -286,6 +299,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                                 }
                             }
                         });
+                        if (movCreado?.id) {
+                            llaveMovements.push({ llave_id: llave.id, id: movCreado.id });
+                        }
                     }
                 }
             }
@@ -295,7 +311,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
         }
 
         return NextResponse.json(
-            { status: true, message: "Movimiento creado correctamente", id: created.id },
+            {
+                status: true,
+                message: "Movimiento creado correctamente",
+                id: created.id,
+                llave_movements: llaveMovements,
+            },
             { status: 200 }
         );
     } catch (error: unknown) {

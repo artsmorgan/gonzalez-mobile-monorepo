@@ -80,7 +80,19 @@ export async function PUT(
             accion_correctiva_preventiva,
             firma_responsable,
             archivos,
+            empresa_id: bodyEmpresaId,
+            cliente_id: bodyClienteId,
+            contrato_id: bodyContratoId,
+            corpo_id: bodyCorpoId,
+            puesto_id: bodyPuestoId,
+            plaza_id: bodyPlazaId,
         } = await req.json();
+
+        const pickNumericId = (value: unknown, fallback: number): number => {
+            const n = parseInt(String(value ?? ""), 10);
+            if (Number.isFinite(n) && n > 0) return n;
+            return fallback;
+        };
 
         const existingRecord = await callDynamicPrisma({
             req,
@@ -120,6 +132,12 @@ export async function PUT(
             estado: estado !== undefined ? String(estado ?? "") : existingRecordObj.estado,
             accion_correctiva_preventiva: accion_correctiva_preventiva !== undefined ? String(accion_correctiva_preventiva ?? "") : existingRecordObj.accion_correctiva_preventiva,
             firma_responsable: firma_responsable !== undefined ? String(firma_responsable ?? existingRecordObj.firma_responsable) : existingRecordObj.firma_responsable,
+            empresa_id: bodyEmpresaId !== undefined ? pickNumericId(bodyEmpresaId, existingRecordObj.empresa_id) : existingRecordObj.empresa_id,
+            cliente_id: bodyClienteId !== undefined ? pickNumericId(bodyClienteId, existingRecordObj.cliente_id) : existingRecordObj.cliente_id,
+            contrato_id: bodyContratoId !== undefined ? pickNumericId(bodyContratoId, existingRecordObj.contrato_id) : existingRecordObj.contrato_id,
+            corpo_id: bodyCorpoId !== undefined ? pickNumericId(bodyCorpoId, existingRecordObj.corpo_id) : existingRecordObj.corpo_id,
+            puesto_id: bodyPuestoId !== undefined ? pickNumericId(bodyPuestoId, existingRecordObj.puesto_id) : existingRecordObj.puesto_id,
+            plaza_id: bodyPlazaId !== undefined ? pickNumericId(bodyPlazaId, existingRecordObj.plaza_id) : existingRecordObj.plaza_id,
         };
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)

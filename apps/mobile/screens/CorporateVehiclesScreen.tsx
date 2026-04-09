@@ -30,6 +30,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/App';
 import { eventBus } from '@/hooks/eventBus';
 import {
+  mergeCorporateVehiclesCorpoCacheForSucursal,
   removeVehicleFromCorpoCache,
   setVehicleUsosInCorpoCache,
   upsertVehicleInCorpoCache,
@@ -47,7 +48,6 @@ import {
   deleteCorporateVehicle,
   listCorporateVehicleUses,
   listCorporateVehiclesByCorpo,
-  listCorporateVehicles,
   updateCorporateVehicleUse,
   updateCorporateVehicle,
   createCorporateVehicleMaintenance,
@@ -589,6 +589,64 @@ const safeParse = <T,>(value: any, fallback: T): T => {
   }
 };
 
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+type HierarchyCorpoIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+};
+
+function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number): HierarchyCorpoIds | null {
+  const cid = Number(corpoId);
+  if (!Number.isFinite(cid)) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa?.clientes || []) {
+      const divA = Array.isArray(cliente.division) ? cliente.division : [];
+      const divB = Array.isArray(cliente.divisiones) ? cliente.divisiones : [];
+      const byDivId = new Map<number, any>();
+      for (const d of [...divA, ...divB]) {
+        const id = Number(d?.id);
+        if (Number.isFinite(id) && !byDivId.has(id)) byDivId.set(id, d);
+      }
+      for (const division of byDivId.values()) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return {
+                empresaId: Number(empresa.id),
+                clienteId: Number(cliente.id),
+                divisionId: Number(division.id),
+                contratoId: Number(contrato.id),
+                corpoId: Number(sucursal.id),
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export default function CorporateVehiclesScreen() {
   const navigation = useNavigation<Nav>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
@@ -610,6 +668,11 @@ export default function CorporateVehiclesScreen() {
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [roleName, setRoleName] = useState<RoleName>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
+  const [deletingUseKey, setDeletingUseKey] = useState<string | null>(null);
+  const [deletingMaintenanceKey, setDeletingMaintenanceKey] = useState<string | null>(null);
 
   // Estados para filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -815,41 +878,142 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
-  const loadMarcaContext = async () => {
-    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-    if (!currentMarcaStr) {
-      setHasCurrentMarca(false);
-      setMarcaDivisionId(null);
-      setMarcaCorpoId(null);
-      setMarcaClienteId(null);
-      setMarcaEmpresaId(null);
-      return null;
-    }
-    try {
-      const current = JSON.parse(currentMarcaStr);
-      if (!current) {
+  type MarcaSnapshot = {
+    current: Record<string, any>;
+    roleName: RoleName;
+    isOperativo: boolean;
+    marcaDivisionId: number | null;
+    marcaCorpoId: number | null;
+    marcaClienteId: number | null;
+    marcaEmpresaId: number | null;
+    filterEmpresaId: number | null;
+    filterClienteId: number | null;
+    filterDivisionId: number | null;
+    filterContratoId: number | null;
+    filterCorpoId: number | null;
+  };
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
         setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
+        setMarcaEmpresaId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterCorpoId(null);
+        }
         return null;
       }
-      setHasCurrentMarca(true);
-      const divIdRaw = current?.roleDivision?.division?.id;
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
-      setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
-      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
-      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
-      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
-      return current;
-    } catch {
-      setHasCurrentMarca(false);
-      setMarcaDivisionId(null);
-      setMarcaCorpoId(null);
-      setMarcaClienteId(null);
-      setMarcaEmpresaId(null);
-      return null;
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+        const divId = numOrNull(divIdRaw);
+        const corpoId = numOrNull(corpoIdRaw);
+        const clienteId = numOrNull(clienteIdRaw);
+        const empresaId = numOrNull(empresaIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? (role as RoleName) : null;
+
+        setMarcaDivisionId(divId);
+        setMarcaCorpoId(corpoId);
+        setMarcaClienteId(clienteId);
+        setMarcaEmpresaId(empresaId);
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterCorpoId(fs);
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaDivisionId: divId,
+          marcaCorpoId: corpoId,
+          marcaClienteId: clienteId,
+          marcaEmpresaId: empresaId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterCorpoId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
+        setMarcaEmpresaId(null);
+        setRoleName(null);
+        return null;
+      }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      setFilterCorpoId(currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null);
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (CorporateVehicles):', e);
     }
-  };
+  }, []);
+
+  /** Creación: precargar jerarquía solo desde JSON de marca (sin recorrer árbol por corpo_id). */
+  const applyCurrentMarcaToCreateHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') return;
+
+      setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
+      setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateHierarchy (CorporateVehicles):', e);
+    }
+  }, []);
 
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
@@ -1036,51 +1200,6 @@ export default function CorporateVehiclesScreen() {
       }
     })();
   }, []);
-
-  // defaults por marca para formulario
-  useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    if (!marcaClienteId || !marcaCorpoId) return;
-
-    const foundEmpresa = empresas.find((e: any) =>
-      (e?.clientes || []).some((c: any) => Number(c.id) === Number(marcaClienteId))
-    );
-    if (!foundEmpresa) return;
-    const empId = Number(foundEmpresa.id);
-    setSelectedEmpresaId(empId);
-
-    const cliFound = (foundEmpresa?.clientes || []).find((c: any) => Number(c.id) === Number(marcaClienteId));
-    if (!cliFound) return;
-    setSelectedClienteId(Number(cliFound.id));
-
-    // Importante: División/Contrato/Sucursal deben ser selección manual (no autoselección)
-    setSelectedDivisionId(null);
-    setSelectedContratoId(null);
-    setSelectedSucursalId(null);
-  }, [structure, marcaClienteId, marcaCorpoId, marcaDivisionId, empresas]);
-
-  // Inicializar filtros jerárquicos con current_marca (solo una vez cuando se carga la estructura)
-  useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    if (marcaEmpresaId && !filterEmpresaId) setFilterEmpresaId(marcaEmpresaId);
-    if (marcaClienteId && !filterClienteId) setFilterClienteId(marcaClienteId);
-    if (marcaCorpoId && !filterCorpoId) setFilterCorpoId(marcaCorpoId);
-
-    // Completar cadena Empresa -> Cliente -> División -> Contrato -> Sucursal
-    const path = findPathForSucursal(marcaClienteId, marcaCorpoId);
-    if (path) {
-      if (path.division_id != null && !filterDivisionId) setFilterDivisionId(path.division_id);
-      if (path.contrato_id != null && !filterContratoId) setFilterContratoId(path.contrato_id);
-    }
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaCorpoId, findPathForSucursal, filterDivisionId, filterContratoId, filterEmpresaId, filterClienteId, filterCorpoId]);
-
-  // Trigger fetch cuando cambien los filtros jerárquicos (pero no al inicializar)
-  useEffect(() => {
-    // Solo hacer fetch si hay al menos un filtro activo y la estructura está cargada
-    if (structure && structure.length > 0 && filterCorpoId != null) {
-      fetchRecords();
-    }
-  }, [filterCorpoId]);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -1471,100 +1590,138 @@ export default function CorporateVehiclesScreen() {
     []
   );
 
+  const runFetchRecords = useCallback(
+    async (snap: MarcaSnapshot) => {
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        if (!snap?.current) {
+          return;
+        }
+
+        await fetchMainStructure();
+
+        /**
+         * Listado solo con sucursal/corpo: OPERATIVO → `current_marca.corpo`;
+         * resto → filtro jerárquico o, si falta, mismo id desde `current_marca`.
+         */
+        const vehicleRecordSucursalId = (r: any) =>
+          Number(r?.corpo_id ?? r?.sucursal_id ?? 0);
+        const corpoId = snap.isOperativo
+          ? snap.marcaCorpoId
+          : (snap.filterCorpoId ?? snap.marcaCorpoId);
+        if (!corpoId || corpoId <= 0) {
+          setError(
+            snap.isOperativo
+              ? 'No se encontró el ID de la sucursal (corpo) en la marca actual'
+              : 'Seleccione sucursal en el filtro o defina la sucursal en la marca actual'
+          );
+          setRecords([]);
+          return;
+        }
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const localCacheAll: VehicleRecord[] = cache.filter((item: any) => item.type === 'corporate_vehicle');
+        const localCache: VehicleRecord[] = localCacheAll.filter(
+          (r: any) => vehicleRecordSucursalId(r) === Number(corpoId)
+        );
+        const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
+
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) {
+          setRecords(localCache);
+          return;
+        }
+
+        const res = await listCorporateVehiclesByCorpo({
+          corpo_id: String(corpoId),
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) {
+          setRecords(localCache);
+          return;
+        }
+
+        const serverItems: VehicleRecord[] = Array.isArray(res.data) ? (res.data as any) : [];
+        const merged: VehicleRecord[] = [
+          ...localOnly.map((r: any) => ({ ...r, synced: false })),
+          ...serverItems.map((r: any) => ({ ...r, synced: true })),
+        ];
+
+        setRecords(merged);
+
+        const withoutThis = cache.filter(
+          (item: any) =>
+            !(
+              item.type === 'corporate_vehicle' && vehicleRecordSucursalId(item) === Number(corpoId)
+            )
+        );
+        await AsyncStorage.setItem(
+          'evaluations_cache',
+          JSON.stringify([...withoutThis, ...merged.map((r: any) => ({ ...r, type: 'corporate_vehicle' }))])
+        );
+
+        await mergeCorporateVehiclesCorpoCacheForSucursal(corpoId, serverItems as any[]);
+
+        void updateMainStructureCacheFromFetchedVehicles({
+          sucursalId: Number(corpoId),
+          vehicles: serverItems,
+        });
+      } catch (e: any) {
+        console.error('Error fetching corporate vehicles:', e);
+        setError(e?.message || 'Error al cargar los vehículos');
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [fetchMainStructure, refreshAccessToken, logout, updateMainStructureCacheFromFetchedVehicles]
+  );
+
   const fetchRecords = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-
-      const current = await loadMarcaContext();
-      if (!current) {
-        setIsLoading(false);
-        return;
-      }
-
-      await fetchMainStructure();
-
-      // Usar filtros jerárquicos si están disponibles, sino usar current_marca
-      const empresaId = filterEmpresaId ?? marcaEmpresaId ?? Number(current?.empresa?.id ?? current?.empresa_id ?? 0);
-      const clienteId = filterClienteId ?? marcaClienteId ?? Number(current?.cliente?.id ?? current?.cliente_id ?? 0);
-      const corpoIdLocal = filterCorpoId ?? marcaCorpoId ?? Number(current?.corpo?.id ?? current?.corpo_id ?? 0);
-      const corpoIdForQuery = filterCorpoId; // SOLO buscar online cuando está seleccionada la sucursal
-
-      if (!corpoIdLocal) {
-        setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
-        setIsLoading(false);
-        return;
-      }
-
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const localCacheAll: VehicleRecord[] = cache.filter((item: any) => item.type === 'corporate_vehicle');
-      // Filtrar cache local por corpo_id
-      const localCache: VehicleRecord[] = localCacheAll.filter((r: any) => Number(r.corpo_id) === Number(corpoIdLocal));
-      const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
-
-      const isConnected = await getConnectionStatus();
-      // Si no hay sucursal seleccionada, evitamos búsqueda online (solo mantenemos el cache local)
-      if (!isConnected || corpoIdForQuery == null) {
-        setRecords(localCache);
-        return;
-      }
-
-      // Usar nueva función con filtros jerárquicos
-      const res = await listCorporateVehicles({
-        empresa_id: empresaId || undefined,
-        cliente_id: clienteId || undefined,
-        corpo_id: corpoIdForQuery || undefined,
-        refreshAccessToken,
-        logout,
-      });
-      if (!res.status) {
-        setRecords(localCache);
-        return;
-      }
-
-      const serverItems: VehicleRecord[] = Array.isArray(res.data) ? (res.data as any) : [];
-      const merged: VehicleRecord[] = [
-        ...localOnly.map((r: any) => ({ ...r, synced: false })),
-        ...serverItems.map((r: any) => ({ ...r, synced: true })),
-      ];
-
-      setRecords(merged);
-
-      const withoutThis = cache.filter(
-        (item: any) => !(item.type === 'corporate_vehicle' && Number(item.corpo_id) === Number(corpoIdForQuery))
-      );
-      await AsyncStorage.setItem(
-        'evaluations_cache',
-        JSON.stringify([...withoutThis, ...merged.map((r: any) => ({ ...r, type: 'corporate_vehicle' }))])
-      );
-
-      // Sincronizamos también el árbol jerárquico offline para que `main_structure_cache`
-      // refleje los últimos `usos`/bitácoras y mantenimientos de la sucursal consultada.
-      void updateMainStructureCacheFromFetchedVehicles({
-        sucursalId: Number(corpoIdForQuery),
-        vehicles: serverItems,
-      });
-    } catch (e: any) {
-      console.error('Error fetching corporate vehicles:', e);
-      setError(e?.message || 'Error al cargar los vehículos');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchMainStructure, refreshAccessToken, logout, filterEmpresaId, filterClienteId, filterCorpoId, marcaEmpresaId, marcaClienteId, marcaCorpoId, updateMainStructureCacheFromFetchedVehicles]);
-
-  const fetchRecordsRef = useRef(fetchRecords);
-  useEffect(() => {
-    fetchRecordsRef.current = fetchRecords;
-  }, [fetchRecords]);
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap) return;
+    await runFetchRecords({
+      ...snap,
+      filterEmpresaId,
+      filterClienteId,
+      filterDivisionId,
+      filterContratoId,
+      filterCorpoId,
+    });
+  }, [
+    syncMarcaFromStorage,
+    runFetchRecords,
+    filterEmpresaId,
+    filterClienteId,
+    filterDivisionId,
+    filterContratoId,
+    filterCorpoId,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRecordsRef.current();
-      const handler = () => fetchRecordsRef.current();
+      let cancelled = false;
+      void (async () => {
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          if (cancelled) return;
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+          if (snap) await runFetchRecords(snap);
+          else await fetchRecords();
+        } else {
+          await fetchRecords();
+        }
+      })();
+      const handler = () => void fetchRecords();
       eventBus.on('connectionRestored', handler);
-      return () => eventBus.off('connectionRestored', handler);
-    }, [])
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, runFetchRecords, fetchRecords])
   );
 
   const resetForm = () => {
@@ -1796,6 +1953,18 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
+  const getUseFirmaHashForSave = (): string => {
+    if (useFirmaResponsable) {
+      return btoa(
+        `${useFirmaResponsable.sessionId}:${useFirmaResponsable.empleadoId}:${useFirmaResponsable.latitud}:${useFirmaResponsable.longitud}:${useFirmaResponsable.timestamp}`
+      );
+    }
+    const u = useEditing;
+    const existing = u?.firma_responsable;
+    if (typeof existing === 'string' && existing.trim().length > 0) return existing.trim();
+    return '';
+  };
+
   const validateUseForm = () => {
     if (!usesVehicleKey) return 'No se encontró el vehículo seleccionado';
     if (!useCodigoConductor.trim()) return 'Código del conductor es requerido';
@@ -1806,16 +1975,12 @@ export default function CorporateVehiclesScreen() {
     if (!useFinHora.trim()) return 'Hora de fin es requerida';
     if (!useCombInicio.trim()) return 'Combustible inicio es requerido';
     if (!useCombFin.trim()) return 'Combustible fin es requerido';
-    if (!useFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
+    if (!getUseFirmaHashForSave().trim()) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
 
   const buildUseRequestData = (horaAccion: number) => {
-    const firmaHash = useFirmaResponsable
-      ? btoa(
-        `${useFirmaResponsable.sessionId}:${useFirmaResponsable.empleadoId}:${useFirmaResponsable.latitud}:${useFirmaResponsable.longitud}:${useFirmaResponsable.timestamp}`
-      )
-      : '';
+    const firmaHash = getUseFirmaHashForSave();
 
     const inicioHoraIso = toIsoFromDateAndTime(useInicioFecha, useInicioHora);
     const finHoraIso = toIsoFromDateAndTime(useFinFecha, useFinHora);
@@ -1855,7 +2020,7 @@ export default function CorporateVehiclesScreen() {
     return undefined;
   };
 
-  const saveUseRecord = async () => {
+  const handleSaveUseRecord = () => {
     const errMsg = validateUseForm();
     if (errMsg) {
       Alert.alert('Error', errMsg);
@@ -1867,11 +2032,23 @@ export default function CorporateVehiclesScreen() {
       return;
     }
 
+    Alert.alert('Confirmar', '¿Desea guardar el uso?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void executeSaveUseRecord() },
+    ]);
+  };
+
+  const executeSaveUseRecord = async () => {
+    if (!usesVehicleKey) {
+      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
+      return;
+    }
+    const useVehicleKeyStr = usesVehicleKey;
     setIsSubmittingUse(true);
     setSubmitResponseUse(null);
 
     try {
-      const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
+      const vehicle = records.find((r) => String(r.id || r.id_local) === useVehicleKeyStr);
       if (!vehicle) {
         Alert.alert('Error', 'No se encontró el vehículo seleccionado');
         setIsSubmittingUse(false);
@@ -1895,7 +2072,7 @@ export default function CorporateVehiclesScreen() {
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
 
         if (!useEditing) {
           const localUseId = `local-use-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -1922,23 +2099,62 @@ export default function CorporateVehiclesScreen() {
           } as any;
           const updated = [...useRecords, newUse];
           setUseRecords(updated);
-          await setUsesForVehicleKey(usesVehicleKey, updated);
+          await setUsesForVehicleKey(useVehicleKeyStr, updated);
         } else {
           const useId = String(useEditing.id || useEditing.id_local);
-          actions.push({
-            id: useId,
-            action: 'update',
-            type: 'corporate_vehicle_use',
-            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
-            synced: false,
-          });
+          if (useId.startsWith('local-')) {
+            actions = actions.filter(
+              (a: any) =>
+                !(
+                  a.type === 'corporate_vehicle_use' &&
+                  a.action === 'update' &&
+                  String(a.id) === useId
+                )
+            );
+            const ci = actions.findIndex(
+              (a: any) =>
+                a.action === 'create' &&
+                a.type === 'corporate_vehicle_use' &&
+                String(a.id) === useId
+            );
+            const nextPayload = {
+              vehiculo_id: vehicleIdForAction,
+              ...(vehiculoIdLocal ? { vehiculo_id_local: vehiculoIdLocal } : {}),
+              ...requestData,
+              id_local: useId,
+            };
+            if (ci !== -1) {
+              const prev = actions[ci].payload || {};
+              actions[ci] = {
+                ...actions[ci],
+                payload: { ...prev, ...nextPayload },
+                synced: false,
+              };
+            } else {
+              actions.push({
+                id: useId,
+                action: 'create',
+                type: 'corporate_vehicle_use',
+                payload: nextPayload,
+                synced: false,
+              });
+            }
+          } else {
+            actions.push({
+              id: useId,
+              action: 'update',
+              type: 'corporate_vehicle_use',
+              payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+              synced: false,
+            });
+          }
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
           const updated = useRecords.map((u) =>
             String(u.id) === useId || String(u.id_local) === useId ? ({ ...u, ...requestData, synced: false } as any) : u
           );
           setUseRecords(updated);
-          await setUsesForVehicleKey(usesVehicleKey, updated);
+          await setUsesForVehicleKey(useVehicleKeyStr, updated);
         }
 
         Alert.alert('Éxito', 'El uso se guardó en el dispositivo. Se sincronizará al reconectar.');
@@ -1989,7 +2205,7 @@ export default function CorporateVehiclesScreen() {
       if (ref.status) {
         const serverUsos: VehicleUse[] = Array.isArray(ref.data) ? (ref.data as any).map((u: any) => ({ ...u, id_local: '', synced: true })) : [];
         setUseRecords(serverUsos);
-        await setUsesForVehicleKey(usesVehicleKey, serverUsos);
+        await setUsesForVehicleKey(useVehicleKeyStr, serverUsos);
       }
 
       setTimeout(() => {
@@ -2005,55 +2221,69 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
-  const confirmDeleteUse = async (u: VehicleUse) => {
+  const confirmDeleteUse = (u: VehicleUse) => {
+    const useKey = String(u.id || u.id_local);
     Alert.alert('Eliminar', '¿Deseas eliminar este uso?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          if (!usesVehicleKey) return;
-          const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
-          if (!vehicle) return;
-          const isConnected = await getConnectionStatus();
-          const useId = String(u.id || u.id_local);
-          const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
-
-          try {
-            setIsLoading(true);
-
-            if (!isConnected || useId.startsWith('local-') || !u.synced) {
-              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-              const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              actions.push({
-                id: useId,
-                action: 'delete',
-                type: 'corporate_vehicle_use',
-                payload: { vehiculo_id: vehicleIdForAction },
-                synced: false,
-              });
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-              const updated = useRecords.filter((x) => String(x.id) !== useId && String(x.id_local) !== useId);
-              setUseRecords(updated);
-              await setUsesForVehicleKey(usesVehicleKey, updated);
-              return;
-            }
-
-            const res = await deleteCorporateVehicleUse({ use_id: useId, refreshAccessToken, logout });
-            if (!res.status) throw new Error(res.message || 'No se pudo eliminar el uso');
-
-            const updated = useRecords.filter((x) => String(x.id) !== useId);
-            setUseRecords(updated);
-            await setUsesForVehicleKey(usesVehicleKey, updated);
-          } catch (e: any) {
-            Alert.alert('Error', e?.message || 'No se pudo eliminar el uso');
-          } finally {
-            setIsLoading(false);
-          }
-        },
+        onPress: () => void executeDeleteUse(u, useKey),
       },
     ]);
+  };
+
+  const executeDeleteUse = async (u: VehicleUse, useKey: string) => {
+    if (!usesVehicleKey) return;
+    const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
+    if (!vehicle) return;
+
+    setDeletingUseKey(useKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      const useId = String(u.id || u.id_local);
+      const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+
+      if (!isConnected || useId.startsWith('local-') || !u.synced) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        if (useId.startsWith('local-')) {
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === 'corporate_vehicle_use' &&
+                (a.action === 'create' || a.action === 'update') &&
+                String(a.id) === useId
+              )
+          );
+        } else {
+          actions.push({
+            id: useId,
+            action: 'delete',
+            type: 'corporate_vehicle_use',
+            payload: { vehiculo_id: vehicleIdForAction },
+            synced: false,
+          });
+        }
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const updated = useRecords.filter((x) => String(x.id) !== useId && String(x.id_local) !== useId);
+        setUseRecords(updated);
+        await setUsesForVehicleKey(usesVehicleKey, updated);
+        return;
+      }
+
+      const res = await deleteCorporateVehicleUse({ use_id: useId, refreshAccessToken, logout });
+      if (!res.status) throw new Error(res.message || 'No se pudo eliminar el uso');
+
+      const updated = useRecords.filter((x) => String(x.id) !== useId);
+      setUseRecords(updated);
+      await setUsesForVehicleKey(usesVehicleKey, updated);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo eliminar el uso');
+    } finally {
+      setDeletingUseKey(null);
+    }
   };
 
   const resolveCorporateServerNumericId = (raw: number | string | undefined): number | undefined => {
@@ -2285,22 +2515,30 @@ export default function CorporateVehiclesScreen() {
     setMaintenanceFirmaResponsable(decodeFirmaHash(m.firma_responsable) as any);
   };
 
+  const getMaintenanceFirmaHashForSave = (): string => {
+    if (maintenanceFirmaResponsable) {
+      return btoa(
+        `${maintenanceFirmaResponsable.sessionId}:${maintenanceFirmaResponsable.empleadoId}:${maintenanceFirmaResponsable.latitud}:${maintenanceFirmaResponsable.longitud}:${maintenanceFirmaResponsable.timestamp}`
+      );
+    }
+    const m = maintenanceEditing;
+    const existing = m?.firma_responsable;
+    if (typeof existing === 'string' && existing.trim().length > 0) return existing.trim();
+    return '';
+  };
+
   const validateMaintenanceForm = () => {
     if (!maintenanceVehicleKey) return 'No se encontró el vehículo seleccionado';
     if (!maintenanceFecha.trim()) return 'Fecha es requerida';
     if (!maintenanceTipo.trim()) return 'Tipo es requerido';
     if (!maintenanceMantenimiento.trim()) return 'Mantenimiento es requerido';
     if (!maintenanceNombreMecanico.trim()) return 'Nombre del mecánico es requerido';
-    if (!maintenanceFirmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
+    if (!getMaintenanceFirmaHashForSave().trim()) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
 
   const buildMaintenanceRequestData = (): CorporateVehicleMaintenanceRequest => {
-    const firmaHash = maintenanceFirmaResponsable
-      ? btoa(
-        `${maintenanceFirmaResponsable.sessionId}:${maintenanceFirmaResponsable.empleadoId}:${maintenanceFirmaResponsable.latitud}:${maintenanceFirmaResponsable.longitud}:${maintenanceFirmaResponsable.timestamp}`
-      )
-      : '';
+    const firmaHash = getMaintenanceFirmaHashForSave();
 
     return {
       fecha: toIsoFromDateAndTime(maintenanceFecha, '00:00'),
@@ -2316,7 +2554,7 @@ export default function CorporateVehiclesScreen() {
     };
   };
 
-  const saveMaintenanceRecord = async () => {
+  const handleSaveMaintenanceRecord = () => {
     const errMsg = validateMaintenanceForm();
     if (errMsg) {
       Alert.alert('Error', errMsg);
@@ -2328,11 +2566,23 @@ export default function CorporateVehiclesScreen() {
       return;
     }
 
+    Alert.alert('Confirmar', '¿Desea guardar el mantenimiento?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void executeSaveMaintenanceRecord() },
+    ]);
+  };
+
+  const executeSaveMaintenanceRecord = async () => {
+    if (!maintenanceVehicleKey) {
+      Alert.alert('Error', 'No se encontró el vehículo seleccionado');
+      return;
+    }
+    const maintenanceVehicleKeyStr = maintenanceVehicleKey;
     setIsSubmittingMaintenance(true);
     setSubmitResponseMaintenance(null);
 
     try {
-      const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKey);
+      const vehicle = records.find((r) => String(r.id || r.id_local) === maintenanceVehicleKeyStr);
       if (!vehicle) {
         Alert.alert('Error', 'No se encontró el vehículo seleccionado');
         setIsSubmittingMaintenance(false);
@@ -2346,7 +2596,7 @@ export default function CorporateVehiclesScreen() {
 
       if (!isConnected) {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
 
         if (!maintenanceEditing) {
           const localMaintenanceId = `local-maintenance-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -2373,16 +2623,55 @@ export default function CorporateVehiclesScreen() {
           } as any;
           const updated = [...maintenanceRecords, newMaintenance];
           setMaintenanceRecords(updated);
-          await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
+          await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
         } else {
           const maintenanceId = String(maintenanceEditing.id || maintenanceEditing.id_local);
-          actions.push({
-            id: maintenanceId,
-            action: 'update',
-            type: 'corporate_vehicle_maintenance',
-            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
-            synced: false,
-          });
+          if (String(maintenanceId).startsWith('local-')) {
+            actions = actions.filter(
+              (a: any) =>
+                !(
+                  a.type === 'corporate_vehicle_maintenance' &&
+                  a.action === 'update' &&
+                  String(a.id) === maintenanceId
+                )
+            );
+            const ci = actions.findIndex(
+              (a: any) =>
+                a.action === 'create' &&
+                a.type === 'corporate_vehicle_maintenance' &&
+                String(a.id) === maintenanceId
+            );
+            const nextPayload = {
+              vehiculo_id: vehicleIdForAction,
+              ...(vehiculoIdLocal ? { vehiculo_id_local: vehiculoIdLocal } : {}),
+              ...requestData,
+              id_local: maintenanceId,
+            };
+            if (ci !== -1) {
+              const prev = actions[ci].payload || {};
+              actions[ci] = {
+                ...actions[ci],
+                payload: { ...prev, ...nextPayload },
+                synced: false,
+              };
+            } else {
+              actions.push({
+                id: maintenanceId,
+                action: 'create',
+                type: 'corporate_vehicle_maintenance',
+                payload: nextPayload,
+                synced: false,
+              });
+            }
+          } else {
+            actions.push({
+              id: maintenanceId,
+              action: 'update',
+              type: 'corporate_vehicle_maintenance',
+              payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+              synced: false,
+            });
+          }
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
           const updated = maintenanceRecords.map((m) =>
@@ -2391,7 +2680,7 @@ export default function CorporateVehiclesScreen() {
               : m
           );
           setMaintenanceRecords(updated);
-          await setMaintenancesForVehicleKey(maintenanceVehicleKey, updated);
+          await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
         }
 
         Alert.alert('Éxito', 'El mantenimiento se guardó en el dispositivo. Se sincronizará al reconectar.');
@@ -2456,7 +2745,7 @@ export default function CorporateVehiclesScreen() {
           ? (res.data as any).map((m: any) => ({ ...m, id_local: '', synced: true }))
           : [];
         setMaintenanceRecords(serverMaintenances);
-        await setMaintenancesForVehicleKey(maintenanceVehicleKey, serverMaintenances);
+        await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, serverMaintenances);
       }
 
       setTimeout(() => {
@@ -2473,55 +2762,73 @@ export default function CorporateVehiclesScreen() {
   };
 
   const confirmDeleteMaintenance = (m: VehicleMaintenance) => {
+    const maintKey = String(m.id || m.id_local);
     Alert.alert('Eliminar', '¿Deseas eliminar este mantenimiento?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          try {
-            setIsLoading(true);
-            const isConnected = await getConnectionStatus();
-            const maintenanceId = String(m.id || m.id_local);
-
-            if (!isConnected || maintenanceId.startsWith('local-') || !m.synced) {
-              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-              const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              actions.push({
-                id: maintenanceId,
-                action: 'delete',
-                type: 'corporate_vehicle_maintenance',
-                payload: {},
-                synced: false,
-              });
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-              const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId && String(maintenance.id_local) !== maintenanceId);
-              setMaintenanceRecords(updated);
-              await setMaintenancesForVehicleKey(maintenanceVehicleKey!, updated);
-              Alert.alert('Eliminado offline', 'Se eliminará al sincronizar');
-              return;
-            }
-
-            const res = await deleteCorporateVehicleMaintenance({
-              maintenance_id: maintenanceId,
-              refreshAccessToken,
-              logout,
-            });
-            if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
-
-            const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId);
-            setMaintenanceRecords(updated);
-            await setMaintenancesForVehicleKey(maintenanceVehicleKey!, updated);
-            Alert.alert('Éxito', 'Mantenimiento eliminado correctamente');
-          } catch (e: any) {
-            Alert.alert('Error', e?.message || 'No se pudo eliminar el mantenimiento');
-          } finally {
-            setIsLoading(false);
-          }
-        },
+        onPress: () => void executeDeleteMaintenance(m, maintKey),
       },
     ]);
+  };
+
+  const executeDeleteMaintenance = async (m: VehicleMaintenance, maintKey: string) => {
+    if (!maintenanceVehicleKey) return;
+    const maintenanceVehicleKeyStr = maintenanceVehicleKey;
+    setDeletingMaintenanceKey(maintKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      const maintenanceId = String(m.id || m.id_local);
+
+      if (!isConnected || maintenanceId.startsWith('local-') || !m.synced) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        if (String(maintenanceId).startsWith('local-')) {
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === 'corporate_vehicle_maintenance' &&
+                (a.action === 'create' || a.action === 'update') &&
+                String(a.id) === String(maintenanceId)
+              )
+          );
+        } else {
+          actions.push({
+            id: maintenanceId,
+            action: 'delete',
+            type: 'corporate_vehicle_maintenance',
+            payload: {},
+            synced: false,
+          });
+        }
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const updated = maintenanceRecords.filter(
+          (maintenance) => String(maintenance.id) !== maintenanceId && String(maintenance.id_local) !== maintenanceId
+        );
+        setMaintenanceRecords(updated);
+        await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
+        Alert.alert('Eliminado offline', 'Se eliminará al sincronizar');
+        return;
+      }
+
+      const res = await deleteCorporateVehicleMaintenance({
+        maintenance_id: maintenanceId,
+        refreshAccessToken,
+        logout,
+      });
+      if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+
+      const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId);
+      setMaintenanceRecords(updated);
+      await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
+      Alert.alert('Éxito', 'Mantenimiento eliminado correctamente');
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo eliminar el mantenimiento');
+    } finally {
+      setDeletingMaintenanceKey(null);
+    }
   };
 
   // Funciones para cámara
@@ -2667,11 +2974,48 @@ export default function CorporateVehiclesScreen() {
     setIsCreating(true);
     setEditing(null);
     resetForm();
+    void applyCurrentMarcaToCreateHierarchy();
   };
 
   const startEditing = (r: VehicleRecord) => {
     setIsCreating(true);
     setEditing({ id: r.id, id_local: r.id_local });
+
+    if (roleName != null && roleName !== 'OPERATIVO' && Array.isArray(structure) && structure.length > 0) {
+      const h = findHierarchyByCorpoIn(structure, Number(r.corpo_id));
+      if (h) {
+        setSelectedEmpresaId(h.empresaId);
+        setSelectedClienteId(h.clienteId);
+        setSelectedDivisionId(h.divisionId);
+        setSelectedContratoId(h.contratoId);
+        setSelectedSucursalId(h.corpoId);
+      } else {
+        const path = findPathForSucursal(Number(r.cliente_id), Number(r.corpo_id));
+        if (path) {
+          setSelectedEmpresaId(path.empresa_id);
+          setSelectedClienteId(path.cliente_id);
+          setSelectedDivisionId(path.division_id);
+          setSelectedContratoId(path.contrato_id);
+          setSelectedSucursalId(path.sucursal_id);
+        } else {
+          const empresaFound = empresas.find((e: any) =>
+            (e?.clientes || []).some((c: any) => Number(c.id) === Number(r.cliente_id))
+          );
+          if (empresaFound) setSelectedEmpresaId(Number(empresaFound.id));
+          setSelectedClienteId(r.cliente_id != null ? Number(r.cliente_id) : null);
+          setSelectedDivisionId(null);
+          setSelectedContratoId(null);
+          setSelectedSucursalId(r.corpo_id != null ? Number(r.corpo_id) : null);
+        }
+      }
+    } else {
+      setSelectedEmpresaId(null);
+      setSelectedClienteId(null);
+      setSelectedDivisionId(null);
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+    }
+
     setPlaca(r.placa || '');
     // Normaliza por si existen registros viejos con valores no soportados
     const allowedTipos = new Set(['Vehículo', 'Bicicleta', 'Motocicleta']);
@@ -2705,13 +3049,39 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
+  const getEditingVehicleRecord = (): VehicleRecord | undefined => {
+    if (!editing) return undefined;
+    return records.find(
+      (rec) => String(rec.id) === String(editing.id) || String(rec.id_local) === String(editing.id_local)
+    );
+  };
+
+  const getVehicleFirmaHashForSave = (): string => {
+    if (firmaResponsable) {
+      return btoa(
+        `${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`
+      );
+    }
+    const rec = getEditingVehicleRecord();
+    const existing = rec?.firma_responsable;
+    if (typeof existing === 'string' && existing.trim().length > 0) return existing.trim();
+    return '';
+  };
+
   const validateForm = () => {
-    if (!selectedClienteId) return 'Cliente es requerido';
-    if (!selectedSucursalId) return 'Sucursal es requerida';
+    if (!hasCurrentMarca) return 'Debes tener una marca activa para usar este módulo.';
+    if (roleName == null) return 'Cargando contexto de marca...';
+    if (roleName === 'OPERATIVO') {
+      if (!marcaClienteId || !marcaCorpoId) return 'No se pudo determinar cliente o sucursal desde la marca actual';
+    } else {
+      if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, cliente y sucursal son obligatorios';
+      if (!selectedDivisionId) return 'División es obligatoria';
+      if (!selectedContratoId) return 'Contrato es obligatorio';
+    }
     if (!placa.trim()) return 'Placa es requerida';
     if (!tipo.trim()) return 'Tipo es requerido';
     if (!tipoAutoria.trim()) return 'Tipo de autoría es requerido';
-    if (!firmaResponsable) return 'Firma del responsable (QR o Generar) es requerida';
+    if (!getVehicleFirmaHashForSave().trim()) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
   };
 
@@ -2847,34 +3217,19 @@ export default function CorporateVehiclesScreen() {
 
   const removeImage = (id: string) => setImageFiles((p) => p.filter((f) => f.id !== id));
 
-  const buildRequestData = async () => {
-    const firmaHash = firmaResponsable
-      ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
-      : '';
-
-    // Obtener empresa_id de current_marca si no está disponible
-    let empresaId = 0;
-    if (selectedEmpresaId) {
-      empresaId = Number(selectedEmpresaId);
-    } else {
-      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-      if (currentMarcaStr) {
-        try {
-          const current = JSON.parse(currentMarcaStr);
-          const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
-          if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
-            empresaId = Number(empresaIdRaw);
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
+  const buildRequestData = () => {
+    const firmaHash = getVehicleFirmaHashForSave();
+    const empresaId =
+      roleName === 'OPERATIVO' ? (marcaEmpresaId ?? 0) : (selectedEmpresaId ?? 0);
+    const clienteId =
+      roleName === 'OPERATIVO' ? (marcaClienteId ?? 0) : (selectedClienteId ?? 0);
+    const corpoId =
+      roleName === 'OPERATIVO' ? (marcaCorpoId ?? 0) : (selectedSucursalId ?? 0);
 
     return {
-      empresa_id: empresaId,
-      cliente_id: Number(selectedClienteId),
-      corpo_id: Number(selectedSucursalId),
+      empresa_id: Number(empresaId),
+      cliente_id: Number(clienteId),
+      corpo_id: Number(corpoId),
       placa: placa.trim(),
       tipo: tipo.trim(),
       tipo_autoria: tipoAutoria.trim(),
@@ -2895,24 +3250,30 @@ export default function CorporateVehiclesScreen() {
     };
   };
 
-  const saveRecord = async () => {
+  const handleSaveRecord = () => {
     const errMsg = validateForm();
     if (errMsg) {
       Alert.alert('Error', errMsg);
       return;
     }
+    Alert.alert('Confirmar', '¿Desea guardar el registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void executeSaveRecord() },
+    ]);
+  };
 
+  const executeSaveRecord = async () => {
     setIsSubmitting(true);
     setSubmitResponse(null);
 
     try {
-      const requestData = await buildRequestData();
+      const requestData = buildRequestData();
       const isConnected = await getConnectionStatus();
 
       if (!isConnected) {
         const localId = editing?.id_local || `local-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
 
         if (!editing) {
           actions.push({
@@ -2923,8 +3284,48 @@ export default function CorporateVehiclesScreen() {
             synced: false,
           });
         } else {
-          const recordId = String(editing.id).startsWith('local-') ? String(editing.id) : String(editing.id);
-          actions.push({ id: recordId, action: 'update', type: 'corporate_vehicle', payload: requestData, synced: false });
+          const recordKey = String(editing.id_local || editing.id || '');
+          const isDraft = String(recordKey).startsWith('local-');
+          if (isDraft) {
+            actions = actions.filter(
+              (a: any) =>
+                !(
+                  a.type === 'corporate_vehicle' &&
+                  a.action === 'update' &&
+                  String(a.id) === recordKey
+                )
+            );
+            const ci = actions.findIndex(
+              (a: any) =>
+                a.action === 'create' &&
+                a.type === 'corporate_vehicle' &&
+                String(a.id) === recordKey
+            );
+            const mergedPayload = { ...requestData, id_local: recordKey };
+            if (ci !== -1) {
+              actions[ci] = {
+                ...actions[ci],
+                payload: { ...(actions[ci].payload || {}), ...mergedPayload },
+                synced: false,
+              };
+            } else {
+              actions.push({
+                id: recordKey,
+                action: 'create',
+                type: 'corporate_vehicle',
+                payload: mergedPayload,
+                synced: false,
+              });
+            }
+          } else {
+            actions.push({
+              id: recordKey,
+              action: 'update',
+              type: 'corporate_vehicle',
+              payload: requestData,
+              synced: false,
+            });
+          }
         }
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
@@ -3062,47 +3463,65 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
-  const confirmDelete = async (r: VehicleRecord) => {
+  const confirmDelete = (r: VehicleRecord) => {
+    const recordKey = String(r.id || r.id_local);
     Alert.alert('Eliminar', '¿Deseas eliminar este registro?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: async () => {
-          try {
-            setIsLoading(true);
-            const isConnected = await getConnectionStatus();
-            const recordId = String(r.id);
-
-            if (!isConnected || String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-') || !r.synced) {
-              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-              const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              actions.push({ id: recordId, action: 'delete', type: 'corporate_vehicle', payload: {}, synced: false });
-              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              const cache = cacheStr ? JSON.parse(cacheStr) : [];
-              const updatedCache = cache.filter(
-                (item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === recordId || String(item.id_local) === recordId))
-              );
-              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
-              await fetchRecords();
-              return;
-            }
-
-            const res = await deleteCorporateVehicle({ id: recordId, refreshAccessToken, logout });
-            if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
-            await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
-            await fetchRecords();
-          } catch (e: any) {
-            Alert.alert('Error', e?.message || 'No se pudo eliminar');
-          } finally {
-            setIsLoading(false);
-          }
-        },
+        onPress: () => void executeDeleteVehicle(r, recordKey),
       },
     ]);
+  };
+
+  const executeDeleteVehicle = async (r: VehicleRecord, recordKey: string) => {
+    setDeletingRecordKey(recordKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      const recordId = String(r.id);
+
+      if (!isConnected || String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-') || !r.synced) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const localDraftKey =
+          String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-')
+            ? String(r.id_local || recordId)
+            : null;
+        if (localDraftKey) {
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === 'corporate_vehicle' &&
+                (a.action === 'create' || a.action === 'update') &&
+                (String(a.id) === String(r.id) || String(a.id) === String(r.id_local))
+              )
+          );
+        } else {
+          actions.push({ id: recordId, action: 'delete', type: 'corporate_vehicle', payload: {}, synced: false });
+        }
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const updatedCache = cache.filter(
+          (item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === recordId || String(item.id_local) === recordId))
+        );
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
+        await fetchRecords();
+        return;
+      }
+
+      const res = await deleteCorporateVehicle({ id: recordId, refreshAccessToken, logout });
+      if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+      await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
+      await fetchRecords();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo eliminar');
+    } finally {
+      setDeletingRecordKey(null);
+    }
   };
 
   const renderImagesPreview = (images: VehicleImage[] | undefined, vehiculoId: number | undefined, recordKey: string) => {
@@ -3147,8 +3566,8 @@ export default function CorporateVehiclesScreen() {
             </ThemedView>
           ) : null}
 
-          {/* Filtros Jerárquicos */}
-          {!isCreating && (
+          {/* Filtros Jerárquicos (solo si el rol no es OPERATIVO) */}
+          {!isCreating && hasCurrentMarca && roleName != null && roleName !== 'OPERATIVO' ? (
             <ThemedView style={styles.filtersContainer}>
               <ThemedView style={styles.filtersHeader}>
                 <TouchableOpacity
@@ -3164,21 +3583,20 @@ export default function CorporateVehiclesScreen() {
                     color="#007AFF"
                   />
                 </TouchableOpacity>
-                {isHierarchyFiltersExpanded && (
+                {isHierarchyFiltersExpanded ? (
                   <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={() => {
-                      setFilterEmpresaId(null);
-                      setFilterClienteId(null);
-                      setFilterDivisionId(null);
-                      setFilterContratoId(null);
-                      setFilterCorpoId(null);
+                      void (async () => {
+                        await resetListFiltersFromCurrentMarca();
+                        void fetchRecords();
+                      })();
                     }}
                   >
                     <Ionicons name="refresh" size={16} color="#FF3B30" />
                     <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </ThemedView>
               {isHierarchyFiltersExpanded && (
                 <ThemedView style={styles.filtersContent}>
@@ -3278,6 +3696,7 @@ export default function CorporateVehiclesScreen() {
                           selectedValue={filterCorpoId ?? ''}
                           onValueChange={(value) => {
                             setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                            void fetchRecords();
                           }}
                           style={styles.picker}
                         >
@@ -3292,7 +3711,7 @@ export default function CorporateVehiclesScreen() {
                 </ThemedView>
               )}
             </ThemedView>
-          )}
+          ) : null}
 
           {!isCreating && !isLoading ? (
             <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
@@ -3306,62 +3725,66 @@ export default function CorporateVehiclesScreen() {
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
 
-              <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
+              {roleName != null && roleName !== 'OPERATIVO' ? (
+                <>
+                  <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
 
-              <ThemedText style={styles.label}>Empresa</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
-                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                  {empresas.map((e: any) => (
-                    <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} color="#000000" />
-                  ))}
-                </Picker>
-              </ThemedView>
+                  <ThemedText style={styles.label}>Empresa</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
+                      <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                      {empresas.map((e: any) => (
+                        <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
-              <ThemedText style={styles.label}>Cliente</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedClienteId ?? 0} onValueChange={(v) => handleClienteChange(Number(v) || null)} style={styles.picker} enabled={!!selectedEmpresaId}>
-                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                  {clientes.map((c: any) => (
-                    <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
-                  ))}
-                </Picker>
-              </ThemedView>
+                  <ThemedText style={styles.label}>Cliente</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={selectedClienteId ?? 0} onValueChange={(v) => handleClienteChange(Number(v) || null)} style={styles.picker} enabled={!!selectedEmpresaId}>
+                      <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                      {clientes.map((c: any) => (
+                        <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
-              <ThemedText style={styles.label}>División</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker
-                  selectedValue={selectedDivisionId ?? 0}
-                  onValueChange={(v) => handleDivisionChange(Number(v) || null)}
-                  enabled={!!selectedClienteId && divisiones.length > 0}
-                  style={styles.picker}
-                >
-                  <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} color="#000000" />
-                  {divisiones.map((d: any) => (
-                    <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} color="#000000" />
-                  ))}
-                </Picker>
-              </ThemedView>
+                  <ThemedText style={styles.label}>División</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedDivisionId ?? 0}
+                      onValueChange={(v) => handleDivisionChange(Number(v) || null)}
+                      enabled={!!selectedClienteId && divisiones.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} color="#000000" />
+                      {divisiones.map((d: any) => (
+                        <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
-              <ThemedText style={styles.label}>Contrato</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedContratoId ?? 0} onValueChange={(v) => handleContratoChange(Number(v) || null)} style={styles.picker} enabled={!!selectedDivisionId}>
-                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                  {contratos.map((c: any) => (
-                    <Picker.Item key={`cont_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
-                  ))}
-                </Picker>
-              </ThemedView>
+                  <ThemedText style={styles.label}>Contrato</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={selectedContratoId ?? 0} onValueChange={(v) => handleContratoChange(Number(v) || null)} style={styles.picker} enabled={!!selectedDivisionId}>
+                      <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                      {contratos.map((c: any) => (
+                        <Picker.Item key={`cont_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
 
-              <ThemedText style={styles.label}>Sucursal</ThemedText>
-              <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={selectedSucursalId ?? 0} onValueChange={(v) => handleSucursalChange(Number(v) || null)} style={styles.picker} enabled={!!selectedContratoId}>
-                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                  {sucursales.map((s: any) => (
-                    <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} color="#000000" />
-                  ))}
-                </Picker>
-              </ThemedView>
+                  <ThemedText style={styles.label}>Sucursal</ThemedText>
+                  <ThemedView style={styles.pickerWrapper}>
+                    <Picker selectedValue={selectedSucursalId ?? 0} onValueChange={(v) => handleSucursalChange(Number(v) || null)} style={styles.picker} enabled={!!selectedContratoId}>
+                      <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                      {sucursales.map((s: any) => (
+                        <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} color="#000000" />
+                      ))}
+                    </Picker>
+                  </ThemedView>
+                </>
+              ) : null}
 
               <ThemedText style={styles.sectionTitle}>Datos del vehículo</ThemedText>
               <ThemedText style={styles.label}>Placa</ThemedText>
@@ -3541,7 +3964,7 @@ export default function CorporateVehiclesScreen() {
                 )}
                 <TouchableOpacity 
                   style={[styles.formActionBtn, styles.saveBtn, isSubmitting && styles.buttonDisabled]} 
-                  onPress={saveRecord} 
+                  onPress={handleSaveRecord} 
                   activeOpacity={0.85}
                   disabled={isSubmitting}
                 >
@@ -3550,7 +3973,7 @@ export default function CorporateVehiclesScreen() {
                   ) : (
                     <>
                       <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                      <ThemedText style={styles.saveBtnText}>Aceptar</ThemedText>
                     </>
                   )}
                 </TouchableOpacity>
@@ -3652,9 +4075,20 @@ export default function CorporateVehiclesScreen() {
                           <ThemedText style={styles.actionBtnText}>Cambios</ThemedText>
                         </TouchableOpacity>
                       )}
-                      <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => confirmDelete(r)} activeOpacity={0.85}>
-                        <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                      <TouchableOpacity
+                        style={[styles.actionBtn, styles.deleteBtn, deletingRecordKey === recordKey && styles.buttonDisabled]}
+                        onPress={() => confirmDelete(r)}
+                        activeOpacity={0.85}
+                        disabled={deletingRecordKey === recordKey}
+                      >
+                        {deletingRecordKey === recordKey ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                          </>
+                        )}
                       </TouchableOpacity>
                     </ThemedView>
                   </ThemedView>
@@ -3906,7 +4340,7 @@ export default function CorporateVehiclesScreen() {
                     )}
                     <TouchableOpacity 
                       style={[styles.formActionBtn, styles.saveBtn, isSubmittingUse && styles.buttonDisabled]} 
-                      onPress={saveUseRecord} 
+                      onPress={handleSaveUseRecord} 
                       activeOpacity={0.85}
                       disabled={isSubmittingUse}
                     >
@@ -3915,7 +4349,7 @@ export default function CorporateVehiclesScreen() {
                       ) : (
                         <>
                           <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                          <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                          <ThemedText style={styles.saveBtnText}>Aceptar</ThemedText>
                         </>
                       )}
                     </TouchableOpacity>
@@ -3971,9 +4405,20 @@ export default function CorporateVehiclesScreen() {
                               <ThemedText style={styles.actionBtnText}>Cambios</ThemedText>
                             </TouchableOpacity>
                           )}
-                          <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => confirmDeleteUse(u)} activeOpacity={0.85}>
-                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.deleteBtn, deletingUseKey === k && styles.buttonDisabled]}
+                            onPress={() => confirmDeleteUse(u)}
+                            activeOpacity={0.85}
+                            disabled={deletingUseKey === k}
+                          >
+                            {deletingUseKey === k ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                                <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                              </>
+                            )}
                           </TouchableOpacity>
                         </ThemedView>
 
@@ -4387,7 +4832,7 @@ export default function CorporateVehiclesScreen() {
                     )}
                     <TouchableOpacity 
                       style={[styles.formActionBtn, styles.saveBtn, isSubmittingMaintenance && styles.buttonDisabled]} 
-                      onPress={saveMaintenanceRecord} 
+                      onPress={handleSaveMaintenanceRecord} 
                       activeOpacity={0.85}
                       disabled={isSubmittingMaintenance}
                     >
@@ -4396,7 +4841,7 @@ export default function CorporateVehiclesScreen() {
                       ) : (
                         <>
                           <Ionicons name="save-outline" size={18} color="#FFFFFF" />
-                          <ThemedText style={styles.saveBtnText}>Guardar</ThemedText>
+                          <ThemedText style={styles.saveBtnText}>Aceptar</ThemedText>
                         </>
                       )}
                     </TouchableOpacity>
@@ -4444,9 +4889,20 @@ export default function CorporateVehiclesScreen() {
                               <ThemedText style={styles.actionBtnText}>Cambios</ThemedText>
                             </TouchableOpacity>
                           )}
-                          <TouchableOpacity style={[styles.actionBtn, styles.deleteBtn]} onPress={() => confirmDeleteMaintenance(m)} activeOpacity={0.85}>
-                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.deleteBtn, deletingMaintenanceKey === k && styles.buttonDisabled]}
+                            onPress={() => confirmDeleteMaintenance(m)}
+                            activeOpacity={0.85}
+                            disabled={deletingMaintenanceKey === k}
+                          >
+                            {deletingMaintenanceKey === k ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                                <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                              </>
+                            )}
                           </TouchableOpacity>
                         </ThemedView>
                       </ThemedView>

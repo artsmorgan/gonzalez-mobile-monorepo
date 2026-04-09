@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -20,6 +20,11 @@ import { createVehicle as createVehicleAPI, updateVehicle as updateVehicleAPI, d
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import {
+  filterVehiclesVisitasCacheForCorpo,
+  readVehiclesVisitasCacheRaw,
+  syncVehiclesVisitasCacheFromNetwork,
+} from '@/hooks/vehiclesVisitasCacheHelpers';
 
 type VehiclesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Vehicles'>;
 
@@ -43,12 +48,8 @@ interface Vehicle {
   created_at: string;
   id_local: string;
   base64_image: string;
-}
-
-interface VehiclesResponse {
-  status: boolean;
-  data?: Vehicle[];
-  message?: string;
+  /** Sucursal (`e_registro_vehiculos.corpo_id`) para caché / filtrado offline */
+  corpo_id?: number;
 }
 
 /** Extrae solo la parte base64 de una imagen (con o sin prefijo data:...;base64,) para enviar al servidor. Referencia: NonConformingProductScreen. */
@@ -91,6 +92,38 @@ interface EditingVehicle {
   base64_image?: string;
 }
 
+function stripQueuedVehicleUpdatesForVehicleId(actions: any[], vehicleId: number): any[] {
+  const id = Number(vehicleId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && Number(a.id) === id)
+  );
+}
+
+function stripQueuedVehicleDeletesForVehicleId(actions: any[], vehicleId: number): any[] {
+  const id = Number(vehicleId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'delete' && Number(a.id) === id)
+  );
+}
+
+function appendOfflineVehicleDelete(actions: any[], vehicleId: number): any[] {
+  let next = stripQueuedVehicleDeletesForVehicleId(actions, vehicleId);
+  next = stripQueuedVehicleUpdatesForVehicleId(next, vehicleId);
+  next.push({ id: vehicleId, type: 'delete' });
+  return next;
+}
+
+/** Evita filas `update` erróneas que reutilicen el id_local del borrador como id de vehículo. */
+function stripErroneousVehicleUpdatesForLocalQueueId(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && a.id != null && String(a.id) === k)
+  );
+}
+
 export default function VehiclesScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -116,6 +149,9 @@ export default function VehiclesScreen() {
 
   // Creating state
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  /** Clave del registro en proceso de borrado (`local:id_local` o `id:serverId`) para deshabilitar solo ese botón Eliminar */
+  const [deletingVehicleKey, setDeletingVehicleKey] = useState<string | null>(null);
   const [newVehicle, setNewVehicle] = useState<EditingVehicle>({
     id: null,
     id_local: '',
@@ -346,13 +382,18 @@ export default function VehiclesScreen() {
     return result;
   };
 
+  const mapCacheBase64 = (list: Vehicle[]): Vehicle[] =>
+    list.map((v) => ({
+      ...v,
+      base64_image: v.base64_image || '',
+    }));
+
   const fetchVehicles = async () => {
     try {
       setIsLoading(true);
       setError(null);
       setOfflineMessage(null);
 
-      // Verificar si existe current_marca
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
         setHasCurrentMarca(false);
@@ -361,89 +402,116 @@ export default function VehiclesScreen() {
       }
 
       const currentMarcaData = JSON.parse(currentMarca);
-      const marcaId = currentMarcaData.id;
+      const marcaId = Number(currentMarcaData?.id);
+      const corpoIdRaw =
+      currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+      const corpoId =
+        corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+
       setHasCurrentMarca(true);
 
-      // Verificar conectividad
+      if (
+        !Number.isFinite(marcaId) ||
+        marcaId <= 0 ||
+        !Number.isFinite(corpoId) ||
+        corpoId <= 0
+      ) {
+        setVehicles([]);
+        setOfflineMessage(
+          'No hay sucursal en la marca actual; no se puede cargar el listado de visitas.'
+        );
+        setIsLoading(false);
+        return;
+      }
+
       const isConnected = await getConnectionStatus();
 
+      const applyFilteredCache = async (offlineHint: string | null) => {
+        const cached = await readVehiclesVisitasCacheRaw();
+        const filtered = filterVehiclesVisitasCacheForCorpo(
+          cached as Vehicle[],
+          corpoId
+        );
+        setVehicles(mapCacheBase64(filtered));
+        if (offlineHint) setOfflineMessage(offlineHint);
+      };
+
       if (isConnected) {
-        // Con internet: hacer fetch normal
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) {
           throw new Error('Server URL not configured');
         }
 
-        const response = await authedFetch({
-          url: `${apiUrl}/api/vehicles?m=${marcaId}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
+        const syncResult = await syncVehiclesVisitasCacheFromNetwork({
+          marcaId,
+          corpoId,
           refreshAccessToken,
           logout,
         });
-        if (!response) return;
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data: VehiclesResponse = await response.json();
-
-        if (data.status && data.data) {
-          setVehicles(data.data);
-          // Actualizar vehicles_cache preservando base64_image
-          await AsyncStorage.setItem('vehicles_cache', JSON.stringify(data.data));
+        if (syncResult.ok) {
+          await applyFilteredCache(null);
         } else {
-          setError(data.message || 'Error al cargar los vehículos');
-          Alert.alert('Error', data.message || 'Error al cargar los vehículos');
+          await applyFilteredCache(
+            'No se pudo actualizar desde el servidor; mostrando visitas en caché para esta sucursal.'
+          );
+          if (syncResult.message) {
+            setError(syncResult.message);
+          }
         }
       } else {
-        // Sin internet: cargar desde cache
-        const vehiclesCache = await AsyncStorage.getItem('vehicles_cache');
-        if (vehiclesCache) {
-          const cachedVehicles = JSON.parse(vehiclesCache);
-          // Añadir base64_image vacío si no existe
-          const vehiclesWithBase64 = cachedVehicles.map((v: Vehicle) => ({
-            ...v,
-            base64_image: v.base64_image || '',
-          }));
-          setVehicles(vehiclesWithBase64);
-          setOfflineMessage('Modo Offline: no hay conexión a internet. Mostrando datos guardados.');
-        } else {
-          // Sin internet NO es error
-          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
-          setVehicles([]);
-        }
+        const cached = await readVehiclesVisitasCacheRaw();
+        const filtered = filterVehiclesVisitasCacheForCorpo(
+          cached as Vehicle[],
+          corpoId
+        );
+        setVehicles(mapCacheBase64(filtered));
+        setOfflineMessage(
+          filtered.length > 0
+            ? 'Modo Offline: no hay conexión a internet. Mostrando visitas guardadas para esta sucursal.'
+            : 'Sin conexión: no hay visitas guardadas para esta sucursal. Puedes registrar offline y se sincronizarán al volver la conexión.'
+        );
       }
     } catch (err) {
       console.error('Error fetching vehicles:', err);
-      // En caso de error, intentar cargar desde cache
       try {
-        const vehiclesCache = await AsyncStorage.getItem('vehicles_cache');
-        if (vehiclesCache) {
-          const cachedVehicles = JSON.parse(vehiclesCache);
-          // Añadir base64_image vacío si no existe
-          const vehiclesWithBase64 = cachedVehicles.map((v: Vehicle) => ({
-            ...v,
-            base64_image: v.base64_image || '',
-          }));
-          setVehicles(vehiclesWithBase64);
-          setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
-        } else {
-          if (isProbablyNetworkError(err)) {
-            setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
-            setVehicles([]);
-          } else {
-            setError('Error al cargar los vehículos');
-          }
+        const currentMarca = await AsyncStorage.getItem('current_marca');
+        if (!currentMarca) {
+          setVehicles([]);
+          return;
         }
-      } catch (cacheErr) {
-        if (isProbablyNetworkError(err) || isProbablyNetworkError(cacheErr)) {
-          setOfflineMessage('Sin conexión: no hay datos guardados previamente. Puedes registrar visitas offline y se sincronizarán cuando haya conexión.');
+        const currentMarcaData = JSON.parse(currentMarca);
+        const corpoIdRaw =
+          currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
+        const corpoId =
+          corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+        if (!Number.isFinite(corpoId) || corpoId <= 0) {
+          setVehicles([]);
+          return;
+        }
+        const cached = await readVehiclesVisitasCacheRaw();
+        const filtered = filterVehiclesVisitasCacheForCorpo(
+          cached as Vehicle[],
+          corpoId
+        );
+        if (filtered.length > 0) {
+          setVehicles(mapCacheBase64(filtered));
+          setOfflineMessage(
+            'Modo Offline: error de conexión. Mostrando visitas guardadas para esta sucursal.'
+          );
+        } else if (isProbablyNetworkError(err)) {
+          setOfflineMessage(
+            'Sin conexión: no hay visitas guardadas para esta sucursal.'
+          );
+          setVehicles([]);
+        } else {
+          setError('Error al cargar los vehículos');
+        }
+      } catch {
+        if (isProbablyNetworkError(err)) {
+          setOfflineMessage(
+            'Sin conexión: no hay visitas guardadas para esta sucursal.'
+          );
           setVehicles([]);
         } else {
           setError('Error al cargar los vehículos');
@@ -610,7 +678,11 @@ export default function VehiclesScreen() {
     }
   };
 
+  const getVehicleRowKey = (vehicleId: number, id_local: string) =>
+    id_local ? `local:${id_local}` : `id:${vehicleId}`;
+
   const createVehicle = async () => {
+    if (isSubmittingForm) return;
     // Validaciones
     if (!placaRef.current.trim()) {
       Alert.alert('Error', 'La placa es obligatoria');
@@ -643,13 +715,14 @@ export default function VehiclesScreen() {
     }
 
     Alert.alert(
-      'Confirmar creación',
-      '¿Estás seguro de que deseas crear esta visita de vehículo?',
+      'Confirmar ubicación',
+      '¿Deseas registrar esta visita de vehículo con los datos ingresados?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Crear',
+          text: 'Aceptar',
           onPress: async () => {
+            setIsSubmittingForm(true);
             try {
               const currentMarca = await AsyncStorage.getItem('current_marca');
               if (!currentMarca) {
@@ -764,7 +837,11 @@ export default function VehiclesScreen() {
 
                 // Crear entrada en vehicles_actions
                 const actionsStr = await AsyncStorage.getItem('vehicles_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = actions.filter(
+                  (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+                );
                 actions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
@@ -777,6 +854,12 @@ export default function VehiclesScreen() {
                 const cacheStr = await AsyncStorage.getItem('vehicles_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
+                const corpoOffline =
+                  currentMarcaData?.corpo?.id != null
+                    ? Number(currentMarcaData.corpo.id)
+                    : currentMarcaData?.corpo_id != null
+                      ? Number(currentMarcaData.corpo_id)
+                      : NaN;
                 const newVehicleCache = {
                   id: 0,
                   tipo: tipoRef.current,
@@ -795,6 +878,9 @@ export default function VehiclesScreen() {
                   created_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
                   base64_image: (vehicleImageBase64 && vehicleImageBase64.trim() !== '') ? vehicleImageBase64 : '',
+                  ...(Number.isFinite(corpoOffline) && corpoOffline > 0
+                    ? { corpo_id: corpoOffline }
+                    : {}),
                 };
 
                 cache.push(newVehicleCache);
@@ -846,6 +932,8 @@ export default function VehiclesScreen() {
             } catch (err) {
               console.error('Error creating vehicle:', err);
               Alert.alert('Error', 'No se pudo registrar la visita de vehículo');
+            } finally {
+              setIsSubmittingForm(false);
             }
           },
         },
@@ -854,6 +942,7 @@ export default function VehiclesScreen() {
   };
 
   const updateVehicle = async (vehicleId: number) => {
+    if (isSubmittingForm) return;
     if (!editingVehicle) return;
 
     // Validaciones
@@ -888,13 +977,14 @@ export default function VehiclesScreen() {
     }
 
     Alert.alert(
-      'Confirmar edición',
-      '¿Estás seguro de que deseas guardar los cambios?',
+      'Confirmar modificación',
+      '¿Deseas guardar los cambios en esta visita de vehículo?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Confirmar',
+          text: 'Aceptar',
           onPress: async () => {
+            setIsSubmittingForm(true);
             try {
               const currentMarca = await AsyncStorage.getItem('current_marca');
               if (!currentMarca) {
@@ -967,19 +1057,34 @@ export default function VehiclesScreen() {
               } else {
                 // Sin internet: modo offline
                 const actionsStr = await AsyncStorage.getItem('vehicles_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
 
                 if (editingVehicle.id_local !== '') {
-                  // Editar acción existente en vehicles_actions
-                  const actionIndex = actions.findIndex((a: any) => a.id === editingVehicle.id_local);
+                  actions = stripErroneousVehicleUpdatesForLocalQueueId(actions, editingVehicle.id_local);
+                  const actionIndex = actions.findIndex(
+                    (a: any) =>
+                      a?.type === 'create' && String(a.id) === String(editingVehicle.id_local)
+                  );
                   if (actionIndex !== -1) {
                     actions[actionIndex].requestData = requestBody;
-                    await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                    if (actions[actionIndex].marcaId == null && currentMarcaData.id != null) {
+                      actions[actionIndex].marcaId = currentMarcaData.id;
+                    }
+                  } else {
+                    actions.push({
+                      requestData: requestBody,
+                      marcaId: currentMarcaData.id,
+                      id: editingVehicle.id_local,
+                      type: 'create',
+                    });
                   }
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
                 } else {
-                  // Crear nueva acción de update en vehicles_actions
-                  // Eliminar cualquier acción de update previa para este vehicleId
-                  const filteredActions = actions.filter((a: any) => !(a.type === 'update' && a.id === vehicleId));
+                  const filteredActions = actions.filter(
+                    (a: any) =>
+                      !(a?.type === 'update' && Number(a.id) === Number(vehicleId))
+                  );
                   filteredActions.push({
                     requestData: requestBody,
                     id: vehicleId,
@@ -1036,6 +1141,8 @@ export default function VehiclesScreen() {
             } catch (err) {
               console.error('Error updating vehicle:', err);
               Alert.alert('Error', 'No se pudo actualizar el vehículo');
+            } finally {
+              setIsSubmittingForm(false);
             }
           },
         },
@@ -1043,68 +1150,70 @@ export default function VehiclesScreen() {
     );
   };
 
-  const deleteVehicle = async (vehicleId: number, id_local: string) => {
+  const deleteVehicle = (vehicleId: number, id_local: string) => {
+    if (deletingVehicleKey) return;
     Alert.alert(
       'Confirmar eliminación',
       '¿Estás seguro de que deseas eliminar esta visita de vehículo?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Eliminar',
+          text: 'Aceptar',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              // Verificar conectividad
-              const isConnected = await getConnectionStatus();
+          onPress: () => {
+            const key = getVehicleRowKey(vehicleId, id_local);
+            void (async () => {
+              setDeletingVehicleKey(key);
+              try {
+                const isConnected = await getConnectionStatus();
 
-              if (isConnected) {
-                // Con internet: llamar a la función API
-                const data = await deleteVehicleAPI({
-                  vehicleId: vehicleId,
-                  refreshAccessToken,
-                  logout,
-                });
-
-                if (data.status) {
-                  Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
-                  fetchVehicles();
-                } else {
-                  Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
-                }
-              } else {
-                // Sin internet: modo offline
-                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-
-                if (id_local !== '') {
-                  // Eliminar acciones con este id_local
-                  const filteredActions = actions.filter((a: any) => a.id !== id_local);
-                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
-                } else {
-                  // Agregar acción de delete
-                  actions.push({
-                    id: vehicleId,
-                    type: 'delete',
+                if (isConnected) {
+                  const data = await deleteVehicleAPI({
+                    vehicleId: vehicleId,
+                    refreshAccessToken,
+                    logout,
                   });
-                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+
+                  if (data.status) {
+                    Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
+                    fetchVehicles();
+                  } else {
+                    Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
+                  }
+                } else {
+                  const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                  if (!Array.isArray(actions)) actions = [];
+
+                  if (id_local !== '') {
+                    const filteredActions = actions.filter(
+                      (a: any) =>
+                        !(a?.type === 'create' && String(a?.id) === String(id_local))
+                    );
+                    await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
+                  } else {
+                    actions = appendOfflineVehicleDelete(actions, vehicleId);
+                    await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                  }
+
+                  const cacheStr = await AsyncStorage.getItem('vehicles_cache');
+                  const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                  const filteredCache = cache.filter((v: Vehicle) =>
+                    id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
+                  );
+                  await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
+
+                  Alert.alert('Modo Offline', 'Vehículo eliminado localmente. Se sincronizará cuando haya conexión.');
+                  fetchVehicles();
                 }
-
-                // Eliminar de vehicles_cache
-                const cacheStr = await AsyncStorage.getItem('vehicles_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                const filteredCache = cache.filter((v: Vehicle) =>
-                  id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
-                );
-                await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
-
-                Alert.alert('Modo Offline', 'Vehículo eliminado localmente. Se sincronizará cuando haya conexión.');
-                fetchVehicles();
+              } catch (err) {
+                console.error('Error deleting vehicle:', err);
+                Alert.alert('Error', 'No se pudo eliminar el vehículo');
+              } finally {
+                setDeletingVehicleKey(null);
               }
-            } catch (err) {
-              console.error('Error deleting vehicle:', err);
-              Alert.alert('Error', 'No se pudo eliminar el vehículo');
-            }
+            })();
           },
         },
       ]
@@ -1369,16 +1478,22 @@ export default function VehiclesScreen() {
         {/* Buttons */}
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
-            style={styles.confirmButton}
+            style={[styles.confirmButton, isSubmittingForm && styles.disabledButton]}
             onPress={isCreating ? createVehicle : () => updateVehicle(vehicle.id!)}
+            disabled={isSubmittingForm}
           >
-            <ThemedText style={styles.confirmButtonText}>
-              {getActionIcon('confirm')}
-            </ThemedText>
+            {isSubmittingForm ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <View style={styles.confirmButtonInner}>
+                {getActionIcon('confirm')}
+              </View>
+            )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.cancelButton}
+            style={[styles.cancelButton, isSubmittingForm && styles.disabledButton]}
             onPress={isCreating ? cancelCreating : cancelEditing}
+            disabled={isSubmittingForm}
           >
             <ThemedText style={styles.cancelButtonText}>
               {getActionIcon('cancel')}
@@ -1865,10 +1980,13 @@ export default function VehiclesScreen() {
               ) : (
                 filteredVehicles.map(vehicle => (
                   <VehicleItemComponent
-                    key={vehicle.id}
+                    key={getVehicleRowKey(vehicle.id, vehicle.id_local)}
                     vehicle={vehicle}
                     onEdit={() => startEditing(vehicle)}
                     onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
+                    isDeleting={
+                      deletingVehicleKey === getVehicleRowKey(vehicle.id, vehicle.id_local)
+                    }
                     onViewChanges={() => {
                       if (vehicle.id_local || vehicle.id === 0) {
                         Alert.alert('Sin conexión', 'Este vehículo es local/offline. Los cambios solo se pueden consultar en el servidor.');
@@ -2022,6 +2140,7 @@ interface VehicleItemComponentProps {
   onEdit: () => void;
   onDelete: () => void;
   onViewChanges?: () => void;
+  isDeleting?: boolean;
   getActionIcon: (action: string) => React.ReactElement;
   convertDate: (dateString: string) => string;
   getConnectionStatus: () => Promise<boolean>;
@@ -2033,6 +2152,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   onEdit,
   onDelete,
   onViewChanges,
+  isDeleting = false,
   getActionIcon,
   convertDate,
   getConnectionStatus,
@@ -2215,8 +2335,16 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
               <Ionicons name="list-outline" size={18} color="#FFFFFF" />
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.deleteButton} onPress={onDelete}>
-            <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+          <TouchableOpacity
+            style={[styles.deleteButton, isDeleting && styles.disabledButton]}
+            onPress={onDelete}
+            disabled={isDeleting}
+          >
+            {isDeleting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+            )}
           </TouchableOpacity>
         </ThemedView>
       )}
@@ -2619,8 +2747,15 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
   },
+  confirmButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
   confirmButtonText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
   },
@@ -2634,6 +2769,9 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.7,
   },
   captureImageButton: {
     flexDirection: 'row',

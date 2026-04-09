@@ -15,6 +15,14 @@ interface DeleteVoiceNoteParams {
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
 
+interface UpdateVoiceNoteParams {
+    voiceNoteId: number;
+    /** Cuerpo JSON del PATCH (título, descripción y opcionalmente marca / jerarquía). */
+    payload: Record<string, unknown>;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
 export async function createVoiceNote({
     requestData,
     marcaId,
@@ -61,6 +69,51 @@ export async function createVoiceNote({
     } catch (error) {
         console.error('Error creating voice note:', error);
         return { status: false, message: 'Error al crear la nota de voz' };
+    }
+}
+
+export async function updateVoiceNote({
+    voiceNoteId,
+    payload,
+    refreshAccessToken,
+    logout
+}: UpdateVoiceNoteParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/voice-notes/${voiceNoteId}`,
+            init: {
+                method: 'PATCH',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error updating voice note:', error);
+        return { status: false, message: 'Error al actualizar la nota de voz' };
     }
 }
 

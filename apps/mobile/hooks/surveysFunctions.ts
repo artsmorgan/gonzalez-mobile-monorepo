@@ -6,8 +6,8 @@ interface UpdateSurveySignatureParams {
     surveyId: number;
     field: 'firma_persona_evaluada';
     value: string | null;
-    refreshAccessToken?: () => Promise<boolean>;
-    logout?: () => Promise<{ status: boolean; message: string }>;
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<{ status: boolean; message: string }>;
 }
 
 export async function updateSurveySignature({
@@ -106,6 +106,104 @@ export async function createSurvey({
     } catch (error) {
         console.error('Error creating survey:', error);
         return { status: false, message: 'Error al crear la encuesta' };
+    }
+}
+
+interface UpdateSurveyParams {
+    surveyId: number;
+    requestData: any;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
+export async function updateSurvey({
+    surveyId,
+    requestData,
+    refreshAccessToken,
+    logout,
+}: UpdateSurveyParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/encuesta-nps/${surveyId}`,
+            init: {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData),
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            return { status: false, message: data?.message || 'Error al actualizar la encuesta' };
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error updating survey:', error);
+        return { status: false, message: 'Error al actualizar la encuesta' };
+    }
+}
+
+interface DeleteSurveyParams {
+    surveyId: number;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
+export async function deleteSurvey({
+    surveyId,
+    refreshAccessToken,
+    logout,
+}: DeleteSurveyParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/encuesta-nps/${surveyId}`,
+            init: {
+                method: 'DELETE',
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            return { status: false, message: data?.message || 'Error al eliminar la encuesta' };
+        }
+
+        return data;
+    } catch (error) {
+        console.error('Error deleting survey:', error);
+        return { status: false, message: 'Error al eliminar la encuesta' };
     }
 }
 

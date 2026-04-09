@@ -19,9 +19,26 @@ import * as Network from 'expo-network';
 import { formatDateDMY } from '../utils/formatDate';
 import saveMarca from '@/hooks/saveMarca';
 import saveAbsentReason from '@/hooks/saveAbsentReason';
+import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
+import {
+  appendAttendanceAction,
+  removePendingSalidaActionsForMarca,
+} from '@/hooks/attendanceActionsStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
+import { getIncidentsCache, mergeIncidentsCacheForCorpo, setIncidentsCache } from '@/hooks/incidentsStorage';
+import { mergeLlavesCacheForCorpo } from '@/hooks/llavesCacheHelpers';
+import { mergeLlaverosCacheForCorpo } from '@/hooks/llaverosCacheHelpers';
+import {
+  mergeNotesBase64FromCache,
+  mergeNotesCacheForPuesto,
+  parseNotesCache,
+} from '@/hooks/notesCacheHelpers';
+import { mergeCorporateVehiclesCorpoCacheForSucursal } from '@/hooks/corporateVehiclesCorpoCache';
+import { getVehicleVisitasCorpoId, syncVehiclesVisitasCacheFromNetwork } from '@/hooks/vehiclesVisitasCacheHelpers';
+import { syncVisitorsCacheFromNetwork } from '@/hooks/visitorsCacheHelpers';
 
 type MarcarIngresoSalidaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MarcarIngresoSalida'>;
 
@@ -102,6 +119,13 @@ interface AttendanceErrorResponse {
 
 type AttendanceResponse = AttendanceSuccessResponse | AttendanceErrorResponse;
 
+/** Evalúa conexión a internet con el mismo criterio en toda esta pantalla. */
+async function evaluateInternetConnection(): Promise<boolean> {
+  //return false;
+  const state = await Network.getNetworkStateAsync();
+  return !!(state.isConnected && state.isInternetReachable);
+}
+
 export default function MarcarIngresoSalidaScreen() {
   const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -122,6 +146,8 @@ export default function MarcarIngresoSalidaScreen() {
   const [shouldResponseAbsentReason, setShouldResponseAbsentReason] = useState(false);
   const [absentReason, setAbsentReason] = useState('');
   const [isSubmittingAbsentReason, setIsSubmittingAbsentReason] = useState(false);
+  /** Sin red y salida ya registrada en caché: vista solo mensaje + revertir (sin ficha de marca). */
+  const [minimalOfflineSalidaView, setMinimalOfflineSalidaView] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -196,7 +222,6 @@ export default function MarcarIngresoSalidaScreen() {
 
   const fetchAttendanceStatus = async () => {
     try {
-      // Cuando inicia carga, detenemos cualquier temporizador activo.
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -206,6 +231,54 @@ export default function MarcarIngresoSalidaScreen() {
       if (horaAccionValue) {
         setHoraAccion(horaAccionValue);
       }
+
+      const online = await evaluateInternetConnection();
+
+      if (!online) {
+        setShowAbsentReasonForm(false);
+        setShouldResponseAbsentReason(false);
+        if (!employee?.id) {
+          setMinimalOfflineSalidaView(false);
+          setErrorMessage('No se encontró el empleado');
+          return;
+        }
+        setIsLoadingData(true);
+        setErrorMessage(null);
+        setAttendanceData(null);
+        setLocationError(null);
+        const cache = await AsyncStorage.getItem('current_marca');
+        if (!cache || cache.trim() === '') {
+          setAttendanceData(null);
+          setMinimalOfflineSalidaView(false);
+          setErrorMessage(
+            'Sin conexión. No hay marca guardada en caché; conéctate o marca ingreso con red en este dispositivo.'
+          );
+          setIsLoadingData(false);
+          return;
+        }
+        try {
+          const marca_send = JSON.parse(cache);
+          const server_time = await AsyncStorage.getItem('server_time');
+          if (!server_time) {
+            throw new Error('Server time not found');
+          }
+          marca_send.current_time = parseInt(server_time, 10);
+          setRevertMarcaId(null);
+          await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
+          setErrorMessage(null);
+          setMinimalOfflineSalidaView(marca_send?.hora_salida_digitada != null);
+        } catch (e) {
+          console.error(e);
+          setAttendanceData(null);
+          setMinimalOfflineSalidaView(false);
+          setErrorMessage('Error al cargar la marca guardada.');
+        } finally {
+          setIsLoadingData(false);
+        }
+        return;
+      }
+
+      setMinimalOfflineSalidaView(false);
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
@@ -219,10 +292,8 @@ export default function MarcarIngresoSalidaScreen() {
       setIsLoadingLocation(true);
       setLocationError(null);
 
-      // Verificar y obtener ubicación GPS antes de hacer la llamada
       let currentLocation: Location.LocationObject | null = null;
 
-      // Verificar permisos de ubicación
       const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
       if (permissionStatus !== 'granted') {
         setLocationError('Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.');
@@ -230,7 +301,6 @@ export default function MarcarIngresoSalidaScreen() {
         return;
       }
 
-      // Verificar que los servicios de ubicación estén habilitados
       const isLocationEnabled = await Location.hasServicesEnabledAsync();
       if (!isLocationEnabled) {
         setLocationError('Los servicios de ubicación están desactivados. Por favor, activa la ubicación en tu dispositivo.');
@@ -238,15 +308,13 @@ export default function MarcarIngresoSalidaScreen() {
         return;
       }
 
-      // Obtener ubicación actual
       try {
         currentLocation = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.High,
         });
-        // Actualizar el estado de ubicación para mantener consistencia
         setLocation(currentLocation);
-      } catch (locationError) {
-        console.error('Error obteniendo ubicación GPS:', locationError);
+      } catch (locErr) {
+        console.error('Error obteniendo ubicación GPS:', locErr);
         setLocationError('Error al obtener la ubicación GPS. Por favor, verifica que los servicios de ubicación estén habilitados.');
         setIsLoadingLocation(false);
         return;
@@ -268,87 +336,71 @@ export default function MarcarIngresoSalidaScreen() {
       setErrorMessage(null);
       setAttendanceData(null);
 
-      const networkState = await Network.getNetworkStateAsync();
       let marca_send = null;
       let result = null;
       let data = null;
 
       let shouldUpdateData = false;
-      if (networkState.isConnected && networkState.isInternetReachable) {
-        const response = await authedFetch({
-          url: `${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (!response) return;
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+      const response = await authedFetch({
+        url: `${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      data = await response.json();
+
+      console.log('Response got from the server', data);
+
+      result = data.status;
+
+      console.log('Result', data.marca);
+
+      if (result) {
+        marca_send = data.marca;
+
+        const server_time = await AsyncStorage.getItem('server_time');
+        if (!server_time) {
+          throw new Error('Server time not found');
         }
 
-        data = await response.json();
+        marca_send.current_time = parseInt(server_time);
 
-        console.log("Response got from the server", data);
-
-        result = data.status;
-
-        console.log("Result", data.marca);
-
-        if (result) {
-          marca_send = data.marca;
-
-          const server_time = await AsyncStorage.getItem('server_time');
-          if (!server_time) {
-            throw new Error('Server time not found');
-          }
-
-          marca_send.current_time = parseInt(server_time);
-
-          const cache = await AsyncStorage.getItem('current_marca');
-          if (cache) {
+        const cache = await AsyncStorage.getItem('current_marca');
+        if (cache) {
+          try {
             const marca_cache = JSON.parse(cache);
             if (marca_cache.id !== marca_send.id) {
               await AsyncStorage.removeItem('current_marca');
             }
+          } catch {
+            /* ignore */
           }
+        }
 
-          // Si la marca tiene hora_salida_digitada null, guardarla en current_marca
-          if (marca_send && marca_send.hora_entrada_digitada !== null && marca_send.hora_salida_digitada === null) {
-            const current_marca = await AsyncStorage.getItem('current_marca');
-            console.log("current_marca", current_marca);
-            if (!current_marca || current_marca.trim() === '') {
-              shouldUpdateData = true;
-            }
-            await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
-          }
+        const current_marca_before = await AsyncStorage.getItem('current_marca');
+        if (
+          marca_send.hora_entrada_digitada != null &&
+          marca_send.hora_salida_digitada == null &&
+          (!current_marca_before || current_marca_before.trim() === '')
+        ) {
+          shouldUpdateData = true;
         }
-      }
-      else {
-        console.log('Sin conexión a internet');
-        const cache = await AsyncStorage.getItem('current_marca');
-        if (!cache) {
-          result = false;
-          marca_send = null;
-          data = { status: false, message: 'No se encontraron datos de asistencia' };
-        }
-        else {
-          result = true;
-          marca_send = JSON.parse(cache);
-          const server_time = await AsyncStorage.getItem('server_time');
-          if (!server_time) {
-            throw new Error('Server time not found');
-          }
-          marca_send.current_time = parseInt(server_time);
-        }
+        await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
       }
 
-      if (marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
+      if (marca_send && marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
         const distance = 25; //getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
         if (distance > 50) {
           result = false;
@@ -362,14 +414,14 @@ export default function MarcarIngresoSalidaScreen() {
       if (result) {
         // Si la actualización periódica fue exitosa, limpiamos cualquier posible marca pendiente de revertir
         setRevertMarcaId(null);
-        await setCurrentAttendanceData(marca_send, horaAccionValue);
+        await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
         console.log("shouldUpdateData", shouldUpdateData);
         if (shouldUpdateData && marca_send) {
           // Mostrar el mismo loader y mensaje de espera que al marcar entrada manualmente
           setIsProcessingMark(true);
           setProcessingType('entrada');
           try {
-            await hydrateAfterEntrada(marca_send, horaAccionValue, false);
+            await hydrateAfterEntrada(marca_send, horaAccionValue || Date.now(), false);
           } finally {
             setIsProcessingMark(false);
             setProcessingType(null);
@@ -378,13 +430,19 @@ export default function MarcarIngresoSalidaScreen() {
       } else {
         const errorData = data as AttendanceErrorResponse;
 
-        // Si viene absent:true, mostramos el formulario de ausencia
-        if (errorData && typeof errorData === 'object' && errorData.absent === true) {
+        // Ausencia: solo con respuesta en línea del servidor (ya no aplica en modo offline)
+        if (
+          errorData &&
+          typeof errorData === 'object' &&
+          errorData.absent === true &&
+          online
+        ) {
           console.log("Error data", errorData);
           setAbsentMarcaId(errorData.marca_id ?? null);
           setShouldResponseAbsentReason(errorData.should_response === true);
           setShowAbsentReasonForm(true);
           setErrorMessage(errorData.message);
+          setIsLoadingData(false);
           return;
         }
 
@@ -449,6 +507,14 @@ export default function MarcarIngresoSalidaScreen() {
   const handleToggleAttendance = () => {
     if (!attendanceData) return;
 
+    if (
+      attendanceData.estado === 'Ingresado' &&
+      attendanceData.marca?.hora_salida_digitada != null
+    ) {
+      Alert.alert('Información', 'Ya has marcado la salida.');
+      return;
+    }
+
     const action = attendanceData.estado === 'No ingresado' ? 'ingresar' : 'salir';
     const actionText = attendanceData.estado === 'No ingresado' ? 'Ingresar' : 'Salir';
     const actionExtraText = attendanceData.estado === 'No ingresado' ? '' : ' Si lo haces, no podrás acceder a la mayoría de las opciones del menú.';
@@ -491,6 +557,11 @@ export default function MarcarIngresoSalidaScreen() {
 
   const executeToggleAttendance = async () => {
     if (!attendanceData) return;
+
+    if (attendanceData.marca?.hora_salida_digitada != null) {
+      Alert.alert('Información', 'Ya has marcado la salida.');
+      return;
+    }
 
     setIsUpdating(true);
 
@@ -546,24 +617,51 @@ export default function MarcarIngresoSalidaScreen() {
 
       await AsyncStorage.setItem('current_marca', JSON.stringify(updatedMarca));
 
+      await AsyncStorage.multiRemove(['visitors_cache', 'vehicles_cache']);
+
       await Promise.all([
         getLunchTimeConfig(updatedMarca.id),
         getActivities(updatedMarca.id),
-        getNotes(updatedMarca.id),
+        getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
         getCategories(),
         getTiposProductoNoConforme(),
         getTipoActivo(),
         getEmployeesCorpo(updatedMarca.corpo.id),
+        getIncidents(updatedMarca.corpo.id),
         getIncidentsClassifications(),
         getDocumentTypes(),
         getExecutives(),
         getPuestosCorpo(updatedMarca.corpo.id),
         getCorporateVehicles(updatedMarca.corpo.id),
-        getVoiceNotes(updatedMarca.id),
+        (async () => {
+          const mid = Number(updatedMarca.id);
+          const cid = Number(updatedMarca.corpo?.id ?? updatedMarca.corpo_id ?? 0);
+          if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
+          if (!(await evaluateInternetConnection())) return;
+          await syncVehiclesVisitasCacheFromNetwork({
+            marcaId: mid,
+            corpoId: cid,
+            refreshAccessToken,
+            logout,
+          });
+        })(),
+        (async () => {
+          const mid = Number(updatedMarca.id);
+          const cid = Number(updatedMarca.corpo?.id ?? updatedMarca.corpo_id ?? 0);
+          if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
+          if (!(await evaluateInternetConnection())) return;
+          await syncVisitorsCacheFromNetwork({
+            marcaId: mid,
+            corpoId: cid,
+            refreshAccessToken,
+            logout,
+          });
+        })(),
+        getVoiceNotes(updatedMarca),
         getArticulos(),
-        getJobManuals(updatedMarca.id),
-        getLlaves(updatedMarca.id),
-        getLlaveros(updatedMarca.id),
+        getJobManuals(updatedMarca.puesto?.id),
+        getLlaves(Number(updatedMarca.corpo?.id) || 0),
+        getLlaveros(Number(updatedMarca.corpo?.id) || 0),
         getCategoriesMantenimiento(),
       ]);
 
@@ -606,22 +704,41 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('Hora de acción not found');
     }
 
-    const networkState = await Network.getNetworkStateAsync();
-
     let data = null;
-    if (networkState.isConnected && networkState.isInternetReachable) {
-      data = await saveMarca({ data_params: { type, reason, horaAccion: horaAccion }, marcaId: attendanceData.marca.id, refreshAccessToken, logout });
+    if (await evaluateInternetConnection()) {
+      data = await saveMarca({
+        data_params: { type, reason, horaAccion: horaAccion },
+        marcaId: attendanceData.marca.id,
+        refreshAccessToken,
+        logout,
+      });
     } else {
       if (type === 'salida') {
-        await AsyncStorage.setItem('marca_cache', JSON.stringify({ marcaId: attendanceData.marca.id, type, reason, horaAccion: horaAccion }));
-        data = { status: true, message: 'Salida registrada correctamente' };
+        await appendAttendanceAction({
+          type: 'salida',
+          marcaId: attendanceData.marca.id,
+          reason: reason ?? '',
+          horaAccion: horaAccion as number,
+        });
+        const rawMarca = await AsyncStorage.getItem('current_marca');
+        if (rawMarca) {
+          try {
+            const m = JSON.parse(rawMarca);
+            if (Number(m.id) === Number(attendanceData.marca.id)) {
+              m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+              await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        data = { status: true, message: 'Salida registrada localmente. Se sincronizará al recuperar conexión.' };
       } else {
         data = { status: false, message: 'No hay conexión a internet. Por favor, intenta nuevamente.' };
       }
     }
 
     if (data.status) {
-      // Si la actualización fue exitosa, limpiamos cualquier posible marca pendiente de revertir
       setRevertMarcaId(null);
       try {
         if (type === 'entrada') {
@@ -629,7 +746,18 @@ export default function MarcarIngresoSalidaScreen() {
             await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
           }
         } else {
-          await AsyncStorage.removeItem('current_marca');
+          const raw = await AsyncStorage.getItem('current_marca');
+          if (raw) {
+            try {
+              const m = JSON.parse(raw);
+              if (Number(m.id) === Number(attendanceData.marca.id)) {
+                m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+                await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+              }
+            } catch {
+              /* ignore */
+            }
+          }
           await fetchAttendanceStatus();
         }
       } catch (storageError) {
@@ -684,16 +812,17 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getJobManuals = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('job_manuals_actions');
-    await AsyncStorage.removeItem('job_manuals_cache');
+  const getJobManuals = async (puestoId: number | null | undefined) => {
+    const pid =
+      puestoId != null && Number.isFinite(Number(puestoId)) && Number(puestoId) > 0 ? Number(puestoId) : null;
+    if (!pid) return;
+
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
     const response = await authedFetch({
-      url: `${apiUrl}/api/job-manuals?m=${marcaId}`,
+      url: `${apiUrl}/api/job-manuals?puesto_id=${pid}`,
       init: {
         method: 'GET',
         headers: {
@@ -708,8 +837,11 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getJobManuals`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(data.manuals));
+    if (data.status && Array.isArray(data.manuals)) {
+      const prevStr = await AsyncStorage.getItem('job_manuals_cache');
+      const prev = prevStr ? JSON.parse(prevStr) : [];
+      const merged = mergeJobManualsCacheForPuesto(Array.isArray(prev) ? prev : [], data.manuals, pid);
+      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
     }
   }
 
@@ -748,8 +880,7 @@ export default function MarcarIngresoSalidaScreen() {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) return false;
 
-      const networkState = await Network.getNetworkStateAsync();
-      if (!networkState.isConnected || !networkState.isInternetReachable) return false;
+      if (!(await evaluateInternetConnection())) return false;
 
       const response = await authedFetch({
         url: `${apiUrl}/api/main-structure/last?created_at=0`,
@@ -809,7 +940,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getDocumentosEntregados = async (marcaId: number) => {
+  const getDocumentosEntregados = async (corpoId: number) => {
     // Eliminar actions
     await AsyncStorage.removeItem('documentos_entregados_actions');
     await AsyncStorage.removeItem('documentos_entregados_cache');
@@ -818,7 +949,7 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('Server URL not configured');
     }
     const response = await authedFetch({
-      url: `${apiUrl}/api/documentos-entregados?m=${marcaId}`,
+      url: `${apiUrl}/api/documentos-entregados?corpo_id=${encodeURIComponent(String(corpoId))}`,
       init: {
         method: 'GET',
         headers: {
@@ -838,16 +969,18 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getLlaves = async (marcaId: number) => {
-    // Eliminar actions
+  const getLlaves = async (corpoId: number) => {
     await AsyncStorage.removeItem('llaves_actions');
-    await AsyncStorage.removeItem('llaves_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
+    const cid = Number(corpoId);
+    if (!Number.isFinite(cid) || cid <= 0) {
+      return;
+    }
     const response = await authedFetch({
-      url: `${apiUrl}/api/llaves?m=${marcaId}`,
+      url: `${apiUrl}/api/llaves?corpo_id=${encodeURIComponent(String(cid))}`,
       init: {
         method: 'GET',
         headers: {
@@ -862,21 +995,26 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getLlaves`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('llaves_cache', JSON.stringify(data.data));
+    if (data.status && Array.isArray(data.data)) {
+      const cacheStr = await AsyncStorage.getItem('llaves_cache');
+      const existing = cacheStr ? JSON.parse(cacheStr) : [];
+      const merged = mergeLlavesCacheForCorpo(existing, data.data, cid);
+      await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
     }
-  }
+  };
   
-  const getLlaveros = async (marcaId: number) => {
-    // Eliminar actions
+  const getLlaveros = async (corpoId: number) => {
     await AsyncStorage.removeItem('llaveros_actions');
-    await AsyncStorage.removeItem('llaveros_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
+    const cid = Number(corpoId);
+    if (!Number.isFinite(cid) || cid <= 0) {
+      return;
+    }
     const response = await authedFetch({
-      url: `${apiUrl}/api/llaveros?m=${marcaId}`,
+      url: `${apiUrl}/api/llaveros?corpo_id=${encodeURIComponent(String(cid))}`,
       init: {
         method: 'GET',
         headers: {
@@ -888,13 +1026,16 @@ export default function MarcarIngresoSalidaScreen() {
     });
     if (!response) return;
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getLlaves`);
+      throw new Error(`HTTP error! status: ${response.status} getLlaveros`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('llaveros_cache', JSON.stringify(data.data));
+    if (data.status && Array.isArray(data.data)) {
+      const cacheStr = await AsyncStorage.getItem('llaveros_cache');
+      const existing = cacheStr ? JSON.parse(cacheStr) : [];
+      const merged = mergeLlaverosCacheForCorpo(existing, data.data, cid);
+      await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
     }
-  }
+  };
 
   const getTrainings = async (marcaId: number) => {
     // Eliminar actions
@@ -925,7 +1066,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getVoiceNotes = async (marcaId: number) => {
+  const getVoiceNotes = async (marca: { corpo?: { id?: number }; puesto?: { id?: number } }) => {
     // Eliminar actions
     await AsyncStorage.removeItem('voice_notes_actions');
     await AsyncStorage.removeItem('voice_notes_cache');
@@ -933,8 +1074,17 @@ export default function MarcarIngresoSalidaScreen() {
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
+    const corpoId = marca.corpo?.id != null ? Number(marca.corpo.id) : null;
+    if (!corpoId || corpoId <= 0) {
+      return;
+    }
+    let url = `${apiUrl}/api/voice-notes?corpo_id=${corpoId}`;
+    const mp = marca.puesto?.id != null ? Number(marca.puesto.id) : null;
+    if (mp != null && mp > 0) {
+      url += `&puesto_id=${mp}`;
+    }
     const response = await authedFetch({
-      url: `${apiUrl}/api/voice-notes?m=${marcaId}`,
+      url,
       init: {
         method: 'GET',
         headers: {
@@ -1065,17 +1215,21 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getNotes = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('notes_actions');
-    await AsyncStorage.removeItem('notes_cache');
+  const getNotes = async (
+    puestoId: number,
+    puestoMeta?: { id: number; nombre?: string } | null
+  ) => {
+    const pid = Number(puestoId);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return;
+    }
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
 
     const response = await authedFetch({
-      url: `${apiUrl}/api/puestos/${marcaId}/notas`,
+      url: `${apiUrl}/api/puestos/0/notas?puesto_id=${encodeURIComponent(String(pid))}`,
       init: {
         method: 'GET',
         headers: {
@@ -1086,15 +1240,29 @@ export default function MarcarIngresoSalidaScreen() {
       logout,
     });
     if (!response) return;
-    console.log("getNotes");
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status} getNotes`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('notes_cache', JSON.stringify(data));
+    if (data.status && Array.isArray(data.notas)) {
+      const cached = parseNotesCache(await AsyncStorage.getItem('notes_cache'));
+      const legacyPid = cached.puesto?.id ?? pid;
+      const mergedNotas = mergeNotesCacheForPuesto(
+        cached.notas || [],
+        data.notas,
+        pid,
+        legacyPid,
+        mergeNotesBase64FromCache
+      );
+      await AsyncStorage.setItem(
+        'notes_cache',
+        JSON.stringify({
+          notas: mergedNotas,
+          puesto: puestoMeta ?? cached.puesto ?? { id: pid },
+        })
+      );
     }
-  }
+  };
 
   const getEvaluations = async (corpoId: number) => {
     // Eliminar actions
@@ -1154,16 +1322,13 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getIncidents = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('incidents_actions');
-    await AsyncStorage.removeItem('incidents_cache');
+  const getIncidents = async (corpoId: number) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
     const response = await authedFetch({
-      url: `${apiUrl}/api/incidents?m=${marcaId}`,
+      url: `${apiUrl}/api/incidents?corpo_id=${corpoId}`,
       init: {
         method: 'GET',
         headers: {
@@ -1178,8 +1343,10 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getIncidents`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('incidents_cache', JSON.stringify(data.incidents));
+    if (data.status && Array.isArray(data.incidents)) {
+      const prev = (await getIncidentsCache()) || [];
+      const merged = mergeIncidentsCacheForCorpo(prev, data.incidents, corpoId);
+      await setIncidentsCache(merged);
     }
   }
 
@@ -1380,38 +1547,66 @@ export default function MarcarIngresoSalidaScreen() {
     navigation.navigate('Home');
   };
 
+  const patchCurrentMarcaHoraSalida = async (marcaId: number, horaSalidaIso: string | null) => {
+    const raw = await AsyncStorage.getItem('current_marca');
+    if (!raw) return;
+    try {
+      const m = JSON.parse(raw);
+      if (Number(m.id) !== Number(marcaId)) return;
+      m.hora_salida_digitada = horaSalidaIso;
+      await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+    } catch {
+      /* ignore */
+    }
+  };
+
   const performRevertLeaving = async (marcaId: number) => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
+      const horaRev = await getHoraAccion();
+      if (!horaRev) {
+        Alert.alert('Error', 'No se pudo obtener la hora del servidor');
+        return;
       }
+      const online = await evaluateInternetConnection();
 
-      const response = await authedFetch({
-        url: `${apiUrl}/api/attendance/${marcaId}/revert-leaving`,
-        init: {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!response) return;
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.status) {
-        Alert.alert('Éxito', 'La salida ha sido revertida correctamente.');
+      if (online) {
+        const data = await revertAttendanceLeaving({
+          marcaId,
+          horaAccion: horaRev,
+          refreshAccessToken,
+          logout,
+        });
+        if (data.status) {
+          await removePendingSalidaActionsForMarca(marcaId);
+          await patchCurrentMarcaHoraSalida(marcaId, null);
+          Alert.alert('Éxito', 'La salida ha sido revertida correctamente.');
+          setRevertMarcaId(null);
+          await fetchAttendanceStatus();
+        } else {
+          Alert.alert('Error', data.message || 'No se pudo revertir la salida.');
+        }
+      } else {
+        const removedSalida = await removePendingSalidaActionsForMarca(marcaId);
+        if (removedSalida > 0) {
+          await patchCurrentMarcaHoraSalida(marcaId, null);
+          Alert.alert(
+            'Modo offline',
+            'Se canceló la salida pendiente de sincronización. No hace falta revertir en el servidor.'
+          );
+        } else {
+          await appendAttendanceAction({
+            type: 'revert_leaving',
+            marcaId,
+            horaAccion: horaRev,
+          });
+          await patchCurrentMarcaHoraSalida(marcaId, null);
+          Alert.alert(
+            'Modo offline',
+            'Revertir salida guardado localmente. Se sincronizará cuando haya conexión.'
+          );
+        }
         setRevertMarcaId(null);
         await fetchAttendanceStatus();
-      } else {
-        Alert.alert('Error', data.message || 'No se pudo revertir la salida.');
       }
     } catch (error) {
       console.error('Error reverting leaving:', error);
@@ -1420,7 +1615,8 @@ export default function MarcarIngresoSalidaScreen() {
   };
 
   const handleRevertLeaving = () => {
-    if (!revertMarcaId) return;
+    const mid = revertMarcaId ?? attendanceData?.marca?.id ?? null;
+    if (mid == null || !Number.isFinite(Number(mid)) || Number(mid) <= 0) return;
 
     Alert.alert(
       'Confirmar',
@@ -1430,7 +1626,7 @@ export default function MarcarIngresoSalidaScreen() {
         {
           text: 'Revertir salida',
           style: 'destructive',
-          onPress: () => performRevertLeaving(revertMarcaId),
+          onPress: () => performRevertLeaving(Number(mid)),
         },
       ],
     );
@@ -1485,17 +1681,27 @@ export default function MarcarIngresoSalidaScreen() {
     try {
       setIsSubmittingAbsentReason(true);
 
-      const networkState = await Network.getNetworkStateAsync();
-
-      let data = null;
-
-      if (networkState.isConnected && networkState.isInternetReachable) {
-        data = await saveAbsentReason({ reason, marcaId: Number(absentMarcaId), refreshAccessToken, logout });
+      if (!(await evaluateInternetConnection())) {
+        Alert.alert(
+          'Sin conexión',
+          'El motivo de ausencia solo puede enviarse con conexión a internet, tras la respuesta del sistema.'
+        );
+        return false;
       }
-      else {
-        await AsyncStorage.setItem('absent_reason_cache', JSON.stringify({ reason, marcaId: Number(absentMarcaId) }));
-        data = { status: true, message: 'Motivo de ausencia registrado correctamente' };
+
+      const horaA = await getHoraAccion();
+      if (!horaA) {
+        Alert.alert('Error', 'No se pudo obtener la hora del servidor');
+        return false;
       }
+
+      const data = await saveAbsentReason({
+        reason,
+        marcaId: Number(absentMarcaId),
+        horaAccion: horaA,
+        refreshAccessToken,
+        logout,
+      });
 
       if (data.status) {
         Alert.alert('Éxito', 'Motivo de ausencia registrado correctamente');
@@ -1516,20 +1722,21 @@ export default function MarcarIngresoSalidaScreen() {
   };
 
   const getNextTime = (nextTime: string) => {
-    const date = new Date(nextTime);
-
-    let hours = date.getUTCHours(); // <-- usa getUTCHours() para evitar ajustes de zona
-    const minutes = date.getUTCMinutes();
-
-    const ampm = hours >= 12 ? "pm" : "am";
-    hours = hours % 12 || 12; // convierte 0 → 12 y 13–23 → 1–11
-
-    const formatted = `${hours}:${minutes.toString().padStart(2, "0")} ${ampm}`;
-    return formatted;
+    const dateSplit = nextTime.split('T');
+    let hours = dateSplit[1].split('.')[0].split(':');
+    let hoursReturn = hours[0] + ':' + hours[1];
+    return hoursReturn;
   };
 
   const getDisability = () => {
     if (!attendanceData) return true;
+
+    if (
+      attendanceData.estado === 'Ingresado' &&
+      attendanceData.marca?.hora_salida_digitada != null
+    ) {
+      return true;
+    }
 
     if (attendanceData.estado === 'Ingresado' && !attendanceData.change_available) return true;
 
@@ -1661,12 +1868,14 @@ export default function MarcarIngresoSalidaScreen() {
   }
 
   const getCorporateVehicles = async (corpoId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('corporate_vehicles_corpo_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
 
     if (!apiUrl) {
       throw new Error('Server URL not configured');
+    }
+
+    if (!(await evaluateInternetConnection())) {
+      return;
     }
 
     const response = await authedFetch({
@@ -1686,39 +1895,8 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getCorporateVehicles`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('corporate_vehicles_corpo_cache', JSON.stringify(data.data));
-    }
-  }
-
-  const getVisitors = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('visitors_actions');
-    await AsyncStorage.removeItem('visitors_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-
-    const response = await authedFetch({
-      url: `${apiUrl}/api/visitors?m=${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    console.log("getVisitors");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getVisitors`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('visitors_cache', JSON.stringify(data.data));
+    if (data.status && Array.isArray(data.data)) {
+      await mergeCorporateVehiclesCorpoCacheForSucursal(corpoId, data.data);
     }
   }
 
@@ -2253,10 +2431,24 @@ export default function MarcarIngresoSalidaScreen() {
               </TouchableOpacity>
             </ThemedView>
           ) : attendanceData ? (
+            minimalOfflineSalidaView && attendanceData.marca?.hora_salida_digitada != null ? (
+              <ThemedView style={styles.contentContainer}>
+                <ThemedView style={{ marginTop: 24, alignItems: 'center' }}>
+                  <ThemedText style={styles.salidaMarcadaMensaje}>
+                    {getActionIcon('warning')} Ya has marcado la salida  { /* Esto debe tener un emoji de alerta */}
+                  </ThemedText>
+                </ThemedView>
+                <ThemedView style={{ alignItems: 'center' }}>
+                  <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
+                    <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              </ThemedView>
+            ) : (
             <ThemedView style={styles.contentContainer}>
               <ThemedView style={styles.infoCard}>
                 <ThemedText style={styles.currentTimeTitle}>Hora actual</ThemedText>
-                <ThemedText style={styles.currentTime}>{attendanceData ? getNextTime(attendanceData?.current_time) : ''}</ThemedText>
+                <ThemedText style={styles.currentTime}>{attendanceData ? getNextTime(attendanceData.current_time) : ''}</ThemedText>
               </ThemedView>
               {/* Work Information Card */}
               <ThemedView style={styles.infoCard}>
@@ -2337,6 +2529,18 @@ export default function MarcarIngresoSalidaScreen() {
                       </ThemedText>
                     </ThemedView>
                   )}
+                  {attendanceData.estado === 'Ingresado' &&
+                    attendanceData.marca.hora_salida_digitada != null && (
+                    <ThemedView style={styles.enterAtContainer}>
+                      <ThemedText style={styles.salidaMarcadaMensaje}>
+                        Ya has marcado la salida
+                      </ThemedText>
+                      <ThemedText style={styles.enterAtLabel}>Fecha y hora de salida:</ThemedText>
+                      <ThemedText style={styles.enterAtText}>
+                        {convertDateToLocal(attendanceData.marca.hora_salida_digitada)}
+                      </ThemedText>
+                    </ThemedView>
+                  )}
                 </ThemedView>
 
                 {/* Next Time */}
@@ -2388,7 +2592,16 @@ export default function MarcarIngresoSalidaScreen() {
                   )}
                 </TouchableOpacity>
               </ThemedView>
+
+              {(revertMarcaId != null || attendanceData.marca.hora_salida_digitada != null) && (
+                <ThemedView style={{ marginTop: 12, alignItems: 'center' }}>
+                  <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
+                    <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              )}
             </ThemedView>
+            )
           ) : null}
         </ThemedView>
       </ScrollView>
@@ -2691,6 +2904,13 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
+  },
+  salidaMarcadaMensaje: {
+    fontSize: 17,
+    color: '#FF3B30',
+    textAlign: 'center',
+    width: '100%',
+    marginBottom: 8,
   },
   enterAtLabel: {
     fontSize: 18,

@@ -9,7 +9,8 @@ import {
   Modal,
   View,
   Platform,
-  Image
+  Image,
+  Dimensions,
 } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
@@ -18,7 +19,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
@@ -30,9 +31,13 @@ import SignatureScreen from "react-native-signature-canvas";
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import * as Network from 'expo-network';
-import { createSurvey as createSurveyAPI, updateSurveySignature } from '@/hooks/surveysFunctions';
+import { createSurvey as createSurveyAPI, updateSurveySignature, updateSurvey as updateSurveyAPI, deleteSurvey as deleteSurveyAPI } from '@/hooks/surveysFunctions';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import {
+  filterSurveysCacheByPuesto,
+  mergeSurveysCacheForPuesto,
+} from '@/hooks/satisfactionSurveysCacheHelpers';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
@@ -53,6 +58,11 @@ interface Survey {
   email_persona_evaluada: string;
   firma_persona_evaluada: string;
   empresa: {
+    id: number;
+    nombre: string;
+  };
+  /** Presente en la respuesta del API aunque no siempre tipado en cliente antiguo */
+  cliente?: {
     id: number;
     nombre: string;
   };
@@ -78,6 +88,48 @@ interface Survey {
   fecha: string;
   evaluaciones: string; // JSON string array
   observations: string;
+}
+
+/** Quita updates pendientes del mismo id de servidor (un solo update encolado). */
+function stripQueuedSurveyUpdatesForServerId(actions: any[], surveyId: number): any[] {
+  const sid = Number(surveyId);
+  if (!Number.isFinite(sid)) return actions;
+  return actions.filter((a: any) => !(a?.type === 'update' && Number(a?.surveyId) === sid));
+}
+
+/** Limpia update/delete pendientes del mismo id antes de encolar delete offline. */
+function stripQueuedSurveyUpdatesAndDeletesForServerId(actions: any[], surveyId: number): any[] {
+  const sid = Number(surveyId);
+  if (!Number.isFinite(sid)) return actions;
+  return actions.filter(
+    (a: any) =>
+      !(
+        (a?.type === 'update' && Number(a?.surveyId) === sid) ||
+        (a?.type === 'delete' && Number(a?.surveyId) === sid)
+      )
+  );
+}
+
+/** Quitar solo `update` erróneos que apunten al id_local del borrador (no toca el pending `create`). */
+function stripErroneousSurveyUpdatesForDraftId(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && a.surveyId != null && String(a.surveyId) === k)
+  );
+}
+
+/** Borrador local eliminado: quita `create` y updates erróneos asociados. */
+function stripQueuedSurveyDraftActions(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) =>
+      !(
+        (a?.type === 'create' && String(a?.id) === k) ||
+        (a?.type === 'update' && a.surveyId != null && String(a.surveyId) === k)
+      )
+  );
 }
 
 interface Question {
@@ -213,6 +265,189 @@ const getQuestionsForDivision = (division: string): Question[] => {
   return QUESTIONS_SEGURIDAD;
 };
 
+/** Normaliza `firma_responsable` (trim, sin espacios internos, quita prefijo data URL si viene). */
+function normalizeFirmaResponsableInput(value: unknown): string {
+  if (value == null) return '';
+  let s = String(value).trim();
+  if (!s) return '';
+  const lower = s.toLowerCase();
+  const b64 = lower.indexOf('base64,');
+  if (b64 !== -1 && lower.startsWith('data:')) {
+    s = s.slice(b64 + 7).trim();
+  }
+  return s.replace(/\s/g, '');
+}
+
+/** Parseo solo para mostrar datos de firma (sin red); si `decodeFirmaFromStoredValue` no devuelve nada. */
+function tryParseFirmaResponsableSync(normalized: string): FirmaData | null {
+  if (!normalized) return null;
+  let inner = normalized;
+  try {
+    inner = atob(normalized);
+  } catch {
+    inner = normalized;
+  }
+  const parts = inner.split(':');
+  if (parts.length !== 5) return null;
+  return {
+    sessionId: parts[0],
+    empleadoId: parts[1],
+    latitud: parts[2],
+    longitud: parts[3],
+    timestamp: parts[4],
+  };
+}
+
+const formatSurveySignatureForDisplay = (value?: string | null) => {
+  if (!value) return '';
+  return value.startsWith('data:') ? value : `data:image/png;base64,${value}`;
+};
+
+function safeFirmaTimestampLabelSurvey(raw: string | undefined): string {
+  if (raw == null || raw === '') return 'N/A';
+  const n = Number(String(raw).trim());
+  if (!Number.isFinite(n)) return 'N/A';
+  let ms = n;
+  if (n > 0 && n < 1e12) ms = n * 1000;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return 'N/A';
+  try {
+    return convertDateTimestampToLocalString(d.toISOString()) || 'N/A';
+  } catch {
+    return 'N/A';
+  }
+}
+
+function decodeFirmaHashSurvey(hash: string): Pick<
+  FirmaData,
+  'sessionId' | 'empleadoId' | 'latitud' | 'longitud' | 'timestamp'
+> | null {
+  try {
+    if (!hash || String(hash).trim().length === 0) return null;
+    const decoded = atob(String(hash));
+    const parts = decoded.split(':');
+    if (parts.length !== 5) return null;
+    const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+    return { sessionId, empleadoId, latitud, longitud, timestamp };
+  } catch {
+    return null;
+  }
+}
+
+function formatSurveyCambioValue(prop: string, value: any): string {
+  if (value == null) return '—';
+  if (prop === 'evaluaciones' && typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return value.length > 500 ? `${value.slice(0, 500)}…` : value;
+    }
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  const s = String(value);
+  if ((prop.includes('firma') || prop === 'firma_responsable') && s.length > 120) {
+    return `${s.slice(0, 120)}…`;
+  }
+  return s.length > 1200 ? `${s.slice(0, 1200)}…` : s;
+}
+
+type FormHierarchyIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+  puestoId: number;
+};
+
+function findHierarchyByPuestoIn(structureArr: any[], puestoId: number): FormHierarchyIds | null {
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto?.id) === Number(puestoId)) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: puesto.id,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findContratoForSucursalIn(structureArr: any[], sucursalId: number): number | null {
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (sucursal.id === sucursalId) {
+              return contrato.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Si el árbol por puesto_id falla, acota por empresa/división/sucursal/puesto que vienen en la encuesta. */
+function findHierarchyFromSurveySnapshot(structureArr: any[], survey: Survey): FormHierarchyIds | null {
+  const wantEmp = survey.empresa?.id;
+  const wantDiv = survey.division?.id;
+  const wantCorpo = survey.sucursal?.id;
+  const wantPuesto = survey.puesto?.id;
+  const wantCliente = survey.cliente?.id;
+  if (!wantPuesto || !Array.isArray(structureArr) || structureArr.length === 0) {
+    return null;
+  }
+  for (const empresa of structureArr) {
+    if (wantEmp != null && empresa.id !== wantEmp) continue;
+    for (const cliente of empresa.clientes || []) {
+      if (wantCliente != null && cliente.id !== wantCliente) continue;
+      for (const division of cliente.division || []) {
+        if (wantDiv != null && division.id !== wantDiv) continue;
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (wantCorpo != null && sucursal.id !== wantCorpo) continue;
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto?.id) === Number(wantPuesto)) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: puesto.id,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 export default function SatisfactionSurveysScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -221,7 +456,7 @@ export default function SatisfactionSurveysScreen() {
   // Data state
   const [surveys, setSurveys] = useState<Survey[]>([]);
   const [puestos, setPuestos] = useState<Puesto[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isListLoading, setIsListLoading] = useState(false);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
   const [isCheckingMarca, setIsCheckingMarca] = useState<boolean>(true);
 
@@ -234,6 +469,11 @@ export default function SatisfactionSurveysScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  const filterPuestoIdRef = useRef<number | null>(null);
+  /** Corpo del filtro para el cual `puestos` en estado proviene ya de API/caché encuestas */
+  const [puestosLoadedForFilterCorpoId, setPuestosLoadedForFilterCorpoId] = useState<number | null>(null);
+
+  const surveyExpandKey = (s: Survey) => (s.id > 0 ? `i:${s.id}` : `l:${s.id_local || '0'}`);
 
   // IDs de current_marca para inicialización
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
@@ -241,7 +481,7 @@ export default function SatisfactionSurveysScreen() {
   const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
-  const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
 
   // Estados para jerarquía seleccionada en el formulario
   const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
@@ -253,6 +493,12 @@ export default function SatisfactionSurveysScreen() {
 
   // Form states
   const [isCreating, setIsCreating] = useState(false);
+  const [editingSurvey, setEditingSurvey] = useState<Survey | null>(null);
+  /** Valor normalizado de firma_responsable del registro en edición (para UI y guardado sin regenerar). */
+  const [editingResponsableFirmaStored, setEditingResponsableFirmaStored] = useState<string | null>(null);
+  const [isCreateSubmitting, setIsCreateSubmitting] = useState(false);
+  const [isEditSubmitting, setIsEditSubmitting] = useState(false);
+  const [deletingSurveyKey, setDeletingSurveyKey] = useState<string | null>(null);
 
   // Form refs
   const empresaEvaluadaRef = useRef<string>('');
@@ -281,6 +527,8 @@ export default function SatisfactionSurveysScreen() {
   const [personSignature, setPersonSignature] = useState<string | null>(null);
   const personSignatureRef = useRef<string | null>(null);
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
+  /** En edición: firma_responsable tal como viene del servidor/cache (sin regenerar). */
+  const editingFirmaResponsableOriginalRef = useRef<string | null>(null);
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
@@ -291,15 +539,11 @@ export default function SatisfactionSurveysScreen() {
   const [formKey, setFormKey] = useState(0);
 
   // Collapsable states
-  const [expandedSurveys, setExpandedSurveys] = useState<Set<number>>(new Set());
-  const [decodedFirmas, setDecodedFirmas] = useState<Map<number, { responsable: FirmaData | null; persona: string | null }>>(new Map());
+  const [expandedSurveys, setExpandedSurveys] = useState<Set<string>>(new Set());
+  const [decodedFirmas, setDecodedFirmas] = useState<Map<string, { responsable: FirmaData | null; persona: string | null }>>(new Map());
 
   // Filters state
   const [filterFecha, setFilterFecha] = useState('');
-  const [filterEmpresaEvaluada, setFilterEmpresaEvaluada] = useState('');
-  const [filterSucursal, setFilterSucursal] = useState('');
-  const [filterPuesto, setFilterPuesto] = useState('');
-  const [filterDivision, setFilterDivision] = useState('');
   const [filterPersonaEvaluada, setFilterPersonaEvaluada] = useState('');
   const [filterCedulaPersonaEvaluada, setFilterCedulaPersonaEvaluada] = useState('');
   const [filterTelefonoPersonaEvaluada, setFilterTelefonoPersonaEvaluada] = useState('');
@@ -317,6 +561,11 @@ export default function SatisfactionSurveysScreen() {
   const [addSignatureManualKey, setAddSignatureManualKey] = useState(0);
   const [isAddSignatureSubmitting, setIsAddSignatureSubmitting] = useState(false);
 
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
+  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+
   // Input refs
   const empresaEvaluadaInputRef = useRef<TextInput>(null);
   const personaNombreInputRef = useRef<TextInput>(null);
@@ -329,9 +578,52 @@ export default function SatisfactionSurveysScreen() {
 
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+    setExpandedCambioId(null);
+  };
+
+  const fetchCambios = useCallback(
+    async (tabla: string, registroId: number) => {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+        return;
+      }
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) throw new Error('Server URL not configured');
+
+        const resp = await authedFetch({
+          url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+          init: {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          refreshAccessToken,
+          logout,
+        });
+
+        if (!resp) return;
+
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.status) {
+          throw new Error(data.message || 'No se pudieron cargar los cambios');
+        }
+        setCambiosItems(Array.isArray(data.data) ? data.data : []);
+        setIsCambiosModalVisible(true);
+      } catch (e: any) {
+        Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+      }
+    },
+    [refreshAccessToken, logout]
+  );
 
   const loadMarcaContext = async () => {
     setIsCheckingMarca(true);
@@ -341,6 +633,7 @@ export default function SatisfactionSurveysScreen() {
       setMarcaClienteId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
+      setMarcaContratoId(null);
       setIsCheckingMarca(false);
       return null;
     }
@@ -351,23 +644,27 @@ export default function SatisfactionSurveysScreen() {
         setMarcaClienteId(null);
         setMarcaCorpoId(null);
         setMarcaPuestoId(null);
+        setMarcaContratoId(null);
         setIsCheckingMarca(false);
         return null;
       }
       setHasCurrentMarca(true);
 
-      // Obtener IDs de empresa, cliente, corpo, puesto y división de current_marca
+      // Obtener IDs de empresa, cliente, corpo, puesto, contrato y división (roleDivision tiene prioridad)
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
       const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-      const divisionIdRaw = current?.division?.id ?? current?.division_id;
+      const divisionIdRaw =
+        current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
+      const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
 
       setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
       setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
       setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
       setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
       setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
 
       // Inicializar también los valores del formulario
       setFormEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
@@ -375,6 +672,7 @@ export default function SatisfactionSurveysScreen() {
       setFormCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
       setFormPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
       setFormDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
+      setFormContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
 
       setIsCheckingMarca(false);
       return current;
@@ -383,6 +681,7 @@ export default function SatisfactionSurveysScreen() {
       setMarcaClienteId(null);
       setMarcaCorpoId(null);
       setMarcaPuestoId(null);
+      setMarcaContratoId(null);
       setIsCheckingMarca(false);
       return null;
     }
@@ -390,8 +689,6 @@ export default function SatisfactionSurveysScreen() {
 
   // Refs para evitar recrear funciones y controlar carga
   const hasLoadedMainStructureRef = useRef(false);
-  const hasLoadedInitialDataRef = useRef(false);
-  const isInitialLoadRef = useRef(true);
 
   const fetchMainStructure = useCallback(async () => {
     // Solo cargar una vez
@@ -483,6 +780,26 @@ export default function SatisfactionSurveysScreen() {
     return sucursal?.puestos || [];
   }, [filterSucursales, filterCorpoId]);
 
+  /** El filtro jerárquico debe usar los puestos del endpoint si el árbol no los trae (caso habitual). */
+  const filterPuestoOptions = useMemo((): Puesto[] => {
+    if (
+      filterCorpoId != null &&
+      puestosLoadedForFilterCorpoId === filterCorpoId &&
+      puestos.length > 0
+    ) {
+      return puestos;
+    }
+    return (filterPuestos || []).map((p: any) => ({
+      id: Number(p.id),
+      nombre:
+        p.nombre != null && String(p.nombre).trim() !== ''
+          ? String(p.nombre)
+          : p.codigo != null
+            ? String(p.codigo)
+            : `Puesto ${p.id}`,
+    }));
+  }, [filterCorpoId, puestosLoadedForFilterCorpoId, puestos, filterPuestos]);
+
   // Nodos computados para estructura jerárquica del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
@@ -522,6 +839,7 @@ export default function SatisfactionSurveysScreen() {
   const fetchPuestosForCorpo = useCallback(async (corpoId: number, forceReload: boolean = false) => {
     // Solo cargar si es un corpo diferente o si se fuerza la recarga
     if (!forceReload && lastLoadedCorpoIdRef.current === corpoId) {
+      setPuestosLoadedForFilterCorpoId(corpoId);
       return;
     }
 
@@ -531,8 +849,15 @@ export default function SatisfactionSurveysScreen() {
         // Cargar desde cache
         const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
         if (puestosCache) {
-          const cachedPuestos = JSON.parse(puestosCache);
-          setPuestos(cachedPuestos);
+          try {
+            const cachedPuestos = JSON.parse(puestosCache);
+            if (Array.isArray(cachedPuestos)) {
+              setPuestos(cachedPuestos);
+              setPuestosLoadedForFilterCorpoId(corpoId);
+            }
+          } catch {
+            /* ignore */
+          }
         }
         lastLoadedCorpoIdRef.current = corpoId;
         return;
@@ -554,6 +879,7 @@ export default function SatisfactionSurveysScreen() {
         const puestosData = await puestosResponse.json();
         if (puestosData.status && puestosData.puestos) {
           setPuestos(puestosData.puestos);
+          setPuestosLoadedForFilterCorpoId(corpoId);
           await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
           lastLoadedCorpoIdRef.current = corpoId;
         }
@@ -566,184 +892,243 @@ export default function SatisfactionSurveysScreen() {
   // Ref para controlar si ya se mostró el alert de modo offline
   const hasShownOfflineAlertRef = useRef(false);
 
-  // Función separada para cargar encuestas (sin cargar puestos)
-  const fetchSurveys = useCallback(async (showOfflineAlert: boolean = true) => {
-    try {
-      setIsLoading(true);
-
-      const isConnected = await getConnectionStatus();
-
-      if (isConnected) {
-        // Con internet: hacer fetch normal
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
-        }
-
-        // Construir parámetros de filtro (jerarquía completa)
-        const params = new URLSearchParams();
-        if (filterEmpresaId) params.append('empresa_id', String(filterEmpresaId));
-        if (filterClienteId) params.append('cliente_id', String(filterClienteId));
-        if (filterDivisionId) params.append('division_id', String(filterDivisionId));
-        if (filterContratoId) params.append('contrato_id', String(filterContratoId));
-        if (filterCorpoId) params.append('corpo_id', String(filterCorpoId));
-        if (filterPuestoId) params.append('puesto_id', String(filterPuestoId));
-
-        // Fetch surveys
-        const surveysResponse = await authedFetch({
-          url: `${apiUrl}/api/encuesta-nps?${params.toString()}`,
-          init: {
-            method: 'GET',
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (!surveysResponse) return;
-
-        const surveysData = await surveysResponse.json();
-
-        if (surveysData.status && surveysData.encuestas) {
-          // Agregar id_local vacío si no existe
-          const surveysWithLocalId = surveysData.encuestas.map((survey: Survey) => ({
-            ...survey,
-            id_local: survey.id_local || '',
-          }));
-          setSurveys(surveysWithLocalId);
-          // Actualizar surveys_cache
-          await AsyncStorage.setItem('surveys_cache', JSON.stringify(surveysWithLocalId));
-        } else {
-          setSurveys([]);
-        }
-        // Resetear el flag cuando hay conexión
-        hasShownOfflineAlertRef.current = false;
-      } else {
-        // Sin internet: cargar desde cache
-        const surveysCache = await AsyncStorage.getItem('surveys_cache');
-        if (surveysCache) {
-          const cachedSurveys = JSON.parse(surveysCache);
-          // Asegurar que todos tengan id_local
-          const surveysWithLocalId = cachedSurveys.map((s: Survey) => ({
-            ...s,
-            id_local: s.id_local || '',
-          }));
-          setSurveys(surveysWithLocalId);
-        } else {
-          setSurveys([]);
-        }
-
-        // Solo mostrar alert en la carga inicial o cuando se restaura la conexión
-        if (showOfflineAlert && !hasShownOfflineAlertRef.current) {
-          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
-          hasShownOfflineAlertRef.current = true;
-        }
+  // Carga encuestas solo por puesto_id (la jerarquía sirve para llegar al puesto sin disparar recargas en cada nivel)
+  const fetchSurveysList = useCallback(
+    async (puestoId: number | null, showOfflineAlert: boolean = true) => {
+      if (!puestoId) {
+        setSurveys([]);
+        setIsListLoading(false);
+        return;
       }
 
-    } catch (err) {
-      console.error('Error fetching surveys:', err);
-      // En caso de error, intentar cargar desde cache
-      try {
+      const pid = Number(puestoId);
+      if (!Number.isFinite(pid) || pid <= 0) {
+        setSurveys([]);
+        setIsListLoading(false);
+        return;
+      }
+
+      const parseSurveysCache = async (): Promise<any[]> => {
         const surveysCache = await AsyncStorage.getItem('surveys_cache');
-        if (surveysCache) {
-          const cachedSurveys = JSON.parse(surveysCache);
-          const surveysWithLocalId = cachedSurveys.map((s: Survey) => ({
+        if (!surveysCache) return [];
+        try {
+          const parsed = JSON.parse(surveysCache);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      };
+
+      try {
+        setIsListLoading(true);
+
+        const isConnected = await getConnectionStatus();
+
+        if (isConnected) {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) {
+            throw new Error('Server URL not configured');
+          }
+
+          const params = new URLSearchParams();
+          params.append('puesto_id', String(pid));
+
+          const surveysResponse = await authedFetch({
+            url: `${apiUrl}/api/encuesta-nps?${params.toString()}`,
+            init: {
+              method: 'GET',
+            },
+            refreshAccessToken,
+            logout,
+          });
+          if (!surveysResponse) return;
+
+          const surveysData = await surveysResponse.json();
+          const fullCache = await parseSurveysCache();
+
+          if (surveysData.status && Array.isArray(surveysData.encuestas)) {
+            const merged = mergeSurveysCacheForPuesto(fullCache, surveysData.encuestas, pid);
+            await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
+            const forList = filterSurveysCacheByPuesto(merged, pid).map((s: Survey) => ({
+              ...s,
+              id_local: s.id_local || '',
+            }));
+            setSurveys(forList);
+          } else {
+            const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
+              ...s,
+              id_local: s.id_local || '',
+            }));
+            setSurveys(forList);
+          }
+          hasShownOfflineAlertRef.current = false;
+        } else {
+          const fullCache = await parseSurveysCache();
+          const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
             ...s,
             id_local: s.id_local || '',
           }));
-          setSurveys(surveysWithLocalId);
+          setSurveys(forList);
+
           if (showOfflineAlert && !hasShownOfflineAlertRef.current) {
-            Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+            Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
             hasShownOfflineAlertRef.current = true;
           }
-        } else {
+        }
+      } catch (err) {
+        console.error('Error fetching surveys:', err);
+        try {
+          const fullCache = await parseSurveysCache();
+          const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
+            ...s,
+            id_local: s.id_local || '',
+          }));
+          setSurveys(forList);
+          if (forList.length > 0 && showOfflineAlert && !hasShownOfflineAlertRef.current) {
+            Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
+            hasShownOfflineAlertRef.current = true;
+          } else if (forList.length === 0 && showOfflineAlert) {
+            Alert.alert('Error', 'No se pudieron cargar las encuestas');
+          }
+        } catch {
           if (showOfflineAlert) {
             Alert.alert('Error', 'No se pudieron cargar las encuestas');
           }
         }
-      } catch (cacheErr) {
-        if (showOfflineAlert) {
-          Alert.alert('Error', 'No se pudieron cargar las encuestas');
-        }
+      } finally {
+        setIsListLoading(false);
       }
-    } finally {
-      setIsLoading(false);
+    },
+    [refreshAccessToken, logout]
+  );
+
+  useEffect(() => {
+    filterPuestoIdRef.current = filterPuestoId;
+  }, [filterPuestoId]);
+
+  useEffect(() => {
+    if (filterCorpoId == null) {
+      setPuestosLoadedForFilterCorpoId(null);
     }
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+  }, [filterCorpoId]);
 
-  // Función para cargar datos iniciales (main_structure y surveys_puestos)
-  // Solo se ejecuta una vez al abrir la ventana
-  const loadInitialData = useCallback(async () => {
-    if (hasLoadedInitialDataRef.current) return;
-    hasLoadedInitialDataRef.current = true;
+  useEffect(() => {
+    if (filterPuestoId == null) return;
+    const pid = Number(filterPuestoId);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    void fetchSurveysList(pid, false);
+  }, [filterPuestoId, fetchSurveysList]);
 
-    const current = await loadMarcaContext();
-    await fetchMainStructure();
-
-    // Inicializar filtros con valores de current_marca después de cargar
-    if (current) {
-      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-
-      if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-        setFilterClienteId(Number(clienteIdRaw));
-      }
-      if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-        setFilterCorpoId(Number(corpoIdRaw));
-        // Cargar puestos para el corpo seleccionado
-        await fetchPuestosForCorpo(Number(corpoIdRaw), true);
-      }
-      if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
-        setFilterPuestoId(Number(puestoIdRaw));
-      }
-    }
-  }, [fetchMainStructure, fetchPuestosForCorpo]);
-
-  // Cargar datos iniciales solo una vez al montar el componente
+  // Cargar estructura, alinear filtros jerárquicos al puesto de current_marca cuando exista en el árbol, y lista solo con puesto_id
   useEffect(() => {
     let isMounted = true;
-    isInitialLoadRef.current = true;
     (async () => {
-      await loadInitialData();
-      // Cargar encuestas después de cargar datos iniciales
-      if (isMounted) {
-        await fetchSurveys();
-        isInitialLoadRef.current = false;
+      const current = await loadMarcaContext();
+      await fetchMainStructure();
+      if (!isMounted) return;
+
+      if (current?.id) {
+        const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+        let tree: any[] = [];
+        try {
+          const treeStr = await AsyncStorage.getItem('main_structure_cache');
+          if (treeStr) {
+            const parsed = JSON.parse(treeStr);
+            if (Array.isArray(parsed)) tree = parsed;
+          }
+        } catch {
+          tree = [];
+        }
+
+        const applyHierarchyPath = (path: FormHierarchyIds) => {
+          setFilterEmpresaId(path.empresaId);
+          setFilterClienteId(path.clienteId);
+          setFilterDivisionId(path.divisionId);
+          setFilterContratoId(path.contratoId);
+          setFilterCorpoId(path.corpoId);
+          setFilterPuestoId(path.puestoId);
+          filterPuestoIdRef.current = path.puestoId;
+        };
+
+        if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
+          const pidNum = Number(puestoIdRaw);
+          if (Number.isFinite(pidNum) && pidNum > 0) {
+            const pathByPuesto = findHierarchyByPuestoIn(tree, pidNum);
+            if (pathByPuesto) {
+              applyHierarchyPath(pathByPuesto);
+              if (isMounted) await fetchPuestosForCorpo(pathByPuesto.corpoId, true);
+            } else {
+              const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+              const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+              const divisionIdRaw =
+                current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
+              const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+              const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+              if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
+                setFilterEmpresaId(Number(empresaIdRaw));
+              }
+              if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
+                setFilterClienteId(Number(clienteIdRaw));
+              }
+              if (divisionIdRaw !== undefined && divisionIdRaw !== null) {
+                setFilterDivisionId(Number(divisionIdRaw));
+              }
+              if (contratoIdRaw !== undefined && contratoIdRaw !== null) {
+                setFilterContratoId(Number(contratoIdRaw));
+              }
+              if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
+                setFilterCorpoId(Number(corpoIdRaw));
+                if (isMounted) await fetchPuestosForCorpo(Number(corpoIdRaw), true);
+              }
+              setFilterPuestoId(pidNum);
+              filterPuestoIdRef.current = pidNum;
+            }
+          }
+        } else {
+          const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+          const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+          const divisionIdRaw =
+            current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
+          const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
+          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+          if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
+            setFilterEmpresaId(Number(empresaIdRaw));
+          }
+          if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
+            setFilterClienteId(Number(clienteIdRaw));
+          }
+          if (divisionIdRaw !== undefined && divisionIdRaw !== null) {
+            setFilterDivisionId(Number(divisionIdRaw));
+          }
+          if (contratoIdRaw !== undefined && contratoIdRaw !== null) {
+            setFilterContratoId(Number(contratoIdRaw));
+          }
+          if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
+            setFilterCorpoId(Number(corpoIdRaw));
+            if (isMounted) await fetchPuestosForCorpo(Number(corpoIdRaw), true);
+          }
+        }
+
       }
     })();
     return () => {
       isMounted = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Solo se ejecuta una vez al montar
-
-  // IMPORTANTE: Al actualizar los filtros solo se actualizan las encuestas
-  // main_structure y puestos NO se recargan cuando cambian los filtros
-  useEffect(() => {
-    // Solo cargar si ya se cargó la estructura inicial y no es la carga inicial
-    if (isInitialLoadRef.current) {
-      return;
-    }
-    if (hasLoadedInitialDataRef.current && (structure.length > 0 || isStructureLoading === false)) {
-      // Solo recargar encuestas cuando cambian los filtros
-      // NO recargar main_structure ni puestos
-      fetchSurveys(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId]);
+  }, []);
 
   useEffect(() => {
     const handler = () => {
-      // Resetear flag de alert cuando se restaura la conexión
       hasShownOfflineAlertRef.current = false;
-      // Mostrar alert si es necesario
-      fetchSurveys(true);
+      const pid = filterPuestoIdRef.current;
+      if (pid) fetchSurveysList(pid, true);
     };
 
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [fetchSurveys]);
+  }, [fetchSurveysList]);
 
   // Función para rastrear el contrato de una sucursal
   const findContratoForSucursal = useCallback((sucursalId: number): number | null => {
@@ -825,6 +1210,41 @@ export default function SatisfactionSurveysScreen() {
     }
   };
 
+  /** Interpreta firma guardada: base64 estándar o cadena `sesión:empleado:lat:lng:timestamp` en claro. */
+  const decodeFirmaFromStoredValue = async (normalized: string): Promise<FirmaData | null> => {
+    if (!normalized) return null;
+    const fromB64 = await decodeFirma(normalized);
+    if (fromB64) return fromB64;
+    let inner = normalized;
+    try {
+      inner = atob(normalized);
+    } catch {
+      inner = normalized;
+    }
+    const parts = inner.split(':');
+    if (parts.length !== 5) return null;
+    const firmaData: FirmaData = {
+      sessionId: parts[0],
+      empleadoId: parts[1],
+      latitud: parts[2],
+      longitud: parts[3],
+      timestamp: parts[4],
+    };
+    try {
+      const empleadoDetalle = await fetchEmpleadoDetalle(parseInt(parts[1], 10));
+      if (empleadoDetalle) firmaData.empleadoDetalle = empleadoDetalle;
+    } catch {
+      /* ignore */
+    }
+    return firmaData;
+  };
+
+  const clearResponsableFirma = () => {
+    setFirmaResponsable(null);
+    setEditingResponsableFirmaStored(null);
+    editingFirmaResponsableOriginalRef.current = null;
+  };
+
   const generateResponsableSignature = async () => {
     if (!employee) {
       Alert.alert('Error', 'No se encontró la información del empleado');
@@ -891,10 +1311,6 @@ export default function SatisfactionSurveysScreen() {
 
   const resetAllFilters = () => {
     setFilterFecha('');
-    setFilterEmpresaEvaluada('');
-    setFilterSucursal('');
-    setFilterPuesto('');
-    setFilterDivision('');
     setFilterPersonaEvaluada('');
     setFilterCedulaPersonaEvaluada('');
     setFilterTelefonoPersonaEvaluada('');
@@ -902,6 +1318,16 @@ export default function SatisfactionSurveysScreen() {
     setFilterResponsableNombre('');
     setFilterResponsableCedula('');
     setFilterObservations('');
+    setFilterEmpresaId(null);
+    setFilterClienteId(null);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    setFilterCorpoId(null);
+    setFilterPuestoId(null);
+    filterPuestoIdRef.current = null;
+    setPuestos([]);
+    setPuestosLoadedForFilterCorpoId(null);
+    setSurveys([]);
   };
 
   const handleFilterFechaChange = (event: any, selectedDate?: Date) => {
@@ -917,22 +1343,6 @@ export default function SatisfactionSurveysScreen() {
     const matchesFecha =
       !filterFecha.trim() ||
       survey.fecha?.split('T')[0] === filterFecha;
-
-    const matchesEmpresaEvaluada =
-      !filterEmpresaEvaluada.trim() ||
-      survey.empresa_evaluada?.toLowerCase().includes(filterEmpresaEvaluada.toLowerCase());
-
-    const matchesSucursal =
-      !filterSucursal.trim() ||
-      survey.sucursal?.nombre?.toLowerCase().includes(filterSucursal.toLowerCase());
-
-    const matchesPuesto =
-      !filterPuesto.trim() ||
-      survey.puesto?.nombre?.toLowerCase().includes(filterPuesto.toLowerCase());
-
-    const matchesDivision =
-      !filterDivision.trim() ||
-      survey.division?.nombre?.toLowerCase().includes(filterDivision.toLowerCase());
 
     const matchesPersonaEvaluada =
       !filterPersonaEvaluada.trim() ||
@@ -963,10 +1373,6 @@ export default function SatisfactionSurveysScreen() {
       (survey.observations && survey.observations.toLowerCase().includes(filterObservations.toLowerCase()));
 
     return matchesFecha &&
-      matchesEmpresaEvaluada &&
-      matchesSucursal &&
-      matchesPuesto &&
-      matchesDivision &&
       matchesPersonaEvaluada &&
       matchesCedulaPersonaEvaluada &&
       matchesTelefonoPersonaEvaluada &&
@@ -984,16 +1390,33 @@ export default function SatisfactionSurveysScreen() {
   };
 
   const startCreating = async () => {
+    setEditingSurvey(null);
     setIsCreating(true);
     setFormKey(prev => prev + 1);
     resetForm();
 
-    // Inicializar jerarquía con valores de current_marca
-    setFormEmpresaId(marcaEmpresaId);
-    setFormClienteId(marcaClienteId);
-    setFormDivisionId(marcaDivisionId);
-    setFormCorpoId(marcaCorpoId);
-    setFormPuestoId(marcaPuestoId);
+    const current = await loadMarcaContext();
+    if (!current?.id) {
+      setIsCreating(false);
+      Alert.alert('Error', 'No se encontró la marca actual');
+      return;
+    }
+
+    const clienteIdMarca =
+      current?.cliente?.id ?? current?.cliente_id;
+    const divisionIdMarca =
+      current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
+    const corpoIdMarca = current?.corpo?.id ?? current?.corpo_id;
+    const puestoIdMarca = current?.puesto?.id ?? current?.puesto_id;
+
+    const clienteIdNum =
+      clienteIdMarca !== undefined && clienteIdMarca !== null && clienteIdMarca !== ''
+        ? Number(clienteIdMarca)
+        : null;
+    const divisionIdNum =
+      divisionIdMarca !== undefined && divisionIdMarca !== null && divisionIdMarca !== ''
+        ? Number(divisionIdMarca)
+        : null;
 
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
@@ -1001,11 +1424,9 @@ export default function SatisfactionSurveysScreen() {
       return;
     }
 
-    // Si hay cliente seleccionado, llenar empresa_evaluado
-    if (marcaClienteId) {
-      // Buscar el cliente en la estructura
+    if (clienteIdNum != null && Number.isFinite(clienteIdNum) && clienteIdNum > 0) {
       for (const empresa of structure) {
-        const cliente = empresa.clientes?.find((c: any) => c.id === marcaClienteId);
+        const cliente = empresa.clientes?.find((c: any) => c.id === clienteIdNum);
         if (cliente) {
           empresaEvaluadaRef.current = cliente.nombre;
           break;
@@ -1013,12 +1434,10 @@ export default function SatisfactionSurveysScreen() {
       }
     }
 
-    // Si hay división seleccionada, determinar el formulario automáticamente
-    if (marcaDivisionId) {
-      // Buscar la división en la estructura
+    if (divisionIdNum != null && Number.isFinite(divisionIdNum) && divisionIdNum > 0) {
       for (const empresa of structure) {
         for (const cliente of empresa.clientes || []) {
-          const division = cliente.division?.find((d: any) => d.id === marcaDivisionId);
+          const division = cliente.division?.find((d: any) => d.id === divisionIdNum);
           if (division) {
             const divisionName = division.nombre;
             // Establecer selectedDivision basado en el nombre
@@ -1038,39 +1457,197 @@ export default function SatisfactionSurveysScreen() {
         if (divisionRef.current) break;
       }
     } else {
-      // Por defecto, establecer Seguridad
       setSelectedDivision('Seguridad');
       divisionRef.current = 'Seguridad';
     }
 
-    // Set default values
-    if (puestos.length > 0) {
-      puestoIdRef.current = puestos[0].id;
-      setSelectedPuesto(puestos[0].id);
+    const resolvedPuestoNum =
+      puestoIdMarca !== undefined && puestoIdMarca !== null && puestoIdMarca !== ''
+        ? Number(puestoIdMarca)
+        : null;
+    if (resolvedPuestoNum != null && Number.isFinite(resolvedPuestoNum) && resolvedPuestoNum > 0) {
+      puestoIdRef.current = resolvedPuestoNum;
+      setSelectedPuesto(resolvedPuestoNum);
+    } else if (puestos.length > 0) {
+      const firstId = puestos[0].id;
+      puestoIdRef.current = firstId;
+      setSelectedPuesto(firstId);
+      setFormPuestoId(firstId);
     }
 
     const today = new Date(horaAccion);
     setFechaEncuesta(today);
     fechaEncuestaRef.current = formatDateToISO(today);
 
-    // Set employee data
     if (employee) {
       responsableNombreRef.current = employee.name || '';
       responsableCedulaRef.current = employee.cedula || '';
     }
 
-    // Generate signature
     generateResponsableSignature();
 
-    // Si hay corpo seleccionado, cargar puestos
-    if (marcaCorpoId) {
-      fetchPuestosForCorpo(marcaCorpoId, true);
+    const corpoToFetch =
+      corpoIdMarca !== undefined && corpoIdMarca !== null && corpoIdMarca !== ''
+        ? Number(corpoIdMarca)
+        : null;
+    if (corpoToFetch != null && Number.isFinite(corpoToFetch) && corpoToFetch > 0) {
+      fetchPuestosForCorpo(corpoToFetch, true);
     }
   };
 
   const cancelCreating = () => {
     setIsCreating(false);
+    setEditingSurvey(null);
+    setEditingResponsableFirmaStored(null);
     resetForm();
+  };
+
+  const startEditing = async (survey: Survey) => {
+    setIsCreating(false);
+    setEditingSurvey(survey);
+
+    const frNorm = normalizeFirmaResponsableInput(
+      (survey as any).firma_responsable ?? (survey as any).firmaResponsable
+    );
+    setEditingResponsableFirmaStored(frNorm.length > 0 ? frNorm : null);
+    editingFirmaResponsableOriginalRef.current = frNorm.length > 0 ? frNorm : null;
+
+    /* 1) Refs y estado que no dependen de red: antes de cualquier await para que el primer render no quede vacío. */
+    empresaEvaluadaRef.current = survey.empresa_evaluada || '';
+    personaNombreRef.current = survey.persona_evaluada || '';
+    personaCedulaRef.current = survey.cedula_persona_evaluada || '';
+    personaTelefonoRef.current = survey.telefono_persona_evaluada || '';
+    personaEmailRef.current = survey.email_persona_evaluada || '';
+    observacionesRef.current = survey.observations || '';
+    puestoIdRef.current = survey.puesto?.id || 0;
+    setSelectedPuesto(survey.puesto?.id || 0);
+
+    const divName = survey.division?.nombre || '';
+    if (divName === 'Seguridad' || divName.toLowerCase().includes('seguridad')) {
+      setSelectedDivision('Seguridad');
+      divisionRef.current = 'Seguridad';
+    } else if (
+      divName === 'Aseo & Limpieza' ||
+      divName === 'Aseo y limpieza' ||
+      divName.toLowerCase().includes('aseo') ||
+      divName.toLowerCase().includes('limpieza')
+    ) {
+      setSelectedDivision('Aseo & Limpieza');
+      divisionRef.current = 'Aseo & Limpieza';
+    } else {
+      setSelectedDivision('');
+      divisionRef.current = '';
+    }
+
+    try {
+      const arr = JSON.parse(survey.evaluaciones || '[]');
+      const ans: { [key: number]: string | number } = {};
+      if (Array.isArray(arr)) {
+        arr.forEach((ev: any, i: number) => {
+          const v = ev.value ?? ev.result ?? '';
+          ans[i] = v;
+        });
+      }
+      setAnswers(ans);
+      answersRef.current = ans;
+    } catch {
+      setAnswers({});
+      answersRef.current = {};
+    }
+
+    if (survey.firma_persona_evaluada?.trim()) {
+      const f = survey.firma_persona_evaluada.trim();
+      const uri = f.startsWith('data:') ? f : `data:image/png;base64,${f}`;
+      setPersonSignature(uri);
+      personSignatureRef.current = uri;
+    } else {
+      setPersonSignature(null);
+      personSignatureRef.current = null;
+    }
+
+    const fd = survey.fecha ? new Date(survey.fecha) : new Date();
+    setFechaEncuesta(fd);
+    fechaEncuestaRef.current = survey.fecha || formatDateToISO(fd);
+
+    responsableNombreRef.current = survey.responsable?.nombre || '';
+    responsableCedulaRef.current = survey.responsable?.cedula || '';
+
+    /* 2) Estructura: estado en memoria o caché (evita jerarquía vacía si el state aún no hidrató). */
+    let structureArr: any[] = Array.isArray(structure) && structure.length > 0 ? structure : [];
+    if (!structureArr.length) {
+      try {
+        const raw = await AsyncStorage.getItem('main_structure_cache');
+        if (raw) {
+          const p = JSON.parse(raw);
+          if (Array.isArray(p)) structureArr = p;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const puestoId = survey.puesto?.id;
+    let h: FormHierarchyIds | null =
+      puestoId && structureArr.length > 0 ? findHierarchyByPuestoIn(structureArr, puestoId) : null;
+    if (!h && structureArr.length > 0) {
+      h = findHierarchyFromSurveySnapshot(structureArr, survey);
+    }
+
+    if (h) {
+      setFormEmpresaId(h.empresaId);
+      setFormClienteId(h.clienteId);
+      setFormDivisionId(h.divisionId);
+      setFormContratoId(h.contratoId);
+      setFormCorpoId(h.corpoId);
+      setFormPuestoId(h.puestoId);
+    } else {
+      setFormEmpresaId(survey.empresa?.id ?? null);
+      setFormClienteId(survey.cliente?.id ?? null);
+      setFormDivisionId(survey.division?.id ?? null);
+      const corpoId = survey.sucursal?.id ?? null;
+      setFormCorpoId(corpoId);
+      setFormPuestoId(survey.puesto?.id ?? null);
+      const contratoId =
+        corpoId != null ? findContratoForSucursalIn(structureArr, corpoId) : null;
+      setFormContratoId(contratoId);
+    }
+
+    const corpoForPuestos = survey.sucursal?.id;
+    if (corpoForPuestos) {
+      await fetchPuestosForCorpo(corpoForPuestos, true);
+    }
+
+    if (frNorm.length > 0) {
+      let fr = await decodeFirmaFromStoredValue(frNorm);
+      if (!fr) {
+        fr = tryParseFirmaResponsableSync(frNorm);
+      }
+      setFirmaResponsable(fr);
+    } else {
+      setFirmaResponsable(null);
+    }
+
+    /* 3) Forzar remount de TextInput cuando refs ya tienen el valor correcto (después de awaits). */
+    setFormKey((k) => k + 1);
+
+    requestAnimationFrame(() => {
+      const e = survey.empresa_evaluada || '';
+      const n = survey.persona_evaluada || '';
+      const c = survey.cedula_persona_evaluada || '';
+      const t = survey.telefono_persona_evaluada || '';
+      const em = survey.email_persona_evaluada || '';
+      const o = survey.observations || '';
+      const rn = survey.responsable?.nombre || '';
+      const rc = survey.responsable?.cedula || '';
+      empresaEvaluadaInputRef.current?.setNativeProps({ text: e });
+      personaNombreInputRef.current?.setNativeProps({ text: n });
+      personaCedulaInputRef.current?.setNativeProps({ text: c });
+      personaTelefonoInputRef.current?.setNativeProps({ text: t });
+      personaEmailInputRef.current?.setNativeProps({ text: em });
+      observacionesInputRef.current?.setNativeProps({ text: o });
+      responsableNombreInputRef.current?.setNativeProps({ text: rn });
+      responsableCedulaInputRef.current?.setNativeProps({ text: rc });
+    });
   };
 
   const resetForm = () => {
@@ -1090,6 +1667,8 @@ export default function SatisfactionSurveysScreen() {
     setPersonSignature(null);
     personSignatureRef.current = null;
     setFirmaResponsable(null);
+    editingFirmaResponsableOriginalRef.current = null;
+    setEditingResponsableFirmaStored(null);
     setSignatureKey(prev => prev + 1);
     setIsSignatureModalVisible(false);
     setTempSignature(null);
@@ -1142,6 +1721,10 @@ export default function SatisfactionSurveysScreen() {
     }
 
     if (!puestoIdRef.current || puestoIdRef.current === 0) {
+      const fromForm = formPuestoId != null && Number(formPuestoId) > 0 ? Number(formPuestoId) : null;
+      if (fromForm) puestoIdRef.current = fromForm;
+    }
+    if (!puestoIdRef.current || puestoIdRef.current === 0) {
       Alert.alert('Error', 'Debe seleccionar un puesto');
       return;
     }
@@ -1186,6 +1769,7 @@ export default function SatisfactionSurveysScreen() {
         {
           text: 'Confirmar',
           onPress: async () => {
+            setIsCreateSubmitting(true);
             try {
               const currentMarca = await AsyncStorage.getItem('current_marca');
               if (!currentMarca) {
@@ -1298,7 +1882,9 @@ export default function SatisfactionSurveysScreen() {
                   Alert.alert('Éxito', data.message || 'Encuesta creada correctamente');
                   setIsCreating(false);
                   resetForm();
-                  await fetchSurveys(true);
+                  const pid =
+                    filterPuestoIdRef.current ?? formPuestoId ?? puestoIdRef.current ?? null;
+                  if (pid) await fetchSurveysList(pid, true);
                 } else {
                   Alert.alert('Error', data.message || 'Error al crear la encuesta');
                 }
@@ -1310,13 +1896,16 @@ export default function SatisfactionSurveysScreen() {
                 // Crear entrada en surveys_actions
                 const actionsStr = await AsyncStorage.getItem('surveys_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
+                const nextActions = actions.filter(
+                  (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+                );
+                nextActions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
                   id: localId,
                   type: 'create',
                 });
-                await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
+                await AsyncStorage.setItem('surveys_actions', JSON.stringify(nextActions));
 
                 // Obtener puesto seleccionado para el cache
                 const selectedPuesto = puestos.find(p => p.id === puestoIdRef.current);
@@ -1368,16 +1957,397 @@ export default function SatisfactionSurveysScreen() {
                 Alert.alert('Modo Offline', 'Encuesta registrada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
                 resetForm();
-                await fetchSurveys();
+                const pid =
+                  filterPuestoIdRef.current ?? formPuestoId ?? puestoIdRef.current ?? null;
+                if (pid) await fetchSurveysList(pid, false);
               }
             } catch (err) {
               console.error('Error creating survey:', err);
               Alert.alert('Error', 'No se pudo crear la encuesta');
+            } finally {
+              setIsCreateSubmitting(false);
             }
           }
         }
       ]
     );
+  };
+
+  const getFirmaResponsableBase64ForSave = (): string | null => {
+    if (firmaResponsable) {
+      return btoa(
+        `${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`
+      );
+    }
+    const stored =
+      editingResponsableFirmaStored?.trim() || editingFirmaResponsableOriginalRef.current?.trim();
+    if (!stored) return null;
+    try {
+      atob(stored);
+      return stored;
+    } catch {
+      try {
+        return btoa(stored);
+      } catch {
+        return stored;
+      }
+    }
+  };
+
+  const saveSurveyEdit = async () => {
+    if (!editingSurvey) return;
+
+    if (!empresaEvaluadaRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar el nombre de la empresa evaluada');
+      return;
+    }
+    if (!personaNombreRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar el nombre de la persona que llena la encuesta');
+      return;
+    }
+    if (!personaCedulaRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar la cédula de la persona que llena la encuesta');
+      return;
+    }
+    if (!personaTelefonoRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar el teléfono de la persona que llena la encuesta');
+      return;
+    }
+    if (!personaEmailRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar el email de la persona que llena la encuesta');
+      return;
+    }
+    if (!puestoIdRef.current || puestoIdRef.current === 0) {
+      const fromForm = formPuestoId != null && Number(formPuestoId) > 0 ? Number(formPuestoId) : null;
+      if (fromForm) puestoIdRef.current = fromForm;
+    }
+    if (!puestoIdRef.current || puestoIdRef.current === 0) {
+      Alert.alert('Error', 'Debe seleccionar un puesto');
+      return;
+    }
+    if (!fechaEncuestaRef.current) {
+      Alert.alert('Error', 'Debe seleccionar la fecha de la encuesta');
+      return;
+    }
+    const currentQuestionsEd = getQuestionsForDivision(selectedDivision);
+    for (let i = 0; i < currentQuestionsEd.length; i++) {
+      const answer = answersRef.current[i] || answers[i];
+      if (currentQuestionsEd[i].inputs.required && !answer) {
+        Alert.alert('Error', `Debe responder la pregunta ${i + 1}`);
+        return;
+      }
+    }
+    if (!responsableNombreRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar el nombre del responsable');
+      return;
+    }
+    if (!responsableCedulaRef.current.trim()) {
+      Alert.alert('Error', 'Debe ingresar la cédula del responsable');
+      return;
+    }
+    if (!getFirmaResponsableBase64ForSave()) {
+      Alert.alert('Error', 'La encuesta no tiene firma del responsable para conservar.');
+      return;
+    }
+
+    Alert.alert('Confirmar cambios', '¿Está seguro de que desea guardar los cambios de esta encuesta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Confirmar',
+        onPress: async () => {
+          setIsEditSubmitting(true);
+          try {
+            const currentMarca = await AsyncStorage.getItem('current_marca');
+            if (!currentMarca) {
+              Alert.alert('Error', 'No se encontró la marca actual');
+              return;
+            }
+            const currentMarcaData = JSON.parse(currentMarca);
+
+            const currentQuestions = getQuestionsForDivision(selectedDivision);
+            const evaluaciones: Answer[] = currentQuestions.map((question, index) => ({
+              question: question.title,
+              value: answersRef.current[index] || answers[index] || '',
+            }));
+
+            const personSignatureBase64 = personSignatureRef.current || personSignature || '';
+            const firmaResponsableBase64 = getFirmaResponsableBase64ForSave();
+            if (!firmaResponsableBase64) {
+              Alert.alert('Error', 'No hay firma del responsable para enviar.');
+              return;
+            }
+
+            const empresaId = formEmpresaId;
+            const clienteId = formClienteId;
+            const corpoId = formCorpoId;
+            const puestoId = formPuestoId;
+            let divisionId = formDivisionId;
+
+            if (!divisionId && formClienteId) {
+              const divisionName = selectedDivision;
+              if (divisionName === 'Seguridad' || divisionName === 'Aseo & Limpieza') {
+                for (const empresa of structure) {
+                  for (const cliente of empresa.clientes || []) {
+                    if (cliente.id === formClienteId) {
+                      const division = cliente.division?.find((d: any) => {
+                        const dName = d.nombre;
+                        if (divisionName === 'Seguridad') {
+                          return dName === 'Seguridad' || dName.toLowerCase().includes('seguridad');
+                        }
+                        if (divisionName === 'Aseo & Limpieza') {
+                          return (
+                            dName === 'Aseo & Limpieza' ||
+                            dName === 'Aseo y limpieza' ||
+                            dName.toLowerCase().includes('aseo') ||
+                            dName.toLowerCase().includes('limpieza')
+                          );
+                        }
+                        return false;
+                      });
+                      if (division) {
+                        divisionId = division.id;
+                        break;
+                      }
+                    }
+                  }
+                  if (divisionId) break;
+                }
+              }
+            }
+
+            let contratoId = formContratoId;
+            if (corpoId && !contratoId) {
+              contratoId = findContratoForSucursal(corpoId);
+            }
+
+            if (!empresaId || !clienteId || !divisionId || !corpoId || !puestoId) {
+              Alert.alert(
+                'Error',
+                'Faltan datos de la jerarquía. Por favor, complete la selección de Empresa, Cliente, División, Sucursal y Puesto en el formulario.'
+              );
+              return;
+            }
+
+            const requestBody = {
+              empresa_id: empresaId,
+              cliente_id: clienteId,
+              division_id: divisionId,
+              corpo_id: corpoId,
+              puesto_id: puestoId,
+              fecha: fechaEncuestaRef.current,
+              evaluaciones: JSON.stringify(evaluaciones),
+              persona_evaluada: personaNombreRef.current,
+              cedula_persona_evaluada: personaCedulaRef.current,
+              telefono_persona_evaluada: personaTelefonoRef.current,
+              email_persona_evaluada: personaEmailRef.current,
+              nombre_responsable: responsableNombreRef.current,
+              cedula_responsable: responsableCedulaRef.current,
+              firma_responsable: firmaResponsableBase64,
+              firma_persona_evaluada: personSignatureBase64,
+              observaciones: observacionesRef.current.trim() || '-',
+              empresa_evaluada: empresaEvaluadaRef.current,
+              division: divisionRef.current,
+            };
+
+            const survey = editingSurvey;
+
+            if (survey.id > 0) {
+              const isConnected = await getConnectionStatus();
+              if (isConnected) {
+                const data = await updateSurveyAPI({
+                  surveyId: survey.id,
+                  requestData: requestBody,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (data.status) {
+                  Alert.alert('Éxito', data.message || 'Encuesta actualizada correctamente');
+                  setEditingSurvey(null);
+                  resetForm();
+                  const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
+                  if (pid) await fetchSurveysList(pid, true);
+                } else {
+                  Alert.alert('Error', data.message || 'Error al actualizar la encuesta');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('surveys_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = stripQueuedSurveyUpdatesForServerId(actions, survey.id);
+                actions.push({
+                  type: 'update',
+                  surveyId: survey.id,
+                  requestData: requestBody,
+                  marcaId: currentMarcaData.id,
+                });
+                await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
+                const cacheStr = await AsyncStorage.getItem('surveys_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const updated = cache.map((s: Survey) => {
+                    if (s.id !== survey.id) return s;
+                    return {
+                      ...s,
+                      ...{
+                        persona_evaluada: personaNombreRef.current,
+                        empresa_evaluada: empresaEvaluadaRef.current,
+                        cedula_persona_evaluada: personaCedulaRef.current,
+                        telefono_persona_evaluada: personaTelefonoRef.current,
+                        email_persona_evaluada: personaEmailRef.current,
+                        firma_persona_evaluada: personSignatureBase64,
+                        firma_responsable: firmaResponsableBase64,
+                        fecha: fechaEncuestaRef.current,
+                        evaluaciones: JSON.stringify(evaluaciones),
+                        observations: observacionesRef.current.trim() || '-',
+                        responsable: {
+                          nombre: responsableNombreRef.current,
+                          cedula: responsableCedulaRef.current,
+                        },
+                      },
+                    };
+                  });
+                  await AsyncStorage.setItem('surveys_cache', JSON.stringify(updated));
+                }
+                Alert.alert('Modo Offline', 'Cambios guardados localmente. Se sincronizarán al recuperar conexión.');
+                setEditingSurvey(null);
+                resetForm();
+                const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
+                if (pid) await fetchSurveysList(pid, false);
+              }
+            } else {
+              const actionsStr = await AsyncStorage.getItem('surveys_actions');
+              let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+              if (!Array.isArray(actions)) actions = [];
+              actions = stripErroneousSurveyUpdatesForDraftId(actions, survey.id_local);
+              const idx = actions.findIndex(
+                (a: any) => a.type === 'create' && String(a.id) === String(survey.id_local)
+              );
+              if (idx < 0) {
+                Alert.alert('Error', 'No se encontró el borrador local para actualizar.');
+                return;
+              }
+              const offlineBody = {
+                ...requestBody,
+                marca_id: currentMarcaData.id,
+              };
+              actions[idx].requestData = offlineBody;
+              await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
+              const cacheStr = await AsyncStorage.getItem('surveys_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updated = cache.map((s: Survey) => {
+                  if (s.id_local !== survey.id_local) return s;
+                  return {
+                    ...s,
+                    persona_evaluada: personaNombreRef.current,
+                    empresa_evaluada: empresaEvaluadaRef.current,
+                    cedula_persona_evaluada: personaCedulaRef.current,
+                    telefono_persona_evaluada: personaTelefonoRef.current,
+                    email_persona_evaluada: personaEmailRef.current,
+                    firma_persona_evaluada: personSignatureBase64,
+                    firma_responsable: firmaResponsableBase64,
+                    fecha: fechaEncuestaRef.current,
+                    evaluaciones: JSON.stringify(evaluaciones),
+                    observations: observacionesRef.current.trim() || '-',
+                    responsable: {
+                      nombre: responsableNombreRef.current,
+                      cedula: responsableCedulaRef.current,
+                    },
+                  };
+                });
+                await AsyncStorage.setItem('surveys_cache', JSON.stringify(updated));
+              }
+              Alert.alert('Éxito', 'Borrador actualizado.');
+              setEditingSurvey(null);
+              resetForm();
+              const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
+              if (pid) await fetchSurveysList(pid, false);
+            }
+          } catch (err) {
+            console.error('Error updating survey:', err);
+            Alert.alert('Error', 'No se pudo guardar la encuesta');
+          } finally {
+            setIsEditSubmitting(false);
+          }
+        },
+      },
+    ]);
+  };
+
+  const confirmDeleteSurvey = (survey: Survey) => {
+    const rowKey = surveyExpandKey(survey);
+    Alert.alert('Eliminar encuesta', '¿Está seguro de que desea eliminar este registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingSurveyKey(rowKey);
+          try {
+            if (survey.id > 0) {
+              const isConnected = await getConnectionStatus();
+              if (isConnected) {
+                const res = await deleteSurveyAPI({
+                  surveyId: survey.id,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (res.status) {
+                  Alert.alert('Éxito', res.message || 'Encuesta eliminada');
+                  const pid = filterPuestoIdRef.current;
+                  if (pid) await fetchSurveysList(pid, false);
+                } else {
+                  Alert.alert('Error', res.message || 'No se pudo eliminar');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('surveys_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = stripQueuedSurveyUpdatesAndDeletesForServerId(actions, survey.id);
+                actions.push({ type: 'delete', surveyId: survey.id });
+                await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
+                const cacheStr = await AsyncStorage.getItem('surveys_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  await AsyncStorage.setItem(
+                    'surveys_cache',
+                    JSON.stringify(cache.filter((s: Survey) => s.id !== survey.id))
+                  );
+                }
+                Alert.alert('Modo Offline', 'Eliminación pendiente de sincronización.');
+                const pid = filterPuestoIdRef.current;
+                if (pid) await fetchSurveysList(pid, false);
+              }
+            } else {
+              const actionsStr = await AsyncStorage.getItem('surveys_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const filtered = stripQueuedSurveyDraftActions(
+                Array.isArray(actions) ? actions : [],
+                survey.id_local
+              );
+              if (filtered.length === 0) await AsyncStorage.removeItem('surveys_actions');
+              else await AsyncStorage.setItem('surveys_actions', JSON.stringify(filtered));
+              const cacheStr = await AsyncStorage.getItem('surveys_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                await AsyncStorage.setItem(
+                  'surveys_cache',
+                  JSON.stringify(cache.filter((s: Survey) => s.id_local !== survey.id_local))
+                );
+              }
+              Alert.alert('Éxito', 'Registro local eliminado.');
+              const pid = filterPuestoIdRef.current;
+              if (pid) await fetchSurveysList(pid, false);
+            }
+          } catch (e) {
+            console.error(e);
+            Alert.alert('Error', 'No se pudo eliminar la encuesta');
+          } finally {
+            setDeletingSurveyKey(null);
+          }
+        },
+      },
+    ]);
   };
 
   const generateDateTime = (timestamp: string) => {
@@ -1510,12 +2480,14 @@ export default function SatisfactionSurveysScreen() {
                 const personaUri = sig.startsWith('data:') ? sig : `data:image/png;base64,${sig}`;
                 setDecodedFirmas((prev) => {
                   const next = new Map(prev);
-                  const existing = next.get(survey.id) || { responsable: null, persona: null };
-                  next.set(survey.id, { ...existing, persona: personaUri });
+                  const ek = surveyExpandKey(survey);
+                  const existing = next.get(ek) || { responsable: null, persona: null };
+                  next.set(ek, { ...existing, persona: personaUri });
                   return next;
                 });
                 closeAddSignatureModal();
-                await fetchSurveys(true);
+                const pid = filterPuestoIdRef.current;
+                if (pid) await fetchSurveysList(pid, true);
                 Alert.alert('Éxito', result.message || 'Firma actualizada correctamente');
               } else {
                 Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
@@ -1571,7 +2543,11 @@ export default function SatisfactionSurveysScreen() {
 
   // Inicializar respuestas con valor por defecto (5 estrellas) cuando se carga el formulario o cambia la división
   useEffect(() => {
-    if (formDivisionId && (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') && isCreating) {
+    if (
+      formDivisionId &&
+      (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') &&
+      (isCreating || editingSurvey)
+    ) {
       const currentQuestions = getQuestionsForDivision(selectedDivision);
       setAnswers(prevAnswers => {
         const newAnswers = { ...prevAnswers };
@@ -1590,7 +2566,7 @@ export default function SatisfactionSurveysScreen() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formDivisionId, selectedDivision, isCreating]);
+  }, [formDivisionId, selectedDivision, isCreating, editingSurvey]);
 
   const renderStarRating = (questionIndex: number, maxStars: number) => {
     // Si no hay valor, usar el máximo (todas las estrellas marcadas por defecto)
@@ -1682,36 +2658,29 @@ export default function SatisfactionSurveysScreen() {
     navigation.navigate('Home');
   };
 
-  const toggleSurveyExpansion = async (surveyId: number, survey: Survey) => {
-    const isExpanded = expandedSurveys.has(surveyId);
+  const toggleSurveyExpansion = async (survey: Survey) => {
+    const key = surveyExpandKey(survey);
+    const isExpanded = expandedSurveys.has(key);
 
     if (isExpanded) {
-      // Collapse
       const newExpanded = new Set(expandedSurveys);
-      newExpanded.delete(surveyId);
+      newExpanded.delete(key);
       setExpandedSurveys(newExpanded);
     } else {
-      // Expand - decode firmas if not already decoded
       const newExpanded = new Set(expandedSurveys);
-      newExpanded.add(surveyId);
+      newExpanded.add(key);
       setExpandedSurveys(newExpanded);
 
-      // Decode firmas if not already decoded
-      if (!decodedFirmas.has(surveyId)) {
+      if (!decodedFirmas.has(key)) {
         try {
-          // Decode responsable firma
           let responsableFirma: FirmaData | null = null;
           if (survey.firma_responsable) {
             responsableFirma = await decodeFirma(survey.firma_responsable);
           }
 
-          // Persona firma is already base64 image
-          // Ensure it has the correct format for display
           let personaFirma: string | null = null;
           if (survey.firma_persona_evaluada) {
             const firma = survey.firma_persona_evaluada.trim();
-            // If it already has data: prefix, use it as is
-            // Otherwise, add the prefix
             personaFirma = firma.startsWith('data:')
               ? firma
               : `data:image/png;base64,${firma}`;
@@ -1719,7 +2688,7 @@ export default function SatisfactionSurveysScreen() {
 
           setDecodedFirmas(prev => {
             const newMap = new Map(prev);
-            newMap.set(surveyId, { responsable: responsableFirma, persona: personaFirma });
+            newMap.set(key, { responsable: responsableFirma, persona: personaFirma });
             return newMap;
           });
         } catch (error) {
@@ -1739,15 +2708,13 @@ export default function SatisfactionSurveysScreen() {
   };
 
 
-  if (isLoading || isCheckingMarca) {
+  if (isCheckingMarca) {
     return (
       <ThemedView style={styles.container}>
         <AppHeader onMenuPress={handleMenuPress} title="Encuestas de Satisfacción" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>
-            {isCheckingMarca ? 'Verificando marca...' : 'Cargando encuestas...'}
-          </ThemedText>
+          <ThemedText style={styles.loadingText}>Verificando marca...</ThemedText>
         </ThemedView>
         <AppFooter />
         <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} />
@@ -1781,7 +2748,7 @@ export default function SatisfactionSurveysScreen() {
               <ThemedText style={styles.subtitle}>Gestión de encuestas NPS</ThemedText>
             </ThemedView>
 
-            {!isCreating && (
+            {!isCreating && !editingSurvey && (
               <>
                 {/* Filters */}
                 <ThemedView style={styles.filtersContainer}>
@@ -1814,144 +2781,160 @@ export default function SatisfactionSurveysScreen() {
                   {/* Filter Content */}
                   {isFiltersExpanded && (
                     <ThemedView style={styles.filtersContent}>
-                      {/* Filtros jerárquicos */}
-                      <ThemedView style={styles.hierarchyFiltersContainer}>
-                        <ThemedView style={styles.hierarchyFiltersHeader}>
-                          <TouchableOpacity
-                            style={styles.filterToggleButton}
-                            onPress={() => setIsHierarchyFiltersExpanded(!isHierarchyFiltersExpanded)}
-                          >
-                            <ThemedText style={styles.filterToggleText}>Filtros jerárquicos</ThemedText>
-                            <Ionicons
-                              name={isHierarchyFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={20}
-                              color="#007AFF"
-                            />
-                          </TouchableOpacity>
-                          {isHierarchyFiltersExpanded && (
-                            <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
-                              setFilterEmpresaId(null);
-                              setFilterClienteId(marcaClienteId);
-                              setFilterDivisionId(null);
-                              setFilterContratoId(null);
-                              setFilterCorpoId(marcaCorpoId);
-                              setFilterPuestoId(marcaPuestoId);
-                            }}>
-                              <Ionicons name="refresh" size={16} color="#FF3B30" />
-                              <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
-                            </TouchableOpacity>
-                          )}
+                        <ThemedView style={styles.filterGroup}>
+                          <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
+                          <View style={styles.pickerWrapper}>
+                            <Picker
+                              selectedValue={filterEmpresaId || ''}
+                              onValueChange={(value) => {
+                                const v = value && value !== '' ? Number(value) : null;
+                                setFilterEmpresaId(v);
+                                setFilterClienteId(null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterCorpoId(null);
+                                setFilterPuestoId(null);
+                                filterPuestoIdRef.current = null;
+                                setSurveys([]);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                              {filterEmpresas.map((e: any) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
                         </ThemedView>
-                        {isHierarchyFiltersExpanded && (
-                          <ThemedView style={styles.hierarchyFiltersContent}>
-                            <ThemedView style={styles.filterGroup}>
-                              <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                              <View style={styles.pickerWrapper}>
-                                <Picker
-                                  selectedValue={filterEmpresaId || ''}
-                                  onValueChange={(value) => setFilterEmpresaId(value && value !== '' ? Number(value) : null)}
-                                  style={styles.picker}
-                                >
-                                  <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                  {filterEmpresas.map((e: any) => (
-                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                                  ))}
-                                </Picker>
-                              </View>
-                            </ThemedView>
 
-                            {filterEmpresaId && (
-                              <ThemedView style={styles.filterGroup}>
-                                <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                                <View style={styles.pickerWrapper}>
-                                  <Picker
-                                    selectedValue={filterClienteId || ''}
-                                    onValueChange={(value) => setFilterClienteId(value && value !== '' ? Number(value) : null)}
-                                    style={styles.picker}
-                                  >
-                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                    {filterClientes.map((c: any) => (
-                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                                    ))}
-                                  </Picker>
-                                </View>
-                              </ThemedView>
-                            )}
-
-                            {filterClienteId && (
-                              <ThemedView style={styles.filterGroup}>
-                                <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                                <View style={styles.pickerWrapper}>
-                                  <Picker
-                                    selectedValue={filterDivisionId || ''}
-                                    onValueChange={(value) => setFilterDivisionId(value && value !== '' ? Number(value) : null)}
-                                    style={styles.picker}
-                                  >
-                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                    {filterDivisiones.map((d: any) => (
-                                      <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                                    ))}
-                                  </Picker>
-                                </View>
-                              </ThemedView>
-                            )}
-
-                            {filterDivisionId && (
-                              <ThemedView style={styles.filterGroup}>
-                                <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                                <View style={styles.pickerWrapper}>
-                                  <Picker
-                                    selectedValue={filterContratoId || ''}
-                                    onValueChange={(value) => setFilterContratoId(value && value !== '' ? Number(value) : null)}
-                                    style={styles.picker}
-                                  >
-                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                    {filterContratos.map((c: any) => (
-                                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                                    ))}
-                                  </Picker>
-                                </View>
-                              </ThemedView>
-                            )}
-
-                            {filterContratoId && (
-                              <ThemedView style={styles.filterGroup}>
-                                <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                                <View style={styles.pickerWrapper}>
-                                  <Picker
-                                    selectedValue={filterCorpoId || ''}
-                                    onValueChange={(value) => setFilterCorpoId(value && value !== '' ? Number(value) : null)}
-                                    style={styles.picker}
-                                  >
-                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                    {filterSucursales.map((s: any) => (
-                                      <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                                    ))}
-                                  </Picker>
-                                </View>
-                              </ThemedView>
-                            )}
-
-                            {filterCorpoId && (
-                              <ThemedView style={styles.filterGroup}>
-                                <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                                <View style={styles.pickerWrapper}>
-                                  <Picker
-                                    selectedValue={filterPuestoId || ''}
-                                    onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
-                                    style={styles.picker}
-                                  >
-                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                    {filterPuestos.map((p: any) => (
-                                      <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                                    ))}
-                                  </Picker>
-                                </View>
-                              </ThemedView>
-                            )}
+                        {filterEmpresaId && (
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterClienteId || ''}
+                                onValueChange={(value) => {
+                                  const v = value && value !== '' ? Number(value) : null;
+                                  setFilterClienteId(v);
+                                  setFilterDivisionId(null);
+                                  setFilterContratoId(null);
+                                  setFilterCorpoId(null);
+                                  setFilterPuestoId(null);
+                                  filterPuestoIdRef.current = null;
+                                  setSurveys([]);
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                {filterClientes.map((c: any) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
                           </ThemedView>
                         )}
-                      </ThemedView>
+
+                        {filterClienteId && (
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>División:</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterDivisionId || ''}
+                                onValueChange={(value) => {
+                                  const v = value && value !== '' ? Number(value) : null;
+                                  setFilterDivisionId(v);
+                                  setFilterContratoId(null);
+                                  setFilterCorpoId(null);
+                                  setFilterPuestoId(null);
+                                  filterPuestoIdRef.current = null;
+                                  setSurveys([]);
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                {filterDivisiones.map((d: any) => (
+                                  <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        )}
+
+                        {filterDivisionId && (
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterContratoId || ''}
+                                onValueChange={(value) => {
+                                  const v = value && value !== '' ? Number(value) : null;
+                                  setFilterContratoId(v);
+                                  setFilterCorpoId(null);
+                                  setFilterPuestoId(null);
+                                  filterPuestoIdRef.current = null;
+                                  setSurveys([]);
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                {filterContratos.map((c: any) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        )}
+
+                        {filterContratoId && (
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterCorpoId || ''}
+                                onValueChange={(value) => {
+                                  const v = value && value !== '' ? Number(value) : null;
+                                  setFilterCorpoId(v);
+                                  setFilterPuestoId(null);
+                                  filterPuestoIdRef.current = null;
+                                  setSurveys([]);
+                                  if (v) {
+                                    fetchPuestosForCorpo(v, true);
+                                  }
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                {filterSucursales.map((s: any) => (
+                                  <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        )}
+
+                        {filterCorpoId && (
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterPuestoId || ''}
+                                onValueChange={(value) => {
+                                  const pid = value && value !== '' ? Number(value) : null;
+                                  setFilterPuestoId(pid);
+                                  if (!pid) {
+                                    setSurveys([]);
+                                  }
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                                {filterPuestoOptions.map((p: any) => (
+                                  <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        )}
 
                       <ThemedView style={styles.filterGroup}>
                         <ThemedText style={styles.filterLabel}>Fecha:</ThemedText>
@@ -1964,50 +2947,6 @@ export default function SatisfactionSurveysScreen() {
                           </ThemedText>
                           <Ionicons name="calendar-outline" size={20} color="#007AFF" />
                         </TouchableOpacity>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Empresa evaluada:</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={filterEmpresaEvaluada}
-                          onChangeText={setFilterEmpresaEvaluada}
-                          placeholder="Buscar por empresa..."
-                          placeholderTextColor="#999"
-                        />
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={filterSucursal}
-                          onChangeText={setFilterSucursal}
-                          placeholder="Buscar por sucursal..."
-                          placeholderTextColor="#999"
-                        />
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={filterPuesto}
-                          onChangeText={setFilterPuesto}
-                          placeholder="Buscar por puesto..."
-                          placeholderTextColor="#999"
-                        />
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={filterDivision}
-                          onChangeText={setFilterDivision}
-                          placeholder="Buscar por división..."
-                          placeholderTextColor="#999"
-                        />
                       </ThemedView>
 
                       <ThemedView style={styles.filterGroup}>
@@ -2097,6 +3036,13 @@ export default function SatisfactionSurveysScreen() {
                   <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
                 </TouchableOpacity>
 
+                {isListLoading && (
+                  <ThemedView style={styles.listLoadingRow}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ThemedText style={styles.listLoadingText}>Cargando encuestas...</ThemedText>
+                  </ThemedView>
+                )}
+
                 {filteredSurveys.length === 0 ? (
                   <ThemedView style={styles.emptyContainer}>
                     <ThemedText style={styles.emptyText}>
@@ -2106,8 +3052,9 @@ export default function SatisfactionSurveysScreen() {
                 ) : (
                   <ThemedView style={styles.surveysList}>
                     {filteredSurveys.map((survey) => {
-                      const isExpanded = expandedSurveys.has(survey.id);
-                      const firmasData = decodedFirmas.get(survey.id);
+                      const rowKey = surveyExpandKey(survey);
+                      const isExpanded = expandedSurveys.has(rowKey);
+                      const firmasData = decodedFirmas.get(rowKey);
 
                       // Parse evaluaciones
                       let evaluacionesArray: Answer[] = [];
@@ -2118,9 +3065,9 @@ export default function SatisfactionSurveysScreen() {
                       }
 
                       return (
-                        <ThemedView key={survey.id} style={styles.surveyCard}>
+                        <ThemedView key={rowKey} style={styles.surveyCard}>
                           <ThemedView style={styles.surveyHeader}>
-                            <ThemedText style={styles.surveyTitle}>
+                            <ThemedText style={styles.surveyTitle} numberOfLines={3}>
                               {survey.empresa_evaluada}
                             </ThemedText>
                           </ThemedView>
@@ -2150,7 +3097,7 @@ export default function SatisfactionSurveysScreen() {
                           {/* Collapsable Button */}
                           <TouchableOpacity
                             style={styles.collapseButton}
-                            onPress={() => toggleSurveyExpansion(survey.id, survey)}
+                            onPress={() => toggleSurveyExpansion(survey)}
                           >
                             <ThemedText style={styles.collapseButtonText}>
                               {isExpanded ? 'Ocultar detalles' : 'Ver detalles'}
@@ -2284,6 +3231,41 @@ export default function SatisfactionSurveysScreen() {
                               )}
                             </ThemedView>
                           )}
+
+                          <ThemedView style={styles.listItemButtons}>
+                            <TouchableOpacity
+                              style={[styles.listItemButton, styles.editButton]}
+                              onPress={() => startEditing(survey)}
+                            >
+                              <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                            </TouchableOpacity>
+                            {survey.id > 0 && (
+                              <TouchableOpacity
+                                style={[styles.listItemButton, styles.changesButton]}
+                                onPress={() => {
+                                  setCambiosTitle(`Cambios - Encuesta #${survey.id}`);
+                                  fetchCambios('c_encuesta_cliente', Number(survey.id));
+                                }}
+                              >
+                                <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+                              </TouchableOpacity>
+                            )}
+                            <TouchableOpacity
+                              style={[
+                                styles.listItemButton,
+                                styles.deleteButton,
+                                deletingSurveyKey !== null && styles.buttonDisabled,
+                              ]}
+                              onPress={() => confirmDeleteSurvey(survey)}
+                              disabled={deletingSurveyKey !== null}
+                            >
+                              {deletingSurveyKey === rowKey ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <Ionicons name="trash" size={18} color="#FFFFFF" />
+                              )}
+                            </TouchableOpacity>
+                          </ThemedView>
                         </ThemedView>
                       );
                     })}
@@ -2292,10 +3274,12 @@ export default function SatisfactionSurveysScreen() {
               </>
             )}
 
-            {isCreating && (
+            {(isCreating || editingSurvey) && (
               <ThemedView style={styles.formCard}>
                 <ThemedView style={styles.formContainer}>
-                  <ThemedText style={styles.formTitle}>Nueva Encuesta</ThemedText>
+                  <ThemedText style={styles.formTitle}>
+                    {editingSurvey ? 'Modificar encuesta' : 'Nueva Encuesta'}
+                  </ThemedText>
 
                   {/* Jerarquía completa */}
                   <ThemedView style={styles.sectionContainer}>
@@ -2738,24 +3722,32 @@ export default function SatisfactionSurveysScreen() {
                       />
                     </ThemedView>
 
-                    {/* Firma responsable (generada) */}
+                    {/* Firma responsable: misma UI en creación y edición; en edición se puede borrar para generar otra */}
                     <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.label}>Firma del Responsable *:</ThemedText>
+                      <ThemedText style={styles.label}>Firma del responsable *:</ThemedText>
                       {!firmaResponsable ? (
-                        <TouchableOpacity
-                          style={styles.signatureButton}
-                          onPress={generateResponsableSignature}
-                          disabled={isGeneratingFirmaResponsable}
-                        >
-                          {isGeneratingFirmaResponsable ? (
-                            <ActivityIndicator size="small" color="#FFFFFF" />
-                          ) : (
-                            <>
-                              <Ionicons name="create" size={24} color='#000000' />
-                              <ThemedText style={styles.signatureButtonText}>Generar Firma</ThemedText>
-                            </>
-                          )}
-                        </TouchableOpacity>
+                        <ThemedView>
+                          {editingSurvey &&
+                          !(editingResponsableFirmaStored || editingFirmaResponsableOriginalRef.current) ? (
+                            <ThemedText style={[styles.warningText, { marginBottom: 10 }]}>
+                              Esta encuesta no tiene firma del responsable registrada.
+                            </ThemedText>
+                          ) : null}
+                          <TouchableOpacity
+                            style={styles.signatureButton}
+                            onPress={generateResponsableSignature}
+                            disabled={isGeneratingFirmaResponsable}
+                          >
+                            {isGeneratingFirmaResponsable ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="create" size={24} color="#000000" />
+                                <ThemedText style={styles.signatureButtonText}>Generar Firma</ThemedText>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        </ThemedView>
                       ) : (
                         <ThemedView style={styles.signatureInfo}>
                           <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
@@ -2767,7 +3759,9 @@ export default function SatisfactionSurveysScreen() {
                           </ThemedText>
                           {firmaResponsable.empleadoDetalle && (
                             <ThemedText style={styles.signatureInfoText}>
-                              Empleado: {firmaResponsable.empleadoDetalle.nombre} {firmaResponsable.empleadoDetalle.primer_apellido} {firmaResponsable.empleadoDetalle.segundo_apellido}
+                              Empleado: {firmaResponsable.empleadoDetalle.nombre}{' '}
+                              {firmaResponsable.empleadoDetalle.primer_apellido}{' '}
+                              {firmaResponsable.empleadoDetalle.segundo_apellido}
                             </ThemedText>
                           )}
                           <ThemedText style={styles.signatureInfoText}>
@@ -2777,11 +3771,14 @@ export default function SatisfactionSurveysScreen() {
                             Longitud: {firmaResponsable.longitud}
                           </ThemedText>
                           <ThemedText style={styles.signatureInfoText}>
-                            Timestamp: {convertDateTimestampToLocalString(new Date(Number(firmaResponsable.timestamp)).toISOString())}
+                            Timestamp:{' '}
+                            {convertDateTimestampToLocalString(
+                              new Date(Number(firmaResponsable.timestamp)).toISOString()
+                            )}
                           </ThemedText>
                           <TouchableOpacity
                             style={styles.removeSignatureButton}
-                            onPress={() => setFirmaResponsable(null)}
+                            onPress={clearResponsableFirma}
                           >
                             {getActionIcon('delete')}
                           </TouchableOpacity>
@@ -2800,10 +3797,18 @@ export default function SatisfactionSurveysScreen() {
                     </TouchableOpacity>
 
                     <TouchableOpacity
-                      style={styles.saveButton}
-                      onPress={createSurvey}
+                      style={[
+                        styles.saveButton,
+                        (isCreateSubmitting || isEditSubmitting) && { opacity: 0.7 },
+                      ]}
+                      onPress={editingSurvey ? saveSurveyEdit : createSurvey}
+                      disabled={isCreateSubmitting || isEditSubmitting}
                     >
-                      <ThemedText style={styles.saveButtonText}>{getActionIcon('confirm')}</ThemedText>
+                      {isCreateSubmitting || isEditSubmitting ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <ThemedText style={styles.saveButtonText}>{getActionIcon('confirm')}</ThemedText>
+                      )}
                     </TouchableOpacity>
                   </ThemedView>
                 </ThemedView>
@@ -2875,6 +3880,214 @@ export default function SatisfactionSurveysScreen() {
                 <ThemedText style={styles.modalAcceptButtonText}>Confirmar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Modal: historial de cambios (c_cambios_apps_modules) */}
+      <Modal
+        visible={isCambiosModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeCambiosModal}
+      >
+        <View style={styles.cambiosOverlay}>
+          <ThemedView style={styles.floatModalCardMovimientos}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
+              <TouchableOpacity onPress={closeCambiosModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <ScrollView
+              style={{ maxHeight: Dimensions.get('window').height * 0.75 }}
+              contentContainerStyle={{ padding: 16 }}
+            >
+              {!cambiosItems || cambiosItems.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
+                </ThemedView>
+              ) : (
+                cambiosItems.map((row: any) => {
+                  let parsed: any[] = [];
+                  try {
+                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
+                  } catch {
+                    parsed = [];
+                  }
+                  const createdAtRaw = row?.created_at;
+                  const createdAtIso =
+                    createdAtRaw instanceof Date
+                      ? createdAtRaw.toISOString()
+                      : typeof createdAtRaw === 'string'
+                        ? createdAtRaw
+                        : '';
+                  const createdAtLabel = createdAtIso
+                    ? convertDateTimestampToLocalString(createdAtIso)
+                    : '—';
+                  const isOpen = expandedCambioId === row.id;
+
+                  return (
+                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
+                      <TouchableOpacity
+                        style={styles.cambioCollapsableHeader}
+                        onPress={() =>
+                          setExpandedCambioId((prev) => (prev === row.id ? null : row.id))
+                        }
+                        activeOpacity={0.8}
+                      >
+                        <ThemedText style={styles.cambioCollapsableTitle}>
+                          {createdAtLabel}
+                        </ThemedText>
+                        <Ionicons
+                          name={isOpen ? 'chevron-up' : 'chevron-down'}
+                          size={18}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+
+                      {isOpen && (
+                        <ThemedView style={styles.cambioCollapsableContent}>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
+                            <ThemedText style={styles.changeDescription}>
+                              {row.empleado_nombre || 'Desconocido'}
+                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
+                            </ThemedText>
+                          </ThemedView>
+
+                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
+                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
+                                const prop = String(c?.prop ?? '-');
+                                const value = c?.after;
+
+                                if (prop === '__created__' && value && typeof value === 'object') {
+                                  const created: any = value;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(created).map(([k, v]) => {
+                                        if (k === 'firma_responsable' || k === 'firma_evaluado')
+                                          return null;
+                                        return (
+                                          <ThemedView
+                                            key={`c-${row.id}-${idx}-${k}`}
+                                            style={styles.changeDescriptionContainer}
+                                          >
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                              {formatSurveyCambioValue(k, v)}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        );
+                                      })}
+                                      {typeof created.firma_responsable === 'string' &&
+                                        created.firma_responsable.trim() && (
+                                          <ThemedView style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
+                                              {(() => {
+                                                const info = decodeFirmaHashSurvey(created.firma_responsable);
+                                                return info
+                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
+                                                      info.empleadoId || 'N/A'
+                                                    } - Hora: ${safeFirmaTimestampLabelSurvey(info.timestamp)}`
+                                                  : 'Firma responsable (formato no decodificable)';
+                                              })()}
+                                            </ThemedText>
+                                          </ThemedView>
+                                        )}
+                                      {typeof created.firma_evaluado === 'string' &&
+                                        created.firma_evaluado.trim() && (
+                                          <ThemedView style={styles.changeDescriptionContainer}>
+                                            <ThemedText style={styles.changeDescription}>
+                                              <ThemedText style={{ fontWeight: '800' }}>firma_evaluado</ThemedText>
+                                            </ThemedText>
+                                            <Image
+                                              source={{
+                                                uri: formatSurveySignatureForDisplay(created.firma_evaluado),
+                                              }}
+                                              style={styles.cambioSignatureImage}
+                                              resizeMode="contain"
+                                            />
+                                          </ThemedView>
+                                        )}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                if (prop === '__deleted__' && c?.before && typeof c.before === 'object') {
+                                  const beforeDel: any = c.before;
+                                  return (
+                                    <React.Fragment key={`c-${row.id}-${idx}-del`}>
+                                      <ThemedView style={styles.changeDescriptionContainer}>
+                                        <ThemedText style={styles.changeDescription}>
+                                          <ThemedText style={{ fontWeight: '800' }}>Registro eliminado</ThemedText>
+                                        </ThemedText>
+                                      </ThemedView>
+                                      {Object.entries(beforeDel).map(([k, v]) => (
+                                        <ThemedView
+                                          key={`c-${row.id}-${idx}-d-${k}`}
+                                          style={styles.changeDescriptionContainer}
+                                        >
+                                          <ThemedText style={styles.changeDescription}>
+                                            <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
+                                            {formatSurveyCambioValue(k, v)}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      ))}
+                                    </React.Fragment>
+                                  );
+                                }
+
+                                const isFirmaEval = prop === 'firma_evaluado';
+                                const isFirmaResp = prop === 'firma_responsable';
+
+                                return (
+                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
+                                    <ThemedText style={styles.changeDescription}>
+                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
+                                      {!isFirmaEval &&
+                                        !isFirmaResp &&
+                                        formatSurveyCambioValue(prop, value)}
+                                      {isFirmaResp &&
+                                        (() => {
+                                          const info =
+                                            typeof value === 'string' ? decodeFirmaHashSurvey(value) : null;
+                                          if (!info)
+                                            return 'Firma responsable (formato no decodificable)';
+                                          return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
+                                            info.empleadoId || 'N/A'
+                                          } - Hora: ${safeFirmaTimestampLabelSurvey(info.timestamp)}`;
+                                        })()}
+                                    </ThemedText>
+                                    {isFirmaEval && typeof value === 'string' && value.trim() !== '' && (
+                                      <Image
+                                        source={{ uri: formatSurveySignatureForDisplay(value) }}
+                                        style={styles.cambioSignatureImage}
+                                        resizeMode="contain"
+                                      />
+                                    )}
+                                  </ThemedView>
+                                );
+                              })}
+                            </ThemedView>
+                          )}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                  );
+                })
+              )}
+            </ScrollView>
           </ThemedView>
         </View>
       </Modal>
@@ -2988,16 +4201,110 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   surveyHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 8,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
     backgroundColor: '#fff',
+    gap: 8,
   },
   surveyTitle: {
+    flex: 1,
     fontSize: 18,
     fontWeight: 'bold',
     color: '#007AFF',
+  },
+  listItemButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+    backgroundColor: '#fff',
+  },
+  listItemButton: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  editButton: { backgroundColor: '#007AFF' },
+  changesButton: {
+    backgroundColor: '#5856D6',
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  deleteButton: { backgroundColor: '#FF3B30' },
+  buttonDisabled: { opacity: 0.6 },
+  cambiosOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  floatModalCardMovimientos: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  filterGroupSearch: { marginBottom: 12 },
+  changeDescription: { fontSize: 14, color: '#333', lineHeight: 20 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: {
+    width: '100%',
+    height: 160,
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: '#EEE',
+  },
+  cambioCollapsableMain: {
+    width: '100%',
+    marginBottom: 10,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  cambioCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  listLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 12,
+  },
+  listLoadingText: {
+    fontSize: 14,
+    opacity: 0.8,
   },
   surveyInfo: {
     fontSize: 14,
