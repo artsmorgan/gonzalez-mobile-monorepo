@@ -124,7 +124,7 @@ export default function NotificationsScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    return false;
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };

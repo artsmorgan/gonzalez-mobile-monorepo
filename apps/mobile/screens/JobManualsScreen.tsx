@@ -342,7 +342,7 @@ export default function JobManualsScreen() {
   };
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    return false;
+    //return false;
     try {
       const networkState = await Network.getNetworkStateAsync();
       return networkState.isConnected === true && networkState.isInternetReachable === true;
