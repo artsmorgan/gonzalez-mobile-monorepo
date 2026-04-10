@@ -61,7 +61,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           const currentMarcaData = JSON.parse(currentMarca);
           setRole(currentMarcaData.roleDivision.role.nombre);
           setDivision(currentMarcaData.roleDivision.division.nombre);
-          setHasCurrentMarca(currentMarcaData.hora_salida_digitada == null);
+          setHasCurrentMarca(currentMarcaData.hora_inicio_digitada != null && currentMarcaData.hora_salida_digitada == null);
           const lunchTime = await AsyncStorage.getItem('lunch_time_config');
           if (lunchTime) {
             const lunchTimeData = JSON.parse(lunchTime);
