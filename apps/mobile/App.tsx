@@ -6105,7 +6105,9 @@ function AppContent() {
     if (!current_marca_obj.id) {
       return;
     }
-
+    if (current_marca_obj.hora_inicio_digitada == null || current_marca_obj.hora_salida_digitada != null) {
+      return;
+    }
     // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
     const currentNotificationsStr = await AsyncStorage.getItem('notifications');
     let currentUnwatchedCount = 0;

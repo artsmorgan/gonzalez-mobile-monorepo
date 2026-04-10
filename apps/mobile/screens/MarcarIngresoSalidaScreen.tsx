@@ -401,7 +401,8 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       if (marca_send && marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
-        const distance = 25; //getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
+        const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
+        //const distance = 50;
         if (distance > 50) {
           result = false;
           const marca_ubicacion = marca_send.puesto.ubicacion.lat + ', ' + marca_send.puesto.ubicacion.lng;
@@ -624,7 +625,7 @@ export default function MarcarIngresoSalidaScreen() {
         getActivities(updatedMarca.id),
         getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
         getCategories(),
-        getTiposProductoNoConforme(),
+        //getTiposProductoNoConforme(),
         getTipoActivo(),
         getEmployeesCorpo(updatedMarca.corpo.id),
         getIncidents(updatedMarca.corpo.id),
