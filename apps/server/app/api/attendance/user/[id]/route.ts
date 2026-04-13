@@ -279,7 +279,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         });
 
         if (solicitudesPermiso.length > 0) {
-            return NextResponse.json({ status: false, message: "Tienes un permiso aprobado para el puesto " + puesto.nombre + " para el día " + marcaDia.fecha.toISOString().split("T")[0] }, { status: 200 });
+            return NextResponse.json({ status: false, message: "Tienes un permiso aprobado para el puesto " + puesto.nombre + " para el día " + new Date(marcaDia.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) }, { status: 200 });
         }
 
         const estado = marcaDia.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
@@ -521,7 +521,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         console.log("Retornamos la marca");
 
         return NextResponse.json(data, { status: 200 });
+
     } catch (error: unknown) {
+        console.log("Error en attendance/user/[id]:", error);
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
