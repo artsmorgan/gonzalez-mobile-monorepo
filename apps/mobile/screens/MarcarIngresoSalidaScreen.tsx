@@ -422,7 +422,8 @@ export default function MarcarIngresoSalidaScreen() {
           setIsProcessingMark(true);
           setProcessingType('entrada');
           try {
-            await hydrateAfterEntrada(marca_send, horaAccionValue || Date.now(), false);
+            let horaAccion = marca_send.hora_entrada_digitada ? new Date(marca_send.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
+            await hydrateAfterEntrada(marca_send, horaAccion, false);
           } finally {
             setIsProcessingMark(false);
             setProcessingType(null);
@@ -628,13 +629,13 @@ export default function MarcarIngresoSalidaScreen() {
         //getTiposProductoNoConforme(),
         getTipoActivo(),
         getEmployeesCorpo(updatedMarca.corpo.id),
-        getIncidents(updatedMarca.corpo.id),
+        //getIncidents(updatedMarca.corpo.id),
         getIncidentsClassifications(),
         getDocumentTypes(),
         getExecutives(),
         getPuestosCorpo(updatedMarca.corpo.id),
-        getCorporateVehicles(updatedMarca.corpo.id),
-        (async () => {
+        //getCorporateVehicles(updatedMarca.corpo.id),
+        /*(async () => {
           const mid = Number(updatedMarca.id);
           const cid = Number(updatedMarca.corpo?.id ?? updatedMarca.corpo_id ?? 0);
           if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
@@ -657,12 +658,12 @@ export default function MarcarIngresoSalidaScreen() {
             refreshAccessToken,
             logout,
           });
-        })(),
-        getVoiceNotes(updatedMarca),
+        })(),*/
+        //getVoiceNotes(updatedMarca),
         getArticulos(),
-        getJobManuals(updatedMarca.puesto?.id),
-        getLlaves(Number(updatedMarca.corpo?.id) || 0),
-        getLlaveros(Number(updatedMarca.corpo?.id) || 0),
+        //getJobManuals(updatedMarca.puesto?.id),
+        //getLlaves(Number(updatedMarca.corpo?.id) || 0),
+        //getLlaveros(Number(updatedMarca.corpo?.id) || 0),
         getCategoriesMantenimiento(),
       ]);
 
@@ -744,6 +745,7 @@ export default function MarcarIngresoSalidaScreen() {
       try {
         if (type === 'entrada') {
           if (attendanceData) {
+            let horaAccion = attendanceData.marca.hora_entrada_digitada ? new Date(attendanceData.marca.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
             await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
           }
         } else {
