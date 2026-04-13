@@ -102,7 +102,8 @@ import ManagementPlanningControlScreen from './screens/ManagementPlanningControl
 import CommunicationPlanRequirementsScreen from './screens/CommunicationPlanRequirementsScreen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import { FORCE_OFFLINE_SYNC } from './constants/syncFlags';
+import { FORCE_OFFLINE } from './constants/syncFlags';
+import { resolveAppConnectivity } from './hooks/resolveAppConnectivity';
 import saveManualSignature from './hooks/saveManualSignature';
 import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
@@ -449,9 +450,15 @@ function AppContent() {
 
   const checkMobileVersionAvailability = useCallback(async () => {
     try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      const connectivity = await resolveAppConnectivity();
       const appVersionInfo = Constants.expoConfig?.extra?.APP_VERSION_INFO;
       const appVersion = String(appVersionInfo?.version || '0.0.0');
+      if (!connectivity.ok) {
+        eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
+        return;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl || !appVersionInfo) {
         eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
         return;
@@ -488,11 +495,12 @@ function AppContent() {
     }
   }, [authedFetchCb]);
 
+  /**
+   * Sincronización de colas pendientes y tareas online agregadas (hora servidor, versión APK, firma manual).
+   * Requiere `resolveAppConnectivity()` (incluye FORCE_OFFLINE). Las funciones `check*ActionsCache` asumen
+   * que solo se llaman desde aquí tras esa comprobación; no duplican el chequeo en cada una.
+   */
   const syncPendingActionsIfOnline = useCallback(() => {
-    if (FORCE_OFFLINE_SYNC) {
-      console.log('[syncCaches] Omitido: FORCE_OFFLINE_SYNC');
-      return;
-    }
     const slot = getSyncCachesSlot();
     if (slot.inFlight != null) {
       console.log('[syncCaches] Omitido: ya hay una ejecución en curso (global)');
@@ -500,17 +508,10 @@ function AppContent() {
     }
     slot.inFlight = (async () => {
       try {
-        if (FORCE_OFFLINE_SYNC) {
-          console.log('[syncCaches] Omitido dentro de cola: FORCE_OFFLINE_SYNC');
-          return;
-        }
-        const state = await Network.getNetworkStateAsync();
-        const connected = !!state.isConnected;
-        const reach = state.isInternetReachable;
-        const online = connected && (reach === true || reach === null);
-        setIsConnected(online);
-        if (!connected || reach === false) {
-          console.log('Sin conexión (verificación en vivo)', { connected, isInternetReachable: reach });
+        const connectivity = await resolveAppConnectivity();
+        setIsConnected(connectivity.ok);
+        if (!connectivity.ok) {
+          console.log('[syncCaches] Sin conexión:', connectivity.reason);
           return;
         }
         if (!employee) {
@@ -613,7 +614,6 @@ function AppContent() {
   // eventBus + foco de app + reconexión → intentar sincronizar cachés (con comprobación de red dentro)
   useEffect(() => {
     const onSyncRequested = () => {
-      if (FORCE_OFFLINE_SYNC) return;
       syncPendingActionsIfOnline();
     };
     eventBus.on(SYNC_CACHES_EVENT, onSyncRequested);
@@ -626,7 +626,7 @@ function AppContent() {
 
   // Red: reconexión dispara sync; intervalo periódico (sync comprueba red dentro)
   useEffect(() => {
-    if (FORCE_OFFLINE_SYNC) {
+    if (FORCE_OFFLINE) {
       setIsConnected(false);
       return;
     }
@@ -661,6 +661,10 @@ function AppContent() {
 
   const checkManualSignatureCache = async () => {
     if (!employee) return;
+    const connectivity = await resolveAppConnectivity();
+    if (!connectivity.ok) {
+      return;
+    }
     const manual_signature_cache = await AsyncStorage.getItem('manual_signature_cache');
     if (manual_signature_cache) {
       const data = await saveManualSignature({ signature: manual_signature_cache, employeeId: employee.id, refreshAccessToken, logout });
@@ -5919,6 +5923,16 @@ function AppContent() {
         const token = initialUrl.split('/recover-password/')[1];
 
         try {
+          const connectivity = await resolveAppConnectivity();
+          if (!connectivity.ok) {
+            Alert.alert(
+              'Sin conexión',
+              connectivity.reason === 'force_offline'
+                ? 'Modo offline forzado (pruebas). Desactiva FORCE_OFFLINE en syncFlags para verificar el enlace.'
+                : 'No hay conexión a internet para verificar el enlace de recuperación.'
+            );
+            return;
+          }
           const response = await fetch(apiUrl + '/api/password/check-recovery-password-token/' + token, {
             method: 'GET',
             headers: {
@@ -5956,10 +5970,13 @@ function AppContent() {
   }, []);
 
   const getUpdatedHoraAccion = async () => {
-    if (isConnected) {
+    const connectivity = await resolveAppConnectivity();
+    console.log('Intentando actualizar hora de acción...');
+    if (connectivity.ok) {
+      console.log('Conectado, actualizando hora de acción...');
       await updateServerTime();
-    }
-    else {
+    } else {
+      console.log('Sin conexión, actualizando hora de acción...');
       await setDisconnectedTime();
     }
     const horaAccion = await getHoraAccion();
@@ -5970,7 +5987,13 @@ function AppContent() {
   useEffect(() => {
     // Define la función de consulta (puedes personalizarla)
     const fetchData = async () => {
+      const horaAccion = await getUpdatedHoraAccion();
       console.log('Consultando estado del temporizador...');
+      const connectivity = await resolveAppConnectivity();
+      if (!connectivity.ok) {
+        console.log('[lunchTimer] Omitido: sin conexión', connectivity.reason);
+        return;
+      }
       const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
       if (!validAccessToken) {
         console.log('Sincronización cancelada: token inválido o expirado');
@@ -6003,7 +6026,6 @@ function AppContent() {
         return;
       }
       console.log(5);
-      const horaAccion = await getUpdatedHoraAccion();
       if (new Date(temp_state.currentTimestamp + temp_state.remainingSeconds).getTime() > horaAccion) {
         return;
       }
@@ -6024,10 +6046,10 @@ function AppContent() {
 
   const check_conection_time = async () => {
     console.log('Checking connection time...');
-    if (isConnected) {
+    const connectivity = await resolveAppConnectivity();
+    if (connectivity.ok) {
       await get_notifications();
-    }
-    else {
+    } else {
       try {
         await setDisconnectedTime();
       } catch (error) {
@@ -6097,6 +6119,11 @@ function AppContent() {
   }
 
   const get_notifications = async () => {
+    const connectivity = await resolveAppConnectivity();
+    if (!connectivity.ok) {
+      console.log('[notifications] Omitido: sin conexión', connectivity.reason);
+      return;
+    }
     const current_marca = await AsyncStorage.getItem('current_marca');
     if (!current_marca) {
       return;
@@ -6219,7 +6246,8 @@ function AppContent() {
       firma_empleado: firma_empleado,
     };
 
-    if (isConnected) {
+    const lunchConnectivity = await resolveAppConnectivity();
+    if (lunchConnectivity.ok) {
       // Con internet: llamar a la función API
       const responseData = await saveLunchTime({
         requestData,

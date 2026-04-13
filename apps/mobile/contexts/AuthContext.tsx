@@ -3,7 +3,7 @@ import Constants from 'expo-constants';
 import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 import { eventBus } from '../hooks/eventBus';
-import { FORCE_OFFLINE_SYNC } from '../constants/syncFlags';
+import { resolveAppConnectivity } from '../hooks/resolveAppConnectivity';
 
 interface Role {
   id: number;
@@ -188,7 +188,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setEmployee(employeeData);
 
       // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
-      if (!FORCE_OFFLINE_SYNC) {
+      const connectivity = await resolveAppConnectivity();
+      if (connectivity.ok) {
         queueMicrotask(() => {
           eventBus.emit('syncCachesRequested');
         });

@@ -61,7 +61,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           const currentMarcaData = JSON.parse(currentMarca);
           setRole(currentMarcaData.roleDivision.role.nombre);
           setDivision(currentMarcaData.roleDivision.division.nombre);
-          setHasCurrentMarca(currentMarcaData.hora_inicio_digitada != null && currentMarcaData.hora_salida_digitada == null);
+          setHasCurrentMarca(currentMarcaData.hora_entrada_digitada != null && currentMarcaData.hora_salida_digitada == null);
           const lunchTime = await AsyncStorage.getItem('lunch_time_config');
           if (lunchTime) {
             const lunchTimeData = JSON.parse(lunchTime);
@@ -393,7 +393,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     // roles será un array de strings con los nombres de los roles que tendrán permitidos y el sistema deberá verificar si la variable role está en el array de roles
     return roles.some((roleArray: string) => role === roleArray);
   };
-  
+
   const hasPermissionDivision = (divisions: string[]) => {
     //return true;
     // divisions será un array de strings con los nombres de las divisiones que tendrán permitidos y el sistema deberá verificar si la variable division está en el array de divisions
@@ -503,7 +503,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Inicio
               </ThemedText>
             </TouchableOpacity>
-            
+
             <TouchableOpacity
               style={[
                 styles.menuItem,
@@ -553,56 +553,56 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Marcar Ingreso/Salida
               </ThemedText>
             </TouchableOpacity>
-            
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('digital-signature') && styles.activeMenuItem
-                ]}
-                onPress={handleDigitalSignaturePress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('digital-signature') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('digital-signature', isActiveRoute('digital-signature'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('digital-signature') && styles.activeMenuItemText
-                  ]}
-                >
-                  Mi Firma Digital
-                </ThemedText>
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                  style={[
-                    styles.menuItem,
-                    isActiveRoute('Jerarquia') && styles.activeMenuItem
-                  ]}
-                  onPress={handleJerarquiaPress}
-                >
-                  <ThemedText
-                    style={[
-                      styles.menuItemText,
-                      isActiveRoute('Jerarquia') && styles.activeMenuItemText
-                    ]}
-                  >
-                    {getActionIcon('jerarquia', isActiveRoute('Jerarquia'))}
-                  </ThemedText>
-                  <ThemedText
-                    style={[
-                      styles.menuItemText,
-                      isActiveRoute('Jerarquia') && styles.activeMenuItemText
-                    ]}
-                  >
-                    Jerarquía
-                  </ThemedText>
-                </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('digital-signature') && styles.activeMenuItem
+              ]}
+              onPress={handleDigitalSignaturePress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('digital-signature') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('digital-signature', isActiveRoute('digital-signature'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('digital-signature') && styles.activeMenuItemText
+                ]}
+              >
+                Mi Firma Digital
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('Jerarquia') && styles.activeMenuItem
+              ]}
+              onPress={handleJerarquiaPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('jerarquia', isActiveRoute('Jerarquia'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                ]}
+              >
+                Jerarquía
+              </ThemedText>
+            </TouchableOpacity>
 
             <ThemedView style={styles.menuSeparator} />
 
@@ -686,7 +686,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -767,7 +767,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -795,7 +795,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasPermissionRole(['SUPERVISOR','ADMINISTRATIVO']) && (
+            {hasCurrentMarca && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -848,7 +848,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
@@ -902,7 +902,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
@@ -930,7 +930,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            
+
             {/* Estamos aquí */}
             {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
@@ -985,7 +985,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionDivision(['Seguridad', 'Administrativos', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
@@ -1013,7 +1013,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca  && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+            {hasCurrentMarca && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1039,7 +1039,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1066,7 +1066,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1093,7 +1093,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1120,7 +1120,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1174,7 +1174,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
@@ -1228,7 +1228,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
@@ -1255,7 +1255,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && (
               <TouchableOpacity
                 style={[
@@ -1309,7 +1309,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
+
             {hasCurrentMarca && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
@@ -1336,31 +1336,31 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 </ThemedText>
               </TouchableOpacity>
             )}
-            
-              <TouchableOpacity
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('PermitRequest') && styles.activeMenuItem
+              ]}
+              onPress={handlePermitRequestPress}
+            >
+              <ThemedText
                 style={[
-                  styles.menuItem,
-                  isActiveRoute('PermitRequest') && styles.activeMenuItem
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
                 ]}
-                onPress={handlePermitRequestPress}
               >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
-                  ]}
-                >
-                  Solicitud de permiso
-                </ThemedText>
-              </TouchableOpacity>
+                {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                ]}
+              >
+                Solicitud de permiso
+              </ThemedText>
+            </TouchableOpacity>
 
             {hasCurrentMarca && hasLunchTime && (
               <TouchableOpacity
@@ -1390,30 +1390,30 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
             )}
 
             {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
-                <TouchableOpacity
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                ]}
+                onPress={handlePuestoUbicacionPress}
+              >
+                <ThemedText
                   style={[
-                    styles.menuItem,
-                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
                   ]}
-                  onPress={handlePuestoUbicacionPress}
                 >
-                  <ThemedText
-                    style={[
-                      styles.menuItemText,
-                      isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
-                    ]}
-                  >
-                    {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
-                  </ThemedText>
-                  <ThemedText
-                    style={[
-                      styles.menuItemText,
-                      isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
-                    ]}
-                  >
-                    Ubicación del puesto
-                  </ThemedText>
-                </TouchableOpacity>
+                  {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                  ]}
+                >
+                  Ubicación del puesto
+                </ThemedText>
+              </TouchableOpacity>
             )}
 
             {hasCurrentMarca && hasPermissionRole(['OPERATIVO', 'SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (

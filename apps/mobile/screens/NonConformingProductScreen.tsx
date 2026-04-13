@@ -328,7 +328,7 @@ export default function NonConformingProductScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    //return false;
+    return false;
     try {
       const state = await Network.getNetworkStateAsync();
       return !!(state.isConnected && state.isInternetReachable);
