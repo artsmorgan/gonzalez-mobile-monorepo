@@ -175,6 +175,7 @@ export async function PUT(
       division_id,
       corpo_id,
       puesto_id,
+      contrato_id,
       fecha,
       evaluaciones,
       persona_evaluada,
@@ -211,6 +212,10 @@ export async function PUT(
         { status: 200 }
       );
     }
+
+    const contratoIdNum =
+      contrato_id != null && String(contrato_id).trim() !== "" ? parseInt(String(contrato_id), 10) : 0;
+    const contratoIdFinal = Number.isFinite(contratoIdNum) && contratoIdNum > 0 ? contratoIdNum : 0;
 
     const empresa = await callDynamicPrisma({
       req,
@@ -293,6 +298,7 @@ export async function PUT(
       corpo_id: corpoObj.id,
       puesto_id: puestoObj.id,
       division_id: divisionObj.id,
+      contrato_id: contratoIdFinal,
       empresa_evaluado: String(empresa_evaluada ?? ""),
       firma_responsable: String(firma_responsable ?? ""),
       fecha: fechaDate.toISOString(),

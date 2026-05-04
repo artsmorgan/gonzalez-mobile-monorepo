@@ -1550,6 +1550,10 @@ interface CreateNonConformingProductParams {
   requestData: {
     cliente_id: number;
     corpo_id: number;
+    empresa_id: number;
+    division_id: number;
+    contrato_id: number;
+    puesto_id: number;
     fecha_identificacion: string; // YYYY-MM-DD
     responsable_cuenta: string;
     tipo_servicio_no_conforme: string;
@@ -1579,6 +1583,10 @@ interface UpdateNonConformingProductParams {
   requestData: {
     cliente_id?: number;
     corpo_id?: number;
+    empresa_id?: number;
+    division_id?: number;
+    contrato_id?: number;
+    puesto_id?: number;
     fecha_identificacion?: string; // YYYY-MM-DD
     responsable_cuenta?: string;
     tipo_servicio_no_conforme?: string;
@@ -1611,6 +1619,13 @@ interface DeleteNonConformingProductParams {
 
 interface ListNonConformingProductByCorpoParams {
   corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteNonConformingProductArchivoParams {
+  productoId: string | number;
+  archivoId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -1654,6 +1669,13 @@ interface UpdateCorporateVehicleParams {
 
 interface DeleteCorporateVehicleParams {
   id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteCorporateVehicleImageParams {
+  vehiculoId: string | number;
+  imageId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -1890,6 +1912,71 @@ export const deleteNonConformingProduct = async ({
   }
 };
 
+export const deleteNonConformingProductArchivo = async ({
+  productoId,
+  archivoId,
+  refreshAccessToken,
+  logout,
+}: DeleteNonConformingProductArchivoParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(
+      `${apiUrl}/api/non-conforming-product/${productoId}/archivo/${archivoId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      }
+    );
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteNonConformingProductArchivo({ productoId, archivoId, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting non-conforming product attachment:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar el adjunto',
+    };
+  }
+};
+
 export const listNonConformingProductByCorpo = async ({
   corpo_id,
   refreshAccessToken,
@@ -2063,6 +2150,68 @@ export const updateCorporateVehicle = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al actualizar el vehículo corporativo',
+    };
+  }
+};
+
+export const deleteCorporateVehicleImage = async ({
+  vehiculoId,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteCorporateVehicleImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(
+      `${apiUrl}/api/corporate-vehicles/${encodeURIComponent(String(vehiculoId))}/image/${encodeURIComponent(String(imageId))}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      }
+    );
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteCorporateVehicleImage({ vehiculoId, imageId, refreshAccessToken, logout });
+      }
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting corporate vehicle image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'No se pudo eliminar la imagen',
     };
   }
 };
@@ -2682,6 +2831,79 @@ export const updateCorporateVehicleMaintenance = async ({
   }
 };
 
+export const deleteCorporateVehicleMaintenanceImage = async ({
+  maintenance_id,
+  slot,
+  refreshAccessToken,
+  logout,
+}: {
+  maintenance_id: string;
+  slot: 'antes' | 'despues';
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const pathSlot = slot === 'antes' ? 'antes' : 'despues';
+    const response = await fetch(
+      `${apiUrl}/api/corporate-vehicles/maintenances/${encodeURIComponent(maintenance_id)}/image/${pathSlot}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      }
+    );
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteCorporateVehicleMaintenanceImage({
+          maintenance_id,
+          slot,
+          refreshAccessToken,
+          logout,
+        });
+      }
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting maintenance image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la imagen del mantenimiento',
+    };
+  }
+};
+
 export const deleteCorporateVehicleMaintenance = async ({
   maintenance_id,
   refreshAccessToken,
@@ -2766,6 +2988,7 @@ interface CreateComplaintsMasterParams {
     corpo_id?: number;
     puesto_id?: number;
     plaza_id?: number;
+    division_id?: number;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -2793,6 +3016,13 @@ interface UpdateComplaintsMasterParams {
     accion_correctiva_preventiva?: string;
     firma_responsable?: string;
     archivos?: any;
+    empresa_id?: number;
+    cliente_id?: number;
+    contrato_id?: number;
+    corpo_id?: number;
+    puesto_id?: number;
+    plaza_id?: number;
+    division_id?: number;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -3116,6 +3346,9 @@ export const listComplaintsMasterByCorpo = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data.status && Array.isArray((data as any).data)) {
+      (data as any).data = (data as any).data.filter((row: any) => row?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing complaints:', error);
@@ -7511,7 +7744,10 @@ export const listPermitRequestByCorpo = async ({
       throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
 
-    const data: ApiResponse = await response.json();
+    const data = (await response.json()) as ApiResponse;
+    if (Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing permit requests:', error);
@@ -7576,7 +7812,11 @@ export const listPermitRequestMine = async ({
       throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
 
-    return (await response.json()) as ApiResponse;
+    const data = (await response.json()) as ApiResponse;
+    if (Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r?.isActive !== false);
+    }
+    return data;
   } catch (error) {
     return {
       status: false,
@@ -7651,6 +7891,13 @@ interface UpdateActaEntregaProductoParams {
 
 interface DeleteActaEntregaProductoParams {
   id: string | number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteActaEntregaProductoImageParams {
+  id: string | number;
+  imageId: string | number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -7832,6 +8079,63 @@ export const deleteActaEntregaProducto = async ({
   }
 };
 
+export const deleteActaEntregaProductoImage = async ({
+  id,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteActaEntregaProductoImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/acta-entrega-productos/${id}/image/${imageId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteActaEntregaProductoImage({ id, imageId, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting acta entrega image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar adjunto del acta',
+    };
+  }
+};
+
 interface ListActaEntregaProductoParams {
   empresa_id?: number;
   cliente_id?: number;
@@ -7871,6 +8175,7 @@ export const listActaEntregaProducto = async ({
     const params = new URLSearchParams();
     if (empresa_id) params.append('empresa_id', String(empresa_id));
     if (cliente_id) params.append('cliente_id', String(cliente_id));
+    if (division_id) params.append('division_id', String(division_id));
     if (contrato_id) params.append('contrato_id', String(contrato_id));
     if (corpo_id) params.append('corpo_id', String(corpo_id));
 
@@ -7980,6 +8285,7 @@ interface CreateAttendanceControlParams {
     division_id?: number;
     contrato_id?: number;
     corpo_id?: number;
+    puesto_id?: number;
     fecha?: string | null;
     turno?: string | null;
     firma_responsable?: string | null;
@@ -7997,6 +8303,7 @@ interface UpdateAttendanceControlParams {
     division_id?: number;
     contrato_id?: number;
     corpo_id?: number;
+    puesto_id?: number;
     fecha?: string | null;
     turno?: string | null;
     firma_responsable?: string | null;
@@ -8205,6 +8512,76 @@ export const deleteAttendanceControl = async ({
   }
 };
 
+interface DeleteAttendanceControlImageParams {
+  controlId: string | number;
+  imageId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const deleteAttendanceControlImage = async ({
+  controlId,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteAttendanceControlImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const url = `${apiUrl}/api/attendance-control/${encodeURIComponent(String(controlId))}/images/${encodeURIComponent(String(imageId))}`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteAttendanceControlImage({ controlId, imageId, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting attendance control image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la imagen',
+    };
+  }
+};
+
 interface ListAttendanceControlParams {
   empresa_id?: number;
   cliente_id?: number;
@@ -8278,6 +8655,9 @@ export const listAttendanceControl = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data?.data && Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r && r.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing attendance control:', error);
@@ -8340,6 +8720,9 @@ export const listAttendanceControlByCorpo = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data?.data && Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r && r.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing attendance control:', error);
@@ -8354,10 +8737,12 @@ export const listAttendanceControlByCorpo = async ({
 interface CreateOpeningClosingPositionParams {
   requestData: {
     marca_id: number;
+    empresa_id?: number;
     cliente_id: number;
     corpo_id: number;
     puesto_id: number;
     division_id: number;
+    contrato_id?: number;
     fecha: string; // ISO date string
     tipo: "Apertura" | "Cierre";
     nombre_representante_cliente: string;
@@ -8379,10 +8764,12 @@ interface CreateOpeningClosingPositionParams {
 interface UpdateOpeningClosingPositionParams {
   id: string;
   requestData: {
+    empresa_id?: number;
     cliente_id?: number;
     corpo_id?: number;
     puesto_id?: number;
     division_id?: number;
+    contrato_id?: number;
     fecha?: string;
     tipo?: "Apertura" | "Cierre";
     nombre_representante_cliente?: string;
@@ -8410,6 +8797,13 @@ interface DeleteOpeningClosingPositionParams {
 
 interface ListOpeningClosingPositionByCorpoParams {
   corpo_id: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteOpeningClosingPositionImageParams {
+  id: string;
+  imageId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -8466,12 +8860,66 @@ export const createOpeningClosingPosition = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data?.status && Array.isArray((data as any).data)) {
+      (data as any).data = ((data as any).data as any[]).filter((row) => row?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error creating opening-closing position:', error);
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al crear la apertura-cierre de puesto',
+    };
+  }
+};
+
+export const deleteOpeningClosingPositionImage = async ({
+  id,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteOpeningClosingPositionImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+    const response = await fetch(`${apiUrl}/api/opening-closing-position/${id}/image/${imageId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) return deleteOpeningClosingPositionImage({ id, imageId, refreshAccessToken, logout });
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting opening-closing image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar imagen de apertura-cierre de puesto',
     };
   }
 };
@@ -8665,6 +9113,15 @@ export const listOpeningClosingPositionByCorpo = async ({
 interface CreateInductionTourRecordParams {
   requestData: {
     marca_id: number;
+    /** Jerarquía completa requerida por el servidor (empresa → plaza). */
+    empresa_id?: number | null;
+    cliente_id?: number | null;
+    division_id?: number | null;
+    contrato_id?: number | null;
+    corpo_id?: number | null;
+    puesto_id?: number | null;
+    plaza_id?: number | null;
+    empleado_id?: number | null;
     fecha?: string | null;
     division?: string | null;
     renglon_edificio?: string | null;
@@ -8674,6 +9131,7 @@ interface CreateInductionTourRecordParams {
     aspectos_especificos?: string | null;
     participantes?: string | null;
     firma_supervisor?: string | null;
+    firma_empleado?: string | null;
     firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
@@ -8683,6 +9141,14 @@ interface CreateInductionTourRecordParams {
 interface UpdateInductionTourRecordParams {
   id: string;
   requestData: {
+    empresa_id?: number | null;
+    cliente_id?: number | null;
+    division_id?: number | null;
+    contrato_id?: number | null;
+    corpo_id?: number | null;
+    puesto_id?: number | null;
+    plaza_id?: number | null;
+    empleado_id?: number | null;
     fecha?: string | null;
     division?: string | null;
     renglon_edificio?: string | null;
@@ -8692,6 +9158,7 @@ interface UpdateInductionTourRecordParams {
     aspectos_especificos?: string | null;
     participantes?: string | null;
     firma_supervisor?: string | null;
+    firma_empleado?: string | null;
     firma_responsable?: string | null;
   };
   refreshAccessToken: () => Promise<boolean>;
@@ -8899,6 +9366,7 @@ export const deleteInductionTourRecord = async ({
 export interface ListInductionTourRecordsParams {
   empresa_id?: number;
   cliente_id?: number;
+  division_id?: number;
   contrato_id?: number;
   corpo_id?: number;
   puesto_id?: number;
@@ -8910,6 +9378,7 @@ export interface ListInductionTourRecordsParams {
 export const listInductionTourRecords = async ({
   empresa_id,
   cliente_id,
+  division_id,
   contrato_id,
   corpo_id,
   puesto_id,
@@ -8936,6 +9405,7 @@ export const listInductionTourRecords = async ({
     const queryParams = new URLSearchParams();
     if (empresa_id) queryParams.append('empresa_id', empresa_id.toString());
     if (cliente_id) queryParams.append('cliente_id', cliente_id.toString());
+    if (division_id) queryParams.append('division_id', division_id.toString());
     if (contrato_id) queryParams.append('contrato_id', contrato_id.toString());
     if (corpo_id) queryParams.append('corpo_id', corpo_id.toString());
     if (puesto_id) queryParams.append('puesto_id', puesto_id.toString());
@@ -8952,7 +9422,7 @@ export const listInductionTourRecords = async ({
 
     if (response.status === 401) {
       const refreshed = await refreshAccessToken?.();
-      if (refreshed) return listInductionTourRecords({ empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id, refreshAccessToken, logout });
+      if (refreshed) return listInductionTourRecords({ empresa_id, cliente_id, division_id, contrato_id, corpo_id, puesto_id, plaza_id, refreshAccessToken, logout });
       if (logout) await logout();
       throw new Error('Sesión expirada');
     }
@@ -8968,6 +9438,9 @@ export const listInductionTourRecords = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data.status && Array.isArray(data.data)) {
+      (data as any).data = (data.data as any[]).filter((r: any) => r?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing induction tour records:', error);
@@ -9030,6 +9503,9 @@ export const listInductionTourRecordByCorpo = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data.status && Array.isArray(data.data)) {
+      (data as any).data = (data.data as any[]).filter((r: any) => r?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing induction tour record:', error);
@@ -9050,6 +9526,9 @@ interface CreateGeneralInductionRegisterParams {
     empresa_id: number;
     cliente_id: number;
     corpo_id: number;
+    division_id: number;
+    contrato_id: number;
+    puesto_id: number;
     division: string;
     fecha?: string | null;
     temas_a_tratar: string;
@@ -9065,6 +9544,12 @@ interface CreateGeneralInductionRegisterParams {
 interface UpdateGeneralInductionRegisterParams {
   id: string;
   requestData: {
+    empresa_id?: number;
+    cliente_id?: number;
+    corpo_id?: number;
+    division_id?: number;
+    contrato_id?: number;
+    puesto_id?: number;
     division?: string;
     fecha?: string | null;
     temas_a_tratar?: string;
@@ -9204,6 +9689,74 @@ export const updateGeneralInductionRegister = async ({
   }
 };
 
+interface DeleteGeneralInductionRegisterImageParams {
+  registroId: string;
+  imageId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const deleteGeneralInductionRegisterImage = async ({
+  registroId,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteGeneralInductionRegisterImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(
+      `${apiUrl}/api/general-induction-register/${encodeURIComponent(registroId)}/image/${encodeURIComponent(String(imageId))}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      }
+    );
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteGeneralInductionRegisterImage({ registroId, imageId, refreshAccessToken, logout });
+      }
+      await logout();
+      throw new Error('Sesión expirada');
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    return (await response.json()) as ApiResponse;
+  } catch (error) {
+    console.error('Error deleting general induction register image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la imagen',
+    };
+  }
+};
+
 export const deleteGeneralInductionRegister = async ({
   id,
   refreshAccessToken,
@@ -9321,6 +9874,9 @@ export const listGeneralInductionRegisters = async ({
     }
 
     const data: ApiResponse = await response.json();
+    if (data.status && Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing general induction registers:', error);
@@ -9377,7 +9933,10 @@ export const listGeneralInductionRegisterByCorpo = async ({
       throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
 
-    const data: ApiResponse = await response.json();
+    const data = (await response.json()) as ApiResponse;
+    if (Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r?.isActive !== false);
+    }
     return data;
   } catch (error) {
     console.error('Error listing general induction register:', error);

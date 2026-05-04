@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { hydrateIncidentArchivosInPayload } from './incidentsArchivosSync';
 import type {
   BasicResponse,
   CreateIncidentRequest,
@@ -118,6 +119,11 @@ export const listIncidentsByCorpo = async ({ corpoId, refreshAccessToken, logout
     if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
+    if (data?.incidents && Array.isArray(data.incidents)) {
+      data.incidents = data.incidents.filter(
+        (it: any) => it == null || (it as { isActive?: boolean }).isActive !== false
+      );
+    }
     return data;
   } catch (error: any) {
     console.error('Error listing incidents:', error);
@@ -146,6 +152,11 @@ export const listIncidentClassifications = async ({ refreshAccessToken, logout }
     if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
+    if (data?.classifications && Array.isArray(data.classifications)) {
+      data.classifications = data.classifications.filter(
+        (c: any) => c == null || c.isActive !== false
+      );
+    }
     return data;
   } catch (error: any) {
     console.error('Error listing incident classifications:', error);
@@ -190,12 +201,26 @@ export const createIncident = async ({ requestData, refreshAccessToken, logout }
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
     // Normalizar archivos: el server acepta string JSON o array, pero siempre guardamos base64 puro
-    const payload: any = { ...requestData };
+    const payload: any = { ...(await hydrateIncidentArchivosInPayload({ ...requestData })) };
     if (Array.isArray(payload.archivos)) {
       payload.archivos = payload.archivos.map((f: any) => ({
         ...f,
         file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
       }));
+    } else if (typeof payload.archivos === 'string' && payload.archivos.trim() !== '') {
+      try {
+        const a = JSON.parse(payload.archivos);
+        if (Array.isArray(a)) {
+          payload.archivos = JSON.stringify(
+            a.map((f: any) => ({
+              ...f,
+              file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
+            }))
+          );
+        }
+      } catch {
+        /* ignore */
+      }
     }
 
     const response = await authedFetch({
@@ -234,6 +259,28 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
     }
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
+    const body: any = { ...(await hydrateIncidentArchivosInPayload({ ...requestData })) };
+    if (Array.isArray(body.archivos)) {
+      body.archivos = body.archivos.map((f: any) => ({
+        ...f,
+        file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
+      }));
+    } else if (typeof body.archivos === 'string' && body.archivos.trim() !== '') {
+      try {
+        const a = JSON.parse(body.archivos);
+        if (Array.isArray(a)) {
+          body.archivos = JSON.stringify(
+            a.map((f: any) => ({
+              ...f,
+              file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
+            }))
+          );
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     const response = await authedFetch({
       url: `${apiUrl}/api/incidents/${incidentId}`,
       init: {
@@ -241,7 +288,7 @@ export const updateIncident = async ({ requestData, incidentId, refreshAccessTok
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify(body),
       },
       refreshAccessToken: refresh,
       logout: doLogout,
@@ -376,12 +423,26 @@ export const createIncidentContribution = async ({
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    const payload: any = { ...requestData };
+    const payload: any = { ...(await hydrateIncidentArchivosInPayload({ ...requestData })) };
     if (Array.isArray(payload.archivos)) {
       payload.archivos = payload.archivos.map((f: any) => ({
         ...f,
         file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
       }));
+    } else if (typeof payload.archivos === 'string' && payload.archivos.trim() !== '') {
+      try {
+        const a = JSON.parse(payload.archivos);
+        if (Array.isArray(a)) {
+          payload.archivos = JSON.stringify(
+            a.map((f: any) => ({
+              ...f,
+              file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
+            }))
+          );
+        }
+      } catch {
+        /* ignore */
+      }
     }
     // firma_aporte_tercero se envía tal cual (con prefijo data:image/png;base64,), igual que firma_empleado_manual en StaffEvaluationsScreen
 
@@ -421,12 +482,27 @@ export const updateIncidentContribution = async ({
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
-    const payload: any = { ...requestData };
+    const raw: any = { ...(await hydrateIncidentArchivosInPayload({ ...requestData })) };
+    const payload: any = { ...raw };
     if (Array.isArray(payload.archivos)) {
       payload.archivos = payload.archivos.map((f: any) => ({
         ...f,
         file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
       }));
+    } else if (typeof payload.archivos === 'string' && payload.archivos.trim() !== '') {
+      try {
+        const a = JSON.parse(payload.archivos);
+        if (Array.isArray(a)) {
+          payload.archivos = JSON.stringify(
+            a.map((f: any) => ({
+              ...f,
+              file_base64: typeof f.file_base64 === 'string' ? normalizeBase64(f.file_base64) : f.file_base64,
+            }))
+          );
+        }
+      } catch {
+        /* ignore */
+      }
     }
     // firma_aporte_tercero se envía tal cual (con prefijo data:image/png;base64,), igual que firma_empleado_manual en StaffEvaluationsScreen
 

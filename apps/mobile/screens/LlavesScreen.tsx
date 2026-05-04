@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
+import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
@@ -21,12 +22,33 @@ import getHoraAccion from '../hooks/getHoraAccion';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import { createLlave, deleteLlave, listLlaves, LlaveItem, updateLlave } from '../hooks/llavesFunctions';
-import { filterLlavesByCorpo, mergeLlavesCacheForCorpo, replaceLlavesCorpoSliceInCache } from '../hooks/llavesCacheHelpers';
-import { filterLlaverosByCorpo, mergeLlaverosCacheForCorpo, replaceLlaverosCorpoSliceInCache } from '../hooks/llaverosCacheHelpers';
+import {
+  readMainStructureTree,
+  writeMainStructureTree,
+  findHierarchyByCorpoIn,
+  getSucursalDataFromTree,
+  getFirstPuestoIdFromSucursalInTree,
+  findHierarchyByPuestoIn,
+  persistCorpoLlavesInMainStructure,
+  persistCorpoLlaverosInMainStructure,
+  normalizeLlaveroLinksForStructure,
+  enrichLlaveroLlavesLinks,
+  upsertLlaveInCorpoTree,
+  upsertLlaveroInCorpoTree,
+  applyLlaveUpdatePayloadToTree,
+  applyLlaveroUpdatePayloadToTree,
+  removeLlaveFromCorpoTreeAndStripLlaveroLinks,
+  removeLlaveroFromCorpoTree,
+  moveLlaveBetweenCorposInTree,
+  moveLlaveroBetweenCorposInTree,
+  findCorpoAndLlaveRowInTree,
+  findCorpoAndLlaveroRowInTree,
+} from '../hooks/llavesMainStructureHelpers';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from '../hooks/movimientosLlavesFunctions';
 import { createLlavero, deleteLlavero, listLlaveros, LlaveroItem, updateLlavero } from '../hooks/llaverosFunctions';
 import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from '../hooks/movimientosLlaverosFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type LlaveUI = LlaveItem & { id_local?: string };
 type MovimientoUI = {
@@ -74,16 +96,73 @@ function resolveCorpoIdFromMarca(marca: any): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+type MainStructureTree = any[];
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+type MarcaSnapshot = {
+  current: Record<string, any>;
+  roleName: string | null;
+  isOperativo: boolean;
+  marcaDivisionId: number | null;
+  marcaCorpoId: number | null;
+  marcaClienteId: number | null;
+  marcaEmpresaId: number | null;
+  filterEmpresaId: number | null;
+  filterClienteId: number | null;
+  filterDivisionId: number | null;
+  filterContratoId: number | null;
+  filterSucursalId: number | null;
+};
+
+function resolveListCorpoIdFromSnap(snap: MarcaSnapshot | null, filterSucursalId: number | null): number | null {
+  if (!snap) return null;
+  if (snap.isOperativo) return snap.marcaCorpoId;
+  const fs = filterSucursalId ?? snap.filterSucursalId;
+  return fs ?? snap.marcaCorpoId;
+}
+
 const normalizeLlavesList = (arr: any[]): LlaveUI[] =>
-  arr.map((it: any) => ({
+  (arr || [])
+    .filter((it: any) => it == null || it.isActive !== false)
+    .map((it: any) => ({
     ...it,
     id_local: it.id_local || '',
     movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
   }));
 
+const normalizeLlaverosList = (arr: any[]): LlaveroUI[] =>
+  (arr || [])
+    .filter((it: any) => it == null || it.isActive !== false)
+    .map((it: any) => ({
+    ...it,
+    id_local: it.id_local || '',
+    movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+    llaves: (it.llaves || []).map((l: any) => ({ ...l })),
+  }));
+
 export default function LlavesScreen() {
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout } = useAuth();
+  /** AuthContext no memoiza refresh/logout: sin ref, cualquier useCallback que los liste cambia cada render y re-dispara effects (p. ej. bucle en el picker de llaves del formulario de llavero). */
+  const authFetchRef = useRef({ refreshAccessToken, logout });
+  authFetchRef.current = { refreshAccessToken, logout };
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -95,6 +174,31 @@ export default function LlavesScreen() {
   const [error, setError] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState(true);
   const [marcaId, setMarcaId] = useState<number | null>(null);
+
+  const [roleName, setRoleName] = useState<RoleName>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
+  const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  /** Puesto (e_estructura_puesto) para creación/edición; requerido vía formulario o marca OPERATIVO. */
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
 
   const [llaves, setLlaves] = useState<LlaveUI[]>([]);
 
@@ -111,11 +215,12 @@ export default function LlavesScreen() {
   /** Selección de llaves para llavero: `s:<id servidor>` o `l:<id_local>` (llaves solo offline). */
   const [llaveroSelectedLlaveKeys, setLlaveroSelectedLlaveKeys] = useState<string[]>([]);
   const [isLlaveroLlavesExpanded, setIsLlaveroLlavesExpanded] = useState(false);
+  const [llaveroPickerLlaves, setLlaveroPickerLlaves] = useState<LlaveUI[]>([]);
+  const [llaveroPickerLoading, setLlaveroPickerLoading] = useState(false);
   const [isGeneratingLlaveroFirma, setIsGeneratingLlaveroFirma] = useState(false);
   const [llaveroFilterSearch, setLlaveroFilterSearch] = useState('');
   const [llaveroFilterFecha, setLlaveroFilterFecha] = useState('');
   const [showLlaveroFilterFechaPicker, setShowLlaveroFilterFechaPicker] = useState(false);
-  const [isLlaveroFiltersExpanded, setIsLlaveroFiltersExpanded] = useState(false);
 
   // Submódulo: Movimiento de llaveros (CRUD dentro de modal)
   const [isLlaveroMovModalVisible, setIsLlaveroMovModalVisible] = useState(false);
@@ -364,212 +469,517 @@ export default function LlavesScreen() {
     return current;
   };
 
-  /** Escribe el slice de llaves de la sucursal actual en `llaves_cache` sin borrar otras sucursales. */
-  const persistLlavesCacheSliceForMarcaCorpo = async (nextSlice: LlaveUI[]) => {
-    const current = await loadMarcaContext();
-    const cid = current ? resolveCorpoIdFromMarca(current) : null;
-    const cacheStr = await AsyncStorage.getItem('llaves_cache');
-    const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
-    const merged = replaceLlavesCorpoSliceInCache(existing, nextSlice, cid);
-    await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
+        setMarcaEmpresaId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current?.id) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        setMarcaId(current.id);
+        const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+        const divId = numOrNull(divIdRaw);
+        const corpoId = numOrNull(corpoIdRaw);
+        const clienteId = numOrNull(clienteIdRaw);
+        const empresaId = numOrNull(empresaIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? (role as RoleName) : null;
+
+        setMarcaDivisionId(divId);
+        setMarcaCorpoId(corpoId);
+        setMarcaClienteId(clienteId);
+        setMarcaEmpresaId(empresaId);
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id ?? current?.corpo_id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaDivisionId: divId,
+          marcaCorpoId: corpoId,
+          marcaClienteId: clienteId,
+          marcaEmpresaId: empresaId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        return null;
+      }
+    },
+    []
+  );
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const merged = await loadMainStructureTreeMerged();
+      setStructure(Array.isArray(merged) ? merged : []);
+    } catch (e) {
+      console.error('Error loading main structure (Llaves):', e);
+      setStructure([]);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e: any) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c: any) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const selectedEmpresaNode = useMemo(() => {
+    if (selectedEmpresaId === null) return null;
+    return structure.find((e: any) => e.id === selectedEmpresaId) ?? null;
+  }, [structure, selectedEmpresaId]);
+  const selectedClienteNode = useMemo(() => {
+    if (!selectedEmpresaNode || selectedClienteId === null) return null;
+    return selectedEmpresaNode.clientes.find((c: any) => c.id === selectedClienteId) ?? null;
+  }, [selectedEmpresaNode, selectedClienteId]);
+  const selectedDivisionNode = useMemo(() => {
+    if (!selectedClienteNode || selectedDivisionId === null) return null;
+    return (selectedClienteNode.division || []).find((d: any) => d.id === selectedDivisionId) ?? null;
+  }, [selectedClienteNode, selectedDivisionId]);
+  const selectedContratoNode = useMemo(() => {
+    if (!selectedDivisionNode || selectedContratoId === null) return null;
+    return (selectedDivisionNode.contratos || []).find((c: any) => c.id === selectedContratoId) ?? null;
+  }, [selectedDivisionNode, selectedContratoId]);
+  const sucursalOptions = useMemo(() => {
+    if (!selectedContratoNode) return [];
+    return (selectedContratoNode.sucursales || []).map((s: any) => ({ id: s.id, nombre: s.nombre }));
+  }, [selectedContratoNode]);
+  const selectedSucursalNodeForForm = useMemo(() => {
+    if (!selectedContratoNode || selectedSucursalId == null) return null;
+    return (selectedContratoNode.sucursales || []).find((s: any) => Number(s.id) === Number(selectedSucursalId)) ?? null;
+  }, [selectedContratoNode, selectedSucursalId]);
+  const formPuestoOptions = useMemo(() => {
+    if (!selectedSucursalNodeForForm) return [];
+    return selectedSucursalNodeForForm.puestos || [];
+  }, [selectedSucursalNodeForForm]);
+
+  const formClienteOptions = useMemo(() => {
+    if (!selectedEmpresaNode) return [];
+    return selectedEmpresaNode.clientes || [];
+  }, [selectedEmpresaNode]);
+  const formDivisionOptions = useMemo(() => {
+    if (!selectedClienteNode) return [];
+    return selectedClienteNode.division || [];
+  }, [selectedClienteNode]);
+  const formContratoOptions = useMemo(() => {
+    if (!selectedDivisionNode) return [];
+    return selectedDivisionNode.contratos || [];
+  }, [selectedDivisionNode]);
+
+  const handleFilterEmpresaChange = (empresaId: number | null) => {
+    setFilterEmpresaId(empresaId);
+    setFilterClienteId(null);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    setFilterSucursalId(null);
+    filterSucursalIdRef.current = null;
+  };
+  const handleFilterClienteChange = (clienteId: number | null) => {
+    setFilterClienteId(clienteId);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    setFilterSucursalId(null);
+    filterSucursalIdRef.current = null;
+  };
+  const handleFilterDivisionChange = (divisionId: number | null) => {
+    setFilterDivisionId(divisionId);
+    setFilterContratoId(null);
+    setFilterSucursalId(null);
+    filterSucursalIdRef.current = null;
+  };
+  const handleFilterContratoChange = (contratoId: number | null) => {
+    setFilterContratoId(contratoId);
+    setFilterSucursalId(null);
+    filterSucursalIdRef.current = null;
   };
 
-  const persistLlaverosCacheSliceForMarcaCorpo = async (nextSlice: LlaveroUI[]) => {
-    const current = await loadMarcaContext();
-    const cid = current ? resolveCorpoIdFromMarca(current) : null;
-    const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-    const existing: LlaveroUI[] = cacheStr ? JSON.parse(cacheStr) : [];
-    const merged = replaceLlaverosCorpoSliceInCache(existing, nextSlice, cid);
-    await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setSelectedEmpresaId(empresaId);
+    setSelectedClienteId(null);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  };
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setSelectedClienteId(clienteId);
+    setSelectedDivisionId(null);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  };
+  const handleFormDivisionChange = (divisionId: number | null) => {
+    setSelectedDivisionId(divisionId);
+    setSelectedContratoId(null);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  };
+  const handleFormContratoChange = (contratoId: number | null) => {
+    setSelectedContratoId(contratoId);
+    setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  };
+  const handleFormSucursalChange = (id: number | null) => {
+    setSelectedSucursalId(id);
+    setSelectedPuestoId(null);
   };
 
-  const fetchLlaves = async () => {
+  const applyCurrentMarcaToFormHierarchy = useCallback(async () => {
+    try {
+      const raw = await AsyncStorage.getItem('current_marca');
+      if (!raw) return;
+      const marca = JSON.parse(raw);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') return;
+      setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
+      setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setSelectedSucursalId(resolveCorpoIdFromMarca(marca));
+      setSelectedPuestoId(marca.puesto?.id != null ? Number(marca.puesto.id) : null);
+    } catch (e) {
+      console.error('applyCurrentMarcaToFormHierarchy (Llaves):', e);
+    }
+  }, []);
+
+  const persistLlavesListToMainStructure = async (corpoId: number, list: LlaveUI[]) => {
+    if (!corpoId) return;
+    const normalized = JSON.parse(JSON.stringify(list)).map((it: any) => ({
+      ...it,
+      sucursal_id: it?.sucursal_id ?? it?.corpo_id ?? corpoId,
+    }));
+    await persistCorpoLlavesInMainStructure(corpoId, normalized);
+    setStructure(await readMainStructureTree());
+  };
+
+  const persistLlaverosListToMainStructure = async (corpoId: number, list: LlaveroUI[]) => {
+    if (!corpoId) return;
+    const normalized = normalizeLlaveroLinksForStructure(
+      JSON.parse(JSON.stringify(list)).map((it: any) => ({
+        ...it,
+        sucursal_id: it?.sucursal_id ?? it?.corpo_id ?? corpoId,
+      }))
+    );
+    await persistCorpoLlaverosInMainStructure(corpoId, normalized);
+    setStructure(await readMainStructureTree());
+  };
+
+  const resolveActiveListCorpoId = async (): Promise<number | null> => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    return resolveListCorpoIdFromSnap(snap, filterSucursalIdRef.current);
+  };
+
+  /** Jerarquía completa (empresa…puesto) para API, caché y acciones en cola. */
+  const resolveHierarchyForRecord = async (): Promise<{
+    cliente_id: number;
+    corpo_id: number;
+    puesto_id: number;
+    empresa_id: number;
+    division_id: number;
+    contrato_id: number;
+  } | null> => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    const current = snap?.current ?? null;
+    if (!current?.id) return null;
+    const tree = await readMainStructureTree();
+    if (snap?.isOperativo) {
+      const cliente_id = Number(current?.cliente?.id ?? current?.cliente_id) || 0;
+      const corpo_id = resolveCorpoIdFromMarca(current) || 0;
+      const puesto_id = Number(current?.puesto?.id ?? current?.puesto_id) || 0;
+      if (!corpo_id || !puesto_id) return null;
+      const h = findHierarchyByPuestoIn(tree, puesto_id);
+      if (h) {
+        return {
+          cliente_id,
+          corpo_id,
+          puesto_id,
+          empresa_id: h.empresaId,
+          division_id: h.divisionId,
+          contrato_id: h.contratoId,
+        };
+      }
+      return { cliente_id, corpo_id, puesto_id, empresa_id: 0, division_id: 0, contrato_id: 0 };
+    }
+    const corpo_id =
+      selectedSucursalId ?? filterSucursalId ?? (resolveCorpoIdFromMarca(current) ?? 0);
+    const cliente_id = selectedClienteId ?? (Number(current?.cliente?.id ?? current?.cliente_id) || 0);
+    if (!corpo_id) return null;
+    const puesto_id =
+      (selectedPuestoId ??
+        getFirstPuestoIdFromSucursalInTree(tree, corpo_id) ??
+        Number(current?.puesto?.id ?? current?.puesto_id)) ||
+      0;
+    if (!puesto_id) return null;
+    const h = findHierarchyByPuestoIn(tree, puesto_id);
+    if (h) {
+      return {
+        cliente_id,
+        corpo_id,
+        puesto_id,
+        empresa_id: h.empresaId,
+        division_id: h.divisionId,
+        contrato_id: h.contratoId,
+      };
+    }
+    return { cliente_id, corpo_id, puesto_id, empresa_id: 0, division_id: 0, contrato_id: 0 };
+  };
+
+  const fetchLlaves = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const current = await loadMarcaContext();
-      if (!current) {
+      const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+      if (!snap?.current) {
+        setLlaves([]);
         setIsLoading(false);
         return;
       }
-
-      const listCorpoId = resolveCorpoIdFromMarca(current);
+      const listCorpoId = resolveListCorpoIdFromSnap(snap, filterSucursalIdRef.current);
       if (!listCorpoId) {
-        setError('No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.');
+        setError(
+          snap.isOperativo
+            ? 'No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.'
+            : 'Seleccione sucursal en el filtro para cargar llaves.'
+        );
         setLlaves([]);
         setIsLoading(false);
         return;
       }
 
+      const tree = await readMainStructureTree();
+      const rawOff = getSucursalDataFromTree(tree, listCorpoId).llaves;
+      const offlineList = normalizeLlavesList(rawOff);
+
       const isConnected = await getConnectionStatus();
-      console.log('isConnected', isConnected);
-      if (isConnected) {
+      if (!isConnected) {
+        setLlaves(offlineList);
+        setIsLoading(false);
+        return;
+      }
+
+        const { refreshAccessToken: rAuth, logout: lAuth } = authFetchRef.current;
         const res = await listLlaves({
-          corpoId: listCorpoId,
-          refreshAccessToken,
-          logout,
+        corpoId: listCorpoId,
+          refreshAccessToken: rAuth,
+          logout: lAuth,
         });
+
         if (res.status) {
-          const list = normalizeLlavesList(res.data || []);
-          const cacheStr = await AsyncStorage.getItem('llaves_cache');
-          const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
-          const merged = mergeLlavesCacheForCorpo(existing, list, listCorpoId);
-          await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
-          setLlaves(normalizeLlavesList(filterLlavesByCorpo(merged, listCorpoId)));
+        const serverList = normalizeLlavesList(res.data || []);
+        setLlaves((prev) => {
+          const localOnly = prev.filter((l) => l.id_local && Number(l.corpo_id) === Number(listCorpoId));
+          const combined = [...localOnly, ...serverList];
+          void persistCorpoLlavesInMainStructure(listCorpoId, JSON.parse(JSON.stringify(combined))).then(() => {
+            void readMainStructureTree().then(setStructure);
+          });
+          return combined;
+        });
         } else {
           setError(res.message || 'Error al cargar llaves');
-          const cacheStr = await AsyncStorage.getItem('llaves_cache');
-          if (cacheStr) {
-            try {
-              const all = JSON.parse(cacheStr);
-              setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
-            } catch {
-              setLlaves([]);
-            }
-          } else {
-            setLlaves([]);
-          }
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('llaves_cache');
-        if (cacheStr) {
-          try {
-            const all = JSON.parse(cacheStr);
-            setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
-          } catch {
-            setLlaves([]);
-          }
-        } else {
-          setLlaves([]);
-        }
+        setLlaves(offlineList);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar llaves');
-      try {
-        const current = await loadMarcaContext();
-        const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
-        const cacheStr = await AsyncStorage.getItem('llaves_cache');
-        if (cacheStr && listCorpoId) {
-          const all = JSON.parse(cacheStr);
-          setLlaves(normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId)));
-        } else {
-          setLlaves([]);
-        }
-      } catch {
-        setLlaves([]);
-      }
+      setLlaves([]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [syncMarcaFromStorage]);
 
-  const fetchLlaveros = async () => {
+  const mapLlaveroApiRow = (it: any) => ({
+    ...it,
+    id_local: it.id_local || '',
+    movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
+    llaves: (it.llaves || []).map((l: any) => ({ ...l })),
+  });
+
+  const fetchLlaveros = useCallback(async () => {
     try {
       setIsLoading(true);
       setError(null);
-      const current = await loadMarcaContext();
-      if (!current) {
+      const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+      if (!snap?.current) {
+        setLlaveros([]);
         setIsLoading(false);
         return;
       }
-
-      const listCorpoId = resolveCorpoIdFromMarca(current);
+      const listCorpoId = resolveListCorpoIdFromSnap(snap, filterSucursalIdRef.current);
       if (!listCorpoId) {
-        setError('No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.');
+        setError(
+          snap.isOperativo
+            ? 'No se encontró sucursal (corpo) en la marca actual. Indique sucursal en la marca.'
+            : 'Seleccione sucursal en el filtro para cargar llaveros.'
+        );
         setLlaveros([]);
         setIsLoading(false);
         return;
       }
 
+      const tree0 = await readMainStructureTree();
+      let rawOff = getSucursalDataFromTree(tree0, listCorpoId).llaves;
+      let baseLlaves = normalizeLlavesList(rawOff);
+      const rawLlaverosOff = getSucursalDataFromTree(tree0, listCorpoId).llaveros;
+      const offlineLlaveros = enrichLlaveroLlavesLinks(
+        normalizeLlaverosList(rawLlaverosOff).map(mapLlaveroApiRow),
+        baseLlaves
+      );
+
       const isConnected = await getConnectionStatus();
-      if (isConnected) {
+      if (!isConnected) {
+        setLlaveros(offlineLlaveros);
+        setIsLoading(false);
+        return;
+      }
+
+        const { refreshAccessToken: rAuth, logout: lAuth } = authFetchRef.current;
         const res = await listLlaveros({
-          corpoId: listCorpoId,
-          refreshAccessToken,
-          logout,
+        corpoId: listCorpoId,
+          refreshAccessToken: rAuth,
+          logout: lAuth,
         });
+
         if (res.status) {
-          const list = (res.data || []).map((it: any) => ({
-            ...it,
-            id_local: it.id_local || '',
-            movimientos: (it.movimientos || []).map((m: any) => ({ ...m, id_local: m.id_local || '' })),
-            llaves: (it.llaves || []).map((l: any) => ({ ...l })),
-          }));
-          const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-          const existing: LlaveroUI[] = cacheStr ? JSON.parse(cacheStr) : [];
-          const merged = mergeLlaverosCacheForCorpo(existing, list, listCorpoId);
-          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
-          setLlaveros(filterLlaverosByCorpo(merged, listCorpoId));
+        const tree1 = await readMainStructureTree();
+        rawOff = getSucursalDataFromTree(tree1, listCorpoId).llaves;
+        baseLlaves = normalizeLlavesList(rawOff);
+
+        setLlaveros((prev) => {
+          const localOnly = prev.filter((l) => l.id_local && Number(l.corpo_id) === Number(listCorpoId));
+          const serverList = normalizeLlaverosList(res.data || []).map(mapLlaveroApiRow);
+          const combined = [...localOnly, ...serverList];
+          const forStruct = normalizeLlaveroLinksForStructure(JSON.parse(JSON.stringify(combined)));
+          void persistCorpoLlaverosInMainStructure(listCorpoId, forStruct).then(() => {
+            void readMainStructureTree().then(setStructure);
+          });
+          return enrichLlaveroLlavesLinks(combined, baseLlaves);
+        });
         } else {
           setError(res.message || 'Error al cargar llaveros');
-          const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-          if (cacheStr) {
-            try {
-              const all = JSON.parse(cacheStr);
-              setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
-            } catch {
-              setLlaveros([]);
-            }
-          } else {
-            setLlaveros([]);
-          }
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-        if (cacheStr) {
-          try {
-            const all = JSON.parse(cacheStr);
-            setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
-          } catch {
-            setLlaveros([]);
-          }
-        } else {
-          setLlaveros([]);
-        }
+        setLlaveros(offlineLlaveros);
       }
     } catch (e: any) {
       setError(e.message || 'Error al cargar llaveros');
-      try {
-        const current = await loadMarcaContext();
-        const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
-        const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-        if (cacheStr && listCorpoId) {
-          const all = JSON.parse(cacheStr);
-          setLlaveros(filterLlaverosByCorpo(Array.isArray(all) ? all : [], listCorpoId));
-        } else {
-          setLlaveros([]);
-        }
-      } catch {
-        setLlaveros([]);
-      }
+      setLlaveros([]);
     } finally {
       setIsLoading(false);
     }
+  }, [syncMarcaFromStorage]);
+
+  const onListFilterSucursalSelected = (raw: number) => {
+    const id = raw === 0 ? null : Number(raw);
+    setFilterSucursalId(id);
+    filterSucursalIdRef.current = id;
+    if (id) {
+      if (activeTab === 'llaves') void fetchLlaves();
+      else void fetchLlaveros();
+    }
   };
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
+  const prevActiveTabRef = useRef<'llaves' | 'llaveros' | null>(null);
 
   useFocusEffect(
     useCallback(() => {
-      if (activeTab === 'llaves') {
-        fetchLlaves();
-      } else {
-        fetchLlaveros();
-      }
-    }, [activeTab])
+      let cancelled = false;
+      void (async () => {
+        await fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+        }
+        if (cancelled) return;
+        if (activeTab === 'llaves') await fetchLlaves();
+        else await fetchLlaveros();
+        prevActiveTabRef.current = activeTab;
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [fetchMainStructure, syncMarcaFromStorage, activeTab, fetchLlaves, fetchLlaveros])
   );
 
   useEffect(() => {
+    if (prevActiveTabRef.current === null) return;
+    if (prevActiveTabRef.current === activeTab) return;
+    prevActiveTabRef.current = activeTab;
+    void (activeTab === 'llaves' ? fetchLlaves() : fetchLlaveros());
+  }, [activeTab, fetchLlaves, fetchLlaveros]);
+
+  useEffect(() => {
     const handler = () => {
-      if (activeTab === 'llaves') {
-        fetchLlaves();
-      } else {
-        fetchLlaveros();
-      }
+      void (async () => {
+        if (activeTab === 'llaves') await fetchLlaves();
+        else await fetchLlaveros();
+      })();
     };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [activeTab]);
+  }, [activeTab, fetchLlaves, fetchLlaveros]);
 
   // Sincronizar movimientos de llaveros cuando cambie la lista principal
   useEffect(() => {
@@ -605,7 +1015,7 @@ export default function LlavesScreen() {
         const raw = (found as any).movimientos;
         if (Array.isArray(raw)) {
           setMovimientos(raw.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-        }
+    }
       }
     }
   }, [llaves, isMovModalVisible, movLlave?.id, movLlave?.id_local, movIsCreating, movEditing]);
@@ -621,15 +1031,42 @@ export default function LlavesScreen() {
     resetForm();
     setEditing(null);
     setIsCreating(true);
+    void applyCurrentMarcaToFormHierarchy();
+    void fetchMainStructure();
   };
 
-  const startEditing = (it: LlaveUI) => {
+  const startEditing = async (it: LlaveUI) => {
     setEditing(it);
     setIsCreating(true);
     setLugarAbre(it.lugar_abre || '');
     setCantidadCopias(String(it.cantidad_copias ?? 1));
     setObservaciones(it.observaciones || '');
     setFirmaResponsable(it.firma_responsable || '');
+    await fetchMainStructure();
+    const tree = await readMainStructureTree();
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    const rn = snap?.roleName;
+    if (rn != null && rn !== 'OPERATIVO' && tree.length) {
+      const byPuesto = it.puesto_id ? findHierarchyByPuestoIn(tree, Number(it.puesto_id)) : null;
+      if (byPuesto) {
+        setSelectedEmpresaId(byPuesto.empresaId);
+        setSelectedClienteId(byPuesto.clienteId);
+        setSelectedDivisionId(byPuesto.divisionId);
+        setSelectedContratoId(byPuesto.contratoId);
+        setSelectedSucursalId(byPuesto.corpoId);
+        setSelectedPuestoId(byPuesto.puestoId);
+      } else {
+        const h = findHierarchyByCorpoIn(tree, Number(it.corpo_id));
+        if (h) {
+          setSelectedEmpresaId(h.empresaId);
+          setSelectedClienteId(h.clienteId);
+          setSelectedDivisionId(h.divisionId);
+          setSelectedContratoId(h.contratoId);
+          setSelectedSucursalId(h.corpoId);
+          setSelectedPuestoId(it.puesto_id != null ? Number(it.puesto_id) : null);
+        }
+      }
+    }
   };
 
   const cancelCreating = () => {
@@ -702,12 +1139,39 @@ export default function LlavesScreen() {
   const buildPayload = async () => {
     const current = await loadMarcaContext();
     if (!current?.id) throw new Error('Marca no encontrada');
+    const h = await resolveHierarchyForRecord();
+    if (!h?.corpo_id || !h.puesto_id) {
+      throw new Error('Indique puesto y sucursal (jerarquía) o use una marca con puesto asignado.');
+    }
+    const empresa_id =
+      h.empresa_id > 0 ? h.empresa_id : (numOrNull(selectedEmpresaId) ?? 0);
+    const division_id =
+      h.division_id > 0 ? h.division_id : (numOrNull(selectedDivisionId) ?? 0);
+    const contrato_id =
+      h.contrato_id > 0 ? h.contrato_id : (numOrNull(selectedContratoId) ?? 0);
+    const cliente_id =
+      h.cliente_id > 0 ? h.cliente_id : (numOrNull(selectedClienteId) ?? 0);
+    if (!empresa_id || !division_id || !contrato_id) {
+      throw new Error(
+        'Complete la jerarquía (empresa, división, contrato) en los select o asegure que el árbol tenga la sucursal y el puesto.'
+      );
+    }
+    if (!cliente_id) {
+      throw new Error('Cliente (jerarquía) requerido: selección en el formulario o marca con cliente.');
+    }
     return {
       marca_id: current.id,
       lugar_abre: lugarAbre,
       cantidad_copias: parseInt(String(cantidadCopias), 10) || 0,
       observaciones: observaciones ?? '',
       firma_responsable: firmaResponsable,
+      empresa_id,
+      division_id,
+      contrato_id,
+      cliente_id,
+      corpo_id: h.corpo_id,
+      sucursal_id: h.corpo_id,
+      puesto_id: h.puesto_id,
     };
   };
 
@@ -757,7 +1221,7 @@ export default function LlavesScreen() {
       }
       return a;
     });
-    await AsyncStorage.setItem('llaves_actions', JSON.stringify(updated));
+      await AsyncStorage.setItem('llaves_actions', JSON.stringify(updated));
     return updatedAny;
   };
 
@@ -823,7 +1287,7 @@ export default function LlavesScreen() {
       }
       return a;
     });
-    await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updated));
+      await AsyncStorage.setItem('movimientos_llaves_actions', JSON.stringify(updated));
     return updatedAny;
   };
 
@@ -960,7 +1424,9 @@ export default function LlavesScreen() {
       return { ...it, movimientos: nextMovs };
     });
     setLlaves(nextLlaves);
-    await persistLlavesCacheSliceForMarcaCorpo(nextLlaves);
+    const resolvedCid = await resolveActiveListCorpoId();
+    const cid = resolvedCid ?? numOrNull(llave.corpo_id) ?? 0;
+    if (cid) await persistLlavesListToMainStructure(cid, nextLlaves);
 
     setMovimientos(nextMovs);
     setMovLlave((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
@@ -974,117 +1440,117 @@ export default function LlavesScreen() {
 
     setIsSavingMov(true);
     try {
-      const payload = await buildMovPayload();
-      const isConnected = await getConnectionStatus();
+    const payload = await buildMovPayload();
+    const isConnected = await getConnectionStatus();
 
-      // create
-      if (!movEditing) {
-        if (isConnected && movLlave.id && movLlave.id !== 0) {
-          const res = await createMovimientoLlave({ llaveId: movLlave.id, requestData: payload, refreshAccessToken, logout });
-          if (res.status) {
-            Alert.alert('Éxito', 'Movimiento creado correctamente');
-            setMovIsCreating(false);
-            await fetchLlaves();
-          } else {
-            Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
-          }
-        } else {
-          const localId = `local-mov-${Date.now()}`;
-          const localItem: MovimientoUI = {
-            id: 0,
-            id_local: localId,
-            llave_id: movLlave.id || 0,
-            llaveLocalId: movLlave.id_local || '',
-            nombre_persona_recibe: payload.nombre_persona_recibe,
-            nombre_persona_entrega: payload.nombre_persona_entrega,
-            departamento: payload.departamento,
-            telefono: payload.telefono,
-            fecha: payload.fecha,
-            hora: payload.hora,
-            firma_entrega: payload.firma_entrega,
-            firma_recibe: payload.firma_recibe,
-            firma_responsable: payload.firma_responsable,
-          };
-          const next = [localItem, ...movimientos];
-          await persistMovimientosToLlavesCache(movLlave, next);
-          await upsertMovAction({
-            type: 'create',
-            id: localId,
-            id_local: localId,
-            llaveId: movLlave.id || 0,
-            llaveLocalId: movLlave.id_local || '',
-            requestData: payload,
-          });
-          Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
-          setMovIsCreating(false);
-        }
-        return;
-      }
-
-      // update
-      const isLocalMov = !!movEditing.id_local || movEditing.id === 0;
-      if (isConnected && !isLocalMov && movLlave.id && movLlave.id !== 0) {
-        const res = await updateMovimientoLlave({
-          llaveId: movLlave.id,
-          id: movEditing.id,
-          requestData: payload,
-          refreshAccessToken,
-          logout,
-        });
+    // create
+    if (!movEditing) {
+      if (isConnected && movLlave.id && movLlave.id !== 0) {
+        const res = await createMovimientoLlave({ llaveId: movLlave.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+          Alert.alert('Éxito', 'Movimiento creado correctamente');
           setMovIsCreating(false);
-          setMovEditing(null);
           await fetchLlaves();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
+          Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
         }
       } else {
-        const next = movimientos.map((m) => {
+        const localId = `local-mov-${Date.now()}`;
+        const localItem: MovimientoUI = {
+          id: 0,
+          id_local: localId,
+          llave_id: movLlave.id || 0,
+          llaveLocalId: movLlave.id_local || '',
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
+          firma_responsable: payload.firma_responsable,
+        };
+        const next = [localItem, ...movimientos];
+        await persistMovimientosToLlavesCache(movLlave, next);
+        await upsertMovAction({
+          type: 'create',
+          id: localId,
+            id_local: localId,
+          llaveId: movLlave.id || 0,
+          llaveLocalId: movLlave.id_local || '',
+          requestData: payload,
+        });
+        Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
+        setMovIsCreating(false);
+      }
+      return;
+    }
+
+    // update
+    const isLocalMov = !!movEditing.id_local || movEditing.id === 0;
+    if (isConnected && !isLocalMov && movLlave.id && movLlave.id !== 0) {
+      const res = await updateMovimientoLlave({
+        llaveId: movLlave.id,
+        id: movEditing.id,
+        requestData: payload,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+        setMovIsCreating(false);
+        setMovEditing(null);
+        await fetchLlaves();
+      } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
+      }
+    } else {
+      const next = movimientos.map((m) => {
           const match =
             (movEditing.id_local && m.id_local === movEditing.id_local) ||
             (!movEditing.id_local && m.id === movEditing.id);
-          if (!match) return m;
-          return {
-            ...m,
-            nombre_persona_recibe: payload.nombre_persona_recibe,
-            nombre_persona_entrega: payload.nombre_persona_entrega,
-            departamento: payload.departamento,
-            telefono: payload.telefono,
-            fecha: payload.fecha,
-            hora: payload.hora,
-            firma_entrega: payload.firma_entrega,
-            firma_recibe: payload.firma_recibe,
-            firma_responsable: payload.firma_responsable,
-          };
-        });
-        await persistMovimientosToLlavesCache(movLlave, next);
+        if (!match) return m;
+        return {
+          ...m,
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
+          firma_responsable: payload.firma_responsable,
+        };
+      });
+      await persistMovimientosToLlavesCache(movLlave, next);
 
-        if (movEditing.id_local) {
-          const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
-          if (!updated) {
-            await upsertMovAction({
-              type: 'create',
-              id: movEditing.id_local,
-              id_local: movEditing.id_local,
-              llaveId: movLlave.id || 0,
-              llaveLocalId: movLlave.id_local || '',
-              requestData: payload,
-            });
-          }
-        } else {
+      if (movEditing.id_local) {
+        const updated = await updateMovCreateActionForLocalId(movEditing.id_local, payload);
+        if (!updated) {
           await upsertMovAction({
-            type: 'update',
-            id: movEditing.id,
+            type: 'create',
+            id: movEditing.id_local,
+              id_local: movEditing.id_local,
             llaveId: movLlave.id || 0,
             llaveLocalId: movLlave.id_local || '',
             requestData: payload,
           });
         }
+      } else {
+        await upsertMovAction({
+          type: 'update',
+          id: movEditing.id,
+          llaveId: movLlave.id || 0,
+          llaveLocalId: movLlave.id_local || '',
+          requestData: payload,
+        });
+      }
 
-        Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
-        setMovIsCreating(false);
-        setMovEditing(null);
+      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+      setMovIsCreating(false);
+      setMovEditing(null);
       }
     } catch (e) {
       Alert.alert('Error', e instanceof Error ? e.message : 'No se pudo guardar el movimiento');
@@ -1115,41 +1581,41 @@ export default function LlavesScreen() {
 
     setDeletingMovLlaveKey(movimientoLlaveRowKey(m));
     try {
-      const isConnected = await getConnectionStatus();
+          const isConnected = await getConnectionStatus();
 
-      if (m.id_local || m.id === 0) {
-        const next = movimientos.filter((x) => x.id_local !== m.id_local);
-        await persistMovimientosToLlavesCache(movLlave, next);
-        if (m.id_local) await removeMovActionsForLocalId(m.id_local);
-        return;
-      }
+          if (m.id_local || m.id === 0) {
+            const next = movimientos.filter((x) => x.id_local !== m.id_local);
+            await persistMovimientosToLlavesCache(movLlave, next);
+            if (m.id_local) await removeMovActionsForLocalId(m.id_local);
+            return;
+          }
 
-      if (isConnected && movLlave.id && movLlave.id !== 0) {
-        const res = await deleteMovimientoLlave({
-          llaveId: movLlave.id,
-          id: m.id,
-          marcaId: current.id,
-          refreshAccessToken,
-          logout,
-        });
-        if (res.status) {
-          Alert.alert('Éxito', 'Movimiento eliminado correctamente');
-          await fetchLlaves();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
-        }
-      } else {
-        const next = movimientos.filter((x) => x.id !== m.id);
-        await persistMovimientosToLlavesCache(movLlave, next);
-        await upsertMovAction({
-          type: 'delete',
-          id: m.id,
-          llaveId: movLlave.id || 0,
-          llaveLocalId: movLlave.id_local || '',
-          marcaId: current.id,
-        });
-        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-      }
+          if (isConnected && movLlave.id && movLlave.id !== 0) {
+            const res = await deleteMovimientoLlave({
+              llaveId: movLlave.id,
+              id: m.id,
+              marcaId: current.id,
+              refreshAccessToken,
+              logout,
+            });
+            if (res.status) {
+              Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+              await fetchLlaves();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+            }
+          } else {
+            const next = movimientos.filter((x) => x.id !== m.id);
+            await persistMovimientosToLlavesCache(movLlave, next);
+            await upsertMovAction({
+              type: 'delete',
+              id: m.id,
+              llaveId: movLlave.id || 0,
+              llaveLocalId: movLlave.id_local || '',
+              marcaId: current.id,
+            });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
     } finally {
       setDeletingMovLlaveKey(null);
     }
@@ -1223,7 +1689,7 @@ export default function LlavesScreen() {
 
     setIsSubmitting(true);
     setSubmitResponse(null);
-    
+
     try {
       const isConnected = await getConnectionStatus();
       const payload = await buildPayload();
@@ -1239,6 +1705,32 @@ export default function LlavesScreen() {
         if (isConnected) {
           const res = await createLlave({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
+            const sid = Number((res as any).id);
+            const hR = await resolveHierarchyForRecord();
+            if (hR?.corpo_id && Number.isFinite(sid) && sid > 0) {
+              const row: LlaveUI = {
+                id: sid,
+                id_local: '',
+                cliente_id: payload.cliente_id,
+                corpo_id: payload.corpo_id,
+                puesto_id: payload.puesto_id,
+                empresa_id: payload.empresa_id,
+                division_id: payload.division_id,
+                contrato_id: payload.contrato_id,
+                isActive: true,
+                lugar_abre: payload.lugar_abre,
+                cantidad_copias: payload.cantidad_copias,
+                observaciones: payload.observaciones,
+                firma_responsable: payload.firma_responsable,
+                created_by: Number(employee?.id) || 0,
+                created_at: horaAccion ? new Date(horaAccion).toISOString() : new Date().toISOString(),
+                movimientos: [],
+              };
+              const tree = await readMainStructureTree();
+              const next = upsertLlaveInCorpoTree(tree, hR.corpo_id, row);
+              await writeMainStructureTree(next);
+              setStructure(next);
+            }
             Alert.alert('Éxito', res.message || 'Llave creada correctamente');
             setIsCreating(false);
             await fetchLlaves();
@@ -1246,12 +1738,9 @@ export default function LlavesScreen() {
             Alert.alert('Error', res.message || 'No se pudo crear la llave');
           }
         } else {
-          const currentMarca = await loadMarcaContext();
-          const clienteNum = Number(currentMarca?.cliente?.id ?? currentMarca?.cliente_id) || 0;
-          const corpoNum = resolveCorpoIdFromMarca(currentMarca) || 0;
-          const puestoNum = Number(currentMarca?.puesto?.id ?? currentMarca?.puesto_id) || 0;
-          if (!corpoNum) {
-            Alert.alert('Error', 'No se encontró sucursal (corpo) en la marca; no se puede crear la llave offline.');
+          const hOff = await resolveHierarchyForRecord();
+          if (!hOff?.corpo_id) {
+            Alert.alert('Error', 'Defina sucursal y puesto en el formulario o en la marca para crear la llave offline.');
             return;
           }
 
@@ -1260,9 +1749,13 @@ export default function LlavesScreen() {
           const localItem: LlaveUI = {
             id: 0,
             id_local: localId,
-            cliente_id: clienteNum,
-            corpo_id: corpoNum,
-            puesto_id: puestoNum,
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
+            puesto_id: payload.puesto_id,
+            empresa_id: payload.empresa_id,
+            division_id: payload.division_id,
+            contrato_id: payload.contrato_id,
+            isActive: true,
             lugar_abre: payload.lugar_abre,
             cantidad_copias: payload.cantidad_copias,
             observaciones: payload.observaciones,
@@ -1271,13 +1764,16 @@ export default function LlavesScreen() {
             created_at: nowIso,
           };
 
-          const cacheStr0 = await AsyncStorage.getItem('llaves_cache');
-          const existingAll: LlaveUI[] = cacheStr0 ? JSON.parse(cacheStr0) : [];
-          const deduped = existingAll.filter((x) => String(x.id_local) !== String(localId));
-          const nextCache = [localItem, ...deduped];
-          await AsyncStorage.setItem('llaves_cache', JSON.stringify(nextCache));
-          setLlaves([localItem, ...llaves]);
-          await upsertAction({ type: 'create', id: localId, id_local: localId, requestData: payload });
+          const next = [localItem, ...llaves];
+          setLlaves(next);
+          await persistLlavesListToMainStructure(hOff.corpo_id, next);
+          await upsertAction({
+            type: 'create',
+            id: localId,
+            id_local: localId,
+            corpo_id: hOff.corpo_id,
+            requestData: payload,
+          });
 
           Alert.alert('Éxito', 'La llave se sincronizará cuando vuelva la conexión.');
           setIsCreating(false);
@@ -1290,6 +1786,14 @@ export default function LlavesScreen() {
       if (isConnected && !isLocal) {
         const res = await updateLlave({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          try {
+            const tree = await readMainStructureTree();
+            const nextTree = applyLlaveUpdatePayloadToTree(tree, editing.id, payload);
+            await writeMainStructureTree(nextTree);
+            setStructure(nextTree);
+          } catch (e) {
+            console.warn('main_structure llave update:', e);
+          }
           Alert.alert('Éxito', res.message || 'Llave actualizada correctamente');
           setIsCreating(false);
           setEditing(null);
@@ -1310,10 +1814,32 @@ export default function LlavesScreen() {
             cantidad_copias: payload.cantidad_copias,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
+            puesto_id: payload.puesto_id,
+            empresa_id: payload.empresa_id,
+            division_id: payload.division_id,
+            contrato_id: payload.contrato_id,
           };
         });
         setLlaves(next);
-        await persistLlavesCacheSliceForMarcaCorpo(next);
+        const oldCorpo = numOrNull(editing.corpo_id);
+        const newCorpo = numOrNull(payload.corpo_id) ?? oldCorpo ?? 0;
+        if (oldCorpo && newCorpo && oldCorpo !== newCorpo) {
+          const row = next.find(
+            (it) =>
+              (editing.id_local && it.id_local === editing.id_local) ||
+              (!editing.id_local && it.id === editing.id)
+          );
+          if (row) {
+            const tree = await readMainStructureTree();
+            const moved = moveLlaveBetweenCorposInTree(tree, oldCorpo, newCorpo, row);
+            await writeMainStructureTree(moved);
+            setStructure(moved);
+          }
+        } else if (newCorpo) {
+          await persistLlavesListToMainStructure(newCorpo, next);
+        }
 
         if (editing.id_local) {
           const updated = await updateCreateActionForLocalId(editing.id_local, payload);
@@ -1328,9 +1854,9 @@ export default function LlavesScreen() {
         setIsCreating(false);
         setEditing(null);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving llave:', error);
-      Alert.alert('Error', 'Error al guardar la llave');
+      Alert.alert('Error', error?.message || 'Error al guardar la llave');
     } finally {
       setIsSubmitting(false);
     }
@@ -1390,6 +1916,26 @@ export default function LlavesScreen() {
     if (!current?.id) throw new Error('Marca no encontrada');
     const llaves_refs = parseLlaveSelectionKeysToRefs(llaveroSelectedLlaveKeys);
     const llaves = llaves_refs.map((r) => r.llave_id).filter((n): n is number => typeof n === 'number' && n > 0);
+    const h = await resolveHierarchyForRecord();
+    if (!h?.corpo_id || !h.puesto_id) {
+      throw new Error('Indique puesto y sucursal (jerarquía) o use una marca con puesto asignado.');
+    }
+    const empresa_id =
+      h.empresa_id > 0 ? h.empresa_id : (numOrNull(selectedEmpresaId) ?? 0);
+    const division_id =
+      h.division_id > 0 ? h.division_id : (numOrNull(selectedDivisionId) ?? 0);
+    const contrato_id =
+      h.contrato_id > 0 ? h.contrato_id : (numOrNull(selectedContratoId) ?? 0);
+    const cliente_id =
+      h.cliente_id > 0 ? h.cliente_id : (numOrNull(selectedClienteId) ?? 0);
+    if (!empresa_id || !division_id || !contrato_id) {
+      throw new Error(
+        'Complete la jerarquía (empresa, división, contrato) en los select o asegure que el árbol tenga la sucursal y el puesto.'
+      );
+    }
+    if (!cliente_id) {
+      throw new Error('Cliente (jerarquía) requerido: selección en el formulario o marca con cliente.');
+    }
     return {
       marca_id: current.id,
       nombre_llavero: llaveroNombre.trim(),
@@ -1397,6 +1943,13 @@ export default function LlavesScreen() {
       firma_responsable: llaveroFirmaResponsable,
       llaves_refs,
       llaves,
+      empresa_id,
+      division_id,
+      contrato_id,
+      cliente_id,
+      corpo_id: h.corpo_id,
+      sucursal_id: h.corpo_id,
+      puesto_id: h.puesto_id,
     };
   };
 
@@ -1422,6 +1975,43 @@ export default function LlavesScreen() {
         if (isConnected) {
           const res = await createLlavero({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
+            const sid = Number((res as any).id);
+            const hE = await resolveHierarchyForRecord();
+            if (hE?.corpo_id && Number.isFinite(sid) && sid > 0) {
+              const tree0 = await readMainStructureTree();
+              const baseLlaves = normalizeLlavesList(getSucursalDataFromTree(tree0, hE.corpo_id).llaves);
+              const row: LlaveroUI = {
+                id: sid,
+                id_local: '',
+                cliente_id: payload.cliente_id,
+                corpo_id: payload.corpo_id,
+                puesto_id: payload.puesto_id,
+                empresa_id: payload.empresa_id,
+                division_id: payload.division_id,
+                contrato_id: payload.contrato_id,
+                isActive: true,
+                nombre_llavero: payload.nombre_llavero,
+                observaciones: payload.observaciones,
+                firma_responsable: payload.firma_responsable,
+                created_by: Number(employee?.id) || 0,
+                created_at: horaAccion ? new Date(horaAccion).toISOString() : new Date().toISOString(),
+                movimientos: [],
+                llaves: (payload.llaves_refs || []).map((r: { llave_id?: number; llave_id_local?: string }) =>
+                  r.llave_id_local
+                    ? { id: 0, llave_id: 0, llave_id_local: r.llave_id_local, llavero_id: sid }
+                    : { id: 0, llave_id: r.llave_id || 0, llavero_id: sid }
+                ),
+              };
+              const enriched = enrichLlaveroLlavesLinks([row], baseLlaves)[0];
+              const tree = await readMainStructureTree();
+              const next = upsertLlaveroInCorpoTree(
+                tree,
+                hE.corpo_id,
+                normalizeLlaveroLinksForStructure([enriched])[0]
+              );
+              await writeMainStructureTree(next);
+              setStructure(next);
+            }
             Alert.alert('Éxito', res.message || 'Llavero creado correctamente');
             setIsLlaveroCreating(false);
             await fetchLlaveros();
@@ -1431,20 +2021,21 @@ export default function LlavesScreen() {
         } else {
           const localId = `local-llavero-${Date.now()}`;
           const nowIso = new Date(horaAccion).toISOString();
-          const current = await loadMarcaContext();
-          const clienteNum = Number(current?.cliente?.id ?? current?.cliente_id) || 0;
-          const corpoNum = resolveCorpoIdFromMarca(current) || 0;
-          const puestoNum = Number(current?.puesto?.id ?? current?.puesto_id) || 0;
-          if (!corpoNum) {
-            Alert.alert('Error', 'No se encontró sucursal (corpo) en la marca; no se puede crear el llavero offline.');
+          const hOffL = await resolveHierarchyForRecord();
+          if (!hOffL?.corpo_id) {
+            Alert.alert('Error', 'Defina sucursal y puesto en el formulario o en la marca para crear el llavero offline.');
             return;
           }
           const localItem: LlaveroUI = {
             id: 0,
             id_local: localId,
-            cliente_id: clienteNum,
-            corpo_id: corpoNum,
-            puesto_id: puestoNum,
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
+            puesto_id: payload.puesto_id,
+            empresa_id: payload.empresa_id,
+            division_id: payload.division_id,
+            contrato_id: payload.contrato_id,
+            isActive: true,
             nombre_llavero: payload.nombre_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
@@ -1457,13 +2048,16 @@ export default function LlavesScreen() {
             ),
           };
 
-          const cacheStr0 = await AsyncStorage.getItem('llaveros_cache');
-          const existingAll: LlaveroUI[] = cacheStr0 ? JSON.parse(cacheStr0) : [];
-          const deduped = existingAll.filter((x) => String(x.id_local) !== String(localId));
-          const nextCache = [localItem, ...deduped];
-          await AsyncStorage.setItem('llaveros_cache', JSON.stringify(nextCache));
-          setLlaveros([localItem, ...llaveros]);
-          await upsertLlaveroAction({ type: 'create', id: localId, id_local: localId, requestData: payload });
+          const next = [localItem, ...llaveros];
+          setLlaveros(next);
+          await persistLlaverosListToMainStructure(hOffL.corpo_id, next);
+          await upsertLlaveroAction({
+            type: 'create',
+            id: localId,
+            id_local: localId,
+            corpo_id: hOffL.corpo_id,
+            requestData: payload,
+          });
 
           Alert.alert('Éxito', 'El llavero se sincronizará cuando vuelva la conexión.');
           setIsLlaveroCreating(false);
@@ -1476,6 +2070,14 @@ export default function LlavesScreen() {
       if (isConnected && !isLocal) {
         const res = await updateLlavero({ id: llaveroEditing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          try {
+            const tree = await readMainStructureTree();
+            const nextTree = applyLlaveroUpdatePayloadToTree(tree, llaveroEditing.id, payload, payload.llaves);
+            await writeMainStructureTree(nextTree);
+            setStructure(nextTree);
+          } catch (e) {
+            console.warn('main_structure llavero update:', e);
+          }
           Alert.alert('Éxito', res.message || 'Llavero actualizado correctamente');
           setIsLlaveroCreating(false);
           setLlaveroEditing(null);
@@ -1495,6 +2097,12 @@ export default function LlavesScreen() {
             nombre_llavero: payload.nombre_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
+            puesto_id: payload.puesto_id,
+            empresa_id: payload.empresa_id,
+            division_id: payload.division_id,
+            contrato_id: payload.contrato_id,
             llaves: (payload.llaves_refs || []).map((r: { llave_id?: number; llave_id_local?: string }) =>
               r.llave_id_local
                 ? { id: 0, llave_id: 0, llave_id_local: r.llave_id_local, llavero_id: it.id || 0 }
@@ -1503,15 +2111,35 @@ export default function LlavesScreen() {
           };
         });
         setLlaveros(next);
-        await persistLlaverosCacheSliceForMarcaCorpo(next);
+        const oldCorpo = numOrNull(llaveroEditing.corpo_id);
+        const newCorpo = numOrNull(payload.corpo_id) ?? oldCorpo ?? 0;
+        if (oldCorpo && newCorpo && oldCorpo !== newCorpo) {
+          const row = next.find(
+            (it) =>
+              (llaveroEditing.id_local && it.id_local === llaveroEditing.id_local) ||
+              (!llaveroEditing.id_local && it.id === llaveroEditing.id)
+          );
+          if (row) {
+            const tree = await readMainStructureTree();
+            const moved = moveLlaveroBetweenCorposInTree(tree, oldCorpo, newCorpo, normalizeLlaveroLinksForStructure([row])[0]);
+            await writeMainStructureTree(moved);
+            setStructure(moved);
+          }
+        } else if (newCorpo) {
+          await persistLlaverosListToMainStructure(newCorpo, next);
+        }
 
         if (llaveroEditing.id_local) {
-          await upsertLlaveroAction({
-            type: 'create',
-            id: llaveroEditing.id_local,
-            id_local: llaveroEditing.id_local,
-            requestData: payload,
-          });
+          const updated = await updateLlaveroCreateActionForLocalId(llaveroEditing.id_local, payload);
+          if (!updated) {
+            await upsertLlaveroAction({
+              type: 'create',
+              id: llaveroEditing.id_local,
+              id_local: llaveroEditing.id_local,
+              corpo_id: newCorpo,
+              requestData: payload,
+            });
+          }
         } else {
           await upsertLlaveroAction({ type: 'update', id: llaveroEditing.id, requestData: payload });
         }
@@ -1520,9 +2148,9 @@ export default function LlavesScreen() {
         setIsLlaveroCreating(false);
         setLlaveroEditing(null);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving llavero:', error);
-      Alert.alert('Error', 'Error al guardar el llavero');
+      Alert.alert('Error', error?.message || 'Error al guardar el llavero');
     } finally {
       setIsSubmitting(false);
     }
@@ -1548,31 +2176,57 @@ export default function LlavesScreen() {
     if (!current?.id) return;
     setDeletingLlaveroKey(llaveroRowKey(it));
     try {
-      const isConnected = await getConnectionStatus();
+          const isConnected = await getConnectionStatus();
 
-      if (it.id_local || it.id === 0) {
-        const next = llaveros.filter((x) => x.id_local !== it.id_local);
-        setLlaveros(next);
-        await persistLlaverosCacheSliceForMarcaCorpo(next);
-        if (it.id_local) await removeLlaveroActionsForLocalId(it.id_local);
-        return;
-      }
-
-      if (isConnected) {
-        const res = await deleteLlavero({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Llavero eliminado correctamente');
-          await fetchLlaveros();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo eliminar el llavero');
+          if (it.id_local || it.id === 0) {
+            const next = llaveros.filter((x) => x.id_local !== it.id_local);
+            setLlaveros(next);
+        const cid = numOrNull(it.corpo_id) ?? (await resolveActiveListCorpoId()) ?? 0;
+        if (cid) {
+          const tree = await readMainStructureTree();
+          const rm = removeLlaveroFromCorpoTree(tree, cid, {
+            id: it.id && it.id > 0 ? it.id : undefined,
+            id_local: it.id_local || undefined,
+          });
+          await writeMainStructureTree(rm);
+          setStructure(rm);
         }
-      } else {
-        const next = llaveros.filter((x) => x.id !== it.id);
-        setLlaveros(next);
-        await persistLlaverosCacheSliceForMarcaCorpo(next);
-        await upsertLlaveroAction({ type: 'delete', id: it.id, marcaId: current.id });
-        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-      }
+            if (it.id_local) await removeLlaveroActionsForLocalId(it.id_local);
+            return;
+          }
+
+          if (isConnected) {
+            const res = await deleteLlavero({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
+            if (res.status) {
+          try {
+            const tree = await readMainStructureTree();
+            const hit = findCorpoAndLlaveroRowInTree(tree, { id: it.id });
+            if (hit) {
+              const rm = removeLlaveroFromCorpoTree(tree, hit.corpoId, { id: it.id });
+              await writeMainStructureTree(rm);
+              setStructure(rm);
+            }
+          } catch (e) {
+            console.warn('main_structure llavero delete:', e);
+          }
+              Alert.alert('Éxito', 'Llavero eliminado correctamente');
+              await fetchLlaveros();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar el llavero');
+            }
+          } else {
+            const next = llaveros.filter((x) => x.id !== it.id);
+            setLlaveros(next);
+        const cid = numOrNull(it.corpo_id) ?? (await resolveActiveListCorpoId()) ?? 0;
+        if (cid) {
+          const tree = await readMainStructureTree();
+          const rm = removeLlaveroFromCorpoTree(tree, cid, { id: it.id });
+          await writeMainStructureTree(rm);
+          setStructure(rm);
+        }
+            await upsertLlaveroAction({ type: 'delete', id: it.id, marcaId: current.id });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
     } finally {
       setDeletingLlaveroKey(null);
     }
@@ -1742,7 +2396,8 @@ export default function LlavesScreen() {
     });
 
     setLlaves(nextLlaves);
-    await persistLlavesCacheSliceForMarcaCorpo(nextLlaves);
+    const cid = await resolveActiveListCorpoId();
+    if (cid) await persistLlavesListToMainStructure(cid, nextLlaves);
   };
 
   const persistMovimientosToLlaverosCache = async (llavero: LlaveroUI, nextMovs: MovimientoLlaveroUI[]) => {
@@ -1752,7 +2407,8 @@ export default function LlavesScreen() {
       return { ...it, movimientos: nextMovs };
     });
     setLlaveros(nextLlaveros);
-    await persistLlaverosCacheSliceForMarcaCorpo(nextLlaveros);
+    const cidLlavero = numOrNull(llavero.corpo_id) ?? (await resolveActiveListCorpoId()) ?? 0;
+    if (cidLlavero) await persistLlaverosListToMainStructure(cidLlavero, nextLlaveros);
 
     setLlaveroMovimientos(nextMovs);
     setMovLlavero((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
@@ -1773,109 +2429,109 @@ export default function LlavesScreen() {
 
     setIsSavingLlaveroMov(true);
     try {
-      const payload = await buildLlaveroMovPayload();
-      const isConnected = await getConnectionStatus();
+    const payload = await buildLlaveroMovPayload();
+    const isConnected = await getConnectionStatus();
 
-      // create
-      if (!llaveroMovEditing) {
-        if (isConnected && movLlavero.id && movLlavero.id !== 0) {
-          const res = await createMovimientoLlavero({ llaveroId: movLlavero.id, requestData: payload, refreshAccessToken, logout });
-          if (res.status) {
-            Alert.alert('Éxito', 'Movimiento creado correctamente');
-            setLlaveroMovIsCreating(false);
-            await fetchLlaveros();
-          } else {
-            Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
-          }
-        } else {
-          const localId = `local-mov-llavero-${Date.now()}`;
-          const localItem: MovimientoLlaveroUI = {
-            id: 0,
-            id_local: localId,
-            llavero_id: movLlavero.id || 0,
-            llaveroLocalId: movLlavero.id_local || '',
-            nombre_persona_recibe: payload.nombre_persona_recibe,
-            nombre_persona_entrega: payload.nombre_persona_entrega,
-            departamento: payload.departamento,
-            telefono: payload.telefono,
-            fecha: payload.fecha,
-            hora: payload.hora,
-            firma_entrega: payload.firma_entrega,
-            firma_recibe: payload.firma_recibe,
-            firma_responsable: payload.firma_responsable,
-          };
-          const next = [localItem, ...llaveroMovimientos];
-          await persistMovimientosToLlaverosCache(movLlavero, next);
-          await upsertLlaveroMovAction({
-            type: 'create',
-            id: localId,
-            id_local: localId,
-            llaveroId: movLlavero.id || 0,
-            llaveroLocalId: movLlavero.id_local || '',
-            requestData: payload,
-          });
-          Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
-          setLlaveroMovIsCreating(false);
-        }
-        return;
-      }
-
-      // update
-      const isLocalMov = !!llaveroMovEditing.id_local || llaveroMovEditing.id === 0;
-      if (isConnected && !isLocalMov && movLlavero.id && movLlavero.id !== 0) {
-        const res = await updateMovimientoLlavero({
-          llaveroId: movLlavero.id,
-          id: llaveroMovEditing.id,
-          requestData: payload,
-          refreshAccessToken,
-          logout,
-        });
+    // create
+    if (!llaveroMovEditing) {
+      if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+        const res = await createMovimientoLlavero({ llaveroId: movLlavero.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
-          Alert.alert('Éxito', 'Movimiento actualizado correctamente');
+          Alert.alert('Éxito', 'Movimiento creado correctamente');
           setLlaveroMovIsCreating(false);
-          setLlaveroMovEditing(null);
           await fetchLlaveros();
         } else {
-          Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
+          Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
         }
       } else {
-        const next = llaveroMovimientos.map((m) => {
-          const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
-          if (!match) return m;
-          return {
-            ...m,
-            nombre_persona_recibe: payload.nombre_persona_recibe,
-            nombre_persona_entrega: payload.nombre_persona_entrega,
-            departamento: payload.departamento,
-            telefono: payload.telefono,
-            fecha: payload.fecha,
-            hora: payload.hora,
-            firma_entrega: payload.firma_entrega,
-            firma_recibe: payload.firma_recibe,
-            firma_responsable: payload.firma_responsable,
-          };
-        });
+        const localId = `local-mov-llavero-${Date.now()}`;
+        const localItem: MovimientoLlaveroUI = {
+          id: 0,
+          id_local: localId,
+          llavero_id: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
+          firma_responsable: payload.firma_responsable,
+        };
+        const next = [localItem, ...llaveroMovimientos];
         await persistMovimientosToLlaverosCache(movLlavero, next);
-        if (llaveroMovEditing.id_local) {
-          await upsertLlaveroMovAction({
-            type: 'create',
-            id: llaveroMovEditing.id_local,
-            id_local: llaveroMovEditing.id_local,
-            llaveroId: movLlavero.id || 0,
-            llaveroLocalId: movLlavero.id_local || '',
-            requestData: payload,
-          });
-        } else {
-          await upsertLlaveroMovAction({
-            type: 'update',
-            id: llaveroMovEditing.id,
-            llaveroId: movLlavero.id || 0,
-            requestData: payload,
-          });
-        }
-        Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+        await upsertLlaveroMovAction({
+          type: 'create',
+          id: localId,
+            id_local: localId,
+          llaveroId: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          requestData: payload,
+        });
+        Alert.alert('Guardado (offline)', 'El movimiento se sincronizará cuando vuelva la conexión.');
+        setLlaveroMovIsCreating(false);
+      }
+      return;
+    }
+
+    // update
+    const isLocalMov = !!llaveroMovEditing.id_local || llaveroMovEditing.id === 0;
+    if (isConnected && !isLocalMov && movLlavero.id && movLlavero.id !== 0) {
+      const res = await updateMovimientoLlavero({
+        llaveroId: movLlavero.id,
+        id: llaveroMovEditing.id,
+        requestData: payload,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        Alert.alert('Éxito', 'Movimiento actualizado correctamente');
         setLlaveroMovIsCreating(false);
         setLlaveroMovEditing(null);
+        await fetchLlaveros();
+      } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
+      }
+    } else {
+      const next = llaveroMovimientos.map((m) => {
+        const match = (llaveroMovEditing.id_local && m.id_local === llaveroMovEditing.id_local) || (!llaveroMovEditing.id_local && m.id === llaveroMovEditing.id);
+        if (!match) return m;
+        return {
+          ...m,
+          nombre_persona_recibe: payload.nombre_persona_recibe,
+          nombre_persona_entrega: payload.nombre_persona_entrega,
+          departamento: payload.departamento,
+          telefono: payload.telefono,
+          fecha: payload.fecha,
+          hora: payload.hora,
+          firma_entrega: payload.firma_entrega,
+          firma_recibe: payload.firma_recibe,
+          firma_responsable: payload.firma_responsable,
+        };
+      });
+      await persistMovimientosToLlaverosCache(movLlavero, next);
+      if (llaveroMovEditing.id_local) {
+        await upsertLlaveroMovAction({
+          type: 'create',
+          id: llaveroMovEditing.id_local,
+            id_local: llaveroMovEditing.id_local,
+          llaveroId: movLlavero.id || 0,
+          llaveroLocalId: movLlavero.id_local || '',
+          requestData: payload,
+        });
+      } else {
+        await upsertLlaveroMovAction({
+          type: 'update',
+          id: llaveroMovEditing.id,
+          llaveroId: movLlavero.id || 0,
+          requestData: payload,
+        });
+      }
+      Alert.alert('Guardado (offline)', 'Los cambios se sincronizarán cuando vuelva la conexión.');
+      setLlaveroMovIsCreating(false);
+      setLlaveroMovEditing(null);
       }
     } finally {
       setIsSavingLlaveroMov(false);
@@ -1904,40 +2560,40 @@ export default function LlavesScreen() {
 
     setDeletingMovLlaveroKey(movimientoLlaveroRowKey(m));
     try {
-      const isConnected = await getConnectionStatus();
+          const isConnected = await getConnectionStatus();
 
-      if (m.id_local || m.id === 0) {
-        const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
-        await persistMovimientosToLlaverosCache(movLlavero, next);
-        if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
-        return;
-      }
+          if (m.id_local || m.id === 0) {
+            const next = llaveroMovimientos.filter((x) => x.id_local !== m.id_local);
+            await persistMovimientosToLlaverosCache(movLlavero, next);
+            if (m.id_local) await removeLlaveroMovActionsForLocalId(m.id_local);
+            return;
+          }
 
-      if (isConnected && movLlavero.id && movLlavero.id !== 0) {
-        const res = await deleteMovimientoLlavero({
-          llaveroId: movLlavero.id,
-          id: m.id,
-          marcaId: current.id,
-          refreshAccessToken,
-          logout,
-        });
-        if (res.status) {
-          Alert.alert('Éxito', 'Movimiento eliminado correctamente');
-          await fetchLlaveros();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
-        }
-      } else {
-        const next = llaveroMovimientos.filter((x) => x.id !== m.id);
-        await persistMovimientosToLlaverosCache(movLlavero, next);
-        await upsertLlaveroMovAction({
-          type: 'delete',
-          id: m.id,
-          llaveroId: movLlavero.id || 0,
-          marcaId: current.id,
-        });
-        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-      }
+          if (isConnected && movLlavero.id && movLlavero.id !== 0) {
+            const res = await deleteMovimientoLlavero({
+              llaveroId: movLlavero.id,
+              id: m.id,
+              marcaId: current.id,
+              refreshAccessToken,
+              logout,
+            });
+            if (res.status) {
+              Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+              await fetchLlaveros();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
+            }
+          } else {
+            const next = llaveroMovimientos.filter((x) => x.id !== m.id);
+            await persistMovimientosToLlaverosCache(movLlavero, next);
+            await upsertLlaveroMovAction({
+              type: 'delete',
+              id: m.id,
+              llaveroId: movLlavero.id || 0,
+              marcaId: current.id,
+            });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
     } finally {
       setDeletingMovLlaveroKey(null);
     }
@@ -1960,31 +2616,57 @@ export default function LlavesScreen() {
 
     setDeletingLlaveKey(llaveRowKey(it));
     try {
-      const isConnected = await getConnectionStatus();
+          const isConnected = await getConnectionStatus();
 
-      if (it.id_local || it.id === 0) {
-        const next = llaves.filter((x) => x.id_local !== it.id_local);
-        setLlaves(next);
-        await persistLlavesCacheSliceForMarcaCorpo(next);
-        if (it.id_local) await removeActionsForLocalId(it.id_local);
-        return;
-      }
-
-      if (isConnected) {
-        const res = await deleteLlave({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
-        if (res.status) {
-          Alert.alert('Éxito', 'Llave eliminada correctamente');
-          await fetchLlaves();
-        } else {
-          Alert.alert('Error', res.message || 'No se pudo eliminar la llave');
+          if (it.id_local || it.id === 0) {
+            const next = llaves.filter((x) => x.id_local !== it.id_local);
+            setLlaves(next);
+        const cid = numOrNull(it.corpo_id) ?? (await resolveActiveListCorpoId()) ?? 0;
+        if (cid) {
+          const tree = await readMainStructureTree();
+          const rm = removeLlaveFromCorpoTreeAndStripLlaveroLinks(tree, cid, {
+            id: it.id && it.id > 0 ? it.id : undefined,
+            id_local: it.id_local || undefined,
+          });
+          await writeMainStructureTree(rm);
+          setStructure(rm);
         }
-      } else {
-        const next = llaves.filter((x) => x.id !== it.id);
-        setLlaves(next);
-        await persistLlavesCacheSliceForMarcaCorpo(next);
-        await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
-        Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
-      }
+            if (it.id_local) await removeActionsForLocalId(it.id_local);
+            return;
+          }
+
+          if (isConnected) {
+            const res = await deleteLlave({ id: it.id, marcaId: current.id, refreshAccessToken, logout });
+            if (res.status) {
+          try {
+            const tree = await readMainStructureTree();
+            const hit = findCorpoAndLlaveRowInTree(tree, { id: it.id });
+            if (hit) {
+              const rm = removeLlaveFromCorpoTreeAndStripLlaveroLinks(tree, hit.corpoId, { id: it.id });
+              await writeMainStructureTree(rm);
+              setStructure(rm);
+            }
+          } catch (e) {
+            console.warn('main_structure llave delete:', e);
+          }
+              Alert.alert('Éxito', 'Llave eliminada correctamente');
+              await fetchLlaves();
+            } else {
+              Alert.alert('Error', res.message || 'No se pudo eliminar la llave');
+            }
+          } else {
+            const next = llaves.filter((x) => x.id !== it.id);
+            setLlaves(next);
+        const cid = numOrNull(it.corpo_id) ?? (await resolveActiveListCorpoId()) ?? 0;
+        if (cid) {
+          const tree = await readMainStructureTree();
+          const rm = removeLlaveFromCorpoTreeAndStripLlaveroLinks(tree, cid, { id: it.id });
+          await writeMainStructureTree(rm);
+          setStructure(rm);
+        }
+            await upsertAction({ type: 'delete', id: it.id, marcaId: current.id });
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+          }
     } finally {
       setDeletingLlaveKey(null);
     }
@@ -2013,9 +2695,13 @@ export default function LlavesScreen() {
     resetLlaveroForm();
     setLlaveroEditing(null);
     setIsLlaveroCreating(true);
+    void (async () => {
+      await applyCurrentMarcaToFormHierarchy();
+      await fetchMainStructure();
+    })();
   };
 
-  const startLlaveroEditing = (it: LlaveroUI) => {
+  const startLlaveroEditing = async (it: LlaveroUI) => {
     setLlaveroEditing(it);
     setIsLlaveroCreating(true);
     setLlaveroNombre(it.nombre_llavero || '');
@@ -2023,11 +2709,38 @@ export default function LlavesScreen() {
     setLlaveroFirmaResponsable(it.firma_responsable || '');
     const keys = (it.llaves || []).map(llaveroLinkRowToSelectionKey).filter(Boolean) as string[];
     setLlaveroSelectedLlaveKeys(keys);
+    await fetchMainStructure();
+    const tree = await readMainStructureTree();
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    const rn = snap?.roleName;
+    if (rn != null && rn !== 'OPERATIVO' && tree.length) {
+      const byPuesto = it.puesto_id ? findHierarchyByPuestoIn(tree, Number(it.puesto_id)) : null;
+      if (byPuesto) {
+        setSelectedEmpresaId(byPuesto.empresaId);
+        setSelectedClienteId(byPuesto.clienteId);
+        setSelectedDivisionId(byPuesto.divisionId);
+        setSelectedContratoId(byPuesto.contratoId);
+        setSelectedSucursalId(byPuesto.corpoId);
+        setSelectedPuestoId(byPuesto.puestoId);
+      } else {
+        const h = findHierarchyByCorpoIn(tree, Number(it.corpo_id));
+        if (h) {
+          setSelectedEmpresaId(h.empresaId);
+          setSelectedClienteId(h.clienteId);
+          setSelectedDivisionId(h.divisionId);
+          setSelectedContratoId(h.contratoId);
+          setSelectedSucursalId(h.corpoId);
+          setSelectedPuestoId(it.puesto_id != null ? Number(it.puesto_id) : null);
+        }
+      }
+    }
   };
 
   const cancelLlaveroCreating = () => {
     setIsLlaveroCreating(false);
     setLlaveroEditing(null);
+    setIsLlaveroLlavesExpanded(false);
+    setLlaveroPickerLlaves([]);
     resetLlaveroForm();
   };
 
@@ -2055,6 +2768,22 @@ export default function LlavesScreen() {
         )
     );
     await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updated));
+  };
+
+  const updateLlaveroCreateActionForLocalId = async (localId: string, requestData: any) => {
+    const actionsStr = await AsyncStorage.getItem('llaveros_actions');
+    let actions = actionsStr ? JSON.parse(actionsStr) || [] : [];
+    actions = actions.filter((a: any) => !(a.type === 'update' && String(a.id) === String(localId)));
+    let updatedAny = false;
+    const updated = actions.map((a: any) => {
+      if (a.type === 'create' && String(a.id) === String(localId)) {
+        updatedAny = true;
+        return { ...a, requestData };
+      }
+      return a;
+    });
+    await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updated));
+    return updatedAny;
   };
 
   const upsertLlaveroMovAction = async (action: any) => {
@@ -2119,109 +2848,60 @@ export default function LlavesScreen() {
     });
   }, [llaveros, llaveroFilterSearch, llaveroFilterFecha]);
 
-  // Obtener llaves disponibles para seleccionar (desde cache o API)
-  const getAvailableLlaves = async (): Promise<LlaveUI[]> => {
-    const current = await loadMarcaContext();
-    const listCorpoId = current ? resolveCorpoIdFromMarca(current) : null;
-    if (!listCorpoId) return [];
+  /** Sucursal (corpo) del formulario de llavero: jerarquía elegida o sucursal de current_marca — no el filtro de lista. */
+  const llaveroFormCorpoId = useMemo(() => {
+    if (!isLlaveroCreating) return null;
+    if (roleName === 'OPERATIVO') return marcaCorpoId;
+    return selectedSucursalId ?? marcaCorpoId;
+  }, [isLlaveroCreating, roleName, marcaCorpoId, selectedSucursalId]);
 
+  /** Llaves de esa sucursal en main_structure; si hay red, se enriquece con API sin mutar el listado principal ni disparar re-renders en bucle. */
+  const loadLlavesForLlaveroForm = useCallback(async (listCorpoId: number): Promise<LlaveUI[]> => {
+    const tree0 = await readMainStructureTree();
+    const fromTree = normalizeLlavesList(getSucursalDataFromTree(tree0, listCorpoId).llaves);
     const isConnected = await getConnectionStatus();
-    if (isConnected) {
-      if (current) {
-        const res = await listLlaves({ corpoId: listCorpoId, refreshAccessToken, logout });
-        if (res.status && res.data) {
-          const list = normalizeLlavesList(res.data);
-          const cacheStr = await AsyncStorage.getItem('llaves_cache');
-          const existing: LlaveUI[] = cacheStr ? JSON.parse(cacheStr) : [];
-          const merged = mergeLlavesCacheForCorpo(existing, list, listCorpoId);
-          await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
-          return normalizeLlavesList(filterLlavesByCorpo(merged, listCorpoId));
-        }
+    if (!isConnected) return fromTree;
+    try {
+      const { refreshAccessToken: r, logout: l } = authFetchRef.current;
+      const res = await listLlaves({ corpoId: listCorpoId, refreshAccessToken: r, logout: l });
+      if (res.status && Array.isArray(res.data)) {
+        const serverList = normalizeLlavesList(res.data);
+        const serverIds = new Set(serverList.map((ll) => Number(ll.id)).filter((n) => Number.isFinite(n) && n > 0));
+        const localOnly = fromTree.filter(
+          (ll) => ll.id_local && (!ll.id || ll.id === 0 || !serverIds.has(Number(ll.id)))
+        );
+        return [...serverList, ...localOnly];
       }
+    } catch (e) {
+      console.error('loadLlavesForLlaveroForm:', e);
     }
-    const cacheStr = await AsyncStorage.getItem('llaves_cache');
-    if (cacheStr) {
-      try {
-        const all = JSON.parse(cacheStr);
-        return normalizeLlavesList(filterLlavesByCorpo(Array.isArray(all) ? all : [], listCorpoId));
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  };
-
-  // Componente para seleccionar llaves en llavero
-  const LlaveroLlavesSelector = ({ selectedKeys, onSelectionChange, getAvailableLlaves, isExpanded }: {
-    selectedKeys: string[];
-    onSelectionChange: (keys: string[]) => void;
-    getAvailableLlaves: () => Promise<LlaveUI[]>;
-    isExpanded: boolean;
-  }) => {
-    const [availableLlaves, setAvailableLlaves] = useState<LlaveUI[]>([]);
-    const [loadingLlaves, setLoadingLlaves] = useState(false);
-    const hasLoadedRef = useRef(false);
+    return fromTree;
+  }, []);
 
     useEffect(() => {
-      // Solo cargar llaves cuando la sección se expande por primera vez
-      if (isExpanded && !hasLoadedRef.current) {
-        const loadLlaves = async () => {
-          setLoadingLlaves(true);
-          try {
-            const llaves = await getAvailableLlaves();
-            setAvailableLlaves(llaves);
-            hasLoadedRef.current = true;
-          } catch (error) {
-            console.error('Error loading llaves:', error);
+    if (!isLlaveroLlavesExpanded || !llaveroFormCorpoId) {
+      if (!isLlaveroLlavesExpanded) return;
+      setLlaveroPickerLlaves([]);
+      return;
+    }
+    let cancelled = false;
+    const cid = Number(llaveroFormCorpoId);
+    (async () => {
+      setLlaveroPickerLoading(true);
+      try {
+        const list = await loadLlavesForLlaveroForm(cid);
+        if (!cancelled) setLlaveroPickerLlaves(list);
+      } catch (e) {
+        console.error('llavero picker llaves:', e);
+        if (!cancelled) setLlaveroPickerLlaves([]);
           } finally {
-            setLoadingLlaves(false);
-          }
-        };
-        loadLlaves();
+        if (!cancelled) setLlaveroPickerLoading(false);
       }
-    }, [isExpanded]);
-
-    const toggleLlave = (key: string) => {
-      if (!key) return;
-      if (selectedKeys.includes(key)) {
-        onSelectionChange(selectedKeys.filter((k) => k !== key));
-      } else {
-        onSelectionChange([...selectedKeys, key]);
-      }
+    })();
+    return () => {
+      cancelled = true;
     };
-
-    return (
-      <ThemedView style={styles.llavesSelectorContainer}>
-        {loadingLlaves ? (
-          <ActivityIndicator size="small" color="#007AFF" />
-        ) : availableLlaves.length === 0 ? (
-          <ThemedText style={styles.emptyText}>No hay llaves disponibles</ThemedText>
-        ) : (
-          availableLlaves.map((llave) => {
-            const selKey = llaveToSelectionKey(llave);
-            const isSelected = selKey ? selectedKeys.includes(selKey) : false;
-            return (
-              <TouchableOpacity
-                key={llave.id || llave.id_local}
-                style={[styles.llaveSelectorItem, isSelected && styles.llaveSelectorItemSelected]}
-                onPress={() => toggleLlave(selKey)}
-                disabled={!selKey}
-              >
-                <Ionicons
-                  name={isSelected ? 'checkbox' : 'checkbox-outline'}
-                  size={20}
-                  color={isSelected ? '#007AFF' : '#999'}
-                />
-                <ThemedText style={[styles.llaveSelectorText, isSelected && styles.llaveSelectorTextSelected]}>
-                  {llave.lugar_abre} ({llave.cantidad_copias} copias)
-                </ThemedText>
-              </TouchableOpacity>
-            );
-          })
-        )}
-      </ThemedView>
-    );
-  };
+  }, [isLlaveroLlavesExpanded, llaveroFormCorpoId, loadLlavesForLlaveroForm]);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (key: string) => {
@@ -2296,7 +2976,7 @@ export default function LlavesScreen() {
         )}
 
         <ThemedView style={styles.listItemButtons}>
-          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(it)}>
+          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => void startEditing(it)}>
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
           </TouchableOpacity>
@@ -2321,8 +3001,8 @@ export default function LlavesScreen() {
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons name="trash" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+            <Ionicons name="trash" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
               </>
             )}
           </TouchableOpacity>
@@ -2413,7 +3093,7 @@ export default function LlavesScreen() {
         )}
 
         <ThemedView style={styles.listItemButtons}>
-          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startLlaveroEditing(it)}>
+          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => void startLlaveroEditing(it)}>
             <Ionicons name="pencil" size={18} color="#FFFFFF" />
             <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
           </TouchableOpacity>
@@ -2438,8 +3118,8 @@ export default function LlavesScreen() {
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons name="trash" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+            <Ionicons name="trash" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
               </>
             )}
           </TouchableOpacity>
@@ -2461,6 +3141,194 @@ export default function LlavesScreen() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.content}>
           {error ? <ThemedText style={styles.errorText}>{error}</ThemedText> : null}
+
+              <ThemedView style={styles.titleContainer}>
+            {activeTab === 'llaves' ? (
+              <>
+                <ThemedText type="title" style={styles.title}>
+                  <Ionicons name="key" size={22} color="#000000" /> Llaves
+                </ThemedText>
+                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaves</ThemedText>
+              </>
+            ) : (
+              <>
+                <ThemedText type="title" style={styles.title}>
+                  <Ionicons name="key-outline" size={22} color="#000000" /> Llaveros
+                </ThemedText>
+                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaveros</ThemedText>
+              </>
+            )}
+              </ThemedView>
+
+          {hasCurrentMarca && !isCreating && !isLlaveroCreating && !isLoading ? (
+                <ThemedView style={styles.filtersMain}>
+                  <ThemedView style={styles.filterHeader}>
+                    <TouchableOpacity
+                      style={styles.filterToggleButton}
+                      onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+                    >
+                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+                      <Ionicons
+                        name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={20}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+
+                    {isFiltersExpanded && (
+                  <TouchableOpacity
+                    style={styles.resetFiltersButton}
+                    onPress={() => (activeTab === 'llaves' ? resetAllFilters() : resetLlaveroFilters())}
+                  >
+                        <Ionicons name="refresh" size={16} color="#FF3B30" />
+                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                      </TouchableOpacity>
+                    )}
+                  </ThemedView>
+
+                  {isFiltersExpanded && (
+                    <ThemedView style={styles.filterContent}>
+                  {roleName != null && roleName !== 'OPERATIVO' ? (
+                    <ThemedView style={{ gap: 8, marginBottom: 8 }}>
+                      <ThemedText style={styles.sectionTitle}>Ubicación (Empresa → Sucursal)</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          selectedValue={filterEmpresaId ?? 0}
+                          onValueChange={(v) => handleFilterEmpresaChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                          {structure.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                          selectedValue={filterClienteId ?? 0}
+                          onValueChange={(v) => handleFilterClienteChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {filterClienteOptionsMemo.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>División</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                          selectedValue={filterDivisionId ?? 0}
+                          onValueChange={(v) => handleFilterDivisionChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {filterDivisionOptionsMemo.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                          selectedValue={filterContratoId ?? 0}
+                          onValueChange={(v) => handleFilterContratoChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {filterContratoOptionsMemo.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Sucursal (Corpo)</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                          selectedValue={filterSucursalId ?? 0}
+                          onValueChange={(v) => onListFilterSucursalSelected(Number(v))}
+                        >
+                          <Picker.Item
+                            label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {filterSucursalOptionsMemo.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  ) : null}
+
+                  {activeTab === 'llaves' ? (
+                    <>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Buscar (lugar/observaciones):</ThemedText>
+                        <TextInput
+                          style={styles.searchInput}
+                          value={filterSearch}
+                          onChangeText={setFilterSearch}
+                          placeholder="Ej: Bodega / Portón / Observación"
+                          placeholderTextColor="#999"
+                        />
+                      </ThemedView>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
+                        <TouchableOpacity
+                          style={styles.dateButton}
+                          onPress={() => setShowFilterFechaPicker(true)}
+                        >
+                          <ThemedText style={styles.dateButtonText}>
+                            {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
+                          </ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </>
+                  ) : (
+                    <>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Buscar (nombre/observaciones):</ThemedText>
+                        <TextInput
+                          style={styles.searchInput}
+                          value={llaveroFilterSearch}
+                          onChangeText={setLlaveroFilterSearch}
+                          placeholder="Ej: Llavero principal / Observación"
+                          placeholderTextColor="#999"
+                        />
+                    </ThemedView>
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
+                        <TouchableOpacity
+                          style={styles.dateButton}
+                          onPress={() => setShowLlaveroFilterFechaPicker(true)}
+                        >
+                          <ThemedText style={styles.dateButtonText}>
+                            {llaveroFilterFecha ? formatYMDToDMY(llaveroFilterFecha) : 'Seleccionar fecha'}
+                          </ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </>
+                  )}
+                </ThemedView>
+              )}
+            </ThemedView>
+          ) : null}
 
           {/* Tabs */}
           <ThemedView style={styles.tabsContainer}>
@@ -2486,67 +3354,6 @@ export default function LlavesScreen() {
 
           {activeTab === 'llaves' && (
             <>
-              <ThemedView style={styles.titleContainer}>
-                <ThemedText type="title" style={styles.title}>
-                  <Ionicons name="key" size={22} color="#000000" /> Llaves
-                </ThemedText>
-                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaves</ThemedText>
-              </ThemedView>
-
-              {/* Filtros (collapsable) */}
-              {!isCreating && !isLoading && (
-                <ThemedView style={styles.filtersMain}>
-                  <ThemedView style={styles.filterHeader}>
-                    <TouchableOpacity
-                      style={styles.filterToggleButton}
-                      onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
-                    >
-                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
-                      <Ionicons
-                        name={isFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                        size={20}
-                        color="#007AFF"
-                      />
-                    </TouchableOpacity>
-
-                    {isFiltersExpanded && (
-                      <TouchableOpacity style={styles.resetFiltersButton} onPress={resetAllFilters}>
-                        <Ionicons name="refresh" size={16} color="#FF3B30" />
-                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
-                      </TouchableOpacity>
-                    )}
-                  </ThemedView>
-
-                  {isFiltersExpanded && (
-                    <ThemedView style={styles.filterContent}>
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedText style={styles.filterLabel}>Buscar (lugar/observaciones):</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={filterSearch}
-                          onChangeText={setFilterSearch}
-                          placeholder="Ej: Bodega / Portón / Observación"
-                          placeholderTextColor="#999"
-                        />
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
-                        <TouchableOpacity
-                          style={styles.dateButton}
-                          onPress={() => setShowFilterFechaPicker(true)}
-                        >
-                          <ThemedText style={styles.dateButtonText}>
-                            {filterFecha ? formatYMDToDMY(filterFecha) : 'Seleccionar fecha'}
-                          </ThemedText>
-                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                        </TouchableOpacity>
-                      </ThemedView>
-                    </ThemedView>
-                  )}
-                </ThemedView>
-              )}
-
               {!hasCurrentMarca ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
@@ -2564,6 +3371,114 @@ export default function LlavesScreen() {
               {isCreating && (
                 <ThemedView style={styles.formCard}>
                   <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
+
+                  {roleName != null && roleName !== 'OPERATIVO' ? (
+                    <ThemedView style={{ marginBottom: 12 }}>
+                      <ThemedText style={styles.sectionTitle}>Ubicación del registro</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          selectedValue={selectedEmpresaId ?? 0}
+                          onValueChange={(v) => handleFormEmpresaChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                          {structure.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedEmpresaId != null && formClienteOptions.length > 0}
+                          selectedValue={selectedClienteId ?? 0}
+                          onValueChange={(v) => handleFormClienteChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedEmpresaId ? 'Seleccione cliente...' : 'Empresa primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formClienteOptions.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>División</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedClienteId != null && formDivisionOptions.length > 0}
+                          selectedValue={selectedDivisionId ?? 0}
+                          onValueChange={(v) => handleFormDivisionChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedClienteId ? 'Seleccione división...' : 'Cliente primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formDivisionOptions.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedDivisionId != null && formContratoOptions.length > 0}
+                          selectedValue={selectedContratoId ?? 0}
+                          onValueChange={(v) => handleFormContratoChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedDivisionId ? 'Seleccione contrato...' : 'División primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formContratoOptions.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Sucursal (Corpo)</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedContratoId != null && sucursalOptions.length > 0}
+                          selectedValue={selectedSucursalId ?? 0}
+                          onValueChange={(v) => handleFormSucursalChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedContratoId ? 'Seleccione sucursal...' : 'Contrato primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {sucursalOptions.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Puesto *</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedSucursalId != null && formPuestoOptions.length > 0}
+                          selectedValue={selectedPuestoId ?? 0}
+                          onValueChange={(v) => setSelectedPuestoId(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedSucursalId ? 'Seleccione puesto...' : 'Sucursal primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formPuestoOptions.map((p: any) => (
+                            <Picker.Item
+                              key={p.id}
+                              label={p.nombre != null ? String(p.nombre) : `Puesto #${p.id}`}
+                              value={p.id}
+                              color="#000000"
+                            />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  ) : null}
 
                   <ThemedText style={styles.label}>Lugar que abre *</ThemedText>
                   <TextInput
@@ -2697,67 +3612,6 @@ export default function LlavesScreen() {
 
           {activeTab === 'llaveros' && (
             <>
-              <ThemedView style={styles.titleContainer}>
-                <ThemedText type="title" style={styles.title}>
-                  <Ionicons name="key-outline" size={22} color="#000000" /> Llaveros
-                </ThemedText>
-                <ThemedText style={styles.subtitle}>Gestiona el registro y control de llaveros</ThemedText>
-              </ThemedView>
-
-              {/* Filtros (collapsable) */}
-              {!isLlaveroCreating && !isLoading && (
-                <ThemedView style={styles.filtersMain}>
-                  <ThemedView style={styles.filterHeader}>
-                    <TouchableOpacity
-                      style={styles.filterToggleButton}
-                      onPress={() => setIsLlaveroFiltersExpanded(!isLlaveroFiltersExpanded)}
-                    >
-                      <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
-                      <Ionicons
-                        name={isLlaveroFiltersExpanded ? 'chevron-up' : 'chevron-down'}
-                        size={20}
-                        color="#007AFF"
-                      />
-                    </TouchableOpacity>
-
-                    {isLlaveroFiltersExpanded && (
-                      <TouchableOpacity style={styles.resetFiltersButton} onPress={resetLlaveroFilters}>
-                        <Ionicons name="refresh" size={16} color="#FF3B30" />
-                        <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
-                      </TouchableOpacity>
-                    )}
-                  </ThemedView>
-
-                  {isLlaveroFiltersExpanded && (
-                    <ThemedView style={styles.filterContent}>
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedText style={styles.filterLabel}>Buscar (nombre/observaciones):</ThemedText>
-                        <TextInput
-                          style={styles.searchInput}
-                          value={llaveroFilterSearch}
-                          onChangeText={setLlaveroFilterSearch}
-                          placeholder="Ej: Llavero principal / Observación"
-                          placeholderTextColor="#999"
-                        />
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedText style={styles.filterLabel}>Fecha de registro:</ThemedText>
-                        <TouchableOpacity
-                          style={styles.dateButton}
-                          onPress={() => setShowLlaveroFilterFechaPicker(true)}
-                        >
-                          <ThemedText style={styles.dateButtonText}>
-                            {llaveroFilterFecha ? formatYMDToDMY(llaveroFilterFecha) : 'Seleccionar fecha'}
-                          </ThemedText>
-                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                        </TouchableOpacity>
-                      </ThemedView>
-                    </ThemedView>
-                  )}
-                </ThemedView>
-              )}
-
               {!hasCurrentMarca ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
@@ -2775,6 +3629,114 @@ export default function LlavesScreen() {
               {isLlaveroCreating && (
                 <ThemedView style={styles.formCard}>
                   <ThemedText style={styles.formTitle}>{llaveroEditing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
+
+                  {roleName != null && roleName !== 'OPERATIVO' ? (
+                    <ThemedView style={{ marginBottom: 12 }}>
+                      <ThemedText style={styles.sectionTitle}>Ubicación del registro</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          selectedValue={selectedEmpresaId ?? 0}
+                          onValueChange={(v) => handleFormEmpresaChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                          {structure.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedEmpresaId != null && formClienteOptions.length > 0}
+                          selectedValue={selectedClienteId ?? 0}
+                          onValueChange={(v) => handleFormClienteChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedEmpresaId ? 'Seleccione cliente...' : 'Empresa primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formClienteOptions.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>División</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedClienteId != null && formDivisionOptions.length > 0}
+                          selectedValue={selectedDivisionId ?? 0}
+                          onValueChange={(v) => handleFormDivisionChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedClienteId ? 'Seleccione división...' : 'Cliente primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formDivisionOptions.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedDivisionId != null && formContratoOptions.length > 0}
+                          selectedValue={selectedContratoId ?? 0}
+                          onValueChange={(v) => handleFormContratoChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedDivisionId ? 'Seleccione contrato...' : 'División primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formContratoOptions.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Sucursal (Corpo)</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedContratoId != null && sucursalOptions.length > 0}
+                          selectedValue={selectedSucursalId ?? 0}
+                          onValueChange={(v) => handleFormSucursalChange(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedContratoId ? 'Seleccione sucursal...' : 'Contrato primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {sucursalOptions.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Puesto *</ThemedText>
+                      <View style={styles.pickerShell}>
+                        <Picker
+                          enabled={selectedSucursalId != null && formPuestoOptions.length > 0}
+                          selectedValue={selectedPuestoId ?? 0}
+                          onValueChange={(v) => setSelectedPuestoId(v === 0 ? null : Number(v))}
+                        >
+                          <Picker.Item
+                            label={selectedSucursalId ? 'Seleccione puesto...' : 'Sucursal primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formPuestoOptions.map((p: any) => (
+                            <Picker.Item
+                              key={p.id}
+                              label={p.nombre != null ? String(p.nombre) : `Puesto #${p.id}`}
+                              value={p.id}
+                              color="#000000"
+                            />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  ) : null}
 
                   <ThemedText style={styles.label}>Nombre del llavero *</ThemedText>
                   <TextInput
@@ -2810,12 +3772,48 @@ export default function LlavesScreen() {
                     </TouchableOpacity>
                     {isLlaveroLlavesExpanded && (
                       <ThemedView style={styles.expandableContent}>
-                        <LlaveroLlavesSelector
-                          selectedKeys={llaveroSelectedLlaveKeys}
-                          onSelectionChange={setLlaveroSelectedLlaveKeys}
-                          getAvailableLlaves={getAvailableLlaves}
-                          isExpanded={isLlaveroLlavesExpanded}
-                        />
+                        <ThemedView style={styles.llavesSelectorContainer}>
+                          {!llaveroFormCorpoId ? (
+                            <ThemedText style={styles.emptyText}>
+                              Seleccione la sucursal en la jerarquía del formulario (o use la marca actual) para listar llaves.
+                            </ThemedText>
+                          ) : llaveroPickerLoading ? (
+                            <ActivityIndicator size="small" color="#007AFF" />
+                          ) : llaveroPickerLlaves.length === 0 ? (
+                            <ThemedText style={styles.emptyText}>
+                              No hay llaves para esta sucursal en main_structure.
+                            </ThemedText>
+                          ) : (
+                            llaveroPickerLlaves.map((llave) => {
+                              const selKey = llaveToSelectionKey(llave);
+                              const isSelected = selKey ? llaveroSelectedLlaveKeys.includes(selKey) : false;
+                              return (
+                                <TouchableOpacity
+                                  key={String(llave.id || llave.id_local)}
+                                  style={[styles.llaveSelectorItem, isSelected && styles.llaveSelectorItemSelected]}
+                                  onPress={() => {
+                                    if (!selKey) return;
+                                    setLlaveroSelectedLlaveKeys((prev) =>
+                                      prev.includes(selKey) ? prev.filter((k) => k !== selKey) : [...prev, selKey]
+                                    );
+                                  }}
+                                  disabled={!selKey}
+                                >
+                                  <Ionicons
+                                    name={isSelected ? 'checkbox' : 'checkbox-outline'}
+                                    size={20}
+                                    color={isSelected ? '#007AFF' : '#999'}
+                                  />
+                                  <ThemedText
+                                    style={[styles.llaveSelectorText, isSelected && styles.llaveSelectorTextSelected]}
+                                  >
+                                    {llave.lugar_abre} ({llave.cantidad_copias} copias)
+                                  </ThemedText>
+                                </TouchableOpacity>
+                              );
+                            })
+                          )}
+                        </ThemedView>
                       </ThemedView>
                     )}
                   </ThemedView>
@@ -3222,8 +4220,8 @@ export default function LlavesScreen() {
                       <ActivityIndicator size="small" color="#FFFFFF" />
                     ) : (
                       <>
-                        <Ionicons name="save" size={18} color="#fff" />
-                        <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    <Ionicons name="save" size={18} color="#fff" />
+                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
                       </>
                     )}
                   </TouchableOpacity>
@@ -3324,8 +4322,8 @@ export default function LlavesScreen() {
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                               <>
-                                <Ionicons name="trash" size={18} color="#FFFFFF" />
-                                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                            <Ionicons name="trash" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
                               </>
                             )}
                           </TouchableOpacity>
@@ -3373,7 +4371,7 @@ export default function LlavesScreen() {
               }}
             />
           )}
-          </ThemedView>
+        </ThemedView>
         </View>
       </Modal>
 
@@ -3613,8 +4611,8 @@ export default function LlavesScreen() {
                       <ActivityIndicator size="small" color="#FFFFFF" />
                     ) : (
                       <>
-                        <Ionicons name="save" size={18} color="#fff" />
-                        <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
+                    <Ionicons name="save" size={18} color="#fff" />
+                    <ThemedText style={styles.formActionSaveText}>Guardar</ThemedText>
                       </>
                     )}
                   </TouchableOpacity>
@@ -3715,8 +4713,8 @@ export default function LlavesScreen() {
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                               <>
-                                <Ionicons name="trash" size={18} color="#FFFFFF" />
-                                <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                            <Ionicons name="trash" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
                               </>
                             )}
                           </TouchableOpacity>
@@ -3754,7 +4752,7 @@ export default function LlavesScreen() {
           )}
 
           {showLlaveroMovHoraPicker && (
-        <DateTimePicker
+            <DateTimePicker
           value={timeStringToPickerDate(llaveroMovHora)}
               mode="time"
               display={Platform.OS === 'ios' ? 'spinner' : 'default'}
@@ -3764,7 +4762,7 @@ export default function LlavesScreen() {
               }}
             />
           )}
-          </ThemedView>
+        </ThemedView>
         </View>
       </Modal>
 
@@ -3906,7 +4904,7 @@ export default function LlavesScreen() {
                                       <ThemedView style={styles.changeDescriptionContainer}>
                                         <ThemedText style={styles.changeDescription}>
                                           <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
+                                </ThemedText>
                                       </ThemedView>
                                       {Object.entries(created).map(([k, v]) => {
                                         if (k === 'firma_entrega' || k === 'firma_recibe' || k === 'firma_responsable') return null;
@@ -3930,16 +4928,16 @@ export default function LlavesScreen() {
                                                 : 'Firma responsable (formato no decodificable)';
                                             })()}
                                           </ThemedText>
-                                        </ThemedView>
-                                      )}
+                            </ThemedView>
+                          )}
                                       {created.firma_entrega && (
                                         <ThemedView style={styles.changeDescriptionContainer}>
                                           <ThemedText style={styles.changeDescription}>
                                             <ThemedText style={{ fontWeight: '800' }}>firma_entrega: </ThemedText>
                                           </ThemedText>
                                           <Image source={{ uri: formatSignatureForDisplay(created.firma_entrega) }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                        </ThemedView>
-                                      )}
+                        </ThemedView>
+                      )}
                                       {created.firma_recibe && (
                                         <ThemedView style={styles.changeDescriptionContainer}>
                                           <ThemedText style={styles.changeDescription}>
@@ -4119,6 +5117,14 @@ const styles = StyleSheet.create({
   filterContent: { padding: 12, backgroundColor: '#F9F9F9', gap: 8 },
   filterGroupSearch: { marginBottom: 8, backgroundColor: '#F9F9F9' },
   filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#000' },
+  pickerShell: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+    marginBottom: 8,
+  },
   searchInput: {
     borderWidth: 1,
     borderColor: '#E0E0E0',

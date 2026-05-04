@@ -1,22 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
-
-function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
-    const fileName = file.name;
-    const type = String(file.type || "file").toLowerCase();
-    let urlPath: string;
-    if (type === "image") {
-        urlPath = `/api/complaints-master/${recordId}/get-image/${fileName}`;
-    } else if (type === "audio") {
-        urlPath = `/api/complaints-master/${recordId}/get-audio/${fileName}`;
-    } else if (type === "video") {
-        urlPath = `/api/complaints-master/${recordId}/get-video/${fileName}`;
-    } else {
-        urlPath = `/api/complaints-master/${recordId}/get-file/${fileName}`;
-    }
-    return `${baseUrl}${urlPath}`;
-}
+import { mapComplaintMasterPublicRow } from "../../mapPublicRow";
 
 export async function GET(
     req: NextRequest,
@@ -37,7 +22,8 @@ export async function GET(
                 table: "c_maestro_quejas",
                 operation: "findMany",
                 where: {
-                    corpo_id: parseInt(corpo_id)
+                    corpo_id: parseInt(corpo_id),
+                    isActive: true,
                 },
                 orderBy: {
                     created_at: 'desc'
@@ -50,18 +36,9 @@ export async function GET(
 
         const recordsArray = Array.isArray(records) ? records : [];
         const baseUrl = req.nextUrl.origin;
-        const recordsWithIdLocal = recordsArray.map((record: any) => ({
-            ...record,
-            id_local: "",
-            files: (Array.isArray(record.c_anexos_quejas) ? record.c_anexos_quejas : []).map((f: any) => ({
-                id: f.id,
-                name: f.name,
-                original_name: f.original_name,
-                type: f.type,
-                extension: f.extension,
-                url: buildFileUrl(baseUrl, record.id, f),
-            })),
-        }));
+        const recordsWithIdLocal = recordsArray.map((record: any) =>
+            mapComplaintMasterPublicRow(record, baseUrl, Number(record.id))
+        );
 
         return NextResponse.json({
             status: true,

@@ -2,6 +2,40 @@
 
 export const NON_CONFORMING_PRODUCT_CACHE_TYPE = 'non_conforming_product';
 
+/**
+ * Clave estable por registro: mismo id de servidor o mismo id_local, no dos filas distintas con la misma clave.
+ * El id de API puede venir como number o string.
+ */
+export function getStablePncRowKey(r: { id?: any; id_local?: any } | null | undefined): string {
+  if (r == null) return 'null';
+  const rawId = r.id;
+  const idStr = rawId == null || rawId === '' ? '' : String(rawId);
+  if (idStr.length > 0 && !idStr.startsWith('local-')) {
+    const n = Number(rawId);
+    if (Number.isFinite(n) && n > 0) {
+      return `i:${n}`;
+    }
+  }
+  const loc = r.id_local != null && String(r.id_local).length > 0 ? String(r.id_local) : '';
+  if (loc.length > 0) {
+    return `l:${loc}`;
+  }
+  return `u:${idStr || 'e'}`;
+}
+
+/**
+ * Unifica filas PNC con la misma clave. Orden: las últimas en el array prevalecen
+ * (útil: pending primero, servidor después → gana el servidor con `synced: true` si coincide id).
+ */
+export function dedupePncRowsByStableKey<T extends { id?: any; id_local?: any }>(rows: T[]): T[] {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const m = new Map<string, T>();
+  for (const row of rows) {
+    m.set(getStablePncRowKey(row), row);
+  }
+  return Array.from(m.values());
+}
+
 export function getPncRecordCorpoId(row: any): number | null {
   const n = Number(row?.corpo_id);
   return Number.isFinite(n) && n > 0 ? n : null;
@@ -10,15 +44,15 @@ export function getPncRecordCorpoId(row: any): number | null {
 /**
  * Registros PNC en caché que pertenecen a una sucursal (para UI offline / fallback).
  */
-export function filterPncFromEvaluationsCacheByCorpo<T extends { type?: string; corpo_id?: any }>(
-  fullCache: T[],
-  corpoId: number | null
-): T[] {
+export function filterPncFromEvaluationsCacheByCorpo<
+  T extends { type?: string; corpo_id?: any; id?: any; id_local?: any },
+>(fullCache: T[], corpoId: number | null): T[] {
   if (corpoId == null || !Number.isFinite(Number(corpoId)) || Number(corpoId) <= 0) return [];
   const cid = Number(corpoId);
-  return fullCache.filter(
+  const filtered = fullCache.filter(
     (item) => item.type === NON_CONFORMING_PRODUCT_CACHE_TYPE && Number(item.corpo_id) === cid
   ) as T[];
+  return dedupePncRowsByStableKey(filtered) as T[];
 }
 
 /**
@@ -47,14 +81,16 @@ export function mergeEvaluationsCachePncForCorpo(
       item.type === NON_CONFORMING_PRODUCT_CACHE_TYPE && Number(item.corpo_id) === cid
   );
   const pending = existingCorpoPnc.filter(isPncLocalPendingRecord);
-  const serverTagged = (freshServerPncRows || []).map((r) => ({
+  const serverTagged = (freshServerPncRows || [])
+    .filter((r: any) => r != null && r.isActive !== false)
+    .map((r) => ({
     ...r,
     synced: true,
     type: NON_CONFORMING_PRODUCT_CACHE_TYPE,
   }));
-  const mergedPnc = [
+  const mergedPnc = dedupePncRowsByStableKey([
     ...pending.map((r) => ({ ...r, synced: false })),
     ...serverTagged,
-  ];
+  ]);
   return [...withoutCorpoPnc, ...mergedPnc];
 }

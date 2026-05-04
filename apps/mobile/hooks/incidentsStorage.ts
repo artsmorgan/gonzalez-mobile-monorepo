@@ -51,11 +51,23 @@ export async function setIncidentsCache(incidents: Incident[]): Promise<void> {
   await AsyncStorage.setItem(INCIDENTS_CACHE_KEY, JSON.stringify(incidents));
 }
 
+/** `corpo_id` de negocio (sucursal/corpo); algunos registros traen `sucursal_id`. */
+export function resolveIncidentCorpoId(i: Incident): number | null {
+  const raw = (i as any)?.corpo_id ?? (i as any)?.sucursal_id;
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Incidentes visibles para la sucursal/corporación activa (caché u online). */
 export function filterIncidentsByCorpo(incidents: Incident[], corpoId: number | null | undefined): Incident[] {
   if (corpoId == null || Number.isNaN(Number(corpoId))) return [];
   const id = Number(corpoId);
-  return incidents.filter((i) => i.corpo_id != null && Number(i.corpo_id) === id);
+  return incidents.filter((i) => {
+    const rid = resolveIncidentCorpoId(i);
+    if (rid == null || rid !== id) return false;
+    return (i as { isActive?: boolean }).isActive !== false;
+  });
 }
 
 /**
@@ -69,16 +81,15 @@ export function mergeIncidentsCacheForCorpo(existing: Incident[], freshFromServe
     corpo_id: i.corpo_id != null ? Number(i.corpo_id) : cid,
   }));
 
-  const pendingLocalOnly = existing.filter(
-    (e) =>
-      e.corpo_id != null &&
-      Number(e.corpo_id) === cid &&
-      !!e.id_local &&
-      e.id_local !== '' &&
-      e.id === 0,
-  );
+  const pendingLocalOnly = existing.filter((e) => {
+    const eid = resolveIncidentCorpoId(e);
+    return eid === cid && !!e.id_local && e.id_local !== '' && e.id === 0;
+  });
 
-  const keepOtherSlices = existing.filter((e) => e.corpo_id == null || Number(e.corpo_id) !== cid);
+  const keepOtherSlices = existing.filter((e) => {
+    const eid = resolveIncidentCorpoId(e);
+    return eid == null || eid !== cid;
+  });
 
   return [...keepOtherSlices, ...pendingLocalOnly, ...freshTagged];
 }

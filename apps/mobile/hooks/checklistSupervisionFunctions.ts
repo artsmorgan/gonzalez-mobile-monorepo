@@ -1,22 +1,44 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { hydrateChecklistEvaluationImagesForApi } from './checklistSupervisionEvaluationFiles';
+
+async function requestDataWithHydratedEvaluacion(requestData: any): Promise<any> {
+  const rd = { ...requestData };
+  const raw = rd?.evaluacion;
+  const evStr = typeof raw === 'string' ? raw : JSON.stringify(raw ?? []);
+  rd.evaluacion = await hydrateChecklistEvaluationImagesForApi(evStr);
+  return rd;
+}
 
 type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
+export type ChecklistSupervisionImageMeta = {
+  id: number;
+  name: string;
+  original_name: string;
+  url: string;
+};
+
 export type ChecklistSupervisionItem = {
   id: number;
+  empresa_id: number;
   cliente_id: number;
   division_id: number;
+  contrato_id: number;
   corpo_id: number;
   puesto_id: number;
+  /** Inactivo: no debe mostrarse ni devolverse en listados normales. */
+  isActive?: boolean;
   fecha: string;
   ejecutivo_cuenta: string;
   evaluacion: string;
+  articulos_puesto?: string | null;
   firma_supervisor: string;
   firma_responsable: string;
   created_by: number;
   created_at: string;
   id_local?: string;
+  images?: ChecklistSupervisionImageMeta[];
   cliente?: { id: number; nombre: string };
   corpo?: { id: number; nombre: string };
   puesto?: { id: number; nombre: string; codigo: string };
@@ -51,6 +73,13 @@ type UpdateParams = {
 
 type DeleteParams = {
   id: number;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+};
+
+type PatchFirmaSupervisorParams = {
+  id: number;
+  firma_supervisor: string;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -105,6 +134,9 @@ export async function listChecklistSupervision({
     if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
+    if (data?.status && Array.isArray(data.data)) {
+      data.data = data.data.filter((row: any) => row?.isActive !== false);
+    }
     return data;
   } catch (error: any) {
     console.error('Error listing checklist supervision:', error);
@@ -112,14 +144,20 @@ export async function listChecklistSupervision({
   }
 }
 
+export type CreateChecklistSupervisionResponse = BasicResponse & {
+  id?: number;
+  data?: ChecklistSupervisionItem & { id?: number };
+};
+
 export async function createChecklistSupervision({
   requestData,
   refreshAccessToken,
   logout,
-}: CreateParams): Promise<BasicResponse> {
+}: CreateParams): Promise<CreateChecklistSupervisionResponse> {
   try {
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const payload = await requestDataWithHydratedEvaluacion(requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision`,
@@ -128,7 +166,48 @@ export async function createChecklistSupervision({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify(payload),
+      },
+      refreshAccessToken: refresh,
+      logout: doLogout,
+    });
+
+    if (!response) return { status: false, message: 'Sesión expirada' };
+
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    const serverId = Number(data?.id ?? data?.data?.id ?? 0);
+    return {
+      ...data,
+      ...(Number.isFinite(serverId) && serverId > 0 ? { id: serverId, data: { ...(data.data || {}), id: serverId } } : {}),
+    };
+  } catch (error: any) {
+    console.error('Error creating checklist supervision:', error);
+    return { status: false, message: error.message || 'Error al crear checklist de supervisión' };
+  }
+}
+
+/**
+ * Actualiza solo la firma del supervisor (evita enviar `evaluacion` y reprocesar imágenes).
+ */
+export async function updateChecklistSupervisionFirmaSupervisor({
+  id,
+  firma_supervisor,
+  refreshAccessToken,
+  logout,
+}: PatchFirmaSupervisorParams): Promise<BasicResponse & { data?: ChecklistSupervisionItem }> {
+  try {
+    const apiUrl = getApiUrl();
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/checklist-supervision/${id}`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ firma_supervisor }),
       },
       refreshAccessToken: refresh,
       logout: doLogout,
@@ -140,8 +219,8 @@ export async function createChecklistSupervision({
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
     return data;
   } catch (error: any) {
-    console.error('Error creating checklist supervision:', error);
-    return { status: false, message: error.message || 'Error al crear checklist de supervisión' };
+    console.error('Error updating checklist supervisor signature:', error);
+    return { status: false, message: error.message || 'Error al actualizar firma del supervisor' };
   }
 }
 
@@ -154,6 +233,7 @@ export async function updateChecklistSupervision({
   try {
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const payload = await requestDataWithHydratedEvaluacion(requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision/${id}`,
@@ -162,7 +242,7 @@ export async function updateChecklistSupervision({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify(payload),
       },
       refreshAccessToken: refresh,
       logout: doLogout,

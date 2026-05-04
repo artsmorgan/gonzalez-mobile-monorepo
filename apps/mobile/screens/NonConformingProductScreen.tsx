@@ -41,8 +41,19 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { createNonConformingProduct, deleteNonConformingProduct, listNonConformingProductByCorpo, updateNonConformingProduct } from '@/hooks/evaluationFunctions';
-import { filterPncFromEvaluationsCacheByCorpo, mergeEvaluationsCachePncForCorpo } from '@/hooks/nonConformingProductCacheHelpers';
+import {
+  createNonConformingProduct,
+  deleteNonConformingProduct,
+  deleteNonConformingProductArchivo,
+  listNonConformingProductByCorpo,
+  updateNonConformingProduct,
+} from '@/hooks/evaluationFunctions';
+import {
+  filterPncFromEvaluationsCacheByCorpo,
+  getStablePncRowKey,
+  mergeEvaluationsCachePncForCorpo,
+} from '@/hooks/nonConformingProductCacheHelpers';
+import { readMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
 
@@ -79,6 +90,11 @@ type PncRecord = {
   id_local: string;
   cliente_id: number;
   corpo_id: number;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
+  isActive?: boolean;
   fecha_identificacion: string;
   responsable_cuenta: string;
   tipo_servicio_no_conforme: string;
@@ -95,6 +111,16 @@ type PncRecord = {
   files?: PncFile[];
   synced?: boolean;
   type?: string; // cache marker
+};
+
+const pncFileDeletingKey = (r: PncRecord, f: PncFile, idx = 0) => {
+  const fid = f.id != null ? Number(f.id) : null;
+  if (fid != null && Number.isFinite(fid) && fid > 0) {
+    return `${r.id || r.id_local}_${fid}`;
+  }
+  const n = f.name || f.original_name;
+  if (n) return `${r.id || r.id_local}_${n}`;
+  return `${r.id || r.id_local}_f_${idx}`;
 };
 
 const guessMimeType = (file: { type?: string; extension?: string; mimeType?: string }) => {
@@ -121,19 +147,72 @@ type FirmaData = {
   timestamp: string;
 };
 
-const dateToLocalString = (d: Date): string => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+const isValidDate = (d: unknown): d is Date =>
+  d instanceof Date && Number.isFinite(d.getTime());
+
+/** Evita RangeError de toISOString/getFullYear con fechas inválidas o fuera de rango. */
+const coerceToValidDate = (d: Date, fallback: Date = new Date()): Date =>
+  isValidDate(d) ? d : fallback;
+
+/**
+ * Día de calendario local → ISO (UTC) seguro. Mediodía local evita que `toISOString` corra el día
+ * respecto a lo que el usuario eligió, y mantiene el instante alineado con el resto de la app/servidor.
+ */
+const datePickedToSafeIso = (d: Date): string => {
+  const safe = coerceToValidDate(d);
+  const y = safe.getFullYear();
+  const m = safe.getMonth();
+  const day = safe.getDate();
+  const localNoon = new Date(y, m, day, 12, 0, 0, 0);
+  if (!isValidDate(localNoon)) {
+    return new Date().toISOString();
+  }
+  try {
+    return localNoon.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+};
+
+const parseRecordDateField = (raw: string | undefined | null, fallbackMs: number): Date => {
+  if (raw == null || String(raw).trim() === '') return new Date(fallbackMs);
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [ys, ms, ds] = s.split('-');
+    const y = Number(ys);
+    const mo = Number(ms);
+    const day = Number(ds);
+    if (Number.isFinite(y) && mo >= 1 && mo <= 12 && day >= 1 && day <= 31) {
+      const localNoon = new Date(y, mo - 1, day, 12, 0, 0, 0);
+      if (isValidDate(localNoon)) return localNoon;
+    }
+  }
+  const d = new Date(s);
+  return isValidDate(d) ? d : new Date(fallbackMs);
+};
+
+const horaAccionToCreatedAtIso = (horaAccion: number): string => {
+  const d = new Date(horaAccion);
+  if (!isValidDate(d)) return new Date().toISOString();
+  try {
+    return d.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
 };
 
 const formatDateForDisplay = (d: Date): string => {
-  // d es un Date local del picker; usamos su ISO directamente
-  if (!(d instanceof Date) || Number.isNaN(d.getTime())) {
+  if (!isValidDate(d)) return 'N/A';
+  const y = d.getFullYear();
+  const m = d.getMonth();
+  const day = d.getDate();
+  const localNoon = new Date(y, m, day, 12, 0, 0, 0);
+  if (!isValidDate(localNoon)) return 'N/A';
+  try {
+    return convertDateTimestampToLocalString(localNoon.toISOString(), false);
+  } catch {
     return 'N/A';
   }
-  return convertDateTimestampToLocalString(d.toISOString(), false);
 };
 
 const getBase64Only = (value: string | null | undefined): string => {
@@ -243,6 +322,8 @@ export default function NonConformingProductScreen() {
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<RoleName>(null);
 
   /** Filtro lista (solo visible si no OPERATIVO); precarga desde current_marca */
@@ -253,6 +334,7 @@ export default function NonConformingProductScreen() {
   const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
   const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
   const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
+  const [deletingFileKey, setDeletingFileKey] = useState<string | null>(null);
   /** Evita volver a pisar filtros desde `current_marca` en cada foco / recarga de lista. */
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
   /** Corpo del filtro de lista; ref estable para no recrear `fetchRecords` al cambiar sucursal (evita re-ejecutar useFocusEffect y volver a aplicar jerarquía desde marca). */
@@ -268,6 +350,7 @@ export default function NonConformingProductScreen() {
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
 
   // lista
   const [records, setRecords] = useState<PncRecord[]>([]);
@@ -328,7 +411,7 @@ export default function NonConformingProductScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    return false;
+    //return false;
     try {
       const state = await Network.getNetworkStateAsync();
       return !!(state.isConnected && state.isInternetReachable);
@@ -412,6 +495,8 @@ export default function NonConformingProductScreen() {
     marcaCorpoId: number | null;
     marcaClienteId: number | null;
     marcaEmpresaId: number | null;
+    marcaContratoId: number | null;
+    marcaPuestoId: number | null;
     filterEmpresaId: number | null;
     filterClienteId: number | null;
     filterDivisionId: number | null;
@@ -429,6 +514,8 @@ export default function NonConformingProductScreen() {
         setMarcaCorpoId(null);
         setMarcaClienteId(null);
         setMarcaEmpresaId(null);
+        setMarcaContratoId(null);
+        setMarcaPuestoId(null);
         setRoleName(null);
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(null);
@@ -465,6 +552,10 @@ export default function NonConformingProductScreen() {
         setMarcaCorpoId(corpoId);
         setMarcaClienteId(clienteId);
         setMarcaEmpresaId(empresaId);
+        const mContrato = numOrNull(current?.contrato?.id);
+        const mPuesto = numOrNull(current?.puesto?.id);
+        setMarcaContratoId(mContrato);
+        setMarcaPuestoId(mPuesto);
         setRoleName(rn);
 
         const divFromMarca = getDivisionIdFromMarcaJson(current);
@@ -489,6 +580,8 @@ export default function NonConformingProductScreen() {
           marcaCorpoId: corpoId,
           marcaClienteId: clienteId,
           marcaEmpresaId: empresaId,
+          marcaContratoId: mContrato,
+          marcaPuestoId: mPuesto,
           filterEmpresaId: fe,
           filterClienteId: fc,
           filterDivisionId: divFromMarca,
@@ -501,6 +594,8 @@ export default function NonConformingProductScreen() {
         setMarcaCorpoId(null);
         setMarcaClienteId(null);
         setMarcaEmpresaId(null);
+        setMarcaContratoId(null);
+        setMarcaPuestoId(null);
         setRoleName(null);
         return null;
       }
@@ -540,6 +635,7 @@ export default function NonConformingProductScreen() {
       setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
       setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
       setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setSelectedPuestoId(marca.puesto?.id != null ? Number(marca.puesto.id) : null);
     } catch (e) {
       console.error('applyCurrentMarcaToCreateHierarchy (PNC):', e);
     }
@@ -548,14 +644,13 @@ export default function NonConformingProductScreen() {
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      const cacheStr = await readMainStructureCacheString();
       if (cacheStr) {
         try {
           const parsed = JSON.parse(cacheStr);
           if (Array.isArray(parsed)) setStructure(parsed);
           else setStructure([]);
         } catch {
-          // ignore
           setStructure([]);
         }
       }
@@ -681,12 +776,23 @@ export default function NonConformingProductScreen() {
     return (selectedContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
   }, [selectedContratoNode]);
 
+  const selectedSucursalNode = useMemo(() => {
+    if (!selectedContratoNode || selectedSucursalId == null) return null;
+    return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
+  }, [selectedContratoNode, selectedSucursalId]);
+
+  const puestoOptions = useMemo(() => {
+    if (!selectedSucursalNode) return [];
+    return (selectedSucursalNode.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre }));
+  }, [selectedSucursalNode]);
+
   const handleEmpresaChange = (empresaId: number | null) => {
     setSelectedEmpresaId(empresaId);
     setSelectedClienteId(null);
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
   };
 
   const handleClienteChange = (clienteId: number | null) => {
@@ -695,6 +801,12 @@ export default function NonConformingProductScreen() {
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
+  };
+
+  const handleSucursalChange = (sucId: number | null) => {
+    setSelectedSucursalId(sucId);
+    setSelectedPuestoId(null);
   };
 
   const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
@@ -786,7 +898,9 @@ export default function NonConformingProductScreen() {
           return;
         }
 
-        const serverItems: PncRecord[] = Array.isArray(res.data) ? (res.data as any) : [];
+        const serverItems: PncRecord[] = (Array.isArray(res.data) ? (res.data as any[]) : []).filter(
+          (row: any) => row && row.isActive !== false
+        ) as PncRecord[];
         const nextCache = mergeEvaluationsCachePncForCorpo(cache, serverItems, corpoId);
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(nextCache));
         setRecords(filterPncFromEvaluationsCacheByCorpo(nextCache, corpoId) as PncRecord[]);
@@ -841,8 +955,10 @@ export default function NonConformingProductScreen() {
   );
 
   const resetForm = (horaAccion: number) => {
-    setFechaIdentificacion(new Date(horaAccion));
-    setFechaSolucion(new Date(horaAccion));
+    const d = new Date(horaAccion);
+    const base = isValidDate(d) ? d : new Date();
+    setFechaIdentificacion(base);
+    setFechaSolucion(new Date(base.getTime()));
     setResponsableCuenta('');
     setTipoServicioNoConforme('');
     setPersonaIdentifico('');
@@ -883,6 +999,11 @@ export default function NonConformingProductScreen() {
         setSelectedDivisionId(h.divisionId);
         setSelectedContratoId(h.contratoId);
         setSelectedSucursalId(h.corpoId);
+        if (r.puesto_id != null && Number(r.puesto_id) > 0) {
+          setSelectedPuestoId(Number(r.puesto_id));
+        } else {
+          setSelectedPuestoId(null);
+        }
       } else {
         const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === r.cliente_id)) ?? null;
         if (empresaFound) setSelectedEmpresaId(empresaFound.id);
@@ -890,6 +1011,7 @@ export default function NonConformingProductScreen() {
         setSelectedDivisionId(null);
         setSelectedContratoId(null);
         setSelectedSucursalId(null);
+        setSelectedPuestoId(null);
       }
     } else if (roleName != null && roleName !== 'OPERATIVO') {
       const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === r.cliente_id)) ?? null;
@@ -898,6 +1020,7 @@ export default function NonConformingProductScreen() {
       setSelectedDivisionId(null);
       setSelectedContratoId(null);
       setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
     }
 
     const horaAccion = await getHoraAccion();
@@ -906,8 +1029,12 @@ export default function NonConformingProductScreen() {
       return;
     }
 
-    setFechaIdentificacion(r.fecha_identificacion ? new Date(r.fecha_identificacion) : new Date(horaAccion));
-    setFechaSolucion(r.fecha_solucion ? new Date(r.fecha_solucion) : new Date(horaAccion));
+    if (roleName === 'OPERATIVO' && (r.puesto_id != null || marcaPuestoId != null)) {
+      setSelectedPuestoId(r.puesto_id != null ? Number(r.puesto_id) : marcaPuestoId);
+    }
+
+    setFechaIdentificacion(parseRecordDateField(r.fecha_identificacion, horaAccion));
+    setFechaSolucion(parseRecordDateField(r.fecha_solucion, horaAccion));
     setResponsableCuenta(r.responsable_cuenta || '');
     setTipoServicioNoConforme(r.tipo_servicio_no_conforme || '');
     setPersonaIdentifico(r.persona_identifico_pnc || '');
@@ -1096,6 +1223,155 @@ export default function NonConformingProductScreen() {
     }));
   };
 
+  /** Sólo entradas con base64 (borrador local). Se usa para reenviar adjuntos viejos + nuevos al sincronizar. */
+  const pncFilesToArchivoPayload = (pncFiles: PncFile[] | undefined) => {
+    if (!pncFiles?.length) return [] as { type: string; extension: string; original_name: string; file_base64: string; mimeType?: string }[];
+    return pncFiles
+      .map((f) => {
+        const b = f.base64;
+        if (!b || !String(b).trim()) return null;
+        return {
+          type: String(f.type),
+          extension: f.extension,
+          original_name: f.original_name || f.name,
+          file_base64: b,
+          mimeType: f.mimeType,
+        };
+      })
+      .filter((x) => x != null) as { type: string; extension: string; original_name: string; file_base64: string; mimeType?: string }[];
+  };
+
+  const archivosPayloadToPncLocalFiles = (arch: any[]): PncFile[] => {
+    const ts = Date.now();
+    return (arch || []).map((f: any, i) => ({
+      id_local: `local_file_${ts}_${i}_${Math.random().toString(36).substring(2, 9)}`,
+      type: f.type,
+      extension: f.extension,
+      name: f.original_name || `archivo.${f.extension || 'dat'}`,
+      original_name: f.original_name,
+      base64: f.file_base64,
+      mimeType: f.mimeType,
+    }));
+  };
+
+  const updatePncInEvaluationsCache = async (updater: (row: PncRecord) => PncRecord) => {
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    const cache = cacheStr ? JSON.parse(cacheStr) : [];
+    if (!Array.isArray(cache)) return;
+    const next = cache.map((item: any) => {
+      if (item.type !== 'non_conforming_product') return item;
+      const row = item as PncRecord;
+      return { ...updater(row), type: 'non_conforming_product' };
+    });
+    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(next));
+  };
+
+  const handleDeleteRecordAttachment = (r: PncRecord, f: PncFile, fileIdx = 0) => {
+    const fid = f.id != null ? Number(f.id) : null;
+    const isServer = fid != null && Number.isFinite(fid) && fid > 0;
+    Alert.alert('Eliminar adjunto', '¿Quitar este archivo del registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () =>
+          void (async () => {
+            const key = pncFileDeletingKey(r, f, fileIdx);
+            setDeletingFileKey(key);
+            try {
+              const isConnected = await getConnectionStatus();
+              const pncId = typeof r.id === 'number' && r.id > 0 ? r.id : null;
+              const recordLocal = String(r.id_local || '').startsWith('local-') || !r.synced;
+
+              if (isServer && pncId && isConnected) {
+                const res = await deleteNonConformingProductArchivo({
+                  productoId: pncId,
+                  archivoId: fid!,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (!res.status) {
+                  Alert.alert('Error', res.message || 'No se pudo eliminar el adjunto');
+                  return;
+                }
+                await updatePncInEvaluationsCache((row) => {
+                  if (String(row.id) !== String(r.id) && String(row.id_local) !== String(r.id_local)) {
+                    return row;
+                  }
+                  return { ...row, files: (row.files || []).filter((x) => Number(x.id) !== fid) };
+                });
+                void fetchRecords();
+                return;
+              }
+
+              if (isServer && pncId && !isConnected) {
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                const aid = `pnc_file_del_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                actions.push({
+                  id: aid,
+                  action: 'delete_archivo',
+                  type: 'non_conforming_product',
+                  payload: { productoId: pncId, archivoId: fid },
+                  synced: false,
+                });
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+                await updatePncInEvaluationsCache((row) => {
+                  if (String(row.id) !== String(r.id) && String(row.id_local) !== String(r.id_local)) {
+                    return row;
+                  }
+                  return { ...row, files: (row.files || []).filter((x) => Number(x.id) !== fid) };
+                });
+                void fetchRecords();
+                Alert.alert('Cola', 'Eliminación de adjunto se sincronizará al reconectar.');
+                return;
+              }
+
+              if (recordLocal) {
+                await updatePncInEvaluationsCache((row) => {
+                  if (String(row.id) !== String(r.id) && String(row.id_local) !== String(r.id_local)) {
+                    return row;
+                  }
+                  return {
+                    ...row,
+                    files: (row.files || []).filter((x) =>
+                      x.id != null && fid != null && Number(x.id) > 0
+                        ? Number(x.id) !== fid
+                        : x.name !== f.name
+                    ),
+                  };
+                });
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                const t = 'non_conforming_product';
+                actions = actions.map((a: any) => {
+                  if (a.type !== t || a.action !== 'create' || String(a.id) !== String(r.id_local)) {
+                    return a;
+                  }
+                  const arch = Array.isArray(a.payload?.archivos) ? a.payload.archivos : [];
+                  const nextArch = arch.filter(
+                    (x: any) =>
+                      (x?.original_name || '') !== (f.original_name || f.name) &&
+                      String(x?.file_base64 || '').slice(0, 40) !== String((f as any).file_base64 || '').slice(0, 40)
+                  );
+                  return { ...a, payload: { ...a.payload, archivos: nextArch } };
+                });
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+                void fetchRecords();
+              }
+            } catch (e) {
+              console.error('delete PNC adjunto', e);
+              Alert.alert('Error', 'No se pudo eliminar el adjunto');
+            } finally {
+              setDeletingFileKey(null);
+            }
+          })(),
+      },
+    ]);
+  };
+
   const buildFileUrl = (pncId: number | undefined, file: PncFile) => {
     const hasLocalId = file.id_local !== undefined && file.id_local !== null && String(file.id_local).trim().length > 0;
     if (hasLocalId && file.base64) {
@@ -1142,10 +1418,14 @@ export default function NonConformingProductScreen() {
     if (roleName === 'OPERATIVO') {
       if (!marcaClienteId || !marcaCorpoId) return 'No se pudo determinar cliente o sucursal desde la marca actual';
       if (!marcaDivisionId) return 'No se pudo determinar la división (marca actual)';
+      if (!marcaEmpresaId || !marcaContratoId || !marcaPuestoId) {
+        return 'No se pudo determinar empresa, contrato o puesto desde la marca actual';
+      }
     } else {
       if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, Cliente y Sucursal son obligatorios';
       if (!selectedDivisionId) return 'División es obligatoria';
       if (!selectedContratoId) return 'Contrato es obligatorio';
+      if (!selectedPuestoId) return 'Debe seleccionar un puesto';
     }
     if (!responsableCuenta.trim()) return 'Responsable de la cuenta es requerido';
     if (!tipoServicioNoConforme.trim()) return 'Tipo de producto no conforme es requerido';
@@ -1163,10 +1443,18 @@ export default function NonConformingProductScreen() {
     const firmaHash = getFirmaResponsableHashForSave();
     const clienteId = roleName === 'OPERATIVO' ? marcaClienteId : selectedClienteId;
     const corpoId = roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId;
+    const empresaId = roleName === 'OPERATIVO' ? marcaEmpresaId : selectedEmpresaId;
+    const divisionId = roleName === 'OPERATIVO' ? marcaDivisionId : selectedDivisionId;
+    const contratoId = roleName === 'OPERATIVO' ? marcaContratoId : selectedContratoId;
+    const puestoId = roleName === 'OPERATIVO' ? marcaPuestoId : selectedPuestoId;
     return {
       cliente_id: clienteId,
       corpo_id: corpoId,
-      fecha_identificacion: dateToLocalString(fechaIdentificacion),
+      empresa_id: Number(empresaId),
+      division_id: Number(divisionId),
+      contrato_id: Number(contratoId),
+      puesto_id: Number(puestoId),
+      fecha_identificacion: datePickedToSafeIso(fechaIdentificacion),
       responsable_cuenta: responsableCuenta.trim(),
       tipo_servicio_no_conforme: tipoServicioNoConforme.trim(),
       persona_identifico_pnc: personaIdentifico.trim(),
@@ -1175,7 +1463,7 @@ export default function NonConformingProductScreen() {
       persona_origino_pnc: personaOrigino.trim(),
       firma_persona_origino_pnc: getBase64Only(firmaPersonaOrigino) || null,
       accion_implementada: accionImplementada.trim(),
-      fecha_solucion: dateToLocalString(fechaSolucion),
+      fecha_solucion: datePickedToSafeIso(fechaSolucion),
       responsable_aprobar: responsableAprobar.trim(),
       firma_responsable: firmaHash,
       archivos: buildArchivosPayload(),
@@ -1284,7 +1572,7 @@ export default function NonConformingProductScreen() {
         }
 
         const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-        const nowIso = new Date(String(horaAccion)).toISOString();
+        const nowIso = horaAccionToCreatedAtIso(horaAccion);
 
         const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
           id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
@@ -1301,6 +1589,10 @@ export default function NonConformingProductScreen() {
           id_local: localId,
           cliente_id: requestData.cliente_id,
           corpo_id: requestData.corpo_id,
+          empresa_id: requestData.empresa_id,
+          division_id: requestData.division_id,
+          contrato_id: requestData.contrato_id,
+          puesto_id: requestData.puesto_id,
           fecha_identificacion: requestData.fecha_identificacion,
           responsable_cuenta: requestData.responsable_cuenta,
           tipo_servicio_no_conforme: requestData.tipo_servicio_no_conforme,
@@ -1336,14 +1628,17 @@ export default function NonConformingProductScreen() {
       // UPDATE
       const recordId = editing.id || editing.id_local;
       const isLocal = String(editing.id).startsWith('local-') || (editing.id_local && String(editing.id_local).startsWith('local-'));
-      const willReplaceFiles = (imageFiles.length + audioFiles.length + videoFiles.length + documentFiles.length) > 0;
+      const newArchivosOnly = buildArchivosPayload();
+      const hasNewLocalFiles = newArchivosOnly.length > 0;
 
       const requestDataUpdate: any = {
         ...buildRequestData(),
       };
-      if (!willReplaceFiles) {
-        // no mandar archivos para no disparar reemplazo total
+      if (!hasNewLocalFiles) {
         delete requestDataUpdate.archivos;
+      } else if (isLocal) {
+        const rec = getEditingRecord();
+        requestDataUpdate.archivos = [...pncFilesToArchivoPayload(rec?.files), ...newArchivosOnly];
       }
 
       if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
@@ -1371,10 +1666,19 @@ export default function NonConformingProductScreen() {
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const { archivos, ...dataWithoutArchivos } = requestDataUpdate;
         const updatedCache = cache.map((item: any) => {
           if (item.type !== 'non_conforming_product') return item;
           if (!(item.id === recordId || item.id_local === recordId)) return item;
-          return { ...item, ...requestDataUpdate, synced: false };
+          const next: any = { ...item, ...dataWithoutArchivos, synced: false };
+          if (archivos && archivos.length) {
+            if (isLocal) {
+              next.files = archivosPayloadToPncLocalFiles(archivos);
+            } else {
+              next.files = [...(item.files || []), ...archivosPayloadToPncLocalFiles(archivos)];
+            }
+          }
+          return next;
         });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
 
@@ -1404,7 +1708,7 @@ export default function NonConformingProductScreen() {
   };
 
   const executeDelete = async (r: PncRecord) => {
-    const recordKey = String(r.id || r.id_local);
+    const recordKey = getStablePncRowKey(r);
     setDeletingRecordKey(recordKey);
     try {
       const isConnected = await getConnectionStatus();
@@ -1428,6 +1732,25 @@ export default function NonConformingProductScreen() {
         actions = actions.filter((a: any) => !(a.type === t && a.action === 'delete' && String(a.id) === rid));
         actions.push({ id: recordId, action: 'delete', type: t, payload: {}, synced: false });
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      }
+
+      const serverPidForArchivos =
+        r.id && !String(r.id).startsWith('local-') && Number.isFinite(Number(r.id)) && Number(r.id) > 0
+          ? Number(r.id)
+          : null;
+      if (serverPidForArchivos != null) {
+        const aStr = await AsyncStorage.getItem('evaluations_actions');
+        let act: any[] = aStr ? JSON.parse(aStr) : [];
+        if (!Array.isArray(act)) act = [];
+        act = act.filter(
+          (a: any) =>
+            !(
+              a.type === 'non_conforming_product' &&
+              a.action === 'delete_archivo' &&
+              Number(a.payload?.productoId) === serverPidForArchivos
+            )
+        );
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(act));
       }
 
       const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -1467,27 +1790,29 @@ export default function NonConformingProductScreen() {
         ))}
 
         {audioFiles.map((file) => (
-          <ThemedView key={file.id} style={styles.mediaBlock}>
-            <ThemedText style={styles.mediaLabel} numberOfLines={1}>Audio: {file.name}</ThemedText>
-            <PncAudioPlayer
-              sourceUrl={`data:${guessMimeType({ type: 'audio', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}`}
-            />
-            <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeLocalFile('audio', file.id)}>
+          <ThemedView key={file.id} style={[styles.fileRow, styles.fileRowTall]}>
+            <Ionicons name="mic-outline" size={16} color="#007AFF" style={styles.fileRowTallIcon} />
+            <ThemedView style={styles.fileNameCol}>
+              <ThemedText numberOfLines={1} style={styles.fileFormName}>
+                {file.name}
+              </ThemedText>
+            </ThemedView>
+            <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
               <Ionicons name="trash" size={16} color="#FF3B30" />
-              <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
             </TouchableOpacity>
           </ThemedView>
         ))}
 
         {videoFiles.map((file) => (
-          <ThemedView key={file.id} style={styles.mediaBlock}>
-            <ThemedText style={styles.mediaLabel} numberOfLines={1}>Video: {file.name}</ThemedText>
-            <PncVideoPlayer
-              sourceUrl={`data:${guessMimeType({ type: 'video', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}`}
-            />
-            <TouchableOpacity style={styles.removeMediaBtn} onPress={() => removeLocalFile('video', file.id)}>
+          <ThemedView key={file.id} style={[styles.fileRow, styles.fileRowTall]}>
+            <Ionicons name="videocam-outline" size={16} color="#007AFF" style={styles.fileRowTallIcon} />
+            <ThemedView style={styles.fileNameCol}>
+              <ThemedText numberOfLines={1} style={styles.fileFormName}>
+                {file.name}
+              </ThemedText>
+            </ThemedView>
+            <TouchableOpacity onPress={() => removeLocalFile('video', file.id)}>
               <Ionicons name="trash" size={16} color="#FF3B30" />
-              <ThemedText style={styles.removeMediaText}>Quitar</ThemedText>
             </TouchableOpacity>
           </ThemedView>
         ))}
@@ -1563,6 +1888,7 @@ export default function NonConformingProductScreen() {
                   setSelectedDivisionId(next);
                   setSelectedContratoId(null);
                   setSelectedSucursalId(null);
+                  setSelectedPuestoId(null);
                 }}
                 enabled={selectedClienteId !== null && divisionOptions.length > 0}
                 style={styles.picker}
@@ -1586,6 +1912,7 @@ export default function NonConformingProductScreen() {
                   const next = Number(v) || null;
                   setSelectedContratoId(next);
                   setSelectedSucursalId(null);
+                  setSelectedPuestoId(null);
                 }}
                 enabled={selectedDivisionId !== null && contratoOptions.length > 0}
                 style={styles.picker}
@@ -1601,13 +1928,32 @@ export default function NonConformingProductScreen() {
             <ThemedView style={styles.pickerWrapper}>
               <Picker
                 selectedValue={selectedSucursalId ?? 0}
-                onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
+                onValueChange={(v) => handleSucursalChange(Number(v) || null)}
                 enabled={selectedContratoId !== null && sucursalOptions.length > 0}
                 style={styles.picker}
               >
                 <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} color="#000000" />
                 {sucursalOptions.map((s) => (
                   <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                ))}
+              </Picker>
+            </ThemedView>
+
+            <ThemedText style={styles.label}>Puesto *</ThemedText>
+            <ThemedView style={styles.pickerWrapper}>
+              <Picker
+                selectedValue={selectedPuestoId ?? 0}
+                onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
+                enabled={selectedSucursalId !== null && puestoOptions.length > 0}
+                style={styles.picker}
+              >
+                <Picker.Item
+                  label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                  value={0}
+                  color="#000000"
+                />
+                {puestoOptions.map((p) => (
+                  <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                 ))}
               </Picker>
             </ThemedView>
@@ -1623,12 +1969,12 @@ export default function NonConformingProductScreen() {
         </TouchableOpacity>
         {showFechaIdentPicker && (
           <DateTimePicker
-            value={fechaIdentificacion}
+            value={coerceToValidDate(fechaIdentificacion)}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={(_, d) => {
               setShowFechaIdentPicker(false);
-              if (d) setFechaIdentificacion(d);
+              if (d && isValidDate(d)) setFechaIdentificacion(d);
             }}
           />
         )}
@@ -1691,12 +2037,12 @@ export default function NonConformingProductScreen() {
         </TouchableOpacity>
         {showFechaSolPicker && (
           <DateTimePicker
-            value={fechaSolucion}
+            value={coerceToValidDate(fechaSolucion)}
             mode="date"
             display={Platform.OS === 'ios' ? 'spinner' : 'default'}
             onChange={(_, d) => {
               setShowFechaSolPicker(false);
-              if (d) setFechaSolucion(d);
+              if (d && isValidDate(d)) setFechaSolucion(d);
             }}
           />
         )}
@@ -2006,7 +2352,7 @@ export default function NonConformingProductScreen() {
     return (
         <ThemedView style={styles.listContainer}>
         {records.map((r) => {
-          const recordKey = String(r.id || r.id_local);
+          const recordKey = getStablePncRowKey(r);
           const isExpanded = expanded.has(recordKey);
           const isOffline = !r.synced || String(r.id_local || '').startsWith('local-');
           const pncId = typeof r.id === 'number' ? r.id : undefined;
@@ -2056,9 +2402,22 @@ export default function NonConformingProductScreen() {
                       <ThemedView style={styles.imagesList}>
                         {imageFilesRemote.map((f, idx) => {
                           const uri = buildFileUrl(pncId, f);
+                          const fk = pncFileDeletingKey(r, f, idx);
                           return (
                             <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
                               <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                              <TouchableOpacity
+                                style={styles.attachmentTrashBtn}
+                                onPress={() => handleDeleteRecordAttachment(r, f, idx)}
+                                disabled={deletingFileKey != null}
+                                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                              >
+                                {deletingFileKey === fk ? (
+                                  <ActivityIndicator size="small" color="#B00020" />
+                                ) : (
+                                  <Ionicons name="trash" size={20} color="#B00020" />
+                                )}
+                              </TouchableOpacity>
                             </ThemedView>
                           );
                         })}
@@ -2072,9 +2431,26 @@ export default function NonConformingProductScreen() {
                       {audioFilesRemote.map((f, idx) => {
                         const uri = buildFileUrl(pncId, f);
                         const label = (f.original_name || f.name || `audio_${idx}`).trim();
+                        const fk = pncFileDeletingKey(r, f, idx);
                         return (
                           <ThemedView key={`${recordKey}_aud_${idx}`} style={styles.mediaBlock}>
-                            <ThemedText style={styles.mediaLabel} numberOfLines={1}>{label}</ThemedText>
+                            <ThemedView style={styles.mediaBlockHeaderRow}>
+                              <ThemedText style={styles.mediaBlockHeaderTitle} numberOfLines={1}>
+                                {label}
+                              </ThemedText>
+                              <TouchableOpacity
+                                style={styles.attachmentTrashBtnInline}
+                                onPress={() => handleDeleteRecordAttachment(r, f, idx)}
+                                disabled={deletingFileKey != null}
+                                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                              >
+                                {deletingFileKey === fk ? (
+                                  <ActivityIndicator size="small" color="#B00020" />
+                                ) : (
+                                  <Ionicons name="trash" size={20} color="#B00020" />
+                                )}
+                              </TouchableOpacity>
+                            </ThemedView>
                             <PncAudioPlayer sourceUrl={uri} />
                           </ThemedView>
                         );
@@ -2088,9 +2464,26 @@ export default function NonConformingProductScreen() {
                       {videoFilesRemote.map((f, idx) => {
                         const uri = buildFileUrl(pncId, f);
                         const label = (f.original_name || f.name || `video_${idx}`).trim();
+                        const fk = pncFileDeletingKey(r, f, idx);
                         return (
                           <ThemedView key={`${recordKey}_vid_${idx}`} style={styles.mediaBlock}>
-                            <ThemedText style={styles.mediaLabel} numberOfLines={1}>{label}</ThemedText>
+                            <ThemedView style={styles.mediaBlockHeaderRow}>
+                              <ThemedText style={styles.mediaBlockHeaderTitle} numberOfLines={1}>
+                                {label}
+                              </ThemedText>
+                              <TouchableOpacity
+                                style={styles.attachmentTrashBtnInline}
+                                onPress={() => handleDeleteRecordAttachment(r, f, idx)}
+                                disabled={deletingFileKey != null}
+                                hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                              >
+                                {deletingFileKey === fk ? (
+                                  <ActivityIndicator size="small" color="#B00020" />
+                                ) : (
+                                  <Ionicons name="trash" size={20} color="#B00020" />
+                                )}
+                              </TouchableOpacity>
+                            </ThemedView>
                             <PncVideoPlayer sourceUrl={uri} />
                           </ThemedView>
                         );
@@ -2104,22 +2497,38 @@ export default function NonConformingProductScreen() {
                       {documentFilesRemote.map((f, idx) => {
                         const uri = buildFileUrl(pncId, f);
                         const label = (f.original_name || f.name || `archivo_${idx}`).trim();
+                        const fk = pncFileDeletingKey(r, f, idx);
                         return (
-                          <TouchableOpacity
-                            key={`${recordKey}_doc_${idx}`}
-                            style={styles.fileRow}
-                            onPress={async () => {
-                              if (!uri) return;
-                              try {
-                                await Linking.openURL(uri);
-                              } catch {
-                                Alert.alert('Error', 'No se pudo abrir el archivo');
-                              }
-                            }}
-                          >
-                            <ThemedText numberOfLines={1} style={styles.fileName}>{label}</ThemedText>
-                            <Ionicons name="open-outline" size={18} color="#007AFF" />
-                          </TouchableOpacity>
+                          <ThemedView key={`${recordKey}_doc_${idx}`} style={styles.fileRowDoc}>
+                            <TouchableOpacity
+                              style={styles.fileRowDocMain}
+                              onPress={async () => {
+                                if (!uri) return;
+                                try {
+                                  await Linking.openURL(uri);
+                                } catch {
+                                  Alert.alert('Error', 'No se pudo abrir el archivo');
+                                }
+                              }}
+                            >
+                              <ThemedText numberOfLines={1} style={styles.fileName}>
+                                {label}
+                              </ThemedText>
+                              <Ionicons name="open-outline" size={18} color="#007AFF" />
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.attachmentTrashBtnInline}
+                              onPress={() => handleDeleteRecordAttachment(r, f, idx)}
+                              disabled={deletingFileKey != null}
+                              hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                            >
+                              {deletingFileKey === fk ? (
+                                <ActivityIndicator size="small" color="#B00020" />
+                              ) : (
+                                <Ionicons name="trash" size={20} color="#B00020" />
+                              )}
+                            </TouchableOpacity>
+                          </ThemedView>
                         );
                       })}
                     </>
@@ -2567,6 +2976,11 @@ const styles = StyleSheet.create({
 
   filesList: { marginTop: 10, gap: 8 },
   fileRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+  fileRowTall: { alignItems: 'flex-start' },
+  fileRowTallIcon: { marginTop: 2 },
+  fileNameCol: { flex: 1, minWidth: 0 },
+  fileFormName: { color: '#000000', fontWeight: '500' },
+  fileNameHint: { fontSize: 12, color: '#888888', marginTop: 2, lineHeight: 16 },
   filePreviewImage: { width: 44, height: 44, borderRadius: 8, backgroundColor: '#F2F2F2' },
   fileName: { flex: 1, color: '#000000' },
 
@@ -2764,12 +3178,54 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   imageWideWrap: {
+    position: 'relative',
     width: '100%',
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: '#E0E0E0',
     backgroundColor: '#F2F2F2',
+  },
+  attachmentTrashBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 2,
+    padding: 4,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 8,
+  },
+  attachmentTrashBtnInline: {
+    padding: 4,
+    marginLeft: 8,
+  },
+  mediaBlockHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 8,
+  },
+  mediaBlockHeaderTitle: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  fileRowDoc: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    gap: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#E0E0E0',
+  },
+  fileRowDocMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   imageWide: {
     width: '100%',

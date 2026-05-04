@@ -68,7 +68,7 @@ async function validateLlaveroOwnership(req: NextRequest, llaveroId: number, mar
         data: { action: "GET", table: "e_llavero", operation: "findUnique", where: { id: llaveroId } }
     });
     if (!llavero) return { ok: false as const, llavero: null, message: "Llavero no encontrado" };
-    if (llavero.cliente_id !== marcaDia.cliente_id || llavero.corpo_id !== marcaDia.corpo_id) {
+    if (llavero.cliente_id !== marcaDia.cliente_id) {
         return { ok: false as const, llavero: null, message: "No autorizado" };
     }
     return { ok: true as const, llavero, message: "" };

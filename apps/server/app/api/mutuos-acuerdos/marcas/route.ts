@@ -54,6 +54,30 @@ export async function GET(req: NextRequest) {
 
     console.log("marcas", marcas);
 
+    const contratoIds = Array.from(
+      new Set(
+        (marcas || [])
+          .map((m: any) => parseIntStrict(m?.contrato_id))
+          .filter((x: number | null): x is number => x != null && x > 0)
+      )
+    );
+    const contratos =
+      contratoIds.length > 0
+        ? await callDynamicPrisma({
+            req,
+            data: {
+              action: "GET",
+              table: "e_estructura_contrato",
+              operation: "findMany",
+              where: { id: { in: contratoIds } },
+              select: { id: true, division_id: true },
+            },
+          })
+        : [];
+    const divisionByContratoId = new Map<number, number | null>(
+      (contratos || []).map((c: any) => [Number(c.id), c?.division_id != null ? Number(c.division_id) : null])
+    );
+
     const marcaIds = (marcas || []).map((m: any) => Number(m.id)).filter(Boolean);
     if (marcaIds.length === 0) {
       return NextResponse.json({ status: true, message: "El empleado está libre ese día", data: [] }, { status: 200 });
@@ -66,9 +90,14 @@ export async function GET(req: NextRequest) {
         table: "e_mutuos_acuerdos",
         operation: "findMany",
         where: {
-          OR: [
-            { marcaDiaAusente_id: { in: marcaIds } },
-            { marcaDiaReemplaza_id: { in: marcaIds } },
+          AND: [
+            { isActive: true },
+            {
+              OR: [
+                { marcaDiaAusente_id: { in: marcaIds } },
+                { marcaDiaReemplaza_id: { in: marcaIds } },
+              ],
+            },
           ],
         },
         select: { marcaDiaAusente_id: true, marcaDiaReemplaza_id: true },
@@ -83,12 +112,20 @@ export async function GET(req: NextRequest) {
 
     const data = (marcas || [])
       .filter((m: any) => !usedIds.has(Number(m.id)))
-      .map((m: any) => ({
+      .map((m: any) => {
+        const cId = m.contrato_id != null ? Number(m.contrato_id) : null;
+        const divRaw = cId != null && cId > 0 ? divisionByContratoId.get(cId) : null;
+        const divId = divRaw != null && Number.isFinite(Number(divRaw)) && Number(divRaw) > 0 ? Number(divRaw) : null;
+        return {
         id: m.id,
         cliente_id: m.cliente_id ?? null,
         corpo_id: m.corpo_id ?? null,
         plaza_id: m.plaza_id ?? null,
         empleadoFijo_id: m.empleadoFijo_id ?? null,
+        empresa_id: m.empresa_id != null ? Number(m.empresa_id) : null,
+        puesto_id: m.puesto_id != null ? Number(m.puesto_id) : null,
+        contrato_id: cId != null && cId > 0 ? cId : null,
+        division_id: divId,
         cliente: m.e_estructura_cliente?.nombre || null,
         sucursal: m.e_estructura_sucursal?.nombre || null,
         puesto: m.e_estructura_puesto?.nombre || null,
@@ -96,7 +133,8 @@ export async function GET(req: NextRequest) {
         hora_fin: m.hora_fin ? new Date(m.hora_fin).toISOString() : null,
         tipo_turno: m.tipo_turno || null,
         tipo_turno_texto: turnoTexto(m.tipo_turno),
-      }));
+        };
+      });
 
     if (data.length === 0) {
       return NextResponse.json({ status: true, message: "El empleado está libre ese día", data: [] }, { status: 200 });

@@ -19,6 +19,12 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  loadMainStructureTreeMerged,
+  persistMergedMainStructureTree,
+  readBitacorasForSucursalFromMainStructure,
+  upsertBitacoraDetenidoRowInMainStructure,
+} from '@/hooks/bitacoraMainStructureCache';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
@@ -30,11 +36,32 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '@/App';
 import { eventBus } from '@/hooks/eventBus';
 import {
+  findCorporateVehicleServerIdByLocalKey,
+  getCorporateVehiclesForCorpo,
   mergeCorporateVehiclesCorpoCacheForSucursal,
   removeVehicleFromCorpoCache,
   setVehicleUsosInCorpoCache,
   upsertVehicleInCorpoCache,
 } from '@/hooks/corporateVehiclesCorpoCache';
+import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
+import { loadMainStructureFragmentsObject } from '@/hooks/mainStructureFragmentsStorage';
+import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import {
+  readCorporateVehiclesForSucursalFromMainStructure,
+  readCorporateVehiclesForSucursalFromFragmentStorage,
+  mergeCorporateVehiclesForSucursalFromServer,
+  upsertCorporateVehicleInMainStructure,
+  moveCorporateVehicleInMainStructure,
+  removeCorporateVehicleFromMainStructureEverywhere,
+  updateVehicleUsosInMainStructureBranch,
+  updateVehicleMantenimientosInMainStructureBranch,
+  findSucursalIdForVehicleKeyInMainStructure,
+  resolveCorporateVehicleServerIdFromMainStructure,
+  isCorporateVehicleLocalDraft,
+  resolveSucursalIdForVehiculoFromMainStructure,
+  normalizeVehiculoCorporativoForMainStructureCache,
+  recomputeBitacorasForSucursalNode,
+} from '@/hooks/corporateVehiclesMainStructure';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -46,6 +73,7 @@ import {
   createCorporateVehicleUse,
   deleteCorporateVehicleUse,
   deleteCorporateVehicle,
+  deleteCorporateVehicleImage,
   listCorporateVehicleUses,
   listCorporateVehiclesByCorpo,
   updateCorporateVehicleUse,
@@ -53,12 +81,15 @@ import {
   createCorporateVehicleMaintenance,
   updateCorporateVehicleMaintenance,
   deleteCorporateVehicleMaintenance,
+  deleteCorporateVehicleMaintenanceImage,
   listCorporateVehicleMaintenances,
   CorporateVehicleMaintenanceRequest,
 } from '@/hooks/evaluationFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'CorporateVehicles'>;
+
+const CORPORATE_VEHICLE_IMAGE_PREFIX = 'corporate_vehicle';
 
 type MainStructureTree = any[];
 
@@ -74,8 +105,12 @@ type LocalImage = {
   id: string;
   name: string;
   extension: string;
-  base64: string;
+  base64?: string;
   mimeType?: string;
+  /** Archivo en `Paths.document` vía `fileStorage.saveFile`. */
+  localFileName?: string;
+  /** Imagen ya persistida en servidor (no se re-sube salvo que haya archivo local / base64 nuevo). */
+  serverImageId?: number;
 };
 
 type VehicleImage = {
@@ -84,6 +119,8 @@ type VehicleImage = {
   id_local?: string;
   base64?: string;
   extension?: string;
+  stored_file_name?: string;
+  localFileName?: string;
 };
 
 type VehicleUse = {
@@ -114,11 +151,13 @@ type VehicleMaintenance = {
   vehiculo_id: number | string;
   fecha: string; // ISO
   imagen_antes: string; // base64 or file_name
+  imagen_antes_local_file?: string;
   tipo: string;
   mantenimiento: string;
   diagnostico: string;
   kilometraje_siguiente_revision: number;
   imagen_despues: string; // base64 or file_name
+  imagen_despues_local_file?: string;
   nombre_mecanico: string;
   firma_mecanico?: string | null; // base64 signature (opcional)
   firma_responsable: string; // base64 hash
@@ -136,6 +175,9 @@ type VehicleRecord = {
   empresa_id: number;
   cliente_id: number;
   corpo_id: number; // sucursal_id
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
 
   placa: string;
   tipo: string;
@@ -159,6 +201,35 @@ type VehicleRecord = {
   usos?: VehicleUse[];
   mantenimientos?: VehicleMaintenance[];
 };
+
+/** Une lista del árbol principal con filas de `corporate_vehicles_corpo_cache` (offline / borradores). */
+function mergeCorporateVehicleDisplayLists(a: VehicleRecord[], b: VehicleRecord[]): VehicleRecord[] {
+  const map = new Map<string, VehicleRecord>();
+  const keyOf = (v: VehicleRecord) => {
+    const idNum = typeof v.id === 'number' && v.id > 0 ? v.id : null;
+    if (idNum != null) return `n:${idNum}`;
+    const loc =
+      (v as any).id_local != null && String((v as any).id_local).trim() !== ''
+        ? String((v as any).id_local)
+        : typeof v.id === 'string' && v.id.startsWith('local-')
+          ? v.id
+          : '';
+    if (loc) return `l:${loc}`;
+    return `u:${String(v.id)}`;
+  };
+  const prefer = (cur: VehicleRecord, next: VehicleRecord) => {
+    if (isCorporateVehicleLocalDraft(next) && !isCorporateVehicleLocalDraft(cur)) return next;
+    return cur;
+  };
+  for (const v of a) map.set(keyOf(v), v);
+  for (const v of b) {
+    const k = keyOf(v);
+    const cur = map.get(k);
+    if (!cur) map.set(k, v);
+    else map.set(k, prefer(cur, v));
+  }
+  return Array.from(map.values());
+}
 
 const getBase64Only = (value: string | null | undefined): string => {
   if (!value) return '';
@@ -668,11 +739,14 @@ export default function CorporateVehiclesScreen() {
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<RoleName>(null);
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
   const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
   const [deletingUseKey, setDeletingUseKey] = useState<string | null>(null);
   const [deletingMaintenanceKey, setDeletingMaintenanceKey] = useState<string | null>(null);
+  const [deletingMaintImageKey, setDeletingMaintImageKey] = useState<string | null>(null);
 
   // Estados para filtros jerárquicos
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -691,6 +765,7 @@ export default function CorporateVehiclesScreen() {
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
 
   // lista
   const [records, setRecords] = useState<VehicleRecord[]>([]);
@@ -739,12 +814,14 @@ export default function CorporateVehiclesScreen() {
   const [maintenanceEditing, setMaintenanceEditing] = useState<VehicleMaintenance | null>(null);
 
   const [maintenanceFecha, setMaintenanceFecha] = useState(''); // YYYY-MM-DD
-  const [maintenanceImagenAntes, setMaintenanceImagenAntes] = useState<string>(''); // base64
+  const [maintenanceImagenAntes, setMaintenanceImagenAntes] = useState<string>(''); // preview uri
+  const [maintenanceImagenAntesRef, setMaintenanceImagenAntesRef] = useState<string>(''); // local file reference
   const [maintenanceTipo, setMaintenanceTipo] = useState('');
   const [maintenanceMantenimiento, setMaintenanceMantenimiento] = useState('');
   const [maintenanceDiagnostico, setMaintenanceDiagnostico] = useState('');
   const [maintenanceKmSiguiente, setMaintenanceKmSiguiente] = useState('');
-  const [maintenanceImagenDespues, setMaintenanceImagenDespues] = useState<string>(''); // base64
+  const [maintenanceImagenDespues, setMaintenanceImagenDespues] = useState<string>(''); // preview uri
+  const [maintenanceImagenDespuesRef, setMaintenanceImagenDespuesRef] = useState<string>(''); // local file reference
   const [maintenanceNombreMecanico, setMaintenanceNombreMecanico] = useState('');
   const [maintenanceFirmaMecanico, setMaintenanceFirmaMecanico] = useState<string>(''); // base64 signature
   const [maintenanceFirmaResponsable, setMaintenanceFirmaResponsable] = useState<FirmaData | null>(null);
@@ -896,13 +973,15 @@ export default function CorporateVehiclesScreen() {
   const syncMarcaFromStorage = useCallback(
     async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
       const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
-      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-      if (!currentMarcaStr) {
-        setHasCurrentMarca(false);
-        setMarcaDivisionId(null);
-        setMarcaCorpoId(null);
-        setMarcaClienteId(null);
-        setMarcaEmpresaId(null);
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
+      setMarcaEmpresaId(null);
+      setMarcaContratoId(null);
+      setMarcaPuestoId(null);
         setRoleName(null);
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(null);
@@ -911,19 +990,19 @@ export default function CorporateVehiclesScreen() {
           setFilterContratoId(null);
           setFilterCorpoId(null);
         }
+      return null;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current) {
+        setHasCurrentMarca(false);
         return null;
       }
-      try {
-        const current = JSON.parse(currentMarcaStr);
-        if (!current) {
-          setHasCurrentMarca(false);
-          return null;
-        }
-        setHasCurrentMarca(true);
+      setHasCurrentMarca(true);
         const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
-        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
-        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+      const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+      const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
         const divId = numOrNull(divIdRaw);
         const corpoId = numOrNull(corpoIdRaw);
         const clienteId = numOrNull(clienteIdRaw);
@@ -938,6 +1017,15 @@ export default function CorporateVehiclesScreen() {
         setMarcaCorpoId(corpoId);
         setMarcaClienteId(clienteId);
         setMarcaEmpresaId(empresaId);
+        setMarcaContratoId(numOrNull(current?.contrato?.id));
+        setMarcaPuestoId(
+          numOrNull(
+            current?.puesto?.id ??
+              current?.plaza?.puesto?.id ??
+              current?.roleDivision?.puesto_id ??
+              current?.role_division?.puesto_id
+          )
+        );
         setRoleName(rn);
 
         const divFromMarca = getDivisionIdFromMarcaJson(current);
@@ -967,15 +1055,17 @@ export default function CorporateVehiclesScreen() {
           filterContratoId: fco,
           filterCorpoId: fs,
         };
-      } catch {
-        setHasCurrentMarca(false);
-        setMarcaDivisionId(null);
-        setMarcaCorpoId(null);
-        setMarcaClienteId(null);
-        setMarcaEmpresaId(null);
+    } catch {
+      setHasCurrentMarca(false);
+      setMarcaDivisionId(null);
+      setMarcaCorpoId(null);
+      setMarcaClienteId(null);
+      setMarcaEmpresaId(null);
+      setMarcaContratoId(null);
+      setMarcaPuestoId(null);
         setRoleName(null);
-        return null;
-      }
+      return null;
+    }
     },
     []
   );
@@ -1010,6 +1100,11 @@ export default function CorporateVehiclesScreen() {
       setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
       setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
       setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      const pId =
+        marca.puesto?.id != null
+          ? Number(marca.puesto.id)
+          : numOrNull(marca?.plaza?.puesto?.id ?? marca?.plaza?.puesto_id);
+      setSelectedPuestoId(pId);
     } catch (e) {
       console.error('applyCurrentMarcaToCreateHierarchy (CorporateVehicles):', e);
     }
@@ -1018,18 +1113,16 @@ export default function CorporateVehiclesScreen() {
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-        } catch {
-          // ignore
+      const fragments = await loadMainStructureFragmentsObject();
+      if (fragments && Object.keys(fragments).length > 0) {
+        const mergedFromFrag = mergeMainStructureFragments(fragments);
+        if (Array.isArray(mergedFromFrag) && mergedFromFrag.length > 0) {
+          setStructure(mergedFromFrag);
+          return;
         }
       }
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-      // esta app ya guarda main_structure_cache desde otras pantallas; aquí solo usamos cache
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged)) setStructure(merged);
     } finally {
       setIsStructureLoading(false);
     }
@@ -1053,6 +1146,28 @@ export default function CorporateVehiclesScreen() {
     const cont = contratos.find((c: any) => Number(c.id) === Number(selectedContratoId));
     return cont?.sucursales || [];
   }, [contratos, selectedContratoId]);
+
+  const selectedSucursalNodeForForm = useMemo(() => {
+    if (!selectedSucursalId) return null;
+    for (const emp of empresas) {
+      for (const cli of emp?.clientes || []) {
+        const divs = cli?.division || cli?.divisiones || [];
+        for (const div of divs) {
+          for (const ct of div?.contratos || []) {
+            for (const suc of ct?.sucursales || []) {
+              if (Number(suc?.id) === Number(selectedSucursalId)) return suc;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }, [empresas, selectedSucursalId]);
+
+  const puestosForm = useMemo(() => {
+    const arr = selectedSucursalNodeForForm?.puestos;
+    return Array.isArray(arr) ? arr : [];
+  }, [selectedSucursalNodeForForm]);
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -1186,6 +1301,7 @@ export default function CorporateVehiclesScreen() {
   };
   const handleSucursalChange = (sucursalId: number | null) => {
     setSelectedSucursalId(sucursalId);
+    setSelectedPuestoId(null);
   };
 
   useEffect(() => {
@@ -1211,6 +1327,14 @@ export default function CorporateVehiclesScreen() {
   };
 
   const buildImageUrl = (vehiculoId: number | undefined, img: VehicleImage) => {
+    const stored =
+      (typeof img.stored_file_name === 'string' && img.stored_file_name.trim()) ||
+      (typeof img.localFileName === 'string' && img.localFileName.trim()) ||
+      '';
+    if (stored) {
+      const uri = getLocalFileDisplayUri(stored.trim());
+      if (uri) return uri;
+    }
     const hasLocal = img.id_local && String(img.id_local).trim().length > 0;
     if (hasLocal && img.base64) {
       const ext = (img.extension || 'jpg').toLowerCase();
@@ -1232,6 +1356,8 @@ export default function CorporateVehiclesScreen() {
     if (imageName.startsWith('data:')) {
       return imageName;
     }
+    const localUri = getLocalFileDisplayUri(imageName.trim());
+    if (localUri) return localUri;
 
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (apiUrl && vehiculoId) {
@@ -1246,10 +1372,7 @@ export default function CorporateVehiclesScreen() {
       if (!sucursalId || !Array.isArray(vehicles) || vehicles.length === 0) return;
 
       try {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (!cacheStr) return;
-
-        const tree = safeParse<any[]>(cacheStr, []);
+        const tree = await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
 
         let updated = false;
@@ -1352,7 +1475,6 @@ export default function CorporateVehiclesScreen() {
                         });
 
                         const mergedMants = [...serverMants, ...localMantsToKeep];
-                        existing.mantenimientos = mergedMants;
                         existing.c_mantenimiento_vehiculos_corporativos = mergedMants;
                       }
 
@@ -1387,17 +1509,19 @@ export default function CorporateVehiclesScreen() {
                       // Añadimos si el cache no tenía el vehículo.
                       vehiculos.push({
                         ...fv,
-                        // Aseguramos alias usados en módulos offline.
                         c_usos_vehiculos_corporativos: Array.isArray((fv as any)?.usos) ? (fv as any).usos : [],
-                        c_mantenimiento_vehiculos_corporativos: Array.isArray((fv as any)?.mantenimientos) ? (fv as any).mantenimientos : [],
+                        c_mantenimiento_vehiculos_corporativos: Array.isArray((fv as any)?.mantenimientos)
+                          ? (fv as any).mantenimientos
+                          : [],
                       });
                       updated = true;
                       byId.set(fid, vehiculos[vehiculos.length - 1]);
                     }
                   }
 
-                  // Persistimos la lista final sobre el nodo sucursal.
-                  sucursal[targetKey] = vehiculos;
+                  const normalizedVehiculos = vehiculos.map(normalizeVehiculoCorporativoForMainStructureCache);
+                  sucursal[targetKey] = normalizedVehiculos;
+                  recomputeBitacorasForSucursalNode(sucursal, normalizedVehiculos);
                 }
               }
             }
@@ -1405,8 +1529,7 @@ export default function CorporateVehiclesScreen() {
         }
 
         if (updated) {
-          console.log('Updating main_structure_cache');
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+          await persistMergedMainStructureTree(tree, [Number(sucursalId)]);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicles):', e);
@@ -1421,11 +1544,12 @@ export default function CorporateVehiclesScreen() {
       if (!vehiculoId || !Array.isArray(usos) || usos.length === 0) return;
 
       try {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (!cacheStr) return;
-
-        const tree = safeParse<any[]>(cacheStr, []);
+        const tree = await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
+
+        const sidResolved =
+          sucursalId ?? (await resolveSucursalIdForVehiculoFromMainStructure(Number(vehiculoId)));
+        if (!sidResolved) return;
 
         let updated = false;
 
@@ -1438,7 +1562,7 @@ export default function CorporateVehiclesScreen() {
               for (const contrato of contratos) {
                 const sucursales = contrato?.sucursales || [];
                 for (const sucursal of sucursales) {
-                  if (sucursalId != null && Number(sucursal?.id) !== Number(sucursalId)) continue;
+                  if (Number(sucursal?.id) !== Number(sidResolved)) continue;
 
                   const targetKey = Array.isArray(sucursal?.vehiculos_corporativos)
                     ? 'vehiculos_corporativos'
@@ -1483,7 +1607,11 @@ export default function CorporateVehiclesScreen() {
                   const mergedUsos = [...serverUsos, ...localToKeep];
 
                   targetVehiculo.usos = mergedUsos;
-                  targetVehiculo.c_usos_vehiculos_corporativos = mergedUsos; // alias para otros módulos
+                  targetVehiculo.c_usos_vehiculos_corporativos = mergedUsos;
+
+                  const normalizedVehiculos = vehiculos.map(normalizeVehiculoCorporativoForMainStructureCache);
+                  sucursal[targetKey] = normalizedVehiculos;
+                  recomputeBitacorasForSucursalNode(sucursal, normalizedVehiculos);
 
                   updated = true;
                 }
@@ -1493,7 +1621,7 @@ export default function CorporateVehiclesScreen() {
         }
 
         if (updated) {
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+          await persistMergedMainStructureTree(tree, [Number(sidResolved)]);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicle uses):', e);
@@ -1508,10 +1636,7 @@ export default function CorporateVehiclesScreen() {
       if (!sucursalId || !Number.isFinite(vehiculoId) || !Array.isArray(mantenimientos) || mantenimientos.length === 0) return;
 
       try {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (!cacheStr) return;
-
-        const tree = safeParse<any[]>(cacheStr, []);
+        const tree = await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
 
         let updated = false;
@@ -1568,9 +1693,11 @@ export default function CorporateVehiclesScreen() {
 
                   const mergedMants = [...serverMants, ...localMantsToKeep];
 
-                  targetVehiculo.mantenimientos = mergedMants;
-                  // Mantiene compatibilidad con la forma usada por `dynamic-prisma/main-structure`.
                   targetVehiculo.c_mantenimiento_vehiculos_corporativos = mergedMants;
+
+                  const normalizedVehiculosM = vehiculos.map(normalizeVehiculoCorporativoForMainStructureCache);
+                  sucursal[targetKey] = normalizedVehiculosM;
+                  recomputeBitacorasForSucursalNode(sucursal, normalizedVehiculosM);
 
                   updated = true;
                 }
@@ -1580,8 +1707,7 @@ export default function CorporateVehiclesScreen() {
         }
 
         if (updated) {
-          console.log('Updating main_structure_cache');
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+          await persistMergedMainStructureTree(tree, [Number(sucursalId)]);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicle maintenances):', e);
@@ -1592,22 +1718,20 @@ export default function CorporateVehiclesScreen() {
 
   const runFetchRecords = useCallback(
     async (snap: MarcaSnapshot) => {
-      try {
-        setIsLoading(true);
-        setError(null);
+    try {
+      setIsLoading(true);
+      setError(null);
 
         if (!snap?.current) {
-          return;
-        }
+        return;
+      }
 
-        await fetchMainStructure();
+      await fetchMainStructure();
 
         /**
          * Listado solo con sucursal/corpo: OPERATIVO → `current_marca.corpo`;
          * resto → filtro jerárquico o, si falta, mismo id desde `current_marca`.
          */
-        const vehicleRecordSucursalId = (r: any) =>
-          Number(r?.corpo_id ?? r?.sucursal_id ?? 0);
         const corpoId = snap.isOperativo
           ? snap.marcaCorpoId
           : (snap.filterCorpoId ?? snap.marcaCorpoId);
@@ -1618,66 +1742,55 @@ export default function CorporateVehiclesScreen() {
               : 'Seleccione sucursal en el filtro o defina la sucursal en la marca actual'
           );
           setRecords([]);
-          return;
-        }
+        return;
+      }
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const localCacheAll: VehicleRecord[] = cache.filter((item: any) => item.type === 'corporate_vehicle');
-        const localCache: VehicleRecord[] = localCacheAll.filter(
-          (r: any) => vehicleRecordSucursalId(r) === Number(corpoId)
+        const listFromFragment = await readCorporateVehiclesForSucursalFromFragmentStorage(Number(corpoId));
+        const listFromMainStructure = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
+        const listOfflineSource = mergeCorporateVehicleDisplayLists(
+          listFromFragment as VehicleRecord[],
+          listFromMainStructure as VehicleRecord[]
         );
-        const localOnly = localCache.filter((r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-'));
+        const fromCorpoCache = await getCorporateVehiclesForCorpo(Number(corpoId));
 
-        const isConnected = await getConnectionStatus();
-        if (!isConnected) {
-          setRecords(localCache);
-          return;
-        }
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+          setRecords(
+            mergeCorporateVehicleDisplayLists(listOfflineSource, fromCorpoCache as VehicleRecord[])
+          );
+        return;
+      }
 
         const res = await listCorporateVehiclesByCorpo({
           corpo_id: String(corpoId),
-          refreshAccessToken,
-          logout,
-        });
-        if (!res.status) {
-          setRecords(localCache);
-          return;
-        }
-
-        const serverItems: VehicleRecord[] = Array.isArray(res.data) ? (res.data as any) : [];
-        const merged: VehicleRecord[] = [
-          ...localOnly.map((r: any) => ({ ...r, synced: false })),
-          ...serverItems.map((r: any) => ({ ...r, synced: true })),
-        ];
-
-        setRecords(merged);
-
-        const withoutThis = cache.filter(
-          (item: any) =>
-            !(
-              item.type === 'corporate_vehicle' && vehicleRecordSucursalId(item) === Number(corpoId)
-            )
-        );
-        await AsyncStorage.setItem(
-          'evaluations_cache',
-          JSON.stringify([...withoutThis, ...merged.map((r: any) => ({ ...r, type: 'corporate_vehicle' }))])
-        );
-
-        await mergeCorporateVehiclesCorpoCacheForSucursal(corpoId, serverItems as any[]);
-
-        void updateMainStructureCacheFromFetchedVehicles({
-          sucursalId: Number(corpoId),
-          vehicles: serverItems,
-        });
-      } catch (e: any) {
-        console.error('Error fetching corporate vehicles:', e);
-        setError(e?.message || 'Error al cargar los vehículos');
-      } finally {
-        setIsLoading(false);
+        refreshAccessToken,
+        logout,
+      });
+      if (!res.status) {
+          setRecords(
+            mergeCorporateVehicleDisplayLists(listOfflineSource, fromCorpoCache as VehicleRecord[])
+          );
+        return;
       }
+
+      const serverItems: VehicleRecord[] = Array.isArray(res.data)
+        ? (res.data as any).filter((r: any) => r?.isActive !== false)
+        : [];
+        await mergeCorporateVehiclesForSucursalFromServer({
+          sucursalId: Number(corpoId),
+          serverVehicles: serverItems as any[],
+        });
+        await mergeCorporateVehiclesCorpoCacheForSucursal(Number(corpoId), serverItems as any[]);
+        const mergedList = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
+        setRecords(mergedList as VehicleRecord[]);
+    } catch (e: any) {
+      console.error('Error fetching corporate vehicles:', e);
+      setError(e?.message || 'Error al cargar los vehículos');
+    } finally {
+      setIsLoading(false);
+    }
     },
-    [fetchMainStructure, refreshAccessToken, logout, updateMainStructureCacheFromFetchedVehicles]
+    [fetchMainStructure, refreshAccessToken, logout]
   );
 
   const fetchRecords = useCallback(async () => {
@@ -1739,6 +1852,7 @@ export default function CorporateVehiclesScreen() {
     setMarchamo(true);
     setFirmaResponsable(null);
     setImageFiles([]);
+    setSelectedPuestoId(null);
   };
 
   const resetUseForm = () => {
@@ -1812,19 +1926,12 @@ export default function CorporateVehiclesScreen() {
       prev.map((r) => {
         const key = String(r.id || r.id_local);
         if (key !== vehicleKey) return r;
-        return { ...r, usos };
+        return { ...r, usos, c_usos_vehiculos_corporativos: usos };
       })
     );
 
-    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-    const cache = cacheStr ? JSON.parse(cacheStr) : [];
-    const updatedCache = cache.map((item: any) => {
-      if (item.type !== 'corporate_vehicle') return item;
-      const key = String(item.id || item.id_local);
-      if (key !== vehicleKey) return item;
-      return { ...item, usos };
-    });
-    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+    const sid = await findSucursalIdForVehicleKeyInMainStructure(vehicleKey);
+    if (sid) await updateVehicleUsosInMainStructureBranch(sid, vehicleKey, usos);
     await setVehicleUsosInCorpoCache(vehicleKey, usos);
   }, []);
 
@@ -2007,6 +2114,10 @@ export default function CorporateVehiclesScreen() {
     const v = String(vehiculoIdOrLocal);
     if (!v.startsWith('local-')) return null;
 
+    const fromMs = await resolveCorporateVehicleServerIdFromMainStructure(v);
+    if (fromMs) return fromMs;
+    const fromCorpo = await findCorporateVehicleServerIdByLocalKey(v);
+    if (fromCorpo) return fromCorpo;
     const cacheStr = await AsyncStorage.getItem('evaluations_cache');
     const cache = cacheStr ? JSON.parse(cacheStr) : [];
     const found = cache.find((item: any) => item.type === 'corporate_vehicle' && String(item.id_local) === v && typeof item.id === 'number');
@@ -2140,13 +2251,13 @@ export default function CorporateVehiclesScreen() {
               });
             }
           } else {
-            actions.push({
-              id: useId,
-              action: 'update',
-              type: 'corporate_vehicle_use',
-              payload: { vehiculo_id: vehicleIdForAction, ...requestData },
-              synced: false,
-            });
+          actions.push({
+            id: useId,
+            action: 'update',
+            type: 'corporate_vehicle_use',
+            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            synced: false,
+          });
           }
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
@@ -2234,18 +2345,18 @@ export default function CorporateVehiclesScreen() {
   };
 
   const executeDeleteUse = async (u: VehicleUse, useKey: string) => {
-    if (!usesVehicleKey) return;
-    const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
-    if (!vehicle) return;
+          if (!usesVehicleKey) return;
+          const vehicle = records.find((r) => String(r.id || r.id_local) === usesVehicleKey);
+          if (!vehicle) return;
 
     setDeletingUseKey(useKey);
     try {
-      const isConnected = await getConnectionStatus();
-      const useId = String(u.id || u.id_local);
-      const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
+          const isConnected = await getConnectionStatus();
+          const useId = String(u.id || u.id_local);
+          const vehicleIdForAction = String(vehicle.id_local || vehicle.id);
 
-      if (!isConnected || useId.startsWith('local-') || !u.synced) {
-        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            if (!isConnected || useId.startsWith('local-') || !u.synced) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
         if (useId.startsWith('local-')) {
           actions = actions.filter(
@@ -2257,31 +2368,49 @@ export default function CorporateVehiclesScreen() {
               )
           );
         } else {
-          actions.push({
-            id: useId,
-            action: 'delete',
-            type: 'corporate_vehicle_use',
-            payload: { vehiculo_id: vehicleIdForAction },
-            synced: false,
-          });
+              actions.push({
+                id: useId,
+                action: 'delete',
+                type: 'corporate_vehicle_use',
+                payload: { vehiculo_id: vehicleIdForAction },
+                synced: false,
+              });
         }
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-        const updated = useRecords.filter((x) => String(x.id) !== useId && String(x.id_local) !== useId);
-        setUseRecords(updated);
-        await setUsesForVehicleKey(usesVehicleKey, updated);
-        return;
-      }
+              const updated = useRecords.filter((x) => String(x.id) !== useId && String(x.id_local) !== useId);
+              setUseRecords(updated);
+              await setUsesForVehicleKey(usesVehicleKey, updated);
+              await clearDeletedUseReferenceInBitacoras({
+                sucursalId: Number(vehicle?.corpo_id || usesVehicle?.corpo_id || 0),
+                useIdRaw: useId,
+                useLocalKey: resolveCorporateLocalKey(u),
+              });
+              await clearDeletedUseReferenceInBitacoraActions({
+                useIdRaw: useId,
+                useLocalKey: resolveCorporateLocalKey(u),
+              });
+              return;
+            }
 
-      const res = await deleteCorporateVehicleUse({ use_id: useId, refreshAccessToken, logout });
-      if (!res.status) throw new Error(res.message || 'No se pudo eliminar el uso');
+            const res = await deleteCorporateVehicleUse({ use_id: useId, refreshAccessToken, logout });
+            if (!res.status) throw new Error(res.message || 'No se pudo eliminar el uso');
 
-      const updated = useRecords.filter((x) => String(x.id) !== useId);
-      setUseRecords(updated);
-      await setUsesForVehicleKey(usesVehicleKey, updated);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo eliminar el uso');
-    } finally {
+            const updated = useRecords.filter((x) => String(x.id) !== useId);
+            setUseRecords(updated);
+            await setUsesForVehicleKey(usesVehicleKey, updated);
+            await clearDeletedUseReferenceInBitacoras({
+              sucursalId: Number(vehicle?.corpo_id || usesVehicle?.corpo_id || 0),
+              useIdRaw: useId,
+              useLocalKey: resolveCorporateLocalKey(u),
+            });
+            await clearDeletedUseReferenceInBitacoraActions({
+              useIdRaw: useId,
+              useLocalKey: resolveCorporateLocalKey(u),
+            });
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo eliminar el uso');
+          } finally {
       setDeletingUseKey(null);
     }
   };
@@ -2301,10 +2430,94 @@ export default function CorporateVehiclesScreen() {
     return undefined;
   };
 
+  const clearDeletedUseReferenceInBitacoras = useCallback(
+    async (params: { sucursalId: number | null; useIdRaw: string; useLocalKey?: string }) => {
+      const sid = Number(params.sucursalId || 0);
+      if (!Number.isFinite(sid) || sid <= 0) return;
+
+      const serverUseId = resolveCorporateServerNumericId(params.useIdRaw);
+      const localUseKey =
+        params.useLocalKey && String(params.useLocalKey).trim() !== ''
+          ? String(params.useLocalKey).trim()
+          : serverUseId
+            ? ''
+            : String(params.useIdRaw || '').trim();
+
+      const rows = await readBitacorasForSucursalFromMainStructure(sid);
+      if (!Array.isArray(rows) || rows.length === 0) return;
+
+      for (const row of rows) {
+        const matchByServerId = serverUseId != null && Number(row?.uso_id) === Number(serverUseId);
+        const matchByLocalId =
+          !!localUseKey &&
+          (String(row?.uso_id_local ?? '') === localUseKey || String(row?.uso_id ?? '') === localUseKey);
+        if (!matchByServerId && !matchByLocalId) continue;
+
+        await upsertBitacoraDetenidoRowInMainStructure(
+          {
+            ...row,
+            uso_id: null,
+            uso_id_local: '',
+            uso: null,
+          },
+          sid,
+          row?.id_local ? String(row.id_local) : null
+        );
+      }
+    },
+    []
+  );
+
+  const clearDeletedUseReferenceInBitacoraActions = useCallback(
+    async (params: { useIdRaw: string; useLocalKey?: string }) => {
+      const serverUseId = resolveCorporateServerNumericId(params.useIdRaw);
+      const localUseKey =
+        params.useLocalKey && String(params.useLocalKey).trim() !== ''
+          ? String(params.useLocalKey).trim()
+          : serverUseId
+            ? ''
+            : String(params.useIdRaw || '').trim();
+
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      if (!Array.isArray(actions) || actions.length === 0) return;
+
+      let changed = false;
+      const next = actions.map((a: any) => {
+        if (a?.type !== 'bitacora_vehiculo_detenido') return a;
+        if (a?.action !== 'create' && a?.action !== 'update') return a;
+        const payload = a?.payload && typeof a.payload === 'object' ? { ...a.payload } : null;
+        if (!payload) return a;
+
+        const matchByServerId = serverUseId != null && Number(payload?.uso_id) === Number(serverUseId);
+        const matchByLocalId =
+          !!localUseKey &&
+          (String(payload?.uso_id_local ?? '') === localUseKey || String(payload?.uso_id ?? '') === localUseKey);
+        if (!matchByServerId && !matchByLocalId) return a;
+
+        changed = true;
+        return {
+          ...a,
+          payload: {
+            ...payload,
+            uso_id: null,
+            uso_id_local: '',
+            uso: null,
+          },
+        };
+      });
+
+      if (changed) {
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
+      }
+    },
+    []
+  );
+
   const handleAssignEstado = async (u: VehicleUse) => {
     try {
       if (!usesVehicle) return;
-      if ((u as any)?.bitacora_id != null) {
+      if ((u as any)?.bitacora_id != null || (u as any)?.bitacora) {
         Alert.alert('Info', 'Este uso ya tiene una bitácora asignada.');
         return;
       }
@@ -2372,11 +2585,13 @@ export default function CorporateVehiclesScreen() {
   const resetMaintenanceForm = useCallback(() => {
     setMaintenanceFecha('');
     setMaintenanceImagenAntes('');
+    setMaintenanceImagenAntesRef('');
     setMaintenanceTipo('');
     setMaintenanceMantenimiento('');
     setMaintenanceDiagnostico('');
     setMaintenanceKmSiguiente('');
     setMaintenanceImagenDespues('');
+    setMaintenanceImagenDespuesRef('');
     setMaintenanceNombreMecanico('');
     setMaintenanceFirmaMecanico('');
     setMaintenanceFirmaResponsable(null);
@@ -2387,38 +2602,16 @@ export default function CorporateVehiclesScreen() {
       prev.map((r) => {
         const key = String(r.id || r.id_local);
         if (key !== vehicleKey) return r;
-        return { ...r, mantenimientos };
+        return {
+          ...r,
+          mantenimientos,
+          c_mantenimiento_vehiculos_corporativos: mantenimientos,
+        };
       })
     );
 
-    // Actualizar main_structure_cache
-    const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-    if (cacheStr) {
-      try {
-        const parsed = JSON.parse(cacheStr);
-        if (Array.isArray(parsed)) {
-          const updated = parsed.map((item: any) => {
-            if (item.type !== 'corporate_vehicle') return item;
-            const key = String(item.id || item.id_local);
-            if (key !== vehicleKey) return item;
-            return { ...item, mantenimientos };
-          });
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
-        }
-      } catch (e) {
-        console.error('Error updating main_structure_cache:', e);
-      }
-    }
-
-    const cacheStr2 = await AsyncStorage.getItem('evaluations_cache');
-    const cache = cacheStr2 ? JSON.parse(cacheStr2) : [];
-    const updatedCache = cache.map((item: any) => {
-      if (item.type !== 'corporate_vehicle') return item;
-      const key = String(item.id || item.id_local);
-      if (key !== vehicleKey) return item;
-      return { ...item, mantenimientos };
-    });
-    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+    const sid = await findSucursalIdForVehicleKeyInMainStructure(vehicleKey);
+    if (sid) await updateVehicleMantenimientosInMainStructureBranch(sid, vehicleKey, mantenimientos);
   }, []);
 
   const openMaintenanceModal = useCallback(
@@ -2430,7 +2623,13 @@ export default function CorporateVehiclesScreen() {
       setMaintenanceEditing(null);
       resetMaintenanceForm();
 
-      const initial = (vehicle.mantenimientos || []).map((m) => ({
+      const initial = (
+        Array.isArray((vehicle as any).mantenimientos)
+          ? (vehicle as any).mantenimientos
+          : Array.isArray((vehicle as any).c_mantenimiento_vehiculos_corporativos)
+            ? (vehicle as any).c_mantenimiento_vehiculos_corporativos
+            : []
+      ).map((m: any) => ({
         ...m,
         synced:
           m.synced !== undefined
@@ -2494,21 +2693,14 @@ export default function CorporateVehiclesScreen() {
     setMaintenanceEditing(m);
     setMaintenanceFecha(isoToDate(m.fecha));
 
-    // Construir URL de imagen si es un nombre de archivo
-    const vehiculoId = typeof maintenanceVehicle?.id === 'number' ? maintenanceVehicle.id : undefined;
-    const imagenAntesUri = m.imagen_antes
-      ? (m.imagen_antes.startsWith('data:') ? m.imagen_antes : buildMaintenanceImageUrl(vehiculoId, m.imagen_antes))
-      : '';
-    const imagenDespuesUri = m.imagen_despues
-      ? (m.imagen_despues.startsWith('data:') ? m.imagen_despues : buildMaintenanceImageUrl(vehiculoId, m.imagen_despues))
-      : '';
-
-    setMaintenanceImagenAntes(imagenAntesUri);
+    setMaintenanceImagenAntes('');
+    setMaintenanceImagenAntesRef('');
+    setMaintenanceImagenDespues('');
+    setMaintenanceImagenDespuesRef('');
     setMaintenanceTipo(m.tipo || '');
     setMaintenanceMantenimiento(m.mantenimiento || '');
     setMaintenanceDiagnostico(m.diagnostico || '');
     setMaintenanceKmSiguiente(String(m.kilometraje_siguiente_revision ?? ''));
-    setMaintenanceImagenDespues(imagenDespuesUri);
     setMaintenanceNombreMecanico(m.nombre_mecanico || '');
     // Cargar firma del mecánico formateada correctamente
     setMaintenanceFirmaMecanico(formatSignatureForDisplay(m.firma_mecanico));
@@ -2537,22 +2729,55 @@ export default function CorporateVehiclesScreen() {
     return null;
   };
 
-  const buildMaintenanceRequestData = (): CorporateVehicleMaintenanceRequest => {
+  const buildMaintenanceRequestData = ():
+    | CorporateVehicleMaintenanceRequest
+    | Partial<CorporateVehicleMaintenanceRequest> => {
     const firmaHash = getMaintenanceFirmaHashForSave();
-
-    return {
+    const base: Record<string, unknown> = {
       fecha: toIsoFromDateAndTime(maintenanceFecha, '00:00'),
-      imagen_antes: getBase64Only(maintenanceImagenAntes),
       tipo: maintenanceTipo.trim(),
       mantenimiento: maintenanceMantenimiento.trim(),
       diagnostico: maintenanceDiagnostico.trim(),
       kilometraje_siguiente_revision: Number(maintenanceKmSiguiente || 0),
-      imagen_despues: getBase64Only(maintenanceImagenDespues),
       nombre_mecanico: maintenanceNombreMecanico.trim(),
       firma_mecanico: (getBase64Only(maintenanceFirmaMecanico) as string | null),
       firma_responsable: firmaHash,
     };
+    if (maintenanceImagenAntesRef) {
+      base.imagen_antes = '';
+      (base as any).imagen_antes_local_file = maintenanceImagenAntesRef;
+    }
+    if (maintenanceImagenDespuesRef) {
+      base.imagen_despues = '';
+      (base as any).imagen_despues_local_file = maintenanceImagenDespuesRef;
+    }
+    if (!maintenanceEditing) {
+      return base as CorporateVehicleMaintenanceRequest;
+    }
+    const partial: Record<string, unknown> = { ...base };
+    return partial as Partial<CorporateVehicleMaintenanceRequest>;
   };
+
+  const hydrateMaintenanceImagesForApi = useCallback(async (payload: Record<string, any>) => {
+    const next: Record<string, any> = { ...(payload || {}) };
+    const refs: Array<{ field: 'imagen_antes' | 'imagen_despues'; refField: 'imagen_antes_local_file' | 'imagen_despues_local_file' }> = [
+      { field: 'imagen_antes', refField: 'imagen_antes_local_file' },
+      { field: 'imagen_despues', refField: 'imagen_despues_local_file' },
+    ];
+    for (const { field, refField } of refs) {
+      const key = typeof next[refField] === 'string' ? next[refField].trim() : '';
+      if (key) {
+        try {
+          const g = await getFile(key);
+          if (g?.base64) next[field] = String(g.base64);
+        } catch {
+          // ignore missing local file; sync/API validation will handle it
+        }
+      }
+      delete next[refField];
+    }
+    return next;
+  }, []);
 
   const handleSaveMaintenanceRecord = () => {
     const errMsg = validateMaintenanceForm();
@@ -2664,13 +2889,13 @@ export default function CorporateVehiclesScreen() {
               });
             }
           } else {
-            actions.push({
-              id: maintenanceId,
-              action: 'update',
-              type: 'corporate_vehicle_maintenance',
-              payload: { vehiculo_id: vehicleIdForAction, ...requestData },
-              synced: false,
-            });
+          actions.push({
+            id: maintenanceId,
+            action: 'update',
+            type: 'corporate_vehicle_maintenance',
+            payload: { vehiculo_id: vehicleIdForAction, ...requestData },
+            synced: false,
+          });
           }
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
@@ -2692,6 +2917,8 @@ export default function CorporateVehiclesScreen() {
         return;
       }
 
+      const requestDataForApi = await hydrateMaintenanceImagesForApi(requestData as Record<string, any>);
+
       const vehicleIdForResolve = vehicle.id || vehicle.id_local;
       if (!vehicleIdForResolve) {
         Alert.alert('Error', 'No se pudo obtener el ID del vehículo');
@@ -2708,7 +2935,7 @@ export default function CorporateVehiclesScreen() {
       if (!maintenanceEditing) {
         const res = await createCorporateVehicleMaintenance({
           vehiculo_id: String(serverVehicleId),
-          requestData,
+          requestData: requestDataForApi as CorporateVehicleMaintenanceRequest,
           refreshAccessToken,
           logout,
         });
@@ -2726,7 +2953,7 @@ export default function CorporateVehiclesScreen() {
         }
         const res = await updateCorporateVehicleMaintenance({
           maintenance_id: serverMaintenanceId,
-          requestData,
+          requestData: requestDataForApi,
           refreshAccessToken,
           logout,
         });
@@ -2778,11 +3005,11 @@ export default function CorporateVehiclesScreen() {
     const maintenanceVehicleKeyStr = maintenanceVehicleKey;
     setDeletingMaintenanceKey(maintKey);
     try {
-      const isConnected = await getConnectionStatus();
-      const maintenanceId = String(m.id || m.id_local);
+            const isConnected = await getConnectionStatus();
+            const maintenanceId = String(m.id || m.id_local);
 
-      if (!isConnected || maintenanceId.startsWith('local-') || !m.synced) {
-        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            if (!isConnected || maintenanceId.startsWith('local-') || !m.synced) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
         if (String(maintenanceId).startsWith('local-')) {
           actions = actions.filter(
@@ -2794,40 +3021,164 @@ export default function CorporateVehiclesScreen() {
               )
           );
         } else {
-          actions.push({
-            id: maintenanceId,
-            action: 'delete',
-            type: 'corporate_vehicle_maintenance',
-            payload: {},
-            synced: false,
-          });
+              actions.push({
+                id: maintenanceId,
+                action: 'delete',
+                type: 'corporate_vehicle_maintenance',
+                payload: {},
+                synced: false,
+              });
         }
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
         const updated = maintenanceRecords.filter(
           (maintenance) => String(maintenance.id) !== maintenanceId && String(maintenance.id_local) !== maintenanceId
         );
-        setMaintenanceRecords(updated);
+              setMaintenanceRecords(updated);
         await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
-        Alert.alert('Eliminado offline', 'Se eliminará al sincronizar');
+              Alert.alert('Eliminado offline', 'Se eliminará al sincronizar');
+              return;
+            }
+
+            const res = await deleteCorporateVehicleMaintenance({
+              maintenance_id: maintenanceId,
+              refreshAccessToken,
+              logout,
+            });
+            if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+
+            const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId);
+            setMaintenanceRecords(updated);
+      await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
+            Alert.alert('Éxito', 'Mantenimiento eliminado correctamente');
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo eliminar el mantenimiento');
+          } finally {
+      setDeletingMaintenanceKey(null);
+          }
+  };
+
+  const confirmRemoveMaintenanceListImage = (m: VehicleMaintenance, slot: 'antes' | 'despues') => {
+    const label = slot === 'antes' ? 'la foto "antes"' : 'la foto "después"';
+    Alert.alert('Eliminar imagen', `¿Quitar ${label} de este mantenimiento?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => void executeRemoveMaintenanceListImage(m, slot) },
+    ]);
+  };
+
+  const patchPendingMaintenanceImageInQueue = async (
+    localMaintId: string,
+    field: 'imagen_antes' | 'imagen_despues'
+  ) => {
+    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+    let actions = actionsStr ? JSON.parse(actionsStr) : [];
+    for (const act of ['create', 'update'] as const) {
+      const idx = actions.findIndex(
+        (a: any) =>
+          a.type === 'corporate_vehicle_maintenance' &&
+          a.action === act &&
+          String(a.id) === String(localMaintId)
+      );
+      if (idx === -1) continue;
+      const p = { ...(actions[idx].payload || {}) };
+      p[field] = '';
+      const refField = field === 'imagen_antes' ? 'imagen_antes_local_file' : 'imagen_despues_local_file';
+      delete p[refField];
+      actions[idx] = { ...actions[idx], payload: p };
+    }
+    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+  };
+
+  const executeRemoveMaintenanceListImage = async (m: VehicleMaintenance, slot: 'antes' | 'despues') => {
+    if (!maintenanceVehicleKey || !maintenanceVehicle) return;
+    const field = slot === 'antes' ? 'imagen_antes' : 'imagen_despues';
+    const maintKey = String(m.id || m.id_local);
+    const opKey = `${maintKey}-${slot}`;
+    setDeletingMaintImageKey(opKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      const vehiculoId = typeof maintenanceVehicle.id === 'number' ? maintenanceVehicle.id : undefined;
+      const vehicleIdForAction = String(maintenanceVehicle.id_local || maintenanceVehicle.id);
+      const refField = field === 'imagen_antes' ? 'imagen_antes_local_file' : 'imagen_despues_local_file';
+      const localRef = typeof (m as any)?.[refField] === 'string' ? String((m as any)[refField]).trim() : '';
+      const hasImage =
+        (!!(m as any)[field] && String((m as any)[field]).trim().length > 0) ||
+        (localRef != null && localRef.length > 0);
+      if (localRef) {
+        try {
+          await deleteFile(localRef);
+        } catch {
+          // ignore
+        }
+      }
+      if (!hasImage) return;
+
+      if (maintKey.startsWith('local-')) {
+        const next = maintenanceRecords.map((row) => {
+          if (String(row.id) !== maintKey && String(row.id_local) !== maintKey) return row;
+          return { ...row, [field]: '', [refField]: '' };
+        });
+        setMaintenanceRecords(next);
+        await setMaintenancesForVehicleKey(maintenanceVehicleKey, next);
+        await patchPendingMaintenanceImageInQueue(maintKey, field);
         return;
       }
 
-      const res = await deleteCorporateVehicleMaintenance({
-        maintenance_id: maintenanceId,
+      if (!isConnected) {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: String(m.id),
+          action: 'delete_image',
+          type: 'corporate_vehicle_maintenance',
+          payload: {
+            slot,
+            vehiculo_id: vehiculoId && vehiculoId > 0 ? vehiculoId : vehicleIdForAction,
+            corpo_id: maintenanceVehicle.corpo_id,
+          },
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        const next = maintenanceRecords.map((row) => {
+          if (String(row.id) !== String(m.id)) return row;
+          return { ...row, [field]: '', [refField]: '' };
+        });
+        setMaintenanceRecords(next);
+        await setMaintenancesForVehicleKey(maintenanceVehicleKey, next);
+        return;
+      }
+
+      const res = await deleteCorporateVehicleMaintenanceImage({
+        maintenance_id: String(m.id),
+        slot,
         refreshAccessToken,
         logout,
       });
-      if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+      if (!res.status) throw new Error(res.message || 'No se pudo eliminar la imagen');
 
-      const updated = maintenanceRecords.filter((maintenance) => String(maintenance.id) !== maintenanceId);
-      setMaintenanceRecords(updated);
-      await setMaintenancesForVehicleKey(maintenanceVehicleKeyStr, updated);
-      Alert.alert('Éxito', 'Mantenimiento eliminado correctamente');
+      const vehiculoRef = maintenanceVehicle.id ?? maintenanceVehicle.id_local;
+      if (vehiculoRef == null || vehiculoRef === '') {
+        return;
+      }
+      const serverVehicleId = await resolveServerVehicleId(vehiculoRef);
+      if (serverVehicleId) {
+        const listRes = await listCorporateVehicleMaintenances({
+          vehiculo_id: String(serverVehicleId),
+          refreshAccessToken,
+          logout,
+        });
+        if (listRes.status) {
+          const serverMaintenances: VehicleMaintenance[] = Array.isArray(listRes.data)
+            ? (listRes.data as any).map((x: any) => ({ ...x, id_local: '', synced: true }))
+            : [];
+          setMaintenanceRecords(serverMaintenances);
+          await setMaintenancesForVehicleKey(maintenanceVehicleKey, serverMaintenances);
+        }
+      }
     } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo eliminar el mantenimiento');
+      Alert.alert('Error', e?.message || 'No se pudo eliminar la imagen');
     } finally {
-      setDeletingMaintenanceKey(null);
+      setDeletingMaintImageKey(null);
     }
   };
 
@@ -2849,18 +3200,41 @@ export default function CorporateVehiclesScreen() {
     try {
       const photo = await cameraRef.current.takePictureAsync({
         quality: 0.8,
-        base64: true,
+        base64: false,
       });
-      if (photo && photo.base64) {
-        const dataUri = `data:image/jpeg;base64,${photo.base64}`;
+      if (photo?.uri) {
+        const fileName = await saveFile({
+          uri: photo.uri,
+          originalName: `maintenance-${cameraType || 'image'}`,
+          extension: 'jpg',
+          type: 'image',
+          prefix: 'corporate_vehicle_maintenance',
+        });
+        const previewUri = getLocalFileDisplayUri(fileName) || photo.uri;
         if (cameraType === 'antes') {
-          setMaintenanceImagenAntes(dataUri);
+          if (maintenanceImagenAntesRef) {
+            try {
+              await deleteFile(maintenanceImagenAntesRef);
+            } catch {
+              // ignore
+            }
+          }
+          setMaintenanceImagenAntesRef(fileName);
+          setMaintenanceImagenAntes(previewUri);
         } else {
-          setMaintenanceImagenDespues(dataUri);
+          if (maintenanceImagenDespuesRef) {
+            try {
+              await deleteFile(maintenanceImagenDespuesRef);
+            } catch {
+              // ignore
+            }
+          }
+          setMaintenanceImagenDespuesRef(fileName);
+          setMaintenanceImagenDespues(previewUri);
         }
-        setIsCameraVisible(false);
-        setCameraType(null);
       }
+      setIsCameraVisible(false);
+      setCameraType(null);
     } catch (e) {
       console.error('Error taking picture:', e);
       Alert.alert('Error', 'No se pudo tomar la foto');
@@ -3003,8 +3377,12 @@ export default function CorporateVehiclesScreen() {
           );
           if (empresaFound) setSelectedEmpresaId(Number(empresaFound.id));
           setSelectedClienteId(r.cliente_id != null ? Number(r.cliente_id) : null);
-          setSelectedDivisionId(null);
-          setSelectedContratoId(null);
+          if ((r as any).division_id != null && Number((r as any).division_id) > 0) {
+            setSelectedDivisionId(Number((r as any).division_id));
+          } else setSelectedDivisionId(null);
+          if ((r as any).contrato_id != null && Number((r as any).contrato_id) > 0) {
+            setSelectedContratoId(Number((r as any).contrato_id));
+          } else setSelectedContratoId(null);
           setSelectedSucursalId(r.corpo_id != null ? Number(r.corpo_id) : null);
         }
       }
@@ -3014,6 +3392,12 @@ export default function CorporateVehiclesScreen() {
       setSelectedDivisionId(null);
       setSelectedContratoId(null);
       setSelectedSucursalId(null);
+    }
+
+    if ((r as any).puesto_id != null && Number((r as any).puesto_id) > 0) {
+      setSelectedPuestoId(Number((r as any).puesto_id));
+    } else {
+      setSelectedPuestoId(null);
     }
 
     setPlaca(r.placa || '');
@@ -3033,20 +3417,7 @@ export default function CorporateVehiclesScreen() {
     setMarchamo(!!r.marchamo);
     setFirmaResponsable(decodeFirmaHash(r.firma_responsable) as any);
 
-    // imágenes existentes (solo preview offline si vienen con base64)
-    const existing = (r.images || []).filter((i) => (i.base64 ? true : false));
-    if (existing.length > 0) {
-      setImageFiles(
-        existing.map((i, idx) => ({
-          id: `existing_${idx}`,
-          name: i.name,
-          extension: i.extension || 'jpg',
-          base64: i.base64 || '',
-        }))
-      );
-    } else {
-      setImageFiles([]);
-    }
+    setImageFiles([]);
   };
 
   const getEditingVehicleRecord = (): VehicleRecord | undefined => {
@@ -3073,10 +3444,15 @@ export default function CorporateVehiclesScreen() {
     if (roleName == null) return 'Cargando contexto de marca...';
     if (roleName === 'OPERATIVO') {
       if (!marcaClienteId || !marcaCorpoId) return 'No se pudo determinar cliente o sucursal desde la marca actual';
+      const h = marcaCorpoId ? findHierarchyByCorpoIn(structure, Number(marcaCorpoId)) : null;
+      const divOk = h?.divisionId || marcaDivisionId;
+      if (!divOk) return 'No se pudo determinar la división desde la marca o la estructura';
+      if (!marcaPuestoId || marcaPuestoId <= 0) return 'No se pudo determinar el puesto desde la marca actual';
     } else {
       if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) return 'Empresa, cliente y sucursal son obligatorios';
       if (!selectedDivisionId) return 'División es obligatoria';
       if (!selectedContratoId) return 'Contrato es obligatorio';
+      if (!selectedPuestoId || selectedPuestoId <= 0) return 'Puesto es obligatorio';
     }
     if (!placa.trim()) return 'Placa es requerida';
     if (!tipo.trim()) return 'Tipo es requerido';
@@ -3179,33 +3555,28 @@ export default function CorporateVehiclesScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const r = reader.result;
-          if (typeof r === 'string') {
-            const parts = r.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else reject(new Error('No se pudo leer el archivo'));
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
-        reader.readAsDataURL(blob);
-      });
-
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const displayName = asset.name || `imagen.${extension || 'jpg'}`;
+      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
+      const extNorm = String(extension || 'jpg').replace(/^\./, '');
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: stem.trim() || 'imagen',
+        extension: extNorm,
+        type: 'image',
+        prefix: CORPORATE_VEHICLE_IMAGE_PREFIX,
+      });
 
       const localId = `local_img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const newFile: LocalImage = {
         id: localId,
-        name: asset.name || `imagen.${extension || 'jpg'}`,
-        extension: extension || 'jpg',
-        base64,
+        name: displayName,
+        extension: extNorm,
         mimeType: asset.mimeType,
+        localFileName,
       };
 
       setImageFiles((p) => [...p, newFile]);
@@ -3215,21 +3586,146 @@ export default function CorporateVehiclesScreen() {
     }
   };
 
-  const removeImage = (id: string) => setImageFiles((p) => p.filter((f) => f.id !== id));
+  const buildImagenesForOfflineQueueFromList = (list: LocalImage[]): any[] => {
+    const out: any[] = [];
+    for (const f of list) {
+      if (f.serverImageId && f.serverImageId > 0 && !f.localFileName && !f.base64) continue;
+      const ext = String(f.extension || 'jpg').replace(/^\./, '');
+      if (f.localFileName != null && String(f.localFileName).trim() !== '') {
+        out.push({
+          extension: ext,
+          stored_file_name: String(f.localFileName).trim(),
+          original_name: f.name,
+        });
+      } else if (f.base64 != null && String(f.base64).trim() !== '') {
+        out.push({
+          extension: ext,
+          file_base64: getBase64Only(f.base64),
+          original_name: f.name,
+        });
+      }
+    }
+    return out;
+  };
 
-  const buildRequestData = () => {
+  const updatePendingCorporateVehicleImagenes = async (localKey: string, list: LocalImage[]) => {
+    const queuePayload = buildImagenesForOfflineQueueFromList(list);
+    const imagenesField = queuePayload.length > 0 ? queuePayload : '[]';
+    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+    let actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const idxCreate = actions.findIndex(
+      (a: any) =>
+        a.type === 'corporate_vehicle' && a.action === 'create' && String(a.id) === String(localKey)
+    );
+    if (idxCreate !== -1) {
+      actions[idxCreate] = {
+        ...actions[idxCreate],
+        payload: { ...(actions[idxCreate].payload || {}), imagenes: imagenesField },
+      };
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      return;
+    }
+    const idxUp = actions.findIndex(
+      (a: any) =>
+        a.type === 'corporate_vehicle' && a.action === 'update' && String(a.id) === String(localKey)
+    );
+    if (idxUp !== -1) {
+      actions[idxUp] = {
+        ...actions[idxUp],
+        payload: { ...(actions[idxUp].payload || {}), imagenes: imagenesField },
+      };
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+    }
+  };
+
+  /** Quitar del formulario solo archivos **nuevos** añadidos en esta edición (no hay adjuntos del servidor en el form). */
+  const confirmRemoveFormImage = (id: string) => {
+    Alert.alert('Confirmar', '¿Quitar esta imagen del formulario?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Quitar', style: 'destructive', onPress: () => void executeRemoveFormImage(id) },
+    ]);
+  };
+
+  const executeRemoveFormImage = async (id: string) => {
+    const target = imageFiles.find((f) => f.id === id);
+    if (!target) return;
+    if (target.localFileName != null && String(target.localFileName).trim() !== '') {
+      try {
+        await deleteFile(String(target.localFileName).trim());
+      } catch {
+        /* noop */
+      }
+    }
+    const next = imageFiles.filter((f) => f.id !== id);
+    setImageFiles(next);
+    const rec = getEditingVehicleRecord();
+    const isLocalDraft =
+      rec &&
+      (String(rec.id || '').startsWith('local-') || String(rec.id_local || '').startsWith('local-'));
+    if (isLocalDraft) {
+      const key = String(rec?.id_local || rec?.id);
+      if (key.startsWith('local-')) {
+        await updatePendingCorporateVehicleImagenes(key, next);
+      }
+    }
+  };
+
+  const buildImagenesForApi = async (): Promise<{ extension: string; file_base64: string; original_name?: string }[]> => {
+    const out: { extension: string; file_base64: string; original_name?: string }[] = [];
+    for (const f of imageFiles) {
+      if (f.serverImageId && f.serverImageId > 0 && !f.localFileName && !f.base64) continue;
+      const ext = String(f.extension || 'jpg').replace(/^\./, '');
+      if (f.localFileName != null && String(f.localFileName).trim() !== '') {
+        try {
+          const { base64 } = await getFile(String(f.localFileName).trim());
+          if (base64 && String(base64).length > 0) {
+            out.push({ extension: ext, file_base64: String(base64), original_name: f.name });
+          }
+        } catch {
+          /* omitir */
+        }
+      } else if (f.base64 != null && String(f.base64).trim() !== '') {
+        out.push({ extension: ext, file_base64: getBase64Only(f.base64), original_name: f.name });
+      }
+    }
+    return out;
+  };
+
+  /** Referencias a disco para cola offline / `evaluations_actions` (se hidratan en sync). */
+  const buildImagenesForOfflineQueue = (): any[] => buildImagenesForOfflineQueueFromList(imageFiles);
+
+  const buildRequestDataBase = () => {
     const firmaHash = getVehicleFirmaHashForSave();
+    const h =
+      roleName === 'OPERATIVO' && marcaCorpoId
+        ? findHierarchyByCorpoIn(structure, Number(marcaCorpoId))
+        : null;
     const empresaId =
       roleName === 'OPERATIVO' ? (marcaEmpresaId ?? 0) : (selectedEmpresaId ?? 0);
     const clienteId =
       roleName === 'OPERATIVO' ? (marcaClienteId ?? 0) : (selectedClienteId ?? 0);
     const corpoId =
       roleName === 'OPERATIVO' ? (marcaCorpoId ?? 0) : (selectedSucursalId ?? 0);
+    const divisionId =
+      roleName === 'OPERATIVO'
+        ? Number(h?.divisionId ?? marcaDivisionId ?? 0)
+        : Number(selectedDivisionId ?? 0);
+    const contratoId =
+      roleName === 'OPERATIVO'
+        ? Number(h?.contratoId ?? marcaContratoId ?? 0)
+        : Number(selectedContratoId ?? 0);
+    const puestoId =
+      roleName === 'OPERATIVO'
+        ? Number(marcaPuestoId ?? 0)
+        : Number(selectedPuestoId ?? 0);
 
     return {
       empresa_id: Number(empresaId),
       cliente_id: Number(clienteId),
       corpo_id: Number(corpoId),
+      division_id: divisionId,
+      contrato_id: contratoId,
+      puesto_id: puestoId,
       placa: placa.trim(),
       tipo: tipo.trim(),
       tipo_autoria: tipoAutoria.trim(),
@@ -3243,10 +3739,6 @@ export default function CorporateVehiclesScreen() {
       rtv: !!rtv,
       marchamo: !!marchamo,
       firma_responsable: firmaHash,
-      imagenes: imageFiles.map((f) => ({
-        extension: f.extension,
-        file_base64: f.base64,
-      })),
     };
   };
 
@@ -3267,10 +3759,25 @@ export default function CorporateVehiclesScreen() {
     setSubmitResponse(null);
 
     try {
-      const requestData = buildRequestData();
+      const editingVehicle: VehicleRecord | null =
+        editing == null
+          ? null
+          : records.find(
+              (r) => String(r.id || r.id_local) === String(editing.id || editing.id_local)
+            ) ?? null;
+
+      const basePayload = buildRequestDataBase();
+      const imagenesQueue = buildImagenesForOfflineQueue();
+      type VehicleSaveFields = ReturnType<typeof buildRequestDataBase>;
+      const offlineRequestPayload: VehicleSaveFields & { imagenes?: any[] | string } = {
+        ...basePayload,
+        ...(imagenesQueue.length > 0 ? { imagenes: imagenesQueue } : {}),
+      };
+
       const isConnected = await getConnectionStatus();
 
       if (!isConnected) {
+        const requestData: VehicleSaveFields & { imagenes?: any[] | string } = offlineRequestPayload;
         const localId = editing?.id_local || `local-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -3329,14 +3836,27 @@ export default function CorporateVehiclesScreen() {
         }
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
         const horaAccion = await getHoraAccion();
         if (!horaAccion) {
           Alert.alert('Error', 'No se pudo obtener la hora');
           return;
         }
+
+        const newImageRows = imageFiles.map((f) => ({
+          name: f.name,
+          id: f.serverImageId,
+          id_local: f.id,
+          extension: f.extension,
+          ...(f.localFileName != null && String(f.localFileName).trim() !== ''
+            ? { stored_file_name: String(f.localFileName).trim() }
+            : f.base64 != null && String(f.base64).trim() !== ''
+              ? { base64: f.base64 }
+              : {}),
+        }));
+        const existingImages = Array.isArray(editingVehicle?.images) ? editingVehicle!.images! : [];
+        const imagesPayload = editing
+          ? [...existingImages, ...newImageRows]
+          : newImageRows;
 
         if (!editing) {
           const localItem: VehicleRecord = {
@@ -3347,6 +3867,9 @@ export default function CorporateVehiclesScreen() {
             empresa_id: requestData.empresa_id,
             cliente_id: requestData.cliente_id,
             corpo_id: requestData.corpo_id,
+            division_id: requestData.division_id,
+            contrato_id: requestData.contrato_id,
+            puesto_id: requestData.puesto_id,
             placa: requestData.placa,
             tipo: requestData.tipo,
             tipo_autoria: requestData.tipo_autoria,
@@ -3361,42 +3884,64 @@ export default function CorporateVehiclesScreen() {
             marchamo: requestData.marchamo,
             firma_responsable: requestData.firma_responsable,
             created_at: new Date(horaAccion).toISOString(),
-            images: imageFiles.map((f) => ({
-              name: f.name,
-              id_local: f.id,
-              base64: f.base64,
-              extension: f.extension,
-            })),
+            images: imagesPayload,
           };
-          cache.push(localItem);
-          await upsertVehicleInCorpoCache(localItem as any, { synced: false });
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
-        } else {
-          const recordId = editing.id;
-          const updatedCache = cache.map((item: any) => {
-            if (item.type !== 'corporate_vehicle') return item;
-            if (String(item.id) === String(recordId) || String(item.id_local) === String(editing.id_local)) {
-              return {
-                ...item,
-                ...requestData,
-                synced: false,
-                images: imageFiles.map((f) => ({
-                  name: f.name,
-                  id_local: f.id,
-                  base64: f.base64,
-                  extension: f.extension,
-                })),
-              };
-            }
-            return item;
-          });
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-          const merged = updatedCache.find(
-            (item: any) =>
-              item.type === 'corporate_vehicle' &&
-              (String(item.id) === String(recordId) || String(item.id_local) === String(editing.id_local))
+          await upsertCorporateVehicleInMainStructure(
+            {
+              ...localItem,
+              sucursal_id: requestData.corpo_id,
+              usos: [],
+              c_usos_vehiculos_corporativos: [],
+              mantenimientos: [],
+              c_mantenimiento_vehiculos_corporativos: [],
+            },
+            localId
           );
-          if (merged) await upsertVehicleInCorpoCache(merged, { synced: false });
+          await upsertVehicleInCorpoCache(localItem as any, { synced: false });
+        } else {
+          if (!editingVehicle) {
+            Alert.alert('Error', 'No se encontró el registro a editar.');
+            return;
+          }
+          const recordKey = String(editing.id_local || editing.id || '');
+          const isDraft = String(recordKey).startsWith('local-');
+          const usos = editingVehicle.usos || (editingVehicle as any).c_usos_vehiculos_corporativos || [];
+          const mantenimientos =
+            editingVehicle.mantenimientos ||
+            (editingVehicle as any).c_mantenimiento_vehiculos_corporativos ||
+            [];
+          const merged: any = {
+            ...editingVehicle,
+                ...requestData,
+            id: isDraft ? recordKey : editingVehicle.id,
+            id_local: isDraft ? recordKey : editingVehicle.id_local,
+            sucursal_id: requestData.corpo_id,
+            corpo_id: requestData.corpo_id,
+                synced: false,
+            type: 'corporate_vehicle',
+            images: imagesPayload,
+            usos,
+            c_usos_vehiculos_corporativos: usos,
+            mantenimientos,
+            c_mantenimiento_vehiculos_corporativos: mantenimientos,
+          };
+          let oldCorpo = Number(editingVehicle.corpo_id ?? (editingVehicle as any).sucursal_id ?? 0);
+          if (!oldCorpo) {
+            const foundS = await findSucursalIdForVehicleKeyInMainStructure(recordKey);
+            if (foundS) oldCorpo = foundS;
+          }
+          const newCorpo = Number(requestData.corpo_id);
+          if (oldCorpo && newCorpo && oldCorpo !== newCorpo) {
+            await moveCorporateVehicleInMainStructure({
+              vehicle: merged,
+              oldCorpoId: oldCorpo,
+              newCorpoId: newCorpo,
+              matchLocalKey: isDraft ? recordKey : null,
+            });
+          } else {
+            await upsertCorporateVehicleInMainStructure(merged, isDraft ? recordKey : null);
+          }
+          await upsertVehicleInCorpoCache(merged as any, { synced: false });
         }
 
         Alert.alert('Éxito', 'Se guardó el registro en el dispositivo. Se sincronizará al reconectar.');
@@ -3410,42 +3955,94 @@ export default function CorporateVehiclesScreen() {
       }
 
       if (!editing) {
+        const imagenesForApiCreate = await buildImagenesForApi();
+        const requestData = {
+          ...buildRequestDataBase(),
+          ...(imagenesForApiCreate.length > 0 ? { imagenes: imagenesForApiCreate } : {}),
+        };
         const res = await createCorporateVehicle({ requestData, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo crear');
         const newId = Number((res as any).data?.id ?? 0);
         if (newId && requestData.corpo_id) {
-          await upsertVehicleInCorpoCache(
-            {
-              ...requestData,
-              ...(typeof (res as any).data === 'object' ? (res as any).data : {}),
-              id: newId,
-              corpo_id: requestData.corpo_id,
-              usos: [],
-              images: (res as any).data?.images,
-            },
-            { synced: true }
-          );
+          const createdLayer: any = {
+            ...requestData,
+            ...(typeof (res as any).data === 'object' ? (res as any).data : {}),
+            id: newId,
+            corpo_id: requestData.corpo_id,
+            sucursal_id: requestData.corpo_id,
+            usos: [],
+            c_usos_vehiculos_corporativos: [],
+            mantenimientos: [],
+            c_mantenimiento_vehiculos_corporativos: [],
+            images: (res as any).data?.images,
+            synced: true,
+            type: 'corporate_vehicle',
+          };
+          await upsertCorporateVehicleInMainStructure(createdLayer, null);
+          await upsertVehicleInCorpoCache(createdLayer, { synced: true });
         }
         Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       } else {
+        if (!editingVehicle) throw new Error('No se encontró el registro a editar');
+        const newFilesOnly = await buildImagenesForApi();
+        const requestData: Record<string, unknown> = { ...buildRequestDataBase() };
+        if (newFilesOnly.length > 0) {
+          requestData.imagenes = newFilesOnly;
+        }
         const idToUpdate = String(editing.id);
         const serverId = idToUpdate.startsWith('local-') ? String(editing.id_local || '') : idToUpdate;
-        const res = await updateCorporateVehicle({ id: serverId, requestData, refreshAccessToken, logout });
+        const res = await updateCorporateVehicle({
+          id: serverId,
+          requestData: requestData as any,
+          refreshAccessToken,
+          logout,
+        });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
         const vid = Number(
           String(editing.id).startsWith('local-') ? (res as any).data?.id ?? editing.id : editing.id
         );
-        if (requestData.corpo_id) {
-          await upsertVehicleInCorpoCache(
-            {
-              ...requestData,
-              id: vid,
-              corpo_id: requestData.corpo_id,
-              images: (res as any).data?.images,
-            },
-            { synced: true }
+        const usos = editingVehicle.usos || (editingVehicle as any).c_usos_vehiculos_corporativos || [];
+        const mantenimientos =
+          editingVehicle.mantenimientos ||
+          (editingVehicle as any).c_mantenimiento_vehiculos_corporativos ||
+          [];
+        const mergedLayer: any = {
+          ...editingVehicle,
+          ...requestData,
+          ...(typeof (res as any).data === 'object' ? (res as any).data : {}),
+          id: vid,
+          corpo_id: requestData.corpo_id,
+          sucursal_id: requestData.corpo_id,
+          usos,
+          c_usos_vehiculos_corporativos: usos,
+          mantenimientos,
+          c_mantenimiento_vehiculos_corporativos: mantenimientos,
+          images: (res as any).data?.images ?? editingVehicle.images,
+          synced: true,
+          type: 'corporate_vehicle',
+        };
+        let oldCorpo = Number(editingVehicle.corpo_id ?? (editingVehicle as any).sucursal_id ?? 0);
+        if (!oldCorpo) {
+          const sk = String(editing.id_local || editing.id);
+          const foundS = await findSucursalIdForVehicleKeyInMainStructure(sk);
+          if (foundS) oldCorpo = foundS;
+        }
+        const newCorpo = Number(requestData.corpo_id);
+        const isDraftKey = String(editing.id || editing.id_local || '').startsWith('local-');
+        if (oldCorpo && newCorpo && oldCorpo !== newCorpo) {
+          await moveCorporateVehicleInMainStructure({
+            vehicle: mergedLayer,
+            oldCorpoId: oldCorpo,
+            newCorpoId: newCorpo,
+            matchLocalKey: isDraftKey ? String(editing.id_local || editing.id) : null,
+          });
+        } else if (newCorpo && vid) {
+          await upsertCorporateVehicleInMainStructure(
+            mergedLayer,
+            isDraftKey ? String(editing.id_local || editing.id) : null
           );
         }
+        await upsertVehicleInCorpoCache(mergedLayer, { synced: true });
         Alert.alert('Éxito', res.message || 'Registro guardado correctamente');
       }
 
@@ -3478,11 +4075,15 @@ export default function CorporateVehiclesScreen() {
   const executeDeleteVehicle = async (r: VehicleRecord, recordKey: string) => {
     setDeletingRecordKey(recordKey);
     try {
-      const isConnected = await getConnectionStatus();
-      const recordId = String(r.id);
+            const isConnected = await getConnectionStatus();
+            const recordId = String(r.id);
+            const sucursalIdHint =
+              roleName === 'OPERATIVO'
+                ? marcaCorpoId ?? null
+                : selectedSucursalId ?? filterCorpoId ?? marcaCorpoId ?? null;
 
-      if (!isConnected || String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-') || !r.synced) {
-        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+            if (!isConnected || String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-') || !r.synced) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
         const localDraftKey =
           String(r.id_local || '').startsWith('local-') || recordId.startsWith('local-')
@@ -3498,34 +4099,156 @@ export default function CorporateVehiclesScreen() {
               )
           );
         } else {
-          actions.push({ id: recordId, action: 'delete', type: 'corporate_vehicle', payload: {}, synced: false });
+              actions.push({ id: recordId, action: 'delete', type: 'corporate_vehicle', payload: {}, synced: false });
         }
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const updatedCache = cache.filter(
-          (item: any) => !(item.type === 'corporate_vehicle' && (String(item.id) === recordId || String(item.id_local) === recordId))
-        );
-        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        await removeCorporateVehicleFromMainStructureEverywhere({
+          vehicleId: r.id,
+          idLocal:
+            (r.id_local && String(r.id_local).startsWith('local-') ? String(r.id_local) : undefined) ||
+            (String(r.id).startsWith('local-') ? String(r.id) : undefined),
+          sucursalIdHint,
+        });
         await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
-        await fetchRecords();
-        return;
-      }
+              await fetchRecords();
+              return;
+            }
 
-      const res = await deleteCorporateVehicle({ id: recordId, refreshAccessToken, logout });
-      if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+            const res = await deleteCorporateVehicle({ id: recordId, refreshAccessToken, logout });
+            if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
+      await removeCorporateVehicleFromMainStructureEverywhere({
+        vehicleId: r.id,
+        idLocal:
+          (r.id_local && String(r.id_local).startsWith('local-') ? String(r.id_local) : undefined) ||
+          (String(r.id).startsWith('local-') ? String(r.id) : undefined),
+        sucursalIdHint,
+      });
       await removeVehicleFromCorpoCache({ id: r.id, id_local: r.id_local });
-      await fetchRecords();
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo eliminar');
-    } finally {
+            await fetchRecords();
+          } catch (e: any) {
+            Alert.alert('Error', e?.message || 'No se pudo eliminar');
+          } finally {
       setDeletingRecordKey(null);
-    }
+          }
   };
 
-  const renderImagesPreview = (images: VehicleImage[] | undefined, vehiculoId: number | undefined, recordKey: string) => {
-    const imgs = images || [];
+  const vehicleImagesToLocalForPending = (nextImages: VehicleImage[]): LocalImage[] =>
+    (nextImages || []).map((im: any, i: number) => ({
+      id: `list_${i}`,
+      name: im.name || `imagen-${i + 1}`,
+      extension: im.extension || 'jpg',
+      base64: im.base64,
+      localFileName: im.stored_file_name || im.localFileName,
+      serverImageId: typeof im.id === 'number' && im.id > 0 ? im.id : undefined,
+    }));
+
+  const confirmRemoveListImage = (r: VehicleRecord, img: VehicleImage, imageIndex: number) => {
+    Alert.alert('Confirmar', '¿Eliminar este archivo adjunto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => void executeRemoveListImage(r, img, imageIndex) },
+    ]);
+  };
+
+  const executeRemoveListImage = async (r: VehicleRecord, img: any, imageIndex: number) => {
+    const regIdStr = r.id != null && r.id !== '' ? String(r.id) : '';
+    const registroServerId =
+      regIdStr && !regIdStr.startsWith('local-') && Number(regIdStr) > 0 ? regIdStr : null;
+    const imageId = img?.id != null && Number(img.id) > 0 ? Number(img.id) : null;
+    const imgs = Array.isArray(r.images) ? [...r.images] : [];
+    const nextImages = imgs.filter((_: any, i: number) => i !== imageIndex);
+    const recordKey = String(r.id_local || r.id);
+
+    const deleteLocalStored = async () => {
+      if (img?.localFileName != null && String(img.localFileName).trim() !== '') {
+        try {
+          await deleteFile(String(img.localFileName).trim());
+        } catch {
+          /* */
+        }
+      }
+      const stored = (img as any)?.stored_file_name;
+      if (stored != null && String(stored).trim() !== '') {
+        try {
+          await deleteFile(String(stored).trim());
+        } catch {
+          /* */
+        }
+      }
+    };
+
+    if (imageId && registroServerId) {
+      const connected = await getConnectionStatus();
+      if (connected) {
+        const res = await deleteCorporateVehicleImage({
+          vehiculoId: registroServerId,
+          imageId,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+          return;
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: String(registroServerId),
+          action: 'delete_image',
+          type: 'corporate_vehicle',
+          payload: { imageId, sucursalId: r.corpo_id },
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      }
+      await deleteLocalStored();
+      const merged: any = { ...r, images: nextImages, type: 'corporate_vehicle' };
+      const isDraft = String(r.id_local || '').startsWith('local-') || String(r.id).startsWith('local-');
+      await upsertCorporateVehicleInMainStructure(merged, isDraft ? recordKey : null);
+      try {
+        await upsertVehicleInCorpoCache(merged, { synced: r.synced !== false });
+      } catch {
+        /* */
+      }
+      await fetchRecords();
+      return;
+    }
+
+    await deleteLocalStored();
+    const mergedOffline: any = { ...r, images: nextImages, type: 'corporate_vehicle' };
+    const isLocalDraft = String(r.id_local || '').startsWith('local-') || String(r.id).startsWith('local-');
+    if (isLocalDraft && recordKey.startsWith('local-')) {
+      await updatePendingCorporateVehicleImagenes(recordKey, vehicleImagesToLocalForPending(nextImages));
+    }
+    let oldCorpo = Number(r.corpo_id ?? (r as any).sucursal_id ?? 0);
+    if (!oldCorpo) {
+      const foundS = await findSucursalIdForVehicleKeyInMainStructure(recordKey);
+      if (foundS) oldCorpo = foundS;
+    }
+    const newCorpo = Number(mergedOffline.corpo_id ?? (mergedOffline as any).sucursal_id ?? 0);
+    if (oldCorpo && newCorpo && oldCorpo !== newCorpo) {
+      await moveCorporateVehicleInMainStructure({
+        vehicle: mergedOffline,
+        oldCorpoId: oldCorpo,
+        newCorpoId: newCorpo,
+        matchLocalKey: isLocalDraft ? recordKey : null,
+      });
+    } else {
+      await upsertCorporateVehicleInMainStructure(mergedOffline, isLocalDraft ? recordKey : null);
+    }
+    try {
+      await upsertVehicleInCorpoCache(mergedOffline, { synced: r.synced !== false });
+    } catch {
+      /* */
+    }
+    await fetchRecords();
+  };
+
+  const renderImagesPreview = (r: VehicleRecord) => {
+    const recordKey = String(r.id || r.id_local);
+    const vehiculoId = typeof r.id === 'number' && r.id > 0 && !String(r.id).startsWith('local-') ? r.id : undefined;
+    const imgs = r.images || [];
     if (imgs.length === 0) return null;
     return (
       <>
@@ -3537,6 +4260,13 @@ export default function CorporateVehiclesScreen() {
             return (
               <ThemedView key={`${recordKey}_img_${idx}`} style={styles.imageWideWrap}>
                 <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
+                <TouchableOpacity
+                  style={styles.removeImageBtn}
+                  onPress={() => confirmRemoveListImage(r, img, idx)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                </TouchableOpacity>
               </ThemedView>
             );
           })}
@@ -3555,7 +4285,7 @@ export default function CorporateVehiclesScreen() {
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="car-sport" size={22} color="#000000" /> Registro de vehículos
+              <Ionicons name="bus" size={22} color="#000000" /> Registro de vehículos
             </ThemedText>
             <ThemedText style={styles.subtitle}>Registro con firma e imágenes (offline + sync)</ThemedText>
           </ThemedView>
@@ -3727,62 +4457,79 @@ export default function CorporateVehiclesScreen() {
 
               {roleName != null && roleName !== 'OPERATIVO' ? (
                 <>
-                  <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Jerarquía (hasta sucursal)</ThemedText>
 
-                  <ThemedText style={styles.label}>Empresa</ThemedText>
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
+              <ThemedText style={styles.label}>Empresa</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => handleEmpresaChange(Number(v) || null)} style={styles.picker}>
                       <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                      {empresas.map((e: any) => (
+                  {empresas.map((e: any) => (
                         <Picker.Item key={`emp_${e.id}`} label={String(e.nombre)} value={Number(e.id)} color="#000000" />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                  ))}
+                </Picker>
+              </ThemedView>
 
-                  <ThemedText style={styles.label}>Cliente</ThemedText>
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker selectedValue={selectedClienteId ?? 0} onValueChange={(v) => handleClienteChange(Number(v) || null)} style={styles.picker} enabled={!!selectedEmpresaId}>
+              <ThemedText style={styles.label}>Cliente</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker selectedValue={selectedClienteId ?? 0} onValueChange={(v) => handleClienteChange(Number(v) || null)} style={styles.picker} enabled={!!selectedEmpresaId}>
                       <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                      {clientes.map((c: any) => (
+                  {clientes.map((c: any) => (
                         <Picker.Item key={`cli_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                  ))}
+                </Picker>
+              </ThemedView>
 
-                  <ThemedText style={styles.label}>División</ThemedText>
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={selectedDivisionId ?? 0}
-                      onValueChange={(v) => handleDivisionChange(Number(v) || null)}
-                      enabled={!!selectedClienteId && divisiones.length > 0}
-                      style={styles.picker}
-                    >
+              <ThemedText style={styles.label}>División</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={selectedDivisionId ?? 0}
+                  onValueChange={(v) => handleDivisionChange(Number(v) || null)}
+                  enabled={!!selectedClienteId && divisiones.length > 0}
+                  style={styles.picker}
+                >
                       <Picker.Item label={selectedClienteId ? 'Seleccione...' : 'Seleccione cliente primero'} value={0} color="#000000" />
-                      {divisiones.map((d: any) => (
+                  {divisiones.map((d: any) => (
                         <Picker.Item key={`div_${d.id}`} label={String(d.nombre)} value={Number(d.id)} color="#000000" />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                  ))}
+                </Picker>
+              </ThemedView>
 
-                  <ThemedText style={styles.label}>Contrato</ThemedText>
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker selectedValue={selectedContratoId ?? 0} onValueChange={(v) => handleContratoChange(Number(v) || null)} style={styles.picker} enabled={!!selectedDivisionId}>
+              <ThemedText style={styles.label}>Contrato</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker selectedValue={selectedContratoId ?? 0} onValueChange={(v) => handleContratoChange(Number(v) || null)} style={styles.picker} enabled={!!selectedDivisionId}>
                       <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                      {contratos.map((c: any) => (
+                  {contratos.map((c: any) => (
                         <Picker.Item key={`cont_${c.id}`} label={String(c.nombre)} value={Number(c.id)} color="#000000" />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                  ))}
+                </Picker>
+              </ThemedView>
 
-                  <ThemedText style={styles.label}>Sucursal</ThemedText>
-                  <ThemedView style={styles.pickerWrapper}>
-                    <Picker selectedValue={selectedSucursalId ?? 0} onValueChange={(v) => handleSucursalChange(Number(v) || null)} style={styles.picker} enabled={!!selectedContratoId}>
+              <ThemedText style={styles.label}>Sucursal</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker selectedValue={selectedSucursalId ?? 0} onValueChange={(v) => handleSucursalChange(Number(v) || null)} style={styles.picker} enabled={!!selectedContratoId}>
                       <Picker.Item label="Seleccione..." value={0} color="#000000" />
-                      {sucursales.map((s: any) => (
+                  {sucursales.map((s: any) => (
                         <Picker.Item key={`suc_${s.id}`} label={String(s.nombre)} value={Number(s.id)} color="#000000" />
-                      ))}
-                    </Picker>
-                  </ThemedView>
+                  ))}
+                </Picker>
+              </ThemedView>
+
+              <ThemedText style={styles.label}>Puesto</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={selectedPuestoId ?? 0}
+                  onValueChange={(v) => {
+                    setSelectedPuestoId(Number(v) || null);
+                  }}
+                  style={styles.picker}
+                  enabled={!!selectedSucursalId}
+                >
+                  <Picker.Item label="Seleccione..." value={0} color="#000000" />
+                  {puestosForm.map((p: any) => (
+                    <Picker.Item key={`puesto_${p.id}`} label={String(p.nombre)} value={Number(p.id)} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
                 </>
               ) : null}
 
@@ -3923,7 +4670,12 @@ export default function CorporateVehiclesScreen() {
                 </TouchableOpacity>
               )}
 
-              <ThemedText style={styles.sectionTitle}>Imágenes</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Imágenes nuevas (opcional)</ThemedText>
+              <ThemedText style={styles.formHierarchyHint}>
+                {editing
+                  ? 'Solo se suben imágenes que agregue aquí. En el listado puede ver o eliminar los archivos ya guardados.'
+                  : 'Las imágenes se guardan en el dispositivo y se suben al confirmar.'}
+              </ThemedText>
               <TouchableOpacity style={styles.attachButton} onPress={handleAddImage} activeOpacity={0.85}>
                 <Ionicons name="image-outline" size={20} color="#007AFF" />
                 <ThemedText style={styles.attachButtonText}>Adjuntar imagen</ThemedText>
@@ -3934,20 +4686,34 @@ export default function CorporateVehiclesScreen() {
                   {imageFiles.map((img) => {
                     const ext = (img.extension || 'jpg').toLowerCase();
                     const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-                    const uri = `data:${mime};base64,${img.base64}`;
+                    const fileUri =
+                      img.localFileName != null && String(img.localFileName).trim() !== ''
+                        ? getLocalFileDisplayUri(String(img.localFileName).trim())
+                        : '';
+                    const uri =
+                      fileUri ||
+                      (img.base64 != null && String(img.base64).trim() !== ''
+                        ? `data:${mime};base64,${img.base64}`
+                        : '');
+                    if (!uri) {
+                      return (
+                        <ThemedView key={img.id} style={styles.imageWideWrap}>
+                          <ThemedText style={styles.emptyText}>Imagen no disponible</ThemedText>
+                        </ThemedView>
+                      );
+                    }
                     return (
                       <ThemedView key={img.id} style={styles.imageWideWrap}>
+                        <ThemedText style={styles.imagePreviewTitle}>Nueva imagen</ThemedText>
                         <Image source={{ uri }} style={styles.imageWide} resizeMode="contain" />
-                        <TouchableOpacity style={styles.removeImageBtn} onPress={() => removeImage(img.id)} activeOpacity={0.85}>
+                        <TouchableOpacity style={styles.removeImageBtn} onPress={() => confirmRemoveFormImage(img.id)} activeOpacity={0.85}>
                           <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                         </TouchableOpacity>
                       </ThemedView>
                     );
                   })}
                 </ThemedView>
-              ) : (
-                <ThemedText style={styles.emptyText}>Sin imágenes adjuntas</ThemedText>
-              )}
+              ) : null}
 
               <ThemedView style={styles.formActions}>
                 <TouchableOpacity style={[styles.formActionBtn, styles.cancelBtn]} onPress={() => { setIsCreating(false); setEditing(null); resetForm(); }} activeOpacity={0.85}>
@@ -4035,7 +4801,7 @@ export default function CorporateVehiclesScreen() {
                           <ThemedText style={styles.cardValue}>{String(r.prox_cambio_aceite ?? '—')}</ThemedText>
                         </ThemedText>
 
-                        {renderImagesPreview(r.images, vehiculoId, recordKey)}
+                        {renderImagesPreview(r)}
                       </ThemedView>
                     ) : null}
 
@@ -4085,8 +4851,8 @@ export default function CorporateVehiclesScreen() {
                           <ActivityIndicator size="small" color="#FFFFFF" />
                         ) : (
                           <>
-                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                        <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
                           </>
                         )}
                       </TouchableOpacity>
@@ -4415,15 +5181,15 @@ export default function CorporateVehiclesScreen() {
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                               <>
-                                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                                <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
                               </>
                             )}
                           </TouchableOpacity>
                         </ThemedView>
 
                         <ThemedView style={styles.modalItemActions}>
-                          {((u as any)?.bitacora_id == null) && (
+                          {((u as any)?.bitacora_id == null && !(u as any)?.bitacora) && (
                             <TouchableOpacity style={[styles.actionBtn, styles.assignBtn]} onPress={() => handleAssignEstado(u)} activeOpacity={0.85}>
                               <Ionicons name="clipboard-outline" size={18} color="#FFFFFF" />
                               <ThemedText style={styles.actionBtnText}>Asignar estado</ThemedText>
@@ -4695,13 +5461,31 @@ export default function CorporateVehiclesScreen() {
                     placeholderTextColor="#999"
                   />
 
-                  <ThemedText style={styles.sectionTitle}>Imagen antes</ThemedText>
+                  <ThemedText style={styles.sectionTitle}>Fotos nuevas (opcional)</ThemedText>
+                  <ThemedText style={styles.formHierarchyHint}>
+                    {maintenanceEditing
+                      ? 'Solo se suben fotos que tome aquí. En el listado puede ver o eliminar las imágenes ya guardadas.'
+                      : 'Puede adjuntar fotos antes y después del servicio.'}
+                  </ThemedText>
+
+                  <ThemedText style={styles.label}>Foto antes</ThemedText>
                   {maintenanceImagenAntes ? (
                     <ThemedView style={styles.imageWideWrap}>
+                      <ThemedText style={styles.imagePreviewTitle}>Nueva foto</ThemedText>
                       <Image source={{ uri: maintenanceImagenAntes }} style={styles.imageWide} resizeMode="contain" />
                       <TouchableOpacity
                         style={styles.removeImageBtn}
-                        onPress={() => setMaintenanceImagenAntes('')}
+                        onPress={async () => {
+                          if (maintenanceImagenAntesRef) {
+                            try {
+                              await deleteFile(maintenanceImagenAntesRef);
+                            } catch {
+                              // ignore
+                            }
+                          }
+                          setMaintenanceImagenAntesRef('');
+                          setMaintenanceImagenAntes('');
+                        }}
                         activeOpacity={0.85}
                       >
                         <Ionicons name="trash-outline" size={18} color="#FF3B30" />
@@ -4714,13 +5498,24 @@ export default function CorporateVehiclesScreen() {
                     </TouchableOpacity>
                   )}
 
-                  <ThemedText style={styles.sectionTitle}>Imagen después</ThemedText>
+                  <ThemedText style={styles.label}>Foto después</ThemedText>
                   {maintenanceImagenDespues ? (
                     <ThemedView style={styles.imageWideWrap}>
+                      <ThemedText style={styles.imagePreviewTitle}>Nueva foto</ThemedText>
                       <Image source={{ uri: maintenanceImagenDespues }} style={styles.imageWide} resizeMode="contain" />
                       <TouchableOpacity
                         style={styles.removeImageBtn}
-                        onPress={() => setMaintenanceImagenDespues('')}
+                        onPress={async () => {
+                          if (maintenanceImagenDespuesRef) {
+                            try {
+                              await deleteFile(maintenanceImagenDespuesRef);
+                            } catch {
+                              // ignore
+                            }
+                          }
+                          setMaintenanceImagenDespuesRef('');
+                          setMaintenanceImagenDespues('');
+                        }}
                         activeOpacity={0.85}
                       >
                         <Ionicons name="trash-outline" size={18} color="#FF3B30" />
@@ -4857,6 +5652,24 @@ export default function CorporateVehiclesScreen() {
                   {maintenanceRecords.map((m) => {
                     const k = String(m.id || m.id_local);
                     const offline = !m.synced || k.startsWith('local-');
+                    const vehiculoIdForMaint =
+                      typeof maintenanceVehicle?.id === 'number' && maintenanceVehicle.id > 0
+                        ? maintenanceVehicle.id
+                        : undefined;
+                    const uriAntes = m.imagen_antes_local_file
+                      ? getLocalFileDisplayUri(String(m.imagen_antes_local_file))
+                      : m.imagen_antes
+                        ? m.imagen_antes.startsWith('data:')
+                          ? m.imagen_antes
+                          : buildMaintenanceImageUrl(vehiculoIdForMaint, m.imagen_antes)
+                        : '';
+                    const uriDespues = m.imagen_despues_local_file
+                      ? getLocalFileDisplayUri(String(m.imagen_despues_local_file))
+                      : m.imagen_despues
+                        ? m.imagen_despues.startsWith('data:')
+                          ? m.imagen_despues
+                          : buildMaintenanceImageUrl(vehiculoIdForMaint, m.imagen_despues)
+                        : '';
                     return (
                       <ThemedView key={k} style={styles.modalListItem}>
                         <ThemedText style={styles.modalListTitle}>
@@ -4870,6 +5683,51 @@ export default function CorporateVehiclesScreen() {
                           <ThemedText style={styles.cardLabel}>Mecánico: </ThemedText>
                           <ThemedText style={styles.cardValue}>{m.nombre_mecanico || '—'}</ThemedText>
                         </ThemedText>
+
+                        {(uriAntes || uriDespues) && (
+                          <ThemedView style={styles.maintenanceListImagesRow}>
+                            {uriAntes ? (
+                              <ThemedView style={styles.maintenanceListImageBlock}>
+                                <ThemedText style={styles.maintenanceListImageLabel}>Antes</ThemedText>
+                                <ThemedView style={styles.maintenanceListImageWrap}>
+                                  <Image source={{ uri: uriAntes }} style={styles.maintenanceListThumb} resizeMode="cover" />
+                                  <TouchableOpacity
+                                    style={styles.removeImageBtn}
+                                    onPress={() => confirmRemoveMaintenanceListImage(m, 'antes')}
+                                    activeOpacity={0.85}
+                                    disabled={deletingMaintImageKey === `${k}-antes`}
+                                  >
+                                    {deletingMaintImageKey === `${k}-antes` ? (
+                                      <ActivityIndicator size="small" color="#FF3B30" />
+                                    ) : (
+                                      <Ionicons name="trash-outline" size={16} color="#FF3B30" />
+                                    )}
+                                  </TouchableOpacity>
+                                </ThemedView>
+                              </ThemedView>
+                            ) : null}
+                            {uriDespues ? (
+                              <ThemedView style={styles.maintenanceListImageBlock}>
+                                <ThemedText style={styles.maintenanceListImageLabel}>Después</ThemedText>
+                                <ThemedView style={styles.maintenanceListImageWrap}>
+                                  <Image source={{ uri: uriDespues }} style={styles.maintenanceListThumb} resizeMode="cover" />
+                                  <TouchableOpacity
+                                    style={styles.removeImageBtn}
+                                    onPress={() => confirmRemoveMaintenanceListImage(m, 'despues')}
+                                    activeOpacity={0.85}
+                                    disabled={deletingMaintImageKey === `${k}-despues`}
+                                  >
+                                    {deletingMaintImageKey === `${k}-despues` ? (
+                                      <ActivityIndicator size="small" color="#FF3B30" />
+                                    ) : (
+                                      <Ionicons name="trash-outline" size={16} color="#FF3B30" />
+                                    )}
+                                  </TouchableOpacity>
+                                </ThemedView>
+                              </ThemedView>
+                            ) : null}
+                          </ThemedView>
+                        )}
 
                         <ThemedView style={styles.modalItemActions}>
                           <TouchableOpacity style={[styles.actionBtn, styles.editBtn]} onPress={() => startEditingMaintenance(m)} activeOpacity={0.85}>
@@ -4899,8 +5757,8 @@ export default function CorporateVehiclesScreen() {
                               <ActivityIndicator size="small" color="#FFFFFF" />
                             ) : (
                               <>
-                                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                                <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
+                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.actionBtnText}>Eliminar</ThemedText>
                               </>
                             )}
                           </TouchableOpacity>
@@ -5114,6 +5972,14 @@ const styles = StyleSheet.create({
   dateButtonText: { color: '#000', fontWeight: '700' },
 
   sectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
+  formHierarchyHint: { fontSize: 13, color: '#666', marginBottom: 8, marginTop: 2 },
+  imagePreviewTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#333' },
+
+  maintenanceListImagesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 10, marginBottom: 4 },
+  maintenanceListImageBlock: { flex: 1, minWidth: 120, maxWidth: '48%' as any },
+  maintenanceListImageLabel: { fontSize: 12, fontWeight: '700', color: '#333', marginBottom: 6 },
+  maintenanceListImageWrap: { position: 'relative' as const, borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: '#E0E0E0' },
+  maintenanceListThumb: { width: '100%', height: 100, backgroundColor: '#F5F5F5' },
 
   switchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 },
   switchBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, paddingHorizontal: 10, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, backgroundColor: '#FFFFFF' },

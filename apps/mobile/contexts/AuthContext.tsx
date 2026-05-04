@@ -4,6 +4,11 @@ import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 import { eventBus } from '../hooks/eventBus';
 import { resolveAppConnectivity } from '../hooks/resolveAppConnectivity';
+import * as Device from 'expo-device';
+import {
+  MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
+  MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
+} from '@/hooks/mainStructureFragmentsStorage';
 
 interface Role {
   id: number;
@@ -69,6 +74,18 @@ const REFRESH_TOKEN_KEY = 'refresh_token';
 const EMPLOYEE_KEY = 'employee_data';
 const TOKEN_CREATED_AT_KEY = 'token_created_at';
 
+async function parseJsonResponseSafe(response: Response): Promise<{ data: any | null; raw: string }> {
+  const raw = await response.text();
+  if (!raw || raw.trim().length === 0) {
+    return { data: null, raw: '' };
+  }
+  try {
+    return { data: JSON.parse(raw), raw };
+  } catch {
+    return { data: null, raw };
+  }
+}
+
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
@@ -117,6 +134,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: 'Server URL not configured' };
       }
 
+      const deviceName = Device.deviceName;
+
+      console.log(Device.brand);
+      console.log(Device.modelName);
+
       const response = await fetch(`${apiUrl}/api/auth/login`, {
         method: 'POST',
         headers: {
@@ -125,20 +147,19 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         },
         body: JSON.stringify({
           cedula: cedula,
-          password: password
+          password: password,
+          deviceName: `${Device.brand}-${Device.modelName}`
         }),
       });
 
-      let responseData;
-      try {
-        const responseText = await response.text();
-        if (!responseText || responseText.trim().length === 0) {
-          return { success: false, error: 'Respuesta vacía del servidor' };
+      const { data: responseData, raw: responseRaw } = await parseJsonResponseSafe(response);
+      if (!responseData) {
+        const compactRaw = String(responseRaw || '').replace(/\s+/g, ' ').trim();
+        console.error('Error parsing login response: non-JSON payload:', compactRaw.slice(0, 300));
+        if (!response.ok) {
+          return { success: false, error: compactRaw || `Error HTTP ${response.status}` };
         }
-        responseData = JSON.parse(responseText);
-      } catch (parseError) {
-        console.error('Error parsing login response:', parseError);
-        return { success: false, error: 'Error al procesar la respuesta del servidor' };
+        return { success: false, error: 'Respuesta inválida del servidor (no JSON)' };
       }
 
       if (!response.ok) {
@@ -207,14 +228,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'disconnected_info',
             'remembered_cedula',
             'server_time',
-            'main_structure_cache',
             'main_structure_created_at',
           ];
           const keys = await AsyncStorage.getAllKeys();
     
-          const keysToDelete = keys.filter(
-            key => !exceptions.includes(key)
-          );
+          const keysToDelete = keys.filter((key) => {
+            if (exceptions.includes(key)) return false;
+            if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
+            if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
+            return true;
+          });
     
           await AsyncStorage.multiRemove(keysToDelete);
         }
@@ -246,8 +269,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             }),
           });
 
-          const responseData = await response.json();
-          serverResponse = responseData;
+          const { data: responseData, raw } = await parseJsonResponseSafe(response);
+          if (responseData && typeof responseData === 'object') {
+            serverResponse = responseData;
+          } else {
+            serverResponse = {
+              status: response.ok,
+              message: raw?.trim() || (response.ok ? 'Sesión cerrada correctamente' : `Error HTTP ${response.status}`),
+            };
+          }
 
         } catch (apiError) {
           console.warn('Logout API call failed:', apiError);
@@ -323,7 +353,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return false;
       }
 
-      const responseData = await response.json();
+      const { data: responseData, raw } = await parseJsonResponseSafe(response);
+      if (!responseData || typeof responseData !== 'object') {
+        console.error('Refresh token invalid JSON response:', raw?.slice(0, 300));
+        return false;
+      }
 
       if (!responseData.status || !responseData.newAccessToken) {
         // logout

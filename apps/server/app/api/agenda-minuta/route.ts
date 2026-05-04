@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
 
-    const where: any = {};
+    const where: any = { isActive: true };
 
     // Filtro por empresa: filtrar clientes que pertenecen a esa empresa
     // Solo se aplica si no hay filtro más específico de cliente
@@ -183,7 +183,10 @@ export async function POST(req: NextRequest) {
     if (!valid) return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
 
     const {
+      empresa_id,
       cliente_id,
+      division_id,
+      contrato_id,
       corpo_id,
       puesto_id,
       numero,
@@ -201,6 +204,9 @@ export async function POST(req: NextRequest) {
 
     const required: Array<[string, any]> = [
       ["cliente_id", cliente_id],
+      ["empresa_id", empresa_id],
+      ["division_id", division_id],
+      ["contrato_id", contrato_id],
       ["corpo_id", corpo_id],
       ["puesto_id", puesto_id],
       ["numero", numero],
@@ -211,7 +217,6 @@ export async function POST(req: NextRequest) {
       ["autor", autor],
       ["participantes", participantes],
       ["acuerdos", acuerdos],
-      ["observaciones", observaciones],
       ["firma_responsable", firma_responsable],
     ];
     for (const [k, v] of required) {
@@ -220,11 +225,14 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const empresaIdNum = parseInt(String(empresa_id), 10);
     const clienteIdNum = parseInt(String(cliente_id), 10);
+    const divisionIdNum = parseInt(String(division_id), 10);
+    const contratoIdNum = parseInt(String(contrato_id), 10);
     const corpoIdNum = parseInt(String(corpo_id), 10);
     const puestoIdNum = parseInt(String(puesto_id), 10);
     const numeroNum = parseInt(String(numero), 10);
-    if ([clienteIdNum, corpoIdNum, puestoIdNum, numeroNum].some((n) => Number.isNaN(n) || n <= 0)) {
+    if ([empresaIdNum, clienteIdNum, divisionIdNum, contratoIdNum, corpoIdNum, puestoIdNum, numeroNum].some((n) => Number.isNaN(n) || n <= 0)) {
       return NextResponse.json({ status: false, message: "IDs inválidos" }, { status: 400 });
     }
 
@@ -242,7 +250,10 @@ export async function POST(req: NextRequest) {
         action: "POST",
         table: "c_agenda_minuta",
         data: {
+          empresa_id: empresaIdNum,
           cliente_id: clienteIdNum,
+          division_id: divisionIdNum,
+          contrato_id: contratoIdNum,
           corpo_id: corpoIdNum,
           puesto_id: puestoIdNum,
           numero: numeroNum,
@@ -254,7 +265,7 @@ export async function POST(req: NextRequest) {
           participantes: ensureStringJson(participantes, "[]"),
           acuerdos: ensureStringJson(acuerdos, "[]"),
           temas_a_tratar: temas_a_tratar !== undefined ? ensureStringJson(temas_a_tratar, "[]") : "[]",
-          observaciones: String(observaciones),
+          observaciones: String(observaciones ?? "-"),
           firma_responsable: String(firma_responsable),
           created_at: createdAt.toISOString(),
           created_by: payload.id?.toString?.() || "",
@@ -338,6 +349,9 @@ export async function POST(req: NextRequest) {
             after: {
               id: record.id,
               cliente_id: record.cliente_id,
+              empresa_id: (record as any).empresa_id,
+              division_id: (record as any).division_id,
+              contrato_id: (record as any).contrato_id,
               corpo_id: record.corpo_id,
               puesto_id: record.puesto_id,
               numero: record.numero,

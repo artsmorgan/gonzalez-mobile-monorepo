@@ -52,7 +52,7 @@ async function validateOwnership(req: NextRequest, llaveId: number, movId: numbe
     data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveId } }
   });
   if (!llave) return { ok: false as const, marcaDia: null, llave: null, mov: null, message: "Llave no encontrada" };
-  if (llave.cliente_id !== marcaDia.cliente_id || llave.corpo_id !== marcaDia.corpo_id) {
+  if (llave.cliente_id !== marcaDia.cliente_id) {
     return { ok: false as const, marcaDia: null, llave: null, mov: null, message: "No autorizado" };
   }
 

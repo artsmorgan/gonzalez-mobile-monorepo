@@ -7,7 +7,11 @@ import {
   ActivityIndicator,
   TextInput,
   Platform,
-  Modal
+  Modal,
+  Linking,
+  unstable_batchedUpdates,
+  Dimensions,
+  View,
 } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
@@ -28,10 +32,25 @@ import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import * as Network from 'expo-network';
-import { createTraining as createTrainingAPI, deleteTraining as deleteTrainingAPI } from '@/hooks/trainingFunctions';
+import {
+  createTraining as createTrainingAPI,
+  deleteTraining as deleteTrainingAPI,
+  updateTraining as updateTrainingAPI,
+  deleteTrainingArchivo,
+} from '@/hooks/trainingFunctions';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import * as DocumentPicker from 'expo-document-picker';
+import { saveFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '@/hooks/fileStorage';
+import {
+  buildTrainingFilesAndMetaFromFileMeta,
+  trainingFilesMetaForQueue,
+  type TrainingFileQueueMeta,
+} from '@/hooks/trainingAttachmentsSync';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { Image } from 'react-native';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
@@ -94,11 +113,26 @@ interface FirmaData {
   };
 }
 
+/** Adjuntos desde API (mismo criterio que job-manuals: `url` listo para authedFetch). */
+interface TrainingArchivo {
+  id?: number;
+  name: string;
+  type?: string;
+  extension?: string;
+  original_name?: string;
+  originalName?: string;
+  url?: string;
+}
+
 interface Training {
   id: number;
   empresa: Empresa;
   cliente: Cliente;
   sucursal: Sucursal;
+  /** Jerarquía guardada en el registro principal */
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
   titulo: string;
   descripcion: string;
   tipo: string;
@@ -109,6 +143,8 @@ interface Training {
   nombre_firma: string;
   fecha: string;
   base64_file: string;
+  archivos?: TrainingArchivo[];
+  isActive?: boolean;
   empleados: Array<{
     id: number;
     nombre: string;
@@ -121,6 +157,8 @@ interface Training {
   id_local: string;
   /** Sucursal explícita en caché / offline (p. ej. al filtrar contra el corpo del filtro) */
   corpo_id?: number;
+  /** Solo offline: metadatos de archivos (documentos) sin base64 en JSON */
+  offline_pending_files?: TrainingFileQueueMeta[];
 }
 
 function stripQueuedTrainingDeletesForTrainingId(actions: any[], trainingId: number): any[] {
@@ -143,6 +181,70 @@ function appendOfflineTrainingDelete(
     marcaId: params.marcaId,
   });
   return next;
+}
+
+/** Clasificación por extensión para listas al estilo JobManuals (sin recursividad, solo dato + comparación). */
+type TrainingPendingFileKind = 'image' | 'document' | 'audio' | 'video';
+
+function trainingPendingFileIsKind(
+  f: { extension?: string },
+  kind: TrainingPendingFileKind
+): boolean {
+  const ext = (f.extension || '').toLowerCase();
+  const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'].includes(ext);
+  const isVid = ['mp4', 'mov', 'm4v', 'webm', 'mkv'].includes(ext);
+  const isAud = ['mp3', 'm4a', 'aac', 'wav', 'ogg', 'flac', 'oga'].includes(ext);
+  if (kind === 'image') return isImg;
+  if (kind === 'video') return isVid;
+  if (kind === 'audio') return isAud;
+  if (kind === 'document') return !isImg && !isVid && !isAud;
+  return false;
+}
+
+/** Clasificación de adjunto de capacitación para URL y UI (API puede omitir `type`). */
+function getTrainingArchivoMediaKind(a: TrainingArchivo): 'image' | 'audio' | 'video' | 'document' {
+  const t = (a.type || '').toLowerCase();
+  if (t === 'image' || t === 'audio' || t === 'video') return t;
+  const ext = (a.extension || '').toLowerCase();
+  const rawName = String(a.original_name || a.originalName || a.name || '');
+  const dot = rawName.lastIndexOf('.');
+  const extFromName = dot >= 0 ? rawName.slice(dot + 1).toLowerCase() : '';
+  const e = ext || extFromName;
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif'].includes(e)) return 'image';
+  if (['mp3', 'm4a', 'aac', 'wav', 'ogg', 'flac', 'oga'].includes(e)) return 'audio';
+  if (['mp4', 'mov', 'm4v', 'webm', 'mkv'].includes(e)) return 'video';
+  return 'document';
+}
+
+function tryExtractNameFromCapacitacionFileUrl(url: string): string {
+  if (!url) return '';
+  try {
+    const m = String(url).match(/\/api\/training\/\d+\/get-(?:image|audio|video|file)\/([^?&]+)/);
+    if (m) return decodeURIComponent(m[1]);
+  } catch {
+    // ignore
+  }
+  return '';
+}
+
+/** Nombre en storage (misma idea que `file.name` en Job Manuals: clave de get-* y DELETE). */
+function getTrainingArchivoStorageName(a: TrainingArchivo): string {
+  const n = String(a.name ?? '').trim();
+  if (n) return n;
+  return tryExtractNameFromCapacitacionFileUrl(String(a.url ?? ''));
+}
+
+function parseFirmaBase64ToFirmaData(firmaB64: string): FirmaData | null {
+  if (!firmaB64 || firmaB64.trim() === '') return null;
+  try {
+    const decodedString = atob(firmaB64);
+    const parts = decodedString.split(':');
+    if (parts.length !== 5) return null;
+    const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+    return { sessionId, empleadoId, latitud, longitud, timestamp };
+  } catch {
+    return null;
+  }
 }
 
 interface DivisionNode {
@@ -334,6 +436,56 @@ export default function TrainingsScreen() {
   const matchCacheToFilterCorpo = route.params?.matchCacheToFilterCorpo ?? true;
 
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+  // URLs de adjuntos: mismo criterio que JobManualsScreen (getManual*Url + buildFileUrl)
+  const getTrainingImageUrl = (trainingId: number, fileName: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return appendTokenToUrl(
+      `${apiUrl}/api/training/${trainingId}/get-image/${encodeURIComponent(fileName)}`
+    );
+  };
+  const getTrainingAudioUrl = (trainingId: number, fileName: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return appendTokenToUrl(
+      `${apiUrl}/api/training/${trainingId}/get-audio/${encodeURIComponent(fileName)}`
+    );
+  };
+  const getTrainingVideoUrl = (trainingId: number, fileName: string) => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return appendTokenToUrl(
+      `${apiUrl}/api/training/${trainingId}/get-video/${encodeURIComponent(fileName)}`
+    );
+  };
+  const buildTrainingArchivoUrl = (trainingId: number, a: TrainingArchivo): string => {
+    const fileName = getTrainingArchivoStorageName(a);
+    if (trainingId > 0 && fileName) {
+      const t = (a.type || '').toLowerCase();
+      if (t === 'image') return getTrainingImageUrl(trainingId, fileName);
+      if (t === 'audio') return getTrainingAudioUrl(trainingId, fileName);
+      if (t === 'video') return getTrainingVideoUrl(trainingId, fileName);
+      const kind = getTrainingArchivoMediaKind(a);
+      if (kind === 'image') return getTrainingImageUrl(trainingId, fileName);
+      if (kind === 'audio') return getTrainingAudioUrl(trainingId, fileName);
+      if (kind === 'video') return getTrainingVideoUrl(trainingId, fileName);
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        return appendTokenToUrl(
+          `${apiUrl}/api/training/${trainingId}/get-file/${encodeURIComponent(fileName)}`
+        );
+      }
+    }
+    if (a.url && String(a.url).trim() !== '') return appendTokenToUrl(a.url);
+    return '';
+  };
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<TrainingsScreenNavigationProp>();
 
@@ -351,6 +503,8 @@ export default function TrainingsScreen() {
   const [corpoId, setCorpoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<string | null>(null);
   const [structure, setStructure] = useState<EmpresaStructure[]>([]);
+  const structureRef = useRef(structure);
+  structureRef.current = structure;
 
   // Dropdowns data (corpo del formulario de creación)
   const [puestos, setPuestos] = useState<Puesto[]>([]);
@@ -364,11 +518,13 @@ export default function TrainingsScreen() {
   const [showFechaCapacitacionPicker, setShowFechaCapacitacionPicker] = useState(false);
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [selectedTipo, setSelectedTipo] = useState<'Prescencial' | 'Virtual'>('Prescencial');
+  const [selectedTipo, setSelectedTipo] = useState<'Presencial' | 'Virtual'>('Presencial');
   const [selectedEmpleados, setSelectedEmpleados] = useState<Empleado[]>([]);
   const [codigoEmpleadoBusqueda, setCodigoEmpleadoBusqueda] = useState<string>('');
   const [selectedPuestos, setSelectedPuestos] = useState<Puesto[]>([]);
-  const [trainingImageBase64, setTrainingImageBase64] = useState<string | null>(null);
+  /** Nuevos archivos: persistidos con `fileStorage` (mismo criterio que acta-entrega). */
+  const [pendingTrainingFiles, setPendingTrainingFiles] = useState<TrainingFileQueueMeta[]>([]);
+  const [editingTraining, setEditingTraining] = useState<Training | null>(null);
   const [decodedFirmas, setDecodedFirmas] = useState<Map<number, FirmaData>>(new Map());
 
   // Form refs
@@ -406,10 +562,8 @@ export default function TrainingsScreen() {
   const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
-  const isRestoringFormHierarchyRef = useRef(false);
-  const pendingFormHierarchyRef = useRef<HierarchyPath | null>(null);
-  const isApplyingFormHierarchyRef = useRef(false);
-
+  /** Puesto de la jerarquía (id en e_estructura_puesto del registro principal) */
+  const [formPuestoJerarquiaId, setFormPuestoJerarquiaId] = useState<number | null>(null);
   const [deletingTrainingKey, setDeletingTrainingKey] = useState<string | null>(null);
 
   // Filter states (solo campos no cubiertos por la jerarquía de selects)
@@ -425,13 +579,8 @@ export default function TrainingsScreen() {
 
   const fetchMainStructure = useCallback(async (): Promise<EmpresaStructure[]> => {
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (!cacheStr) {
-        setStructure([]);
-        return [];
-      }
-      const parsed = JSON.parse(cacheStr);
-      const arr = Array.isArray(parsed) ? parsed : [];
+      const merged = await loadMainStructureTreeMerged();
+      const arr = Array.isArray(merged) ? (merged as EmpresaStructure[]) : [];
       setStructure(arr);
       return arr;
     } catch {
@@ -450,12 +599,31 @@ export default function TrainingsScreen() {
     setFilterCorpoId(path.sucursalId);
   }, []);
 
-  const applyFormHierarchySequentialFromMarca = useCallback((path: HierarchyPath) => {
-    pendingFormHierarchyRef.current = path;
-    isApplyingFormHierarchyRef.current = true;
-    isRestoringFormHierarchyRef.current = true;
-    setFormEmpresaId(path.empresaId);
+  /** Un solo lote (mismo criterio que InductionTourRecordScreen: sin useEffect en cascada). */
+  const applyFormHierarchyBatchedFromMarca = useCallback((path: HierarchyPath) => {
+    unstable_batchedUpdates(() => {
+      setFormEmpresaId(path.empresaId);
+      setFormClienteId(path.clienteId);
+      setFormDivisionId(path.divisionId);
+      setFormContratoId(path.contratoId);
+      setFormCorpoId(path.sucursalId);
+      setFormPuestoJerarquiaId(path.puestoId);
+    });
   }, []);
+
+  /** Precarga desde `current_marca` + árbol (paralelo a `applyCurrentMarcaToFormHierarchy` en InductionTourRecordScreen). */
+  const applyCurrentMarcaToFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const tree = structure.length > 0 ? structure : await fetchMainStructure();
+      const marcaObj = JSON.parse(currentMarcaStr);
+      const path = buildHierarchyFromCurrentMarca(marcaObj, tree);
+      applyFormHierarchyBatchedFromMarca(path);
+    } catch (e) {
+      console.error('Precarga jerarquía formulario:', e);
+    }
+  }, [structure, fetchMainStructure, applyFormHierarchyBatchedFromMarca]);
 
   useFocusEffect(
     useCallback(() => {
@@ -548,14 +716,11 @@ export default function TrainingsScreen() {
   };
 
   const hydratePuestosEmpleadosForCorpo = useCallback(async (corpoId: number) => {
-    let tree: StructureTree = Array.isArray(structure) ? structure : [];
+    let tree: StructureTree = Array.isArray(structureRef.current) ? structureRef.current : [];
     if (tree.length === 0) {
       try {
-        const raw = await AsyncStorage.getItem('main_structure_cache');
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          tree = Array.isArray(parsed) ? parsed : [];
-        }
+        const merged = await loadMainStructureTreeMerged();
+        tree = Array.isArray(merged) ? (merged as StructureTree) : [];
       } catch {
         tree = [];
       }
@@ -568,7 +733,7 @@ export default function TrainingsScreen() {
     }
     setPuestos(extractPuestosUniqueFromSucursalNode(sucursalNode));
     setEmpleados(extractEmpleadosUniqueFromSucursalNode(sucursalNode));
-  }, [structure]);
+  }, []);
 
   const listFetchGenRef = useRef(0);
 
@@ -877,62 +1042,6 @@ export default function TrainingsScreen() {
     v != null && v !== '' ? Number(v) : null;
 
   useEffect(() => {
-    const pending = pendingFormHierarchyRef.current;
-    if (!pending || !isApplyingFormHierarchyRef.current || !isCreating) return;
-
-    if ((pending.empresaId ?? null) !== (formEmpresaId ?? null)) {
-      setFormEmpresaId(pending.empresaId ?? null);
-      return;
-    }
-    if ((pending.clienteId ?? null) !== (formClienteId ?? null)) {
-      setFormClienteId(pending.clienteId ?? null);
-      return;
-    }
-    if ((pending.divisionId ?? null) !== (formDivisionId ?? null)) {
-      setFormDivisionId(pending.divisionId ?? null);
-      return;
-    }
-    if ((pending.contratoId ?? null) !== (formContratoId ?? null)) {
-      setFormContratoId(pending.contratoId ?? null);
-      return;
-    }
-    if ((pending.sucursalId ?? null) !== (formCorpoId ?? null)) {
-      setFormCorpoId(pending.sucursalId ?? null);
-      return;
-    }
-
-    pendingFormHierarchyRef.current = null;
-    isApplyingFormHierarchyRef.current = false;
-    isRestoringFormHierarchyRef.current = false;
-  }, [isCreating, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]);
-
-  useEffect(() => {
-    if (isRestoringFormHierarchyRef.current) return;
-    setFormClienteId(null);
-    setFormDivisionId(null);
-    setFormContratoId(null);
-    setFormCorpoId(null);
-  }, [formEmpresaId]);
-
-  useEffect(() => {
-    if (isRestoringFormHierarchyRef.current) return;
-    setFormDivisionId(null);
-    setFormContratoId(null);
-    setFormCorpoId(null);
-  }, [formClienteId]);
-
-  useEffect(() => {
-    if (isRestoringFormHierarchyRef.current) return;
-    setFormContratoId(null);
-    setFormCorpoId(null);
-  }, [formDivisionId]);
-
-  useEffect(() => {
-    if (isRestoringFormHierarchyRef.current) return;
-    setFormCorpoId(null);
-  }, [formContratoId]);
-
-  useEffect(() => {
     if (formCorpoId == null) {
       setPuestos([]);
       setEmpleados([]);
@@ -947,14 +1056,13 @@ export default function TrainingsScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    pendingFormHierarchyRef.current = null;
-    isApplyingFormHierarchyRef.current = false;
-    isRestoringFormHierarchyRef.current = false;
     setFormEmpresaId(null);
     setFormClienteId(null);
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
+    setFormPuestoJerarquiaId(null);
+    setEditingTraining(null);
     setIsCreating(true);
     setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
     tituloRef.current = '';
@@ -963,25 +1071,15 @@ export default function TrainingsScreen() {
     nombreResponsableRef.current = employee?.name || '';
     cedulaResponsableRef.current = employee?.cedula || '';
     setFechaCapacitacion(new Date(horaAccion).toISOString().split('T')[0]);
-    setSelectedTipo('Prescencial');
+    setSelectedTipo('Presencial');
     setSelectedEmpleados([]);
     setSelectedPuestos([]);
     setSelectedResultado('');
     setFirmaResponsable(null);
-    setTrainingImageBase64(null);
+    setPendingTrainingFiles([]);
     setLocation(null);
 
-    try {
-      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-      const tree = structure.length > 0 ? structure : await fetchMainStructure();
-      if (currentMarcaStr) {
-        const marcaObj = JSON.parse(currentMarcaStr);
-        const path = buildHierarchyFromCurrentMarca(marcaObj, tree);
-        applyFormHierarchySequentialFromMarca(path);
-      }
-    } catch (e) {
-      console.error('Precarga jerarquía formulario:', e);
-    }
+    await applyCurrentMarcaToFormHierarchy();
 
     // Request location permissions
     (async () => {
@@ -1002,22 +1100,18 @@ export default function TrainingsScreen() {
   };
 
   const cancelCreating = () => {
-    pendingFormHierarchyRef.current = null;
-    isApplyingFormHierarchyRef.current = false;
-    isRestoringFormHierarchyRef.current = false;
+    setEditingTraining(null);
     setIsCreating(false);
     resetForm();
   };
 
   const resetForm = () => {
-    pendingFormHierarchyRef.current = null;
-    isApplyingFormHierarchyRef.current = false;
-    isRestoringFormHierarchyRef.current = false;
     setFormEmpresaId(null);
     setFormClienteId(null);
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
+    setFormPuestoJerarquiaId(null);
     setFormKey(prev => prev + 1); // Incrementar key para forzar re-render
     tituloRef.current = '';
     descripcionRef.current = '';
@@ -1025,12 +1119,12 @@ export default function TrainingsScreen() {
     nombreResponsableRef.current = '';
     cedulaResponsableRef.current = '';
     setFechaCapacitacion('');
-    setSelectedTipo('Prescencial');
+    setSelectedTipo('Presencial');
     setSelectedEmpleados([]);
     setSelectedPuestos([]);
     setSelectedResultado('');
     setFirmaResponsable(null);
-    setTrainingImageBase64(null);
+    setPendingTrainingFiles([]);
     setLocation(null);
   };
 
@@ -1070,31 +1164,34 @@ export default function TrainingsScreen() {
 
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
-        skipProcessing: false
+        skipProcessing: false,
       });
 
-      if (!photo) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
 
-      if (!photo.base64) {
-        Alert.alert('Error', 'No se pudo procesar la imagen. Por favor intente nuevamente.');
-        setIsCameraVisible(false);
-        return;
-      }
-
       setIsCameraVisible(false);
-
-      // Format base64 with data URI prefix
-      const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
-
-      setTimeout(() => {
-        setTrainingImageBase64(formattedBase64);
-      }, 100);
+      const fileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'capacitacion_foto',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'capacitacion',
+      });
+      const id = Math.random().toString(36).substring(2, 12);
+      setPendingTrainingFiles((prev) => [
+        ...prev,
+        {
+          id,
+          localFileName: fileName,
+          extension: 'jpg',
+          originalName: `Foto_cámara_${Date.now()}.jpg`,
+        },
+      ]);
     } catch (error) {
       console.error('Error capturing image:', error);
       Alert.alert('Error', 'No se pudo capturar la imagen');
@@ -1102,6 +1199,116 @@ export default function TrainingsScreen() {
     }
   };
 
+  /** Añade archivo por tipo (mismo criterio que JobManualsScreen: `DocumentPicker` por MIME). */
+  const pickTrainingFileByType = async (kind: 'image' | 'document' | 'audio' | 'video') => {
+    let pickerTypes: string | string[] | undefined;
+    switch (kind) {
+      case 'image':
+        pickerTypes = ['image/*'];
+        break;
+      case 'audio':
+        pickerTypes = ['audio/*'];
+        break;
+      case 'video':
+        pickerTypes = ['video/*'];
+        break;
+      case 'document':
+        pickerTypes = [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'text/plain',
+          'text/csv',
+        ];
+        break;
+      default:
+        pickerTypes = ['*/*'];
+    }
+    const storageType: StoredFileType =
+      kind === 'document' ? 'text' : kind === 'image' ? 'image' : kind === 'video' ? 'video' : 'audio';
+
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        type: pickerTypes,
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const asset = res.assets[0];
+      const on = asset.name || (kind === 'image' ? 'imagen' : kind === 'audio' ? 'audio' : kind === 'video' ? 'video' : 'documento');
+      let ext = '';
+      if (on.includes('.')) {
+        ext = (on.split('.').pop() || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) || '';
+      }
+      const mt = (asset.mimeType || '').split(';')[0].trim().toLowerCase();
+      const PICKER_MIME_TO_EXT: Record<string, string> = {
+        'application/pdf': 'pdf',
+        'application/msword': 'doc',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+        'application/vnd.ms-excel': 'xls',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+        'text/plain': 'txt',
+        'text/csv': 'csv',
+        'text/html': 'html',
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/heic': 'heic',
+        'image/heif': 'heif',
+        'video/mp4': 'mp4',
+        'video/quicktime': 'mov',
+        'audio/mpeg': 'mp3',
+        'audio/mp4': 'm4a',
+        'audio/wav': 'wav',
+        'application/octet-stream': '',
+      };
+      if (!ext && mt && PICKER_MIME_TO_EXT[mt]) {
+        ext = PICKER_MIME_TO_EXT[mt];
+      }
+      if (!ext && mt && mt.includes('/')) {
+        const part = mt.split('/').pop() || '';
+        const guess = part.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20) || '';
+        if (guess && guess !== 'octetstream' && guess.length <= 6) {
+          ext = guess;
+        }
+      }
+      if (!ext) {
+        if (kind === 'image') ext = 'jpg';
+        else if (kind === 'video') ext = 'mp4';
+        else if (kind === 'audio') ext = 'm4a';
+        else ext = 'pdf';
+      }
+      const fileName = await saveFile({
+        uri: asset.uri,
+        originalName: on,
+        extension: ext,
+        type: storageType,
+        prefix: 'capacitacion',
+      });
+      const id = Math.random().toString(36).substring(2, 12);
+      setPendingTrainingFiles((prev) => [
+        ...prev,
+        { id, localFileName: fileName, extension: ext, originalName: on },
+      ]);
+    } catch (e) {
+      console.error('pickTrainingFileByType', kind, e);
+      Alert.alert('Error', 'No se pudo adjuntar el archivo. Intenta de nuevo.');
+    }
+  };
+
+  const removePendingTrainingFile = useCallback((pf: TrainingFileQueueMeta) => {
+    void (async () => {
+      try {
+        await deleteFile(pf.localFileName);
+      } catch {
+        /* idempotente */
+      }
+      setPendingTrainingFiles((prev) => prev.filter((x) => x.id !== pf.id));
+    })();
+  }, []);
 
   const generateSignature = async () => {
     if (!employee) {
@@ -1315,6 +1522,7 @@ export default function TrainingsScreen() {
   };
 
   const filteredTrainings = trainings.filter((training) => {
+    if (training.isActive === false) return false;
     const matchesEmpresa = !filterEmpresaId || training.empresa.id === filterEmpresaId;
     const matchesCliente = !filterClienteId || training.cliente.id === filterClienteId;
     const matchesSucursal = !filterCorpoId || training.sucursal.id === filterCorpoId;
@@ -1353,9 +1561,10 @@ export default function TrainingsScreen() {
       !formClienteId ||
       !formDivisionId ||
       !formContratoId ||
-      !formCorpoId
+      !formCorpoId ||
+      !formPuestoJerarquiaId
     ) {
-      Alert.alert('Error', 'Debes completar la jerarquía Empresa → Sucursal');
+      Alert.alert('Error', 'Debes completar la jerarquía Empresa → Sucursal → Puesto');
       return false;
     }
     if (selectedPuestos.length === 0) {
@@ -1387,47 +1596,120 @@ export default function TrainingsScreen() {
       return false;
     }
 
-    if (!firmaResponsable) {
-      Alert.alert('Error', 'Debes generar o escanear la firma del responsable');
-      return false;
+    if (!editingTraining) {
+      if (!firmaResponsable) {
+        Alert.alert('Error', 'Debes generar o escanear la firma del responsable');
+        return false;
+      }
     }
 
     return true;
   };
 
+  const openEditTraining = (t: Training) => {
+    if (t.id === 0) {
+      Alert.alert('Aviso', 'No se puede editar un borrador pendiente de sincronización.');
+      return;
+    }
+    setEditingTraining(t);
+    setIsCreating(true);
+    setFormKey((k) => k + 1);
+    unstable_batchedUpdates(() => {
+      setFormEmpresaId(t.empresa.id);
+      setFormClienteId(t.cliente.id);
+      setFormDivisionId(t.division_id ?? null);
+      setFormContratoId(t.contrato_id ?? null);
+      setFormCorpoId(t.sucursal.id);
+      setFormPuestoJerarquiaId(t.puesto_id ?? null);
+    });
+    tituloRef.current = t.titulo;
+    descripcionRef.current = t.descripcion;
+    observacionesRef.current = t.observaciones;
+    nombreResponsableRef.current = t.responsable.nombre;
+    cedulaResponsableRef.current = t.responsable.cedula;
+    setFechaCapacitacion(t.fecha.split('T')[0] || t.fecha);
+    setSelectedTipo((t.tipo as 'Presencial' | 'Virtual') || 'Presencial');
+    setSelectedResultado(t.resultado && t.resultado !== 'No disponible' ? t.resultado : '');
+    setSelectedEmpleados(
+      t.empleados.map((e) => ({
+        id: e.id,
+        nombre: e.nombre,
+        cedula: e.cedula,
+        fecha_contratacion: '',
+      }))
+    );
+    setSelectedPuestos(t.puestos.map((p) => ({ id: p.id, nombre: p.nombre })));
+    setPendingTrainingFiles([]);
+    const firmaFromList = decodedFirmas.get(t.id);
+    const firmaParsed = firmaFromList ?? parseFirmaBase64ToFirmaData(t.firma_responsable);
+    setFirmaResponsable(firmaParsed);
+    if (firmaParsed && !firmaParsed.empleadoDetalle && firmaParsed.empleadoId) {
+      void (async () => {
+        try {
+          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          if (!apiUrl) return;
+          const empleadoResponse = await authedFetch({
+            url: `${apiUrl}/api/empleados/${firmaParsed.empleadoId}`,
+            init: {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json' },
+            },
+            refreshAccessToken,
+            logout,
+          });
+          if (!empleadoResponse?.ok) return;
+          const empleadoData = await empleadoResponse.json();
+          setFirmaResponsable((prev) =>
+            prev && prev.sessionId === firmaParsed.sessionId
+              ? {
+                  ...prev,
+                  empleadoDetalle: {
+                    nombre: empleadoData.nombre,
+                    primer_apellido: empleadoData.primer_apellido,
+                    segundo_apellido: empleadoData.segundo_apellido,
+                    cedula_empleado: empleadoData.cedula || '',
+                  },
+                }
+              : prev
+          );
+        } catch (e) {
+          console.error('Firma empleado detalle (edición):', e);
+        }
+      })();
+    }
+  };
+
   const submitCreateTraining = async () => {
-    if (!validateForm() || !firmaResponsable || !marcaId) return;
+    if (!validateForm() || !marcaId) return;
+    if (!editingTraining && !firmaResponsable) return;
     setIsCreateSubmitting(true);
     try {
-      const signatureHash = btoa(
-        firmaResponsable.sessionId +
-          ':' +
-          firmaResponsable.empleadoId +
-          ':' +
-          firmaResponsable.latitud +
-          ':' +
-          firmaResponsable.longitud +
-          ':' +
-          firmaResponsable.timestamp
-      );
+      const signatureHash =
+        firmaResponsable != null
+          ? btoa(
+            firmaResponsable.sessionId +
+              ':' +
+              firmaResponsable.empleadoId +
+              ':' +
+              firmaResponsable.latitud +
+              ':' +
+              firmaResponsable.longitud +
+              ':' +
+              firmaResponsable.timestamp
+          )
+          : editingTraining?.firma_responsable || '';
 
-      let imageBase64 = null;
-      if (trainingImageBase64) {
-        const base64Regex = /^data:(.+);base64,(.+)$/;
-        if (base64Regex.test(trainingImageBase64)) {
-          imageBase64 = trainingImageBase64;
-        } else if (trainingImageBase64.startsWith('data:image')) {
-          imageBase64 = trainingImageBase64;
-        } else {
-          imageBase64 = `data:image/jpeg;base64,${trainingImageBase64}`;
-        }
-      }
+      const { files: fileUris, files_meta: filesMetaForApi } =
+        await buildTrainingFilesAndMetaFromFileMeta(pendingTrainingFiles);
 
-      const requestData = {
+      const baseRequestFields = {
         marca_id: marcaId,
         empresa_id: formEmpresaId,
         cliente_id: formClienteId,
         corpo_id: formCorpoId,
+        division_id: formDivisionId,
+        contrato_id: formContratoId,
+        puesto_id: formPuestoJerarquiaId,
         titulo: tituloRef.current,
         descripcion: descripcionRef.current,
         tipo: selectedTipo,
@@ -1436,11 +1718,128 @@ export default function TrainingsScreen() {
         nombre_responsable: nombreResponsableRef.current,
         cedula_responsable: cedulaResponsableRef.current,
         firma_responsable: signatureHash,
-        file: imageBase64,
         fecha: fechaCapacitacion,
         empleados: selectedEmpleados.map((e) => e.id),
         puestos: selectedPuestos.map((p) => p.id),
       };
+
+      const requestData = {
+        ...baseRequestFields,
+        files: fileUris,
+        ...(fileUris.length > 0 && filesMetaForApi.length > 0
+          ? { files_meta: filesMetaForApi }
+          : {}),
+      };
+
+      if (editingTraining && editingTraining.id > 0) {
+        const hasConnection = await checkConnection();
+        const updateBody = {
+          ...requestData,
+          files: fileUris,
+        };
+        if (hasConnection) {
+          const result = await updateTrainingAPI({
+            trainingId: editingTraining.id,
+            requestData: updateBody,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            Alert.alert('Éxito', 'Capacitación actualizada');
+            setEditingTraining(null);
+            setIsCreating(false);
+            resetForm();
+            void fetchTrainingsForCorpoRef.current?.();
+          } else {
+            Alert.alert('Error', (result as { message?: string }).message || 'No se pudo actualizar');
+          }
+        } else {
+          const uq = Math.random().toString(36).substring(2, 12);
+          const actionsStr = await AsyncStorage.getItem('trainings_actions');
+          let act: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+          if (!Array.isArray(act)) act = [];
+          act = act.filter(
+            (a: any) => !(a.type === 'update' && Number(a.trainingId) === Number(editingTraining.id))
+          );
+          const updatePayload =
+            pendingTrainingFiles.length > 0
+              ? {
+                  ...baseRequestFields,
+                  filesMeta: trainingFilesMetaForQueue(pendingTrainingFiles),
+                }
+              : { ...baseRequestFields };
+          act.push({
+            type: 'update',
+            updateQueueId: uq,
+            trainingId: editingTraining.id,
+            requestData: updatePayload,
+            marcaId,
+          });
+          await AsyncStorage.setItem('trainings_actions', JSON.stringify(act));
+          const cacheStr = await AsyncStorage.getItem('trainings_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr) as Training[];
+            const next = cache.map((row) =>
+              row.id === editingTraining.id
+                ? {
+                    ...row,
+                    empresa: { id: formEmpresaId!, nombre: row.empresa.nombre },
+                    cliente: { id: formClienteId!, nombre: row.cliente.nombre },
+                    sucursal: { id: formCorpoId!, nombre: row.sucursal.nombre },
+                    responsable: {
+                      nombre: nombreResponsableRef.current,
+                      cedula: cedulaResponsableRef.current,
+                    },
+                    titulo: tituloRef.current,
+                    descripcion: descripcionRef.current,
+                    observaciones: observacionesRef.current.trim() !== '' ? observacionesRef.current.trim() : '-',
+                    tipo: selectedTipo,
+                    puesto_id: formPuestoJerarquiaId!,
+                    division_id: formDivisionId!,
+                    contrato_id: formContratoId!,
+                    fecha: fechaCapacitacion,
+                    resultado: selectedResultado || null,
+                    empleados: selectedEmpleados.map((e) => ({
+                      id: e.id,
+                      nombre: e.nombre,
+                      cedula: e.cedula,
+                    })),
+                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+                  }
+                : row
+            );
+            await AsyncStorage.setItem('trainings_cache', JSON.stringify(next));
+          }
+          setTrainings((prev) =>
+            prev.map((row) =>
+              row.id === editingTraining.id
+                ? {
+                    ...row,
+                    titulo: tituloRef.current,
+                    descripcion: descripcionRef.current,
+                    observaciones: requestData.observaciones,
+                    tipo: selectedTipo,
+                    resultado: selectedResultado || null,
+                    division_id: formDivisionId!,
+                    contrato_id: formContratoId!,
+                    puesto_id: formPuestoJerarquiaId!,
+                    empleados: selectedEmpleados.map((e) => ({
+                      id: e.id,
+                      nombre: e.nombre,
+                      cedula: e.cedula,
+                    })),
+                    puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
+                  }
+                : row
+            )
+          );
+          Alert.alert('Modo offline', 'Cambios guardados; se enviarán al reconectar.');
+          setEditingTraining(null);
+          setIsCreating(false);
+          resetForm();
+        }
+        return;
+      }
 
       const hasConnection = await checkConnection();
 
@@ -1468,8 +1867,12 @@ export default function TrainingsScreen() {
         actions = actions.filter(
           (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
         );
+        const requestDataOffline = {
+          ...baseRequestFields,
+          filesMeta: trainingFilesMetaForQueue(pendingTrainingFiles),
+        };
         actions.push({
-          requestData,
+          requestData: requestDataOffline,
           marcaId,
           id: localId,
           type: 'create',
@@ -1488,6 +1891,9 @@ export default function TrainingsScreen() {
           empresa: { id: formEmpresaId!, nombre: empNode?.nombre || '-' },
           cliente: { id: formClienteId!, nombre: cliNode?.nombre || '-' },
           sucursal: { id: formCorpoId!, nombre: sucNode?.nombre || '-' },
+          division_id: formDivisionId!,
+          contrato_id: formContratoId!,
+          puesto_id: formPuestoJerarquiaId!,
           titulo: tituloRef.current,
           descripcion: descripcionRef.current,
           tipo: selectedTipo,
@@ -1502,7 +1908,9 @@ export default function TrainingsScreen() {
           nombre_firma: firmaResponsable?.empleadoDetalle
             ? `${firmaResponsable.empleadoDetalle.nombre} ${firmaResponsable.empleadoDetalle.primer_apellido} ${firmaResponsable.empleadoDetalle.segundo_apellido}`
             : '-',
-          base64_file: imageBase64 || '',
+          base64_file: '',
+          archivos: [],
+          offline_pending_files: trainingFilesMetaForQueue(pendingTrainingFiles),
           empleados: selectedEmpleados.map((e) => ({ id: e.id, nombre: e.nombre, cedula: e.cedula })),
           puestos: selectedPuestos.map((p) => ({ id: p.id, nombre: p.nombre })),
           corpo_id: formCorpoId!,
@@ -1534,9 +1942,172 @@ export default function TrainingsScreen() {
       Alert.alert('Error', 'No se encontró la marca actual');
       return;
     }
-    Alert.alert('Confirmar', '¿Estás seguro de que deseas crear esta capacitación?', [
+    const msg = editingTraining
+      ? '¿Guardar los cambios de esta capacitación?'
+      : '¿Estás seguro de que deseas crear esta capacitación?';
+    Alert.alert('Confirmar', msg, [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Aceptar', onPress: () => void submitCreateTraining() },
+    ]);
+  };
+
+  const confirmDeleteArchivo = (training: Training, fileName: string) => {
+    Alert.alert('Eliminar adjunto', '¿Eliminar este archivo del registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            if (training.id === 0 && training.id_local) {
+              const localIdx = (training.offline_pending_files || []).findIndex(
+                (p) => p.id === fileName
+              );
+              const targetMeta = localIdx >= 0 ? training.offline_pending_files?.[localIdx] : undefined;
+              if (targetMeta?.localFileName) {
+                try {
+                  await deleteFile(targetMeta.localFileName);
+                } catch {
+                  /* idempotente */
+                }
+              }
+              const actionsStr = await AsyncStorage.getItem('trainings_actions');
+              const list: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+              const next = list.map((a) => {
+                if (a.type !== 'create' || String(a.id) !== String(training.id_local)) return a;
+                const meta = Array.isArray(a.requestData?.filesMeta) ? [...a.requestData.filesMeta] : [];
+                if (localIdx >= 0 && localIdx < meta.length) {
+                  meta.splice(localIdx, 1);
+                }
+                return {
+                  ...a,
+                  requestData: { ...a.requestData, filesMeta: meta },
+                };
+              });
+              await AsyncStorage.setItem('trainings_actions', JSON.stringify(next));
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr) as Training[];
+                const upd = cache.map((t) => {
+                  if (t.id_local !== training.id_local) return t;
+                  const of = Array.isArray(t.offline_pending_files) ? t.offline_pending_files : [];
+                  const nextOf = of.filter((x) => x.id !== fileName);
+                  return {
+                    ...t,
+                    offline_pending_files: nextOf,
+                    base64_file: '',
+                  };
+                });
+                await AsyncStorage.setItem('trainings_cache', JSON.stringify(upd));
+              }
+              setTrainings((prev) =>
+                prev.map((t) =>
+                  t.id_local === training.id_local
+                    ? {
+                        ...t,
+                        offline_pending_files: (t.offline_pending_files || []).filter(
+                          (x) => x.id !== fileName
+                        ),
+                        base64_file: '',
+                      }
+                    : t
+                )
+              );
+              return;
+            }
+
+            const hasConnection = await checkConnection();
+            if (hasConnection) {
+              const result = await deleteTrainingArchivo({
+                trainingId: training.id,
+                fileName,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                setTrainings((prev) =>
+                  prev.map((t) =>
+                    t.id === training.id
+                      ? {
+                          ...t,
+                          archivos: (t.archivos || []).filter(
+                            (a) => getTrainingArchivoStorageName(a) !== fileName
+                          ),
+                        }
+                      : t
+                  )
+                );
+                const cacheStr = await AsyncStorage.getItem('trainings_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr) as Training[];
+                  const u = cache.map((t) =>
+                    t.id === training.id
+                      ? {
+                          ...t,
+                          archivos: (t.archivos || []).filter(
+                            (a) => getTrainingArchivoStorageName(a) !== fileName
+                          ),
+                        }
+                      : t
+                  );
+                  await AsyncStorage.setItem('trainings_cache', JSON.stringify(u));
+                }
+                void fetchTrainingsForCorpoRef.current?.();
+              } else {
+                Alert.alert('Error', (result as { message?: string }).message || 'No se pudo eliminar');
+              }
+            } else {
+              if (marcaId == null) {
+                Alert.alert('Error', 'No se encontró la marca');
+                return;
+              }
+              const actionId = Math.random().toString(36).substring(2, 12);
+              const actionsStr = await AsyncStorage.getItem('trainings_actions');
+              let act: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+              if (!Array.isArray(act)) act = [];
+              act.push({
+                type: 'delete_file',
+                id: actionId,
+                trainingId: training.id,
+                fileName,
+                marcaId: marcaId,
+              });
+              await AsyncStorage.setItem('trainings_actions', JSON.stringify(act));
+              setTrainings((prev) =>
+                prev.map((t) =>
+                  t.id === training.id
+                    ? {
+                        ...t,
+                        archivos: (t.archivos || []).filter(
+                          (a) => getTrainingArchivoStorageName(a) !== fileName
+                        ),
+                      }
+                    : t
+                )
+              );
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr) as Training[];
+                const u = cache.map((t) =>
+                  t.id === training.id
+                    ? {
+                        ...t,
+                        archivos: (t.archivos || []).filter(
+                          (a) => getTrainingArchivoStorageName(a) !== fileName
+                        ),
+                      }
+                    : t
+                );
+                await AsyncStorage.setItem('trainings_cache', JSON.stringify(u));
+              }
+              Alert.alert('Cola', 'Eliminación de adjunto guardada; se enviará al reconectar.');
+            }
+          } catch (e) {
+            console.error('delete archivo capacitación:', e);
+            Alert.alert('Error', 'No se pudo eliminar el adjunto');
+          }
+        },
+      },
     ]);
   };
 
@@ -1978,8 +2549,14 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={formEmpresaId ?? undefined}
                   onValueChange={(v) => {
-                    if (isRestoringFormHierarchyRef.current) return;
-                    setFormEmpresaId(normPicker(v));
+                    const n = normPicker(v);
+                    if (n === formEmpresaId) return;
+                    setFormEmpresaId(n);
+                    setFormClienteId(null);
+                    setFormDivisionId(null);
+                    setFormContratoId(null);
+                    setFormCorpoId(null);
+                    setFormPuestoJerarquiaId(null);
                   }}
                   style={styles.picker}
                 >
@@ -1996,8 +2573,13 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={formClienteId ?? undefined}
                   onValueChange={(v) => {
-                    if (isRestoringFormHierarchyRef.current) return;
-                    setFormClienteId(normPicker(v));
+                    const n = normPicker(v);
+                    if (n === formClienteId) return;
+                    setFormClienteId(n);
+                    setFormDivisionId(null);
+                    setFormContratoId(null);
+                    setFormCorpoId(null);
+                    setFormPuestoJerarquiaId(null);
                   }}
                   enabled={!!formEmpresaId}
                   style={styles.picker}
@@ -2015,8 +2597,12 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={formDivisionId ?? undefined}
                   onValueChange={(v) => {
-                    if (isRestoringFormHierarchyRef.current) return;
-                    setFormDivisionId(normPicker(v));
+                    const n = normPicker(v);
+                    if (n === formDivisionId) return;
+                    setFormDivisionId(n);
+                    setFormContratoId(null);
+                    setFormCorpoId(null);
+                    setFormPuestoJerarquiaId(null);
                   }}
                   enabled={!!formClienteId}
                   style={styles.picker}
@@ -2034,8 +2620,11 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={formContratoId ?? undefined}
                   onValueChange={(v) => {
-                    if (isRestoringFormHierarchyRef.current) return;
-                    setFormContratoId(normPicker(v));
+                    const n = normPicker(v);
+                    if (n === formContratoId) return;
+                    setFormContratoId(n);
+                    setFormCorpoId(null);
+                    setFormPuestoJerarquiaId(null);
                   }}
                   enabled={!!formDivisionId}
                   style={styles.picker}
@@ -2053,8 +2642,10 @@ export default function TrainingsScreen() {
                 <Picker
                   selectedValue={formCorpoId ?? undefined}
                   onValueChange={(v) => {
-                    if (isRestoringFormHierarchyRef.current) return;
-                    setFormCorpoId(normPicker(v));
+                    const n = normPicker(v);
+                    if (n === formCorpoId) return;
+                    setFormCorpoId(n);
+                    setFormPuestoJerarquiaId(null);
                   }}
                   enabled={!!formContratoId}
                   style={styles.picker}
@@ -2062,6 +2653,26 @@ export default function TrainingsScreen() {
                   <Picker.Item label="Seleccionar sucursal..." value={undefined} color="#000000" />
                   {formSucursalesList.map((s) => (
                     <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Puesto (jerarquía) *:</ThemedText>
+              <ThemedView style={styles.pickerContainer}>
+                <Picker
+                  selectedValue={formPuestoJerarquiaId ?? undefined}
+                  onValueChange={(v) => {
+                    const n = normPicker(v);
+                    if (n === formPuestoJerarquiaId) return;
+                    setFormPuestoJerarquiaId(n);
+                  }}
+                  enabled={!!formCorpoId && puestosForFormPicker.length > 0}
+                  style={styles.picker}
+                >
+                  <Picker.Item label="Seleccionar puesto..." value={undefined} color="#000000" />
+                  {puestosForFormPicker.map((p) => (
+                    <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                   ))}
                 </Picker>
               </ThemedView>
@@ -2099,11 +2710,11 @@ export default function TrainingsScreen() {
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Tipo de capacitación *:</ThemedText>
               <ThemedView style={styles.radioGroup}>
-                {['Prescencial', 'Virtual'].map((option) => (
+                {['Presencial', 'Virtual'].map((option) => (
                   <TouchableOpacity
                     key={option}
                     style={styles.radioOption}
-                    onPress={() => setSelectedTipo(option as 'Prescencial' | 'Virtual')}
+                    onPress={() => setSelectedTipo(option as 'Presencial' | 'Virtual')}
                   >
                     <ThemedView style={[
                       styles.radioCircle,
@@ -2215,9 +2826,9 @@ export default function TrainingsScreen() {
               )}
             </ThemedView>
 
-            {/* Puestos en la capacitación */}
+            {/* Puestos de la capacitación (lista vinculada) */}
             <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Puestos en la capacitación:</ThemedText>
+              <ThemedText style={styles.formLabel}>Puestos de la capacitación:</ThemedText>
               <ThemedView style={styles.pickerContainer}>
                 <Picker
                   selectedValue={undefined}
@@ -2294,31 +2905,148 @@ export default function TrainingsScreen() {
               </ThemedView>
             </ThemedView>
 
-            {/* Adjuntar imagen */}
+            {/* Archivos (opcional) — mismo criterio visual que JobManualsScreen: botón + lista por tipo */}
             <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Adjuntar imagen (opcional):</ThemedText>
+              <ThemedText style={styles.formLabel}>Documentos (opcional):</ThemedText>
               <TouchableOpacity
-                style={styles.cameraButton}
-                onPress={openCamera}
+                style={styles.addFileButton}
+                onPress={() => void pickTrainingFileByType('document')}
               >
-                <Ionicons name="camera" size={20} color="#000000" />
-                <ThemedText style={styles.cameraButtonText}>Tomar foto</ThemedText>
+                <Ionicons name="document-text-outline" size={18} color="#007AFF" />
+                <ThemedText style={styles.addFileButtonText}>Añadir documento</ThemedText>
               </TouchableOpacity>
-              {trainingImageBase64 && (
-                <ThemedView style={styles.previewContainer}>
-                  <ThemedText style={styles.previewTitle}>Imagen capturada:</ThemedText>
-                  <Image
-                    source={{ uri: trainingImageBase64 }}
-                    style={styles.imagePreview}
-                    resizeMode="contain"
-                  />
-                  <TouchableOpacity
-                    style={styles.removeImageButton}
-                    onPress={() => setTrainingImageBase64(null)}
-                  >
-                    <Ionicons name="trash" size={20} color="#000000" />
-                    <ThemedText style={styles.removeImageText}>Eliminar imagen</ThemedText>
-                  </TouchableOpacity>
+              {pendingTrainingFiles.filter((f) => trainingPendingFileIsKind(f, 'document')).length > 0 && (
+                <ThemedView style={styles.filesList}>
+                  {pendingTrainingFiles
+                    .filter((f) => trainingPendingFileIsKind(f, 'document'))
+                    .map((pf) => (
+                      <ThemedView key={pf.id} style={styles.fileRow}>
+                        <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {pf.originalName || pf.localFileName}
+                        </ThemedText>
+                        <TouchableOpacity
+                          onPress={() => {
+                            void removePendingTrainingFile(pf);
+                          }}
+                        >
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                </ThemedView>
+              )}
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Imágenes (opcional):</ThemedText>
+              <ThemedView style={styles.addFileButtonRow}>
+                <TouchableOpacity style={styles.addFileButton} onPress={openCamera}>
+                  <Ionicons name="camera" size={18} color="#007AFF" />
+                  <ThemedText style={styles.addFileButtonText}>Tomar foto</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.addFileButton}
+                  onPress={() => void pickTrainingFileByType('image')}
+                >
+                  <Ionicons name="image-outline" size={18} color="#007AFF" />
+                  <ThemedText style={styles.addFileButtonText}>Añadir imagen</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+              {pendingTrainingFiles.filter((f) => trainingPendingFileIsKind(f, 'image')).length > 0 && (
+                <ThemedView style={styles.filesList}>
+                  {pendingTrainingFiles
+                    .filter((f) => trainingPendingFileIsKind(f, 'image'))
+                    .map((pf) => {
+                      const localUri = getLocalFileDisplayUri(pf.localFileName);
+                      return (
+                        <ThemedView key={pf.id} style={styles.fileRow}>
+                          {localUri ? (
+                            <Image
+                              source={{ uri: localUri }}
+                              style={styles.filePreviewImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <Ionicons name="image-outline" size={16} color="#007AFF" />
+                          )}
+                          <ThemedText numberOfLines={1} style={styles.fileName}>
+                            {pf.originalName || pf.localFileName}
+                          </ThemedText>
+                          <TouchableOpacity
+                            onPress={() => {
+                              void removePendingTrainingFile(pf);
+                            }}
+                          >
+                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      );
+                    })}
+                </ThemedView>
+              )}
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Audio (opcional):</ThemedText>
+              <TouchableOpacity
+                style={styles.addFileButton}
+                onPress={() => void pickTrainingFileByType('audio')}
+              >
+                <Ionicons name="mic-outline" size={18} color="#007AFF" />
+                <ThemedText style={styles.addFileButtonText}>Añadir audio</ThemedText>
+              </TouchableOpacity>
+              {pendingTrainingFiles.filter((f) => trainingPendingFileIsKind(f, 'audio')).length > 0 && (
+                <ThemedView style={styles.filesList}>
+                  {pendingTrainingFiles
+                    .filter((f) => trainingPendingFileIsKind(f, 'audio'))
+                    .map((pf) => (
+                      <ThemedView key={pf.id} style={styles.fileRow}>
+                        <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {pf.originalName || pf.localFileName}
+                        </ThemedText>
+                        <TouchableOpacity
+                          onPress={() => {
+                            void removePendingTrainingFile(pf);
+                          }}
+                        >
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                </ThemedView>
+              )}
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Video (opcional):</ThemedText>
+              <TouchableOpacity
+                style={styles.addFileButton}
+                onPress={() => void pickTrainingFileByType('video')}
+              >
+                <Ionicons name="videocam-outline" size={18} color="#007AFF" />
+                <ThemedText style={styles.addFileButtonText}>Añadir video</ThemedText>
+              </TouchableOpacity>
+              {pendingTrainingFiles.filter((f) => trainingPendingFileIsKind(f, 'video')).length > 0 && (
+                <ThemedView style={styles.filesList}>
+                  {pendingTrainingFiles
+                    .filter((f) => trainingPendingFileIsKind(f, 'video'))
+                    .map((pf) => (
+                      <ThemedView key={pf.id} style={styles.fileRow}>
+                        <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                          {pf.originalName || pf.localFileName}
+                        </ThemedText>
+                        <TouchableOpacity
+                          onPress={() => {
+                            void removePendingTrainingFile(pf);
+                          }}
+                        >
+                          <Ionicons name="trash" size={16} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
                 </ThemedView>
               )}
             </ThemedView>
@@ -2366,7 +3094,9 @@ export default function TrainingsScreen() {
 
             {/* Firma Responsable */}
             <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Firma del responsable *:</ThemedText>
+              <ThemedText style={styles.formLabel}>
+                {editingTraining ? 'Firma del responsable (conservada o nueva):' : 'Firma del responsable *:'}
+              </ThemedText>
               {!firmaResponsable ? (
                 <ThemedView style={styles.signatureButtons}>
                   <TouchableOpacity
@@ -2579,60 +3309,142 @@ export default function TrainingsScreen() {
                           ))}
                         </ThemedView>
                         <ThemedView style={styles.detailSection}>
-                          <ThemedText style={styles.detailSectionTitle}>Imagen adjunta:</ThemedText>
-                          {training.id_local === '' ? (
-                            <TrainingImageComponent trainingId={training.id} />
-                          ) : (
-                            training.base64_file && training.base64_file.trim() !== '' ? (
-                              (() => {
-                                // Asegurar formato correcto: data:image/jpeg;base64,<base64_string>
-                                const base64Regex = /^data:(.+);base64,(.+)$/;
-                                let imageUri = training.base64_file;
-                                if (!base64Regex.test(imageUri)) {
-                                  // Si no tiene el formato correcto, agregarlo
-                                  if (imageUri.startsWith('data:image')) {
-                                    // Ya tiene data:image pero puede que no tenga el formato exacto
-                                    imageUri = imageUri;
-                                  } else {
-                                    // Agregar el prefijo completo
-                                    imageUri = `data:image/jpeg;base64,${imageUri}`;
-                                  }
-                                }
+                          <ThemedText style={styles.detailSectionTitle}>Archivos:</ThemedText>
+                          {training.id !== 0 && (training.archivos && training.archivos.length > 0) ? (
+                            <ThemedView style={styles.archivosGrid}>
+                              {training.archivos.map((a) => {
+                                const label = a.original_name || a.originalName || a.name;
+                                const kind = getTrainingArchivoMediaKind(a);
+                                const displayUri = buildTrainingArchivoUrl(training.id, a);
+                                const tileStyle =
+                                  kind === 'video' || kind === 'audio'
+                                    ? [styles.archivoTile, styles.archivoTileWide]
+                                    : styles.archivoTile;
                                 return (
-                                  <Image
-                                    source={{ uri: imageUri }}
-                                    style={styles.trainingImage}
-                                    onError={(error) => {
-                                      console.error('Error loading image:', error);
-                                    }}
-                                  />
+                                <ThemedView
+                                  key={`${a.id ?? 0}-${getTrainingArchivoStorageName(a) || 'f'}`}
+                                  style={tileStyle}
+                                >
+                                  {kind === 'image' && displayUri ? (
+                                    <Image
+                                      source={{ uri: displayUri }}
+                                      style={styles.trainingImage}
+                                      resizeMode="contain"
+                                    />
+                                  ) : kind === 'audio' && displayUri ? (
+                                    <CapacitacionArchivoAudioPlayer sourceUrl={displayUri} label={label} />
+                                  ) : kind === 'video' && displayUri ? (
+                                    <CapacitacionArchivoVideoPlayer sourceUrl={displayUri} />
+                                  ) : (
+                                    <ThemedView style={styles.docPlaceholder}>
+                                      <Ionicons name="document-text-outline" size={32} color="#007AFF" />
+                                      <ThemedText numberOfLines={2} style={styles.docNameText}>
+                                        {label}
+                                      </ThemedText>
+                                      <TouchableOpacity
+                                        onPress={() => {
+                                          if (displayUri) void Linking.openURL(displayUri);
+                                          else Alert.alert('Aviso', 'No hay URL para descargar este archivo.');
+                                        }}
+                                      >
+                                        <ThemedText style={styles.openLinkText}>Descargar</ThemedText>
+                                      </TouchableOpacity>
+                                    </ThemedView>
+                                  )}
+                                  <TouchableOpacity
+                                    style={styles.trashOnTile}
+                                    onPress={() =>
+                                      confirmDeleteArchivo(
+                                        training,
+                                        getTrainingArchivoStorageName(a) || a.name
+                                      )
+                                    }
+                                  >
+                                    <Ionicons name="trash" size={18} color="#B00020" />
+                                  </TouchableOpacity>
+                                </ThemedView>
                                 );
-                              })()
-                            ) : (
-                              <ThemedText style={styles.noImageText}>No hay imagen adjunta</ThemedText>
-                            )
+                              })}
+                            </ThemedView>
+                          ) : null}
+                          {training.id === 0 &&
+                          training.offline_pending_files &&
+                          training.offline_pending_files.length > 0 ? (
+                            <ThemedView style={styles.archivosGrid}>
+                              {training.offline_pending_files.map((pf) => {
+                                const ext = (pf.extension || '').toLowerCase();
+                                const isImg = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext);
+                                const u = getLocalFileDisplayUri(pf.localFileName);
+                                return (
+                                <ThemedView key={pf.id} style={styles.archivoTile}>
+                                  {isImg && u ? (
+                                    <Image source={{ uri: u }} style={styles.trainingImage} />
+                                  ) : (
+                                    <ThemedText style={styles.noImageText}>
+                                      {pf.originalName || 'Documento (pendiente)'}
+                                    </ThemedText>
+                                  )}
+                                  <TouchableOpacity
+                                    style={styles.trashOnTile}
+                                    onPress={() => confirmDeleteArchivo(training, pf.id)}
+                                  >
+                                    <Ionicons name="trash" size={18} color="#B00020" />
+                                  </TouchableOpacity>
+                                </ThemedView>
+                                );
+                              })}
+                            </ThemedView>
+                          ) : null}
+                          {(!training.archivos || training.archivos.length === 0) &&
+                            (!training.offline_pending_files || training.offline_pending_files.length === 0) &&
+                            training.id !== 0 && (
+                            <TrainingImageComponent trainingId={training.id} />
                           )}
+                          {training.id === 0 &&
+                            (!training.offline_pending_files || training.offline_pending_files.length === 0) &&
+                            training.base64_file &&
+                            training.base64_file.trim() !== '' && (
+                              <Image
+                                source={{
+                                  uri: training.base64_file.startsWith('data:')
+                                    ? training.base64_file
+                                    : `data:image/jpeg;base64,${training.base64_file}`,
+                                }}
+                                style={styles.trainingImage}
+                              />
+                            )}
                         </ThemedView>
                       </ThemedView>
                     )}
 
-                    <TouchableOpacity
-                      style={[
-                        styles.trainingDeleteButton,
-                        deletingTrainingKey === trainingKey && styles.trainingDeleteButtonDisabled,
-                      ]}
-                      onPress={() => confirmDeleteTraining(training, trainingKey)}
-                      disabled={deletingTrainingKey !== null}
-                    >
-                      {deletingTrainingKey === trainingKey ? (
-                        <ActivityIndicator size="small" color="#FFFFFF" />
-                      ) : (
-                        <>
-                          <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                          <ThemedText style={styles.trainingDeleteButtonText}>Eliminar</ThemedText>
-                        </>
+                    <ThemedView style={styles.cardActionsRow}>
+                      {training.id > 0 && (
+                        <TouchableOpacity
+                          style={styles.trainingEditButton}
+                          onPress={() => openEditTraining(training)}
+                        >
+                          <Ionicons name="pencil" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.trainingEditButtonText}>Editar</ThemedText>
+                        </TouchableOpacity>
                       )}
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.trainingDeleteButton,
+                          deletingTrainingKey === trainingKey && styles.trainingDeleteButtonDisabled,
+                        ]}
+                        onPress={() => confirmDeleteTraining(training, trainingKey)}
+                        disabled={deletingTrainingKey !== null}
+                      >
+                        {deletingTrainingKey === trainingKey ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.trainingDeleteButtonText}>Eliminar</ThemedText>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                    </ThemedView>
                   </ThemedView>
                 );
               })
@@ -2699,8 +3511,11 @@ export default function TrainingsScreen() {
   );
 }
 
-// Component to load training image from server
-const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }) => {
+// Carga un adjunto desde get-image: con `fileName` usa /get-image/[file] (igual que Job Manuals); sin nombre, ruta legada (campo `file` único).
+const TrainingImageComponent: React.FC<{ trainingId: number; fileName?: string }> = ({
+  trainingId,
+  fileName,
+}) => {
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const { refreshAccessToken, logout, accessToken } = useAuth();
@@ -2717,8 +3532,12 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
       try {
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return;
+        const getImagePath =
+          fileName && String(fileName).trim() !== ''
+            ? `${apiUrl}/api/training/${trainingId}/get-image/${encodeURIComponent(String(fileName).trim())}`
+            : `${apiUrl}/api/training/${trainingId}/get-image`;
         const response = await authedFetch({
-          url: appendTokenToUrl(`${apiUrl}/api/training/${trainingId}/get-image`),
+          url: appendTokenToUrl(getImagePath),
           init: {
             method: 'GET',
           },
@@ -2728,6 +3547,11 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
         if (!response) return;
 
         if (response.ok) {
+          const ct = response.headers.get('content-type') || '';
+          if (!ct.startsWith('image/')) {
+            setImageBase64(null);
+            return;
+          }
           const blob = await response.blob();
           const reader = new FileReader();
           reader.onloadend = () => {
@@ -2743,8 +3567,8 @@ const TrainingImageComponent: React.FC<{ trainingId: number }> = ({ trainingId }
       }
     };
 
-    fetchImage();
-  }, [trainingId]);
+    void fetchImage();
+  }, [trainingId, fileName]);
 
   if (isLoading) {
     return <ActivityIndicator size="small" color="#007AFF" />;
@@ -3179,16 +4003,41 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
+  cardActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+    flexWrap: 'wrap',
+  },
+  trainingEditButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    flex: 1,
+    minWidth: 120,
+  },
+  trainingEditButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
   trainingDeleteButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 12,
     paddingVertical: 10,
     paddingHorizontal: 14,
     backgroundColor: '#FF3B30',
     borderRadius: 8,
+    flex: 1,
+    minWidth: 120,
   },
   trainingDeleteButtonDisabled: {
     opacity: 0.65,
@@ -3278,40 +4127,46 @@ const styles = StyleSheet.create({
     color: '#000000',
     flex: 1,
   },
-  cameraButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+  addFileButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 8,
-  },
-  cameraButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  previewContainer: {
-    marginTop: 12,
-    padding: 12,
-    backgroundColor: '#F9F9F9',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#E0E0E0',
+    backgroundColor: '#F8F9FA',
   },
-  previewTitle: {
+  addFileButtonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  addFileButtonText: {
     fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-    color: '#333',
+    color: '#007AFF',
+    fontWeight: '500',
   },
-  imagePreview: {
-    width: '100%',
-    height: 200,
-    borderRadius: 8,
-    marginBottom: 12,
+  filesList: {
+    marginTop: 8,
+    gap: 6,
+  },
+  fileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  fileName: {
+    flex: 1,
+    fontSize: 13,
+    color: '#333333',
+  },
+  filePreviewImage: {
+    width: 40,
+    height: 40,
+    borderRadius: 4,
+    backgroundColor: '#F0F0F0',
   },
   removeImageButton: {
     backgroundColor: '#FF3B30',
@@ -3389,5 +4244,185 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     paddingLeft: 8,
   },
+  archivosGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  archivoTile: {
+    position: 'relative',
+    width: '100%',
+    maxWidth: 280,
+  },
+  archivoTileWide: {
+    maxWidth: '100%',
+  },
+  audioPlayerContainer: {
+    marginVertical: 8,
+    backgroundColor: '#fff',
+  },
+  audioLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 6,
+    color: '#000000',
+  },
+  audioPlayer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#DDD',
+  },
+  playButton: {
+    padding: 6,
+  },
+  audioTime: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#007AFF',
+    flex: 1,
+  },
+  resetAudioButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+  },
+  trashOnTile: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 14,
+    padding: 6,
+    zIndex: 2,
+  },
+  docPlaceholder: {
+    padding: 12,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  docNameText: {
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: 'center',
+  },
+  openLinkText: {
+    color: '#007AFF',
+    marginTop: 8,
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });
+
+/** Misma idea que JobManualsScreen: reproductor con URL autenticada (token en query). */
+function CapacitacionArchivoAudioPlayer({ sourceUrl, label }: { sourceUrl: string; label?: string }) {
+  const player = useAudioPlayer(sourceUrl);
+  const status = useAudioPlayerStatus(player);
+  const [isPlaying, setIsPlaying] = useState(false);
+
+  const duration = status.duration ?? 0;
+  const position = status.currentTime ?? 0;
+
+  const formatTime = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const togglePlayPause = () => {
+    if (!player) return;
+    try {
+      if (!isPlaying) {
+        player.play();
+        setIsPlaying(true);
+      } else {
+        player.pause();
+        setIsPlaying(false);
+      }
+    } catch (error) {
+      console.error('Error controlling training audio player:', error);
+    }
+  };
+
+  const resetAudio = () => {
+    if (!player) return;
+    try {
+      player.seekTo(0);
+      player.pause();
+      setIsPlaying(false);
+    } catch (error) {
+      console.error('Error resetting training audio player:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!status.playing && isPlaying && position >= duration && duration > 0) {
+      setIsPlaying(false);
+    }
+  }, [status.playing, position, duration, isPlaying]);
+
+  useEffect(() => {
+    if (status.playing !== isPlaying) {
+      setIsPlaying(status.playing);
+    }
+  }, [status.playing]);
+
+  return (
+    <ThemedView style={styles.audioPlayerContainer}>
+      {label ? <ThemedText style={styles.audioLabel}>{label}</ThemedText> : null}
+      <ThemedView style={styles.audioPlayer}>
+        <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
+          <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color="#007AFF" />
+        </TouchableOpacity>
+        <ThemedText style={styles.audioTime}>
+          {formatTime(position)} / {formatTime(duration)}
+        </ThemedText>
+        <TouchableOpacity style={styles.resetAudioButton} onPress={resetAudio}>
+          <Ionicons name="refresh" size={20} color="#FFFFFF" />
+        </TouchableOpacity>
+      </ThemedView>
+    </ThemedView>
+  );
+}
+
+function CapacitacionArchivoVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
+  const player = useVideoPlayer(sourceUrl);
+  const maxW = Dimensions.get('window').width - 64;
+
+  return (
+    <View
+      style={{
+        marginBottom: 8,
+        overflow: 'hidden',
+        borderRadius: 8,
+        backgroundColor: '#000000',
+        width: maxW,
+        maxWidth: '100%',
+        alignSelf: 'center',
+      }}
+    >
+      <VideoView
+        player={player}
+        style={{
+          width: '100%',
+          aspectRatio: 16 / 9,
+          backgroundColor: '#000000',
+        }}
+        contentFit="contain"
+        nativeControls
+        allowsFullscreen={false}
+        allowsPictureInPicture={false}
+      />
+    </View>
+  );
+}
 

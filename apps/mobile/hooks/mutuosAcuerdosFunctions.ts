@@ -52,7 +52,11 @@ export const listMutuosAcuerdosMine = async ({
       logout: doLogout,
     });
     if (!response) return { status: false, message: 'Sesión expirada', data: [] };
-    return (await response.json()) as ListMutuosAcuerdosResponse;
+    const json = (await response.json()) as ListMutuosAcuerdosResponse;
+    if (json.data && Array.isArray(json.data)) {
+      json.data = json.data.filter((r: { isActive?: boolean }) => r != null && r.isActive !== false);
+    }
+    return json;
   } catch (error: any) {
     return { status: false, message: error?.message || 'Error al listar mutuos acuerdos', data: [] };
   }

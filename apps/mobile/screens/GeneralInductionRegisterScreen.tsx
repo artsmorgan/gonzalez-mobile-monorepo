@@ -39,11 +39,23 @@ import authedFetch from '@/hooks/authedFetch';
 import {
   createGeneralInductionRegister,
   deleteGeneralInductionRegister,
+  deleteGeneralInductionRegisterImage,
   listGeneralInductionRegisterByCorpo,
   updateGeneralInductionRegister,
 } from '@/hooks/evaluationFunctions';
 import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  girRecordSucursalId,
+  readAllGeneralInductionRegisterRecords,
+  removeImageFromGeneralInductionCache,
+  replaceGeneralInductionRecordsForCorpo,
+  upsertGeneralInductionRegisterFromServerData,
+  writeAllGeneralInductionRegisterRecords,
+  removeGeneralInductionRegisterFromCacheByKeys,
+} from '@/hooks/generalInductionRegisterCache';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 
 type GeneralInductionRegisterScreenNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -80,6 +92,9 @@ type GeneralInductionRegisterRecord = {
   empresa_id: number;
   cliente_id: number;
   corpo_id: number;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
   division: string;
   fecha: string | null;
   temas_a_tratar: string;
@@ -269,7 +284,35 @@ function generateRandomId() {
   return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function mimeFromExtension(ext: string): string {
+  const e = String(ext || 'jpg').replace(/^\./, '').toLowerCase();
+  if (e === 'png') return 'png';
+  if (e === 'webp') return 'webp';
+  if (e === 'gif') return 'gif';
+  return 'jpeg';
+}
+
+function getPuestosForCorpo(structureArr: MainStructureTree, corpoId: number | null): MainStructurePuestoNode[] {
+  if (corpoId == null) return [];
+  const cid = Number(corpoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of getDivisionesFromCliente(cliente as any)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return (sucursal.puestos || []) as MainStructurePuestoNode[];
+            }
+          }
+        }
+      }
+    }
+  }
+  return [];
+}
+
 async function getConnectionStatus() {
+  //return false;
   try {
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
@@ -405,6 +448,68 @@ function getDivisionIdFromMarcaJson(marca: any): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getDivisionesFromCliente(cliente);
+  for (const div of divisions) {
+    const contratos: MainStructureContratoNode[] = Array.isArray(div?.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+function resolveDivisionIdInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getDivisionesFromCliente(cliente);
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureTree): number | null {
+  const empresaId =
+    current?.empresa?.id != null
+      ? Number(current.empresa.id)
+      : current?.empresa_id != null
+        ? Number(current.empresa_id)
+        : null;
+  const clienteId =
+    current?.cliente?.id != null
+      ? Number(current.cliente.id)
+      : current?.cliente_id != null
+        ? Number(current.cliente_id)
+        : null;
+  const contratoId =
+    current?.contrato?.id != null
+      ? Number(current.contrato.id)
+      : current?.contrato_id != null
+        ? Number(current.contrato_id)
+        : null;
+  let divId = getDivisionIdFromMarcaJson(current);
+  if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+    divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+  }
+  if (divId == null) return null;
+  return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
+}
+
 type HierarchyCorpoIds = {
   empresaId: number;
   clienteId: number;
@@ -438,9 +543,34 @@ function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number
   return null;
 }
 
-/** Sucursal en caché / API (`corpo_id` o `sucursal_id`). */
-function girRecordSucursalId(r: any): number {
-  return Number(r?.corpo_id ?? r?.sucursal_id ?? 0);
+type HierarchyFormIds = HierarchyCorpoIds & { puestoId: number };
+
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyFormIds | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of getDivisionesFromCliente(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: Number(empresa.id),
+                  clienteId: Number(cliente.id),
+                  divisionId: Number(division.id),
+                  contratoId: Number(contrato.id),
+                  corpoId: Number(sucursal.id),
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export default function GeneralInductionRegisterScreen() {
@@ -509,12 +639,15 @@ export default function GeneralInductionRegisterScreen() {
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
   const [divisionOptions, setDivisionOptions] = useState<Array<{ id: number; nombre: string }>>([]);
   const [isDivisionOptionsLoading, setIsDivisionOptionsLoading] = useState(false);
 
@@ -536,7 +669,9 @@ export default function GeneralInductionRegisterScreen() {
   const [expandedCapacitadores, setExpandedCapacitadores] = useState<string[]>([]);
   const [colaboradorCodigoInput, setColaboradorCodigoInput] = useState<Record<string, string>>({});
 
-  const [images, setImages] = useState<Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>>([]);
+  const [images, setImages] = useState<
+    Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string; localFileName?: string }>
+  >([]);
   const [photosDirty, setPhotosDirty] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
@@ -628,6 +763,48 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, [refreshAccessToken, logout, accessToken]);
 
+  const preloadServerImagesForEdit = useCallback(
+    async (record: GeneralInductionRegisterRecord) => {
+      try {
+        const isConnected = await getConnectionStatus();
+        const recId = typeof record.id === 'number' ? record.id : parseInt(String(record.id || ''), 10);
+        const imgs = Array.isArray((record as any).images) ? (record as any).images : [];
+        if (imgs.length === 0) return;
+
+        if (!isConnected || !recId || Number.isNaN(recId) || String(record.id_local || '').startsWith('local-')) {
+          return;
+        }
+
+        const next: Array<{
+          id?: number;
+          name?: string;
+          base64?: string;
+          extension?: string;
+          url?: string;
+          localFileName?: string;
+        }> = [];
+        for (const img of imgs) {
+          const im = img as any;
+          if (im.base64 || im.localFileName) {
+            next.push(im);
+            continue;
+          }
+          if (!im.name) {
+            next.push(im);
+            continue;
+          }
+          const dataUrl = await loadImageFromServer(recId, String(im.name));
+          if (dataUrl) next.push({ ...im, base64: dataUrl, extension: im.extension || 'jpg' });
+          else next.push(im);
+        }
+        setImages(next);
+      } catch (e) {
+        console.error('Error preloading GIR images for edit:', e);
+      }
+    },
+    [loadImageFromServer]
+  );
+
   const preloadServerImagesForList = useCallback(async (recordsInput: GeneralInductionRegisterRecord[]) => {
     try {
       const isConnected = await getConnectionStatus();
@@ -648,6 +825,10 @@ export default function GeneralInductionRegisterScreen() {
             nextImgs.push(img);
             continue;
           }
+          if (img?.localFileName) {
+            nextImgs.push(img);
+            continue;
+          }
           if (!img?.name) {
             nextImgs.push(img);
             continue;
@@ -665,54 +846,21 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, [loadImageFromServer]);
 
-  const fetchMainStructure = useCallback(async () => {
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-        } catch {
-          // ignore
-          setStructure([]);
-        }
-      } else {
-        setStructure([]);
-      }
-/*
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!response) return;
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json().catch(() => ({}));
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-      */
+      const tree = await loadMainStructureTreeMerged();
+      const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+      setStructure(arr);
+      return arr;
     } catch (e) {
       console.error('Error fetching main structure for general induction register:', e);
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   type MarcaSnapshot = {
     current: Record<string, any>;
@@ -730,8 +878,12 @@ export default function GeneralInductionRegisterScreen() {
   };
 
   const syncMarcaFromStorage = useCallback(
-    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+    async (opts?: {
+      applyFiltersFromMarca?: boolean;
+      structureTree?: MainStructureTree | null;
+    }): Promise<MarcaSnapshot | null> => {
       const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const structureTree = opts?.structureTree;
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         setHasCurrentMarca(false);
@@ -739,6 +891,8 @@ export default function GeneralInductionRegisterScreen() {
         setMarcaClienteId(null);
         setMarcaCorpoId(null);
         setMarcaDivisionId(null);
+        setMarcaContratoId(null);
+        setMarcaPuestoId(null);
         setRoleName(null);
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(null);
@@ -762,12 +916,17 @@ export default function GeneralInductionRegisterScreen() {
         const empresaId = numOrNull(empresaIdRaw);
         const clienteId = numOrNull(clienteIdRaw);
         const corpoId = numOrNull(corpoIdRaw);
-        const divId = numOrNull(current?.roleDivision?.division?.id ?? current?.division_id);
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const divResolved =
+          structureTree && structureTree.length > 0
+            ? resolveMarcaDivisionForTree(current, structureTree)
+            : null;
+        const effectiveDivisionId = divResolved ?? divFromMarca ?? numOrNull(current?.roleDivision?.division?.id ?? current?.division_id);
 
         setMarcaEmpresaId(empresaId);
         setMarcaClienteId(clienteId);
         setMarcaCorpoId(corpoId);
-        setMarcaDivisionId(divId);
+        setMarcaDivisionId(effectiveDivisionId);
         const role =
           current?.roleDivision?.role?.nombre ??
           current?.role_division?.role?.nombre ??
@@ -775,15 +934,17 @@ export default function GeneralInductionRegisterScreen() {
         const rn = typeof role === 'string' ? (role as RoleName) : null;
         setRoleName(rn);
 
-        const divFromMarca = getDivisionIdFromMarcaJson(current);
         const fe = numOrNull(current?.empresa?.id);
         const fc = numOrNull(current?.cliente?.id);
-        const fco = numOrNull(current?.contrato?.id);
+        const fco = numOrNull(current?.contrato?.id ?? current?.contrato_id);
         const fs = numOrNull(current?.corpo?.id);
+        const fp = numOrNull(current?.puesto?.id ?? current?.puesto_id);
+        setMarcaContratoId(fco);
+        setMarcaPuestoId(fp);
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(fe);
           setFilterClienteId(fc);
-          setFilterDivisionId(divFromMarca);
+          setFilterDivisionId(effectiveDivisionId);
           setFilterContratoId(fco);
           setFilterCorpoId(fs);
         }
@@ -792,13 +953,13 @@ export default function GeneralInductionRegisterScreen() {
           current,
           roleName: rn,
           isOperativo: rn === 'OPERATIVO',
-          marcaDivisionId: divId,
+          marcaDivisionId: effectiveDivisionId,
           marcaCorpoId: corpoId,
           marcaClienteId: clienteId,
           marcaEmpresaId: empresaId,
           filterEmpresaId: fe,
           filterClienteId: fc,
-          filterDivisionId: divFromMarca,
+          filterDivisionId: effectiveDivisionId,
           filterContratoId: fco,
           filterCorpoId: fs,
         };
@@ -808,6 +969,8 @@ export default function GeneralInductionRegisterScreen() {
         setMarcaClienteId(null);
         setMarcaCorpoId(null);
         setMarcaDivisionId(null);
+        setMarcaContratoId(null);
+        setMarcaPuestoId(null);
         setRoleName(null);
         return null;
       }
@@ -820,7 +983,12 @@ export default function GeneralInductionRegisterScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
-      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      const loaded = await loadMainStructureTreeMerged().catch(() => []);
+      const tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      const divId =
+        tree.length > 0
+          ? resolveMarcaDivisionForTree(currentMarca, tree) ?? getDivisionIdFromMarcaJson(currentMarca)
+          : getDivisionIdFromMarcaJson(currentMarca);
       setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
       setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
       setFilterDivisionId(divId);
@@ -831,7 +999,7 @@ export default function GeneralInductionRegisterScreen() {
     }
   }, []);
 
-  const applyCurrentMarcaToCreateHierarchy = useCallback(async () => {
+  const applyCurrentMarcaToCreateHierarchy = useCallback(async (treeFromCaller?: MainStructureTree) => {
     try {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
@@ -839,11 +1007,21 @@ export default function GeneralInductionRegisterScreen() {
       const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
       if (rn === 'OPERATIVO') return;
 
+      let tree = treeFromCaller;
+      if (!tree?.length) {
+        const loaded = await loadMainStructureTreeMerged().catch(() => []);
+        tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+        if (tree.length) setStructure(tree);
+      }
+      const divResolved =
+        tree && tree.length > 0 ? resolveMarcaDivisionForTree(marca, tree) : null;
+
       setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
       setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
-      setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
+      setSelectedDivisionId(divResolved ?? getDivisionIdFromMarcaJson(marca));
       setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
       setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setSelectedPuestoId(marca.puesto?.id != null ? Number(marca.puesto.id) : marca.puesto_id != null ? Number(marca.puesto_id) : null);
     } catch (e) {
       console.error('applyCurrentMarcaToCreateHierarchy (GeneralInduction):', e);
     }
@@ -981,13 +1159,19 @@ export default function GeneralInductionRegisterScreen() {
         }
 
         const sid = Number(corpoId);
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const localAll = (cache || []).filter((i: any) => i.type === 'general_induction_register');
+        const localAll = await readAllGeneralInductionRegisterRecords();
         const localByCorpo = localAll.filter((r: any) => girRecordSucursalId(r) === sid);
-        const localOnly = localByCorpo.filter(
-          (r: any) => !r?.synced || String(r?.id_local || '').startsWith('local-')
-        );
+        /** Filas que aún no existen en el servidor (borrador / pendiente). No mezclar filas ya sincronizadas (id numérico + synced), o el GET duplica la misma fila. */
+        const localOnly = localByCorpo.filter((r: any) => {
+          if (r?.synced === true) {
+            const rid = String(r?.id ?? '');
+            if (rid && !rid.startsWith('local-')) {
+              const n = Number(rid);
+              if (Number.isFinite(n) && n > 0) return false;
+            }
+          }
+          return true;
+        });
 
         const isConnected = await getConnectionStatus();
         if (!isConnected) {
@@ -1007,32 +1191,27 @@ export default function GeneralInductionRegisterScreen() {
             return;
           }
 
-          const serverRecords = (result.data as any[]).map((r) => ({
-            ...r,
-            corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? corpoId),
-            synced: true,
-          }));
+          const serverRecords = (result.data as any[])
+            .filter((r) => r?.isActive !== false)
+            .map((r) => ({
+              ...r,
+              corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? corpoId),
+              synced: true,
+            }));
 
           const merged = [...localOnly, ...serverRecords];
           setRecords(await preloadServerImagesForList(merged));
 
-          const withoutCorpo = (cache || []).filter(
-            (item: any) =>
-              !(
-                item.type === 'general_induction_register' && girRecordSucursalId(item) === sid
-              )
-          );
-          await AsyncStorage.setItem(
-            'evaluations_cache',
-            JSON.stringify([
-              ...withoutCorpo,
-              ...merged.map((r: any) => ({
-                ...r,
-                type: 'general_induction_register',
-                corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? sid),
-              })),
-            ])
-          );
+          const allGir = await readAllGeneralInductionRegisterRecords();
+          const otherCorpo = allGir.filter((item: any) => girRecordSucursalId(item) !== sid);
+          await writeAllGeneralInductionRegisterRecords([
+            ...otherCorpo,
+            ...merged.map((r: any) => ({
+              ...r,
+              type: 'general_induction_register',
+              corpo_id: Number(r.corpo_id ?? r.sucursal_id ?? sid),
+            })),
+          ]);
         } catch (fetchErr) {
           console.error('Error listGeneralInductionRegisterByCorpo:', fetchErr);
           if (isProbablyNetworkError(fetchErr)) {
@@ -1048,9 +1227,7 @@ export default function GeneralInductionRegisterScreen() {
           setError('Error al cargar los registros de inducción general');
         }
         try {
-          const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-          const cache = cacheStr ? JSON.parse(cacheStr) : [];
-          const localAll = (cache || []).filter((i: any) => i.type === 'general_induction_register');
+          const localAll = await readAllGeneralInductionRegisterRecords();
           const fallbackCorpo = snap?.isOperativo
             ? snap?.marcaCorpoId
             : (snap?.filterCorpoId ?? snap?.marcaCorpoId);
@@ -1072,7 +1249,8 @@ export default function GeneralInductionRegisterScreen() {
   );
 
   const fetchRecords = useCallback(async () => {
-    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    const tree = await loadMainStructureCache();
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false, structureTree: tree });
     if (!snap) return;
     await runFetchRecords({
       ...snap,
@@ -1085,25 +1263,24 @@ export default function GeneralInductionRegisterScreen() {
   }, [
     syncMarcaFromStorage,
     runFetchRecords,
+    loadMainStructureCache,
     filterEmpresaId,
     filterClienteId,
     filterDivisionId,
     filterContratoId,
   ]);
 
-  // Cargar main_structure solo una vez al abrir la pantalla
-  useFocusEffect(
-    useCallback(() => {
-      fetchMainStructure();
-    }, [fetchMainStructure])
-  );
-
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       void (async () => {
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          const tree = await loadMainStructureCache();
+          if (cancelled) return;
+          const snap = await syncMarcaFromStorage({
+            applyFiltersFromMarca: true,
+            structureTree: tree,
+          });
           if (cancelled) return;
           listFiltersSyncedFromMarcaOnceRef.current = true;
           if (snap) await runFetchRecords(snap);
@@ -1118,20 +1295,25 @@ export default function GeneralInductionRegisterScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [syncMarcaFromStorage, runFetchRecords, fetchRecords])
+    }, [
+      syncMarcaFromStorage,
+      runFetchRecords,
+      fetchRecords,
+      loadMainStructureCache,
+    ])
   );
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
   const filterClientes = useMemo(() => {
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
     return empresa?.clientes || [];
   }, [filterEmpresas, filterEmpresaId]);
 
   const filterDivisiones = useMemo(() => {
     if (!filterClienteId) return [];
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    const cliente = filterClientes.find((c: any) => Number(c.id) === Number(filterClienteId));
     if (!cliente) return [];
     return getDivisionesFromCliente(cliente);
   }, [filterClientes, filterClienteId]);
@@ -1144,9 +1326,9 @@ export default function GeneralInductionRegisterScreen() {
 
   const filterSucursales = useMemo(() => {
     if (filterClienteId == null || filterContratoId == null) return [];
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
     if (!empresa) return [];
-    const cliente = empresa.clientes?.find((c: any) => c.id === filterClienteId);
+    const cliente = empresa.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
     if (!cliente) return [];
 
     const sucursalesMap = new Map<number, any>();
@@ -1165,27 +1347,31 @@ export default function GeneralInductionRegisterScreen() {
 
   const selectedEmpresaNode = useMemo(() => {
     if (selectedEmpresaId === null) return null;
-    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+    return structure.find((e) => Number(e.id) === Number(selectedEmpresaId)) ?? null;
   }, [structure, selectedEmpresaId]);
 
   const selectedClienteNode = useMemo(() => {
     if (!selectedEmpresaNode || selectedClienteId === null) return null;
-    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+    return selectedEmpresaNode.clientes.find((c) => Number(c.id) === Number(selectedClienteId)) ?? null;
   }, [selectedEmpresaNode, selectedClienteId]);
 
   const selectedDivisionNode = useMemo(() => {
     if (!selectedClienteNode || selectedDivisionId === null) return null;
-    return getDivisionesFromCliente(selectedClienteNode as any).find((d) => d.id === selectedDivisionId) ?? null;
+    return (
+      getDivisionesFromCliente(selectedClienteNode as any).find(
+        (d) => Number(d.id) === Number(selectedDivisionId)
+      ) ?? null
+    );
   }, [selectedClienteNode, selectedDivisionId]);
 
   const selectedContratoNode = useMemo(() => {
     if (!selectedDivisionNode || selectedContratoId === null) return null;
-    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+    return (selectedDivisionNode.contratos || []).find((c) => Number(c.id) === Number(selectedContratoId)) ?? null;
   }, [selectedDivisionNode, selectedContratoId]);
 
   const selectedSucursalNode = useMemo(() => {
     if (!selectedContratoNode || selectedSucursalId === null) return null;
-    return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
+    return (selectedContratoNode.sucursales || []).find((s) => Number(s.id) === Number(selectedSucursalId)) ?? null;
   }, [selectedContratoNode, selectedSucursalId]);
 
   // Opciones memoizadas (patrón de OpeningClosingPositionScreen)
@@ -1204,8 +1390,11 @@ export default function GeneralInductionRegisterScreen() {
   );
 
   const puestosForSelectedSucursal = useMemo(() => {
+    if (roleName === 'OPERATIVO' && marcaCorpoId) {
+      return getPuestosForCorpo(structure, marcaCorpoId);
+    }
     return (selectedSucursalNode?.puestos || []) as MainStructurePuestoNode[];
-  }, [selectedSucursalNode]);
+  }, [roleName, marcaCorpoId, structure, selectedSucursalNode]);
   const plazasForSelectedSucursal = useMemo(
     () => puestosForSelectedSucursal.flatMap((p) => (Array.isArray(p.plazas) ? p.plazas : [])),
     [puestosForSelectedSucursal]
@@ -1245,6 +1434,7 @@ export default function GeneralInductionRegisterScreen() {
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
     setDivisionOptions([]);
     setSelectedTemas([]);
   };
@@ -1255,6 +1445,7 @@ export default function GeneralInductionRegisterScreen() {
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
     setDivisionOptions([]);
     setSelectedTemas([]);
   };
@@ -1285,7 +1476,9 @@ export default function GeneralInductionRegisterScreen() {
       return;
     }
     if (selectedContratoId !== null) {
-      const exists = (selectedDivisionNode.contratos || []).some((c) => c.id === selectedContratoId);
+      const exists = (selectedDivisionNode.contratos || []).some(
+        (c) => Number(c.id) === Number(selectedContratoId)
+      );
       if (!exists) setSelectedContratoId(null);
     }
   }, [selectedDivisionNode]);
@@ -1296,7 +1489,9 @@ export default function GeneralInductionRegisterScreen() {
       return;
     }
     if (selectedSucursalId !== null) {
-      const exists = (selectedContratoNode.sucursales || []).some((s) => s.id === selectedSucursalId);
+      const exists = (selectedContratoNode.sucursales || []).some(
+        (s) => Number(s.id) === Number(selectedSucursalId)
+      );
       if (!exists) setSelectedSucursalId(null);
     }
   }, [selectedContratoNode]);
@@ -1430,7 +1625,7 @@ export default function GeneralInductionRegisterScreen() {
     // Fallback: búsqueda global en main_structure
     for (const empresa of structure || []) {
       for (const cliente of (empresa.clientes || [])) {
-        for (const division of (cliente.division || [])) {
+        for (const division of getDivisionesFromCliente(cliente as any)) {
           for (const contrato of (division.contratos || [])) {
             for (const sucursal of (contrato.sucursales || [])) {
               for (const puesto of (sucursal.puestos || [])) {
@@ -1574,7 +1769,8 @@ export default function GeneralInductionRegisterScreen() {
     }
     resetForm(horaAccion);
     setIsCreating(true);
-    void applyCurrentMarcaToCreateHierarchy();
+    const tree = await loadMainStructureCache();
+    await applyCurrentMarcaToCreateHierarchy(tree);
   };
 
   const startEditing = async (record: GeneralInductionRegisterRecord) => {
@@ -1592,16 +1788,41 @@ export default function GeneralInductionRegisterScreen() {
       const temasObj = safeJsonParse<any>(record.temas_a_tratar, null);
       const meta = temasObj?.meta;
 
+      let structureArr: MainStructureTree =
+        Array.isArray(structure) && structure.length > 0 ? structure : [];
+      if (!structureArr.length) {
+        try {
+          structureArr = await loadMainStructureCache();
+        } catch {
+          /* ignore */
+        }
+      }
+
       let usedHierarchy = false;
-      if (roleName != null && roleName !== 'OPERATIVO' && Array.isArray(structure) && structure.length > 0) {
-        const h = findHierarchyByCorpoIn(structure, Number(record.corpo_id));
-        if (h) {
-          setSelectedEmpresaId(h.empresaId);
-          setSelectedClienteId(h.clienteId);
-          setSelectedDivisionId(h.divisionId);
-          setSelectedContratoId(h.contratoId);
-          setSelectedSucursalId(h.corpoId);
+      if (roleName != null && roleName !== 'OPERATIVO' && Array.isArray(structureArr) && structureArr.length > 0) {
+        const pid = record.puesto_id != null ? Number(record.puesto_id) : NaN;
+        const byPuesto =
+          Number.isFinite(pid) && pid > 0 ? findHierarchyByPuestoIn(structureArr, pid) : null;
+        if (byPuesto) {
+          setSelectedEmpresaId(byPuesto.empresaId);
+          setSelectedClienteId(byPuesto.clienteId);
+          setSelectedDivisionId(byPuesto.divisionId);
+          setSelectedContratoId(byPuesto.contratoId);
+          setSelectedSucursalId(byPuesto.corpoId);
+          setSelectedPuestoId(byPuesto.puestoId);
           usedHierarchy = true;
+        } else {
+          const h = findHierarchyByCorpoIn(structureArr, Number(record.corpo_id));
+          if (h) {
+            setSelectedEmpresaId(h.empresaId);
+            setSelectedClienteId(h.clienteId);
+            setSelectedDivisionId(h.divisionId);
+            setSelectedContratoId(h.contratoId);
+            setSelectedSucursalId(h.corpoId);
+            const mp = record.puesto_id != null ? Number(record.puesto_id) : null;
+            setSelectedPuestoId(mp && Number.isFinite(mp) && mp > 0 ? mp : null);
+            usedHierarchy = true;
+          }
         }
       } else if (roleName === 'OPERATIVO') {
         setSelectedEmpresaId(null);
@@ -1609,6 +1830,7 @@ export default function GeneralInductionRegisterScreen() {
         setSelectedDivisionId(null);
         setSelectedContratoId(null);
         setSelectedSucursalId(null);
+        setSelectedPuestoId(null);
       }
 
       if (!usedHierarchy && meta) {
@@ -1617,6 +1839,7 @@ export default function GeneralInductionRegisterScreen() {
         if (meta.division_id) setSelectedDivisionId(Number(meta.division_id));
         if (meta.contrato_id) setSelectedContratoId(Number(meta.contrato_id));
         if (meta.sucursal_id) setSelectedSucursalId(Number(meta.sucursal_id));
+        if (meta.puesto_id) setSelectedPuestoId(Number(meta.puesto_id));
       }
 
       const selected = Array.isArray(temasObj?.selected) ? temasObj.selected : [];
@@ -1654,6 +1877,7 @@ export default function GeneralInductionRegisterScreen() {
       setImages(Array.isArray((record as any).images) ? (record as any).images : []);
       setPhotosDirty(false);
       setFirmaResponsableHash(record.firma_responsable || '');
+      void preloadServerImagesForEdit(record);
     } catch (e) {
       console.error('Error startEditing general induction register:', e);
       Alert.alert('Error', 'No se pudo cargar el registro para edición');
@@ -1666,10 +1890,11 @@ export default function GeneralInductionRegisterScreen() {
       cliente_id: roleName === 'OPERATIVO' ? marcaClienteId : selectedClienteId,
       division_id: roleName === 'OPERATIVO' ? marcaDivisionId : selectedDivisionId,
       division_nombre: divisionNombre || null,
-      contrato_id: roleName === 'OPERATIVO' ? null : selectedContratoId,
+      contrato_id: roleName === 'OPERATIVO' ? marcaContratoId : selectedContratoId,
       contrato_nombre: roleName === 'OPERATIVO' ? null : selectedContratoNode?.nombre || null,
       sucursal_id: roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId,
       sucursal_nombre: roleName === 'OPERATIVO' ? null : selectedSucursalNode?.nombre || null,
+      puesto_id: roleName === 'OPERATIVO' ? marcaPuestoId : selectedPuestoId,
     };
 
     // Persistimos como array de objetos (string JSON)
@@ -1686,12 +1911,17 @@ export default function GeneralInductionRegisterScreen() {
     return { meta, selected: selectedSafe, leafs };
   };
 
+  type GirImageEntry = {
+    id?: number;
+    name?: string;
+    base64?: string;
+    extension?: string;
+    url?: string;
+    localFileName?: string;
+  };
+
   const openCamera = async () => {
     try {
-      if (editingRecord?.id && !(await getConnectionStatus())) {
-        Alert.alert('Sin conexión', 'Necesitas conexión para agregar fotos en un registro ya sincronizado.');
-        return;
-      }
       if (!cameraPermission?.granted) {
         const result = await requestCameraPermission();
         if (!result.granted) {
@@ -1713,21 +1943,30 @@ export default function GeneralInductionRegisterScreen() {
     }
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
         skipProcessing: false,
       });
-      if (!photo?.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto');
         setIsCameraVisible(false);
         return;
       }
-      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
+      const fileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'photo',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'general_induction',
+      });
       setIsCameraVisible(false);
-      setTimeout(() => {
-        setPhotosDirty(true);
-        setImages((prev) => [...prev, { base64: base64Image, extension: 'jpg' }]);
-      }, 100);
+      const newEntry: GirImageEntry = { localFileName: fileName, extension: 'jpg' };
+      const nextImages = [...images, newEntry];
+      setPhotosDirty(true);
+      setImages(nextImages);
+      const lid = editingRecord?.id_local ? String(editingRecord.id_local) : '';
+      if (lid.startsWith('local-')) {
+        void updatePendingGirCreateActionImagenes(lid, nextImages);
+      }
     } catch (e) {
       console.error('Error capturing photo:', e);
       Alert.alert('Error', 'No se pudo capturar la foto');
@@ -1735,35 +1974,263 @@ export default function GeneralInductionRegisterScreen() {
     }
   };
 
-  const removeImage = (index: number) => {
-    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+  const buildImagenesJsonFromImageEntries = async (entries: GirImageEntry[]): Promise<string> => {
+    const out: { file_base64: string; extension: string; original_name?: string }[] = [];
+    for (let i = 0; i < entries.length; i++) {
+      const img = entries[i];
+      const hasServerId = img.id != null && Number(img.id) > 0;
+      if (hasServerId && !img.localFileName) {
+        continue;
+      }
+      let file_base64 = '';
+      if (img.localFileName != null && String(img.localFileName).trim() !== '') {
+        try {
+          const g = await getFile(String(img.localFileName));
+          const ext = String(img.extension || 'jpg').replace(/^\./, '').trim() || 'jpg';
+          file_base64 = `data:image/${mimeFromExtension(ext)};base64,${g.base64}`;
+        } catch {
+          file_base64 = '';
+        }
+      }
+      if (!file_base64 && img.base64 && !hasServerId) {
+        file_base64 = String(img.base64).trim();
+      }
+      if (!file_base64) continue;
+      const ext = String(img.extension || 'jpg').replace(/^\./, '').trim() || 'jpg';
+      out.push({
+        file_base64,
+        extension: ext,
+        original_name: img.name || `general-induction-${Date.now()}-${i + 1}.${ext}`,
+      });
+    }
+    return JSON.stringify(out);
+  };
+
+  const buildImagenesJsonForUpload = async (): Promise<string> => buildImagenesJsonFromImageEntries(images);
+
+  const updatePendingGirCreateActionImagenes = async (idLocal: string, imageEntries: GirImageEntry[]) => {
+    const imagenesJson = await buildImagenesJsonFromImageEntries(imageEntries);
+    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const idx = actions.findIndex(
+      (a: any) =>
+        a?.type === 'general_induction_register' &&
+        a?.action === 'create' &&
+        String(a?.id) === String(idLocal)
+    );
+    if (idx === -1) return;
+    actions[idx] = {
+      ...actions[idx],
+      payload: { ...(actions[idx].payload || {}), imagenes: imagenesJson },
+    };
+    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+  };
+
+  const confirmRemoveImageAt = (index: number) => {
+    Alert.alert('Confirmar', '¿Eliminar este archivo adjunto?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: () => {
-          setPhotosDirty(true);
-          setImages((prev) => prev.filter((_, i) => i !== index));
-        },
+        onPress: () => void executeRemoveImageAt(index),
       },
     ]);
   };
 
-  const buildImagenesJson = () =>
-    JSON.stringify(
-      images.map((img, idx) => ({
-        file_base64: img.base64 || '',
-        extension: img.extension || 'jpg',
-        original_name: img.name || `general-induction-${Date.now()}-${idx + 1}.jpg`,
-      }))
+  const executeRemoveImageAt = async (index: number) => {
+    const img = images[index];
+    if (!img) return;
+    const registroServerId =
+      editingRecord?.id && !String(editingRecord.id).startsWith('local-')
+        ? String(editingRecord.id)
+        : null;
+    const imageId = img.id != null && Number(img.id) > 0 ? Number(img.id) : null;
+
+    const finalizeRemoveImageAtIndex = async (idx: number) => {
+      const im = images[idx];
+      if (!im) return;
+      if (im.localFileName) {
+        try {
+          await deleteFile(String(im.localFileName));
+        } catch {
+          /* idempotente */
+        }
+      }
+      const nextImages = images.filter((_, i) => i !== idx);
+      setPhotosDirty(true);
+      setImages(nextImages);
+      const lid = editingRecord?.id_local ? String(editingRecord.id_local) : '';
+      if (lid.startsWith('local-')) {
+        await updatePendingGirCreateActionImagenes(lid, nextImages);
+      }
+    };
+
+    if (imageId && registroServerId) {
+      const connected = await getConnectionStatus();
+      if (connected) {
+        const res = await deleteGeneralInductionRegisterImage({
+          registroId: registroServerId,
+          imageId,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+          return;
+        }
+        await removeImageFromGeneralInductionCache(registroServerId, imageId);
+        if (editingRecord?.id_local) {
+          await removeImageFromGeneralInductionCache(editingRecord.id_local, imageId);
+        }
+        await finalizeRemoveImageAtIndex(index);
+        return;
+      }
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      const dedup = actions.filter(
+        (a: any) =>
+          !(
+            a.type === 'general_induction_register' &&
+            a.action === 'delete_file' &&
+            String(a.id) === String(registroServerId) &&
+            Number(a.payload?.imageId) === imageId
+          )
+      );
+      dedup.push({
+        id: registroServerId,
+        action: 'delete_file',
+        type: 'general_induction_register',
+        payload: { imageId },
+        synced: false,
+      });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(dedup));
+      await removeImageFromGeneralInductionCache(registroServerId, imageId);
+      if (editingRecord?.id_local) {
+        await removeImageFromGeneralInductionCache(editingRecord.id_local, imageId);
+      }
+      await finalizeRemoveImageAtIndex(index);
+      return;
+    }
+
+    await finalizeRemoveImageAtIndex(index);
+  };
+
+  const girCacheRowMatches = (item: any, r: GeneralInductionRegisterRecord) => {
+    const idStr = r.id != null && r.id !== '' ? String(r.id) : '';
+    const lid = r.id_local != null && r.id_local !== '' ? String(r.id_local) : '';
+    return (
+      (idStr && String(item.id) === idStr) ||
+      (lid && String(item.id_local) === lid) ||
+      (lid && String(item.id) === lid) ||
+      (idStr && String(item.id_local) === idStr)
     );
+  };
+
+  const patchGirRecordImagesInCache = async (
+    r: GeneralInductionRegisterRecord,
+    nextImages: any[]
+  ) => {
+    const all = await readAllGeneralInductionRegisterRecords();
+    const next = all.map((item: any) =>
+      girCacheRowMatches(item, r) ? { ...item, images: nextImages } : item
+    );
+    await writeAllGeneralInductionRegisterRecords(next);
+  };
+
+  const confirmRemoveListImage = (r: GeneralInductionRegisterRecord, img: any, imageIndex: number) => {
+    Alert.alert('Confirmar', '¿Eliminar este archivo adjunto del registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => void executeRemoveListImage(r, img, imageIndex),
+      },
+    ]);
+  };
+
+  const executeRemoveListImage = async (r: GeneralInductionRegisterRecord, img: any, imageIndex: number) => {
+    const regIdStr = r.id != null && r.id !== '' ? String(r.id) : '';
+    const registroServerId =
+      regIdStr && !regIdStr.startsWith('local-') && Number(regIdStr) > 0 ? regIdStr : null;
+    const imageId = img?.id != null && Number(img.id) > 0 ? Number(img.id) : null;
+
+    const imgs = Array.isArray((r as any).images) ? [...(r as any).images] : [];
+    const nextImages = imgs.filter((_: any, i: number) => i !== imageIndex);
+
+    const deleteLocalStored = async () => {
+      if (img?.localFileName != null && String(img.localFileName).trim() !== '') {
+        try {
+          await deleteFile(String(img.localFileName));
+        } catch {
+          /* idempotente */
+        }
+      }
+    };
+
+    if (imageId && registroServerId) {
+      const connected = await getConnectionStatus();
+      if (connected) {
+        const res = await deleteGeneralInductionRegisterImage({
+          registroId: registroServerId,
+          imageId,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+          return;
+        }
+        await removeImageFromGeneralInductionCache(registroServerId, imageId);
+        if (r.id_local) await removeImageFromGeneralInductionCache(String(r.id_local), imageId);
+        await deleteLocalStored();
+        await fetchRecords();
+        return;
+      }
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      const dedup = actions.filter(
+        (a: any) =>
+          !(
+            a.type === 'general_induction_register' &&
+            a.action === 'delete_file' &&
+            String(a.id) === String(registroServerId) &&
+            Number(a.payload?.imageId) === imageId
+          )
+      );
+      dedup.push({
+        id: registroServerId,
+        action: 'delete_file',
+        type: 'general_induction_register',
+        payload: { imageId },
+        synced: false,
+      });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(dedup));
+      await removeImageFromGeneralInductionCache(registroServerId, imageId);
+      if (r.id_local) await removeImageFromGeneralInductionCache(String(r.id_local), imageId);
+      await deleteLocalStored();
+      await fetchRecords();
+      return;
+    }
+
+    await deleteLocalStored();
+    await patchGirRecordImagesInCache(r, nextImages);
+    const pendingCreateId = regIdStr.startsWith('local-')
+      ? regIdStr
+      : String(r.id_local || '').startsWith('local-')
+        ? String(r.id_local)
+        : '';
+    if (pendingCreateId) {
+      await updatePendingGirCreateActionImagenes(pendingCreateId, nextImages);
+    }
+    await fetchRecords();
+  };
 
   const validateSaveForm = (): string | null => {
     if (!hasCurrentMarca) return 'Debes tener una marca activa para usar este módulo.';
     if (roleName == null) return 'Cargando contexto de marca...';
     if (roleName === 'OPERATIVO') {
-      if (!marcaClienteId || !marcaCorpoId || !marcaDivisionId) {
-        return 'No se pudo determinar cliente, sucursal o división desde la marca actual';
+      if (!marcaClienteId || !marcaCorpoId || !marcaDivisionId || !marcaContratoId || !marcaPuestoId) {
+        return 'No se pudo determinar cliente, sucursal, división, contrato o puesto desde la marca actual';
       }
     } else {
       if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
@@ -1772,6 +2239,8 @@ export default function GeneralInductionRegisterScreen() {
       if (!selectedDivisionId || !selectedDivisionNode) {
         return 'División es obligatoria';
       }
+      if (!selectedContratoId) return 'Contrato es obligatorio';
+      if (!selectedPuestoId) return 'Puesto es obligatorio';
     }
     if (!firmaResponsableHash.trim()) return 'Firma responsable (QR/Generar) es obligatoria';
     return null;
@@ -1841,11 +2310,19 @@ export default function GeneralInductionRegisterScreen() {
       const empresaIdSave = roleName === 'OPERATIVO' ? marcaEmpresaId! : selectedEmpresaId!;
       const clienteIdSave = roleName === 'OPERATIVO' ? marcaClienteId! : selectedClienteId!;
       const corpoIdSave = roleName === 'OPERATIVO' ? marcaCorpoId! : selectedSucursalId!;
+      const divisionIdSave = roleName === 'OPERATIVO' ? marcaDivisionId! : selectedDivisionId!;
+      const contratoIdSave = roleName === 'OPERATIVO' ? marcaContratoId! : selectedContratoId!;
+      const puestoIdSave = roleName === 'OPERATIVO' ? marcaPuestoId! : selectedPuestoId!;
+
+      const imagenesJson = await buildImagenesJsonForUpload();
 
       const requestData = {
         empresa_id: empresaIdSave,
         cliente_id: clienteIdSave,
         corpo_id: corpoIdSave,
+        division_id: divisionIdSave,
+        contrato_id: contratoIdSave,
+        puesto_id: puestoIdSave,
         division: divisionNombre,
         fecha: fecha.toISOString(),
         temas_a_tratar: JSON.stringify(temasPayload),
@@ -1859,7 +2336,6 @@ export default function GeneralInductionRegisterScreen() {
             firma: getBase64Only(c.firma),
           }))
         ),
-        // Capacitadores: sin puesto (solo nombre/cedula/firma)
         capacitadores: JSON.stringify(
           capacitadoresList.map((c) => ({
             id_local: c.id_local,
@@ -1869,8 +2345,16 @@ export default function GeneralInductionRegisterScreen() {
           }))
         ),
         firma_responsable: firmaResponsableHash.trim(),
-        imagenes: buildImagenesJson(),
+        imagenes: imagenesJson,
       };
+
+      const girImagesSnapshot = images.map((im) => ({
+        id: im.id,
+        name: im.name,
+        extension: im.extension,
+        url: im.url,
+        localFileName: im.localFileName,
+      }));
 
       const isConnected = await getConnectionStatus();
 
@@ -1890,6 +2374,9 @@ export default function GeneralInductionRegisterScreen() {
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo crear el registro');
+          if (result.data) {
+            await upsertGeneralInductionRegisterFromServerData({ idLocal: null, serverRow: result.data });
+          }
           Alert.alert('Éxito', result.message || 'Registro creado correctamente');
           setTimeout(() => {
             setIsCreating(false);
@@ -1904,6 +2391,9 @@ export default function GeneralInductionRegisterScreen() {
             empresa_id: requestData.empresa_id,
             cliente_id: requestData.cliente_id,
             corpo_id: requestData.corpo_id,
+            division_id: requestData.division_id,
+            contrato_id: requestData.contrato_id,
+            puesto_id: requestData.puesto_id,
             division: requestData.division,
             fecha: requestData.fecha,
             temas_a_tratar: requestData.temas_a_tratar,
@@ -1913,6 +2403,7 @@ export default function GeneralInductionRegisterScreen() {
             created_at: new Date(horaAccion).toISOString(),
             created_by: String(employee?.id || ''),
             synced: false,
+            images: girImagesSnapshot,
           };
 
           const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -1926,10 +2417,11 @@ export default function GeneralInductionRegisterScreen() {
           });
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-          const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-          const cache = cacheStr ? JSON.parse(cacheStr) : [];
-          cache.push({ ...newCacheRecord, type: 'general_induction_register' });
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+          const allGir = await readAllGeneralInductionRegisterRecords();
+          await writeAllGeneralInductionRegisterRecords([
+            ...allGir,
+            { ...newCacheRecord, type: 'general_induction_register' },
+          ]);
 
           Alert.alert('Éxito', 'Se guardó localmente y se sincronizará al recuperar conexión');
           setTimeout(() => {
@@ -1945,45 +2437,62 @@ export default function GeneralInductionRegisterScreen() {
       const recordId = editingRecord.id || editingRecord.id_local;
       if (!recordId) return;
 
-      if (isConnected) {
+      const serverUpdateId =
+        editingRecord.id && !String(editingRecord.id).startsWith('local-') ? String(editingRecord.id) : null;
+
+      if (isConnected && serverUpdateId) {
         try {
+          const updatePayload: Record<string, unknown> = {
+            empresa_id: empresaIdSave,
+            cliente_id: clienteIdSave,
+            corpo_id: corpoIdSave,
+            division_id: divisionIdSave,
+            contrato_id: contratoIdSave,
+            puesto_id: puestoIdSave,
+            division: requestData.division,
+            fecha: requestData.fecha,
+            temas_a_tratar: requestData.temas_a_tratar,
+            colaboradores: requestData.colaboradores,
+            capacitadores: requestData.capacitadores,
+            firma_responsable: requestData.firma_responsable,
+          };
+          if (photosDirty) {
+            updatePayload.imagenes = await buildImagenesJsonForUpload();
+          }
           const result = await updateGeneralInductionRegister({
-            id: String(recordId),
-            requestData: {
-              division: requestData.division,
-              fecha: requestData.fecha,
-              temas_a_tratar: requestData.temas_a_tratar,
-              colaboradores: requestData.colaboradores,
-              capacitadores: requestData.capacitadores,
-              firma_responsable: requestData.firma_responsable,
-              ...(photosDirty ? { imagenes: requestData.imagenes } : {}),
-            },
+            id: serverUpdateId,
+            requestData: updatePayload as any,
             refreshAccessToken,
             logout,
           });
           if (!result.status) throw new Error(result.message || 'No se pudo actualizar el registro');
+          if (result.data) {
+            await upsertGeneralInductionRegisterFromServerData({
+              idLocal: editingRecord.id_local || null,
+              serverRow: result.data,
+            });
+          }
           Alert.alert('Éxito', result.message || 'Registro actualizado correctamente');
-          const horaAccion = await getHoraAccion();
-          if (!horaAccion) {
+          const horaAccionAfter = await getHoraAccion();
+          if (!horaAccionAfter) {
             Alert.alert('Error', 'No se pudo obtener la hora');
             return;
           }
           setTimeout(() => {
             setIsCreating(false);
-            resetForm(horaAccion);
+            resetForm(horaAccionAfter);
             fetchRecords();
           }, 2000);
           return;
         } catch (e: any) {
           const msg = String(e?.message || e || '');
           console.warn('Error updating general induction register:', e);
-          // fallback offline en caso de 5xx (ej: 503) o fallas de red
           if (!msg.includes('status: 5') && !msg.includes('Network') && !msg.includes('fetch')) {
             throw e;
           }
         }
       }
-      // offline fallback (incluye caso server 503)
+      // offline fallback (incluye caso server 503, registros solo locales o sin id de servidor)
       {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -2025,15 +2534,24 @@ export default function GeneralInductionRegisterScreen() {
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
         }
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const updatedCache = (cache || []).map((item: any) => {
-          if ((item.id === recordId || item.id_local === recordId) && item.type === 'general_induction_register') {
-            return { ...item, ...requestData, id: item.id, id_local: item.id_local, synced: false };
+        const allGir = await readAllGeneralInductionRegisterRecords();
+        const updatedGir = allGir.map((item: any) => {
+          if (item.id === recordId || item.id_local === recordId) {
+            return {
+              ...item,
+              ...requestData,
+              id: item.id,
+              id_local: item.id_local,
+              images: girImagesSnapshot,
+              division_id: requestData.division_id,
+              contrato_id: requestData.contrato_id,
+              puesto_id: requestData.puesto_id,
+              synced: false,
+            };
           }
           return item;
         });
-        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        await writeAllGeneralInductionRegisterRecords(updatedGir);
 
         Alert.alert('Éxito', 'El servidor no está disponible. Se guardó localmente y se sincronizará al recuperar conexión');
         const horaAccion = await getHoraAccion();
@@ -2082,6 +2600,7 @@ export default function GeneralInductionRegisterScreen() {
       if (isConnected && !isLocal) {
         const result = await deleteGeneralInductionRegister({ id: String(recordId), refreshAccessToken, logout });
         if (!result.status) throw new Error(result.message || 'No se pudo eliminar el registro');
+        await removeGeneralInductionRegisterFromCacheByKeys(String(recordId), record.id_local);
         Alert.alert('Éxito', 'Registro eliminado');
         await fetchRecords();
         return;
@@ -2107,12 +2626,7 @@ export default function GeneralInductionRegisterScreen() {
       }
       await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
 
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const updatedCache = (cache || []).filter(
-        (i: any) => !((i.id === recordId || i.id_local === recordId) && i.type === 'general_induction_register')
-      );
-      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+      await removeGeneralInductionRegisterFromCacheByKeys(String(recordId), record.id_local);
 
       Alert.alert('Eliminado', isLocal ? 'Se eliminó el registro local' : 'Se eliminará al sincronizar');
       await fetchRecords();
@@ -2187,7 +2701,10 @@ export default function GeneralInductionRegisterScreen() {
           const isImagesOpen = !!expandedImagesById[itemKey];
 
           return (
-            <ThemedView key={r.id || r.id_local} style={styles.listItem}>
+            <ThemedView
+              key={`gir-row-${String(r.id_local ?? '')}-${String(r.id ?? '')}`}
+              style={styles.listItem}
+            >
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>{sucursalNombre}</ThemedText>
@@ -2317,20 +2834,37 @@ export default function GeneralInductionRegisterScreen() {
                     ) : (
                       <ThemedView style={styles.listImagesRow}>
                         {images.map((img: any, idx: number) => {
+                          const localUri =
+                            img?.localFileName != null && String(img.localFileName).trim() !== ''
+                              ? getLocalFileDisplayUri(String(img.localFileName))
+                              : '';
                           const base64Uri = String(img?.base64 || '').trim();
-                          const uri = base64Uri || appendTokenToUrl(String(img?.url || '').trim());
+                          const uri =
+                            localUri || base64Uri || appendTokenToUrl(String(img?.url || '').trim());
                           if (!uri) return null;
                           return (
-                            <TouchableOpacity
-                              key={`img-${itemKey}-${String(img?.id || idx)}`}
-                              activeOpacity={0.85}
-                              onPress={() => {
-                                setSelectedImageUrl(uri);
-                                setIsImagePreviewVisible(true);
-                              }}
+                            <ThemedView
+                              key={`img-${itemKey}-${String(img?.id ?? 'noid')}-${idx}`}
+                              style={styles.listImageThumbWrap}
                             >
-                              <Image source={{ uri }} style={styles.listImageThumb} />
-                            </TouchableOpacity>
+                              <TouchableOpacity
+                                activeOpacity={0.85}
+                                onPress={() => {
+                                  setSelectedImageUrl(uri);
+                                  setIsImagePreviewVisible(true);
+                                }}
+                              >
+                                <Image source={{ uri }} style={styles.listImageThumb} />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.girListImageTrashButton}
+                                onPress={() => confirmRemoveListImage(r, img, idx)}
+                                activeOpacity={0.85}
+                                accessibilityLabel="Eliminar adjunto"
+                              >
+                                <Ionicons name="trash-outline" size={20} color="#fff" />
+                              </TouchableOpacity>
+                            </ThemedView>
                           );
                         })}
                       </ThemedView>
@@ -2567,11 +3101,18 @@ export default function GeneralInductionRegisterScreen() {
                                   puesto_text: found ? found.nombre : p.puesto_text,
                                 });
                               }}
-                              enabled={selectedSucursalId !== null && puestosForSelectedSucursal.length > 0}
+                              enabled={
+                                (roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId) != null &&
+                                puestosForSelectedSucursal.length > 0
+                              }
                               style={styles.picker}
                             >
                               <Picker.Item
-                                label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                                label={
+                                  (roleName === 'OPERATIVO' ? marcaCorpoId : selectedSucursalId)
+                                    ? 'Seleccione puesto...'
+                                    : 'Seleccione sucursal primero'
+                                }
                                 value={0}
                                 color="#000000"
                               />
@@ -2644,13 +3185,17 @@ export default function GeneralInductionRegisterScreen() {
         ) : (
           <ThemedView style={styles.thumbRow}>
             {images.map((img, idx) => {
-              const uri = img.base64 || img.url || '';
+              const localUri =
+                img.localFileName != null && String(img.localFileName).trim() !== ''
+                  ? getLocalFileDisplayUri(String(img.localFileName))
+                  : '';
+              const uri = localUri || String(img.base64 || '').trim() || appendTokenToUrl(String(img.url || '').trim());
               if (!uri) return null;
               return (
                 <ThemedView key={`img-${idx}`} style={styles.thumbWrapper}>
                   <Image source={{ uri }} style={styles.thumb} />
-                  <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
-                    <Ionicons name="close" size={16} color="#FFFFFF" />
+                  <TouchableOpacity style={styles.thumbDelete} onPress={() => confirmRemoveImageAt(idx)}>
+                    <Ionicons name="trash" size={14} color="#FFFFFF" />
                   </TouchableOpacity>
                 </ThemedView>
               );
@@ -2709,7 +3254,11 @@ export default function GeneralInductionRegisterScreen() {
                     style={styles.resetFiltersButton}
                     onPress={() => {
                       void (async () => {
-                        const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+                        const tree = await loadMainStructureCache();
+                        const snap = await syncMarcaFromStorage({
+                          applyFiltersFromMarca: true,
+                          structureTree: tree,
+                        });
                         if (snap) await runFetchRecords(snap);
                         else await fetchRecords();
                       })();
@@ -2940,6 +3489,7 @@ export default function GeneralInductionRegisterScreen() {
                             setSelectedDivisionId(next);
                             setSelectedContratoId(null);
                             setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
                           }}
                           enabled={selectedClienteId !== null && divisionOptions.length > 0}
                           style={styles.picker}
@@ -2968,6 +3518,7 @@ export default function GeneralInductionRegisterScreen() {
                             const next = Number(v) || null;
                             setSelectedContratoId(next);
                             setSelectedSucursalId(null);
+                            setSelectedPuestoId(null);
                           }}
                           enabled={selectedDivisionId !== null && contratoOptions.length > 0}
                           style={styles.picker}
@@ -2995,6 +3546,7 @@ export default function GeneralInductionRegisterScreen() {
                           onValueChange={(v) => {
                             const next = Number(v) || null;
                             setSelectedSucursalId(next);
+                            setSelectedPuestoId(null);
                           }}
                           enabled={selectedContratoId !== null && sucursalOptions.length > 0}
                           style={styles.picker}
@@ -3012,6 +3564,27 @@ export default function GeneralInductionRegisterScreen() {
                       {selectedContratoId !== null && sucursalOptions.length === 0 && (
                         <ThemedText style={styles.hintText}>No hay sucursales disponibles para este contrato.</ThemedText>
                       )}
+                    </ThemedView>
+
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Puesto</ThemedText>
+                      <ThemedView style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={selectedPuestoId ?? 0}
+                          onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
+                          enabled={selectedSucursalId !== null && puestosForSelectedSucursal.length > 0}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {puestosForSelectedSucursal.map((pp) => (
+                            <Picker.Item key={pp.id} label={pp.nombre} value={pp.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
                     </ThemedView>
                   </ThemedView>
                 )}
@@ -3795,6 +4368,9 @@ const styles = StyleSheet.create({
   detailLine: { marginBottom: 6, color: '#000' },
   fullTemaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   listImagesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  listImageThumbWrap: {
+    position: 'relative',
+  },
   listImageThumb: {
     width: 84,
     height: 84,
@@ -3802,6 +4378,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E0E0E0',
     backgroundColor: '#FFFFFF',
+  },
+  girListImageTrashButton: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 16,
+    padding: 6,
+    zIndex: 2,
   },
 
   actionButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 10 },

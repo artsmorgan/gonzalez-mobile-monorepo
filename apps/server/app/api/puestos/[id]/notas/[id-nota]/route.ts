@@ -38,8 +38,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
-        if (nota.puesto_id !== id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
-
         return NextResponse.json({ status: true, nota }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -64,6 +62,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             categoria_id,
             relevancia,
             empleado_id,
+            empresa_id,
+            cliente_id,
+            division_id,
+            contrato_id,
+            corpo_id,
             firma_responsable,
             firma_manual_responsable,
             imagenes
@@ -117,8 +120,6 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const previous_description = nota.description;
         const previous_categoria = categoriaData.nombre;
 
-        if (nota.puesto_id !== puesto.id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
-
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
 
         // Si relevancia no viene o es null, usar "Baja" por defecto
@@ -135,6 +136,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     description,
                     categoria_id: categoria_id,
                     relevancia: relevanciaValue,
+                    empresa_id: empresa_id ?? nota.empresa_id ?? null,
+                    cliente_id: cliente_id ?? nota.cliente_id ?? null,
+                    division_id: division_id ?? nota.division_id ?? null,
+                    contrato_id: contrato_id ?? nota.contrato_id ?? null,
+                    corpo_id: corpo_id ?? nota.corpo_id ?? null,
                     puesto_id: puesto.id,
                     firma_responsable: (firma_responsable && String(firma_responsable).trim().length > 0) ? String(firma_responsable) : nota.firma_responsable,
                     firma_manual_responsable: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null,
@@ -270,14 +276,13 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         });
         if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
 
-        if (nota.puesto_id !== puesto.id) return NextResponse.json({ status: false, message: "Nota no pertenece al puesto" }, { status: 200 });
-
         await callDynamicPrisma({
             req,
             data: {
-                action: "DELETE",
+                action: "UPDATE",
                 table: "c_puesto_notas",
                 where: { id: id_nota },
+                data: { isActive: false, updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString() },
                 returning: false
             }
         });

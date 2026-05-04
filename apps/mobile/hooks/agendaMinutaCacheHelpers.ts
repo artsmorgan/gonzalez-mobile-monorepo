@@ -12,46 +12,78 @@ export function getAgendaMinutaRecordPuestoId(row: any): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-export function filterAgendaFromEvaluationsCacheByPuesto(fullCache: any[], puestoId: number | null): any[] {
-  if (puestoId == null || !Number.isFinite(Number(puestoId)) || Number(puestoId) <= 0) return [];
-  const pid = Number(puestoId);
+export function getAgendaMinutaRecordCorpoId(row: any): number | null {
+  const n = Number(row?.corpo_id);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export function filterAgendaFromEvaluationsCacheByCorpo(fullCache: any[], corpoId: number | null): any[] {
+  if (corpoId == null || !Number.isFinite(Number(corpoId)) || Number(corpoId) <= 0) return [];
+  const cid = Number(corpoId);
   return (fullCache || []).filter(
-    (item) => isAgendaMinutaCacheType(item.type) && Number(item.puesto_id) === pid
+    (item) =>
+      isAgendaMinutaCacheType(item.type) &&
+      Number(item.corpo_id) === cid &&
+      item?.isActive !== false
   );
 }
 
 export function isAgendaMinutaLocalPendingRecord(r: any): boolean {
-  if (r?.id == null || r?.id === 0) return true;
-  if (r?.id_local != null && String(r.id_local).length > 0) return true;
+  const serverId = Number(r?.id);
+  const hasServerId = Number.isFinite(serverId) && serverId > 0;
+  if (!hasServerId) return true;
+  const localKey = String(r?.id_local ?? '').trim();
+  if (localKey.length > 0 && (localKey.startsWith('local-') || r?.synced === false)) return true;
   if (r?.synced === false) return true;
   return false;
 }
 
+/** Compatibilidad temporal: si se requiere filtrar por puesto, filtra sobre resultados por corpo. */
+export function filterAgendaFromEvaluationsCacheByPuesto(fullCache: any[], puestoId: number | null): any[] {
+  if (puestoId == null || !Number.isFinite(Number(puestoId)) || Number(puestoId) <= 0) return [];
+  const pid = Number(puestoId);
+  return (fullCache || []).filter(
+    (item) =>
+      isAgendaMinutaCacheType(item.type) &&
+      Number(item.puesto_id) === pid &&
+      item?.isActive !== false
+  );
+}
+
 /**
- * Tras respuesta online: reemplaza en caché global solo las entradas de agenda del `puestoId`;
- * conserva otros tipos, otros puestos y borradores locales pendientes de este puesto.
+ * Tras respuesta online: reemplaza en caché global solo las entradas de agenda del `corpoId`;
+ * conserva otros tipos, otros corpos y borradores locales pendientes de este corpo.
  */
-export function mergeEvaluationsCacheAgendaMinutaForPuesto(
+export function mergeEvaluationsCacheAgendaMinutaForCorpo(
   fullCache: any[],
   freshFromServer: any[],
-  puestoId: number
+  corpoId: number
 ): any[] {
-  const pid = Number(puestoId);
-  const withoutPuestoAgenda = fullCache.filter(
-    (item) => !(isAgendaMinutaCacheType(item.type) && Number(item.puesto_id) === pid)
+  const cid = Number(corpoId);
+  const withoutCorpoAgenda = fullCache.filter(
+    (item) => !(isAgendaMinutaCacheType(item.type) && Number(item.corpo_id) === cid)
   );
-  const existingPuestoAgenda = fullCache.filter(
-    (item) => isAgendaMinutaCacheType(item.type) && Number(item.puesto_id) === pid
+  const existingCorpoAgenda = fullCache.filter(
+    (item) => isAgendaMinutaCacheType(item.type) && Number(item.corpo_id) === cid
   );
-  const pending = existingPuestoAgenda.filter(isAgendaMinutaLocalPendingRecord);
-  const serverTagged = (freshFromServer || []).map((r) => ({
-    ...r,
-    synced: true,
-    type: AGENDA_MINUTA_CACHE_TYPE,
-  }));
+  const pending = existingCorpoAgenda.filter(isAgendaMinutaLocalPendingRecord);
+  const serverTagged = (freshFromServer || [])
+    .filter((r) => Number(r?.corpo_id) === cid && r?.isActive !== false)
+    .map((r) => ({
+      ...r,
+      synced: true,
+      type: AGENDA_MINUTA_CACHE_TYPE,
+      isActive: r?.isActive ?? true,
+    }));
   const mergedAgenda = [
     ...pending.map((r) => ({ ...r, synced: false })),
     ...serverTagged,
   ];
-  return [...withoutPuestoAgenda, ...mergedAgenda];
+  const deduped = new Map<string, any>();
+  for (const row of mergedAgenda) {
+    const sid = Number(row?.id);
+    const key = Number.isFinite(sid) && sid > 0 ? `id:${sid}` : `local:${String(row?.id_local ?? '')}`;
+    deduped.set(key, row);
+  }
+  return [...withoutCorpoAgenda, ...Array.from(deduped.values())];
 }

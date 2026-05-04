@@ -89,6 +89,8 @@ export async function GET(req: NextRequest) {
             where.puesto_id = parseInt(puestoIdStr);
         }
 
+        where.isActive = true;
+
         const encuestas = await callDynamicPrisma({
             req,
             data: {
@@ -195,6 +197,7 @@ export async function POST(req: NextRequest) {
             division_id,
             corpo_id,
             puesto_id,
+            contrato_id,
             fecha,
             evaluaciones,
             persona_evaluada,
@@ -233,6 +236,10 @@ export async function POST(req: NextRequest) {
         if (!empresa_id || !cliente_id || !division_id || !corpo_id || !puesto_id) {
             return NextResponse.json({ status: false, message: "IDs de jerarquía incompletos" }, { status: 200 });
         }
+
+        const contratoIdNum =
+            contrato_id != null && String(contrato_id).trim() !== "" ? parseInt(String(contrato_id), 10) : 0;
+        const contratoIdFinal = Number.isFinite(contratoIdNum) && contratoIdNum > 0 ? contratoIdNum : 0;
 
         const marca = await callDynamicPrisma({
             req,
@@ -366,6 +373,7 @@ export async function POST(req: NextRequest) {
                     puesto_id: puestoObj.id,
                     division_id: divisionObj.id,
                     responsable_id: responsableObj.id,
+                    contrato_id: contratoIdFinal,
                     empresa_evaluado: empresa_evaluada,
                     firma_responsable: firma_responsable,
                     created_at: createdAtStamp.toISOString(),
@@ -461,7 +469,15 @@ export async function POST(req: NextRequest) {
             await sendNotificationByRole(req, marcaObj.corpo_id, [marcaObj.plaza_id], "Encuesta de satisfacción agregada", desc_notification, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
-        return NextResponse.json({ status: true, message: "Encuesta creada correctamente" }, { status: 200 });
+        const createdId = (encuesta as any)?.id != null ? Number((encuesta as any).id) : undefined;
+        return NextResponse.json(
+            {
+                status: true,
+                message: "Encuesta creada correctamente",
+                data: createdId != null && Number.isFinite(createdId) ? { id: createdId } : undefined,
+            },
+            { status: 200 }
+        );
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

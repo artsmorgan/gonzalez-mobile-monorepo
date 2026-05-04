@@ -6,6 +6,17 @@ import fs from "fs";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
+import {
+    buildTrainingUploadPartsFromDataUris,
+    collectTrainingUploadDataUrisFromBody,
+    parseTrainingFileField,
+    resolveTrainingFilesMetaList,
+} from "./trainingFileField";
+import {
+    getRequestBaseUrl,
+    mapArchivoRowToApiPayload,
+    mapLegacyFileItemToApiPayload,
+} from "./trainingArchivosHelpers";
 
 export async function GET(req: NextRequest) {
     try {
@@ -118,7 +129,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_registro_capacitaciones",
                 operation: "findMany",
-                where: { corpo_id: effectiveCorpoId },
+                where: { corpo_id: effectiveCorpoId, isActive: true },
             },
         });
         const capacitacionesArray = Array.isArray(capacitaciones) ? capacitaciones : [];
@@ -128,6 +139,9 @@ export async function GET(req: NextRequest) {
             empresa: { id: number, nombre: string },
             cliente: { id: number, nombre: string },
             sucursal: { id: number, nombre: string },
+            division_id: number,
+            contrato_id: number,
+            puesto_id: number,
             titulo: string,
             descripcion: string,
             tipo: string,
@@ -138,10 +152,20 @@ export async function GET(req: NextRequest) {
             nombre_firma: string,
             fecha: string,
             base64_file: string,
+            archivos: {
+                id: number;
+                name: string;
+                original_name: string;
+                type: string;
+                extension: string;
+                url: string;
+            }[],
             empleados: { id: number, nombre: string, cedula: string }[],
             puestos: { id: number, nombre: string }[],
             id_local: string,
         }[] = [];
+
+        const baseUrl = getRequestBaseUrl(req);
 
         const empresaCache = new Map<number, any>();
         const clienteCache = new Map<number, any>();
@@ -192,6 +216,9 @@ export async function GET(req: NextRequest) {
 
         for (const capacitacion of capacitacionesArray) {
             const capacitacionObj = capacitacion as any;
+            if (capacitacionObj.isActive === false) {
+                continue;
+            }
             // Desconvertir de base64 a string
             const id_firma = atob(capacitacionObj.firma_responsable).split(":")[1];
             const firma = await callDynamicPrisma({
@@ -284,6 +311,33 @@ export async function GET(req: NextRequest) {
             const clienteObj = (clienteRow || {}) as any;
             const corpoObj = (corpoRow || {}) as any;
 
+            const archivosDbRows = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_archivos_adjuntos_capacitaciones",
+                    operation: "findMany",
+                    where: { capacitacion_id: capacitacionObj.id },
+                },
+            });
+            const archivosDb = Array.isArray(archivosDbRows) ? archivosDbRows : [];
+            const seenNames = new Set(archivosDb.map((r: any) => String(r?.name ?? "")));
+            const archivosApi = archivosDb.map((r: any) =>
+                mapArchivoRowToApiPayload(baseUrl, capacitacionObj.id, {
+                    id: r.id,
+                    name: r.name,
+                    original_name: r.original_name,
+                    type: r.type,
+                    extension: r.extension,
+                    capacitacion_id: r.capacitacion_id,
+                })
+            );
+            const legacyItems = parseTrainingFileField(capacitacionObj.file);
+            for (const li of legacyItems) {
+                if (seenNames.has(li.name)) continue;
+                archivosApi.push(mapLegacyFileItemToApiPayload(baseUrl, capacitacionObj.id, li));
+            }
+
             capacitaciones_return.push({
                 id: capacitacionObj.id,
                 empresa: {
@@ -298,6 +352,9 @@ export async function GET(req: NextRequest) {
                     id: corpoObj.id ?? capacitacionObj.corpo_id,
                     nombre: corpoObj.nombre ?? "—"
                 },
+                division_id: Number(capacitacionObj.division_id) || 0,
+                contrato_id: Number(capacitacionObj.contrato_id) || 0,
+                puesto_id: Number(capacitacionObj.puesto_id) || 0,
                 titulo: capacitacionObj.titulo,
                 descripcion: capacitacionObj.descripcion,
                 tipo: capacitacionObj.tipo,
@@ -311,6 +368,7 @@ export async function GET(req: NextRequest) {
                 nombre_firma: nombre_firma,
                 fecha: fechaValue.toISOString(),
                 base64_file: "",
+                archivos: archivosApi,
                 empleados: all_empleados,
                 puestos: all_puestos,
                 id_local: ""
@@ -337,6 +395,9 @@ export async function POST(req: NextRequest) {
             empresa_id: body_empresa_id,
             cliente_id: body_cliente_id,
             corpo_id: body_corpo_id,
+            division_id: body_division_id,
+            contrato_id: body_contrato_id,
+            puesto_id: body_puesto_id,
             titulo,
             descripcion,
             tipo,
@@ -345,7 +406,8 @@ export async function POST(req: NextRequest) {
             nombre_responsable,
             cedula_responsable,
             firma_responsable,
-            file, // Opcional
+            file, // Opcional (una imagen legacy)
+            files, // Opcional string[] data URI
             fecha,
             empleados,
             puestos
@@ -366,6 +428,10 @@ export async function POST(req: NextRequest) {
         console.log("puestos", puestos);
         console.log("--------------------------------");
 
+        const divId = body_division_id != null && body_division_id !== "" ? parseInt(String(body_division_id), 10) : NaN;
+        const conId = body_contrato_id != null && body_contrato_id !== "" ? parseInt(String(body_contrato_id), 10) : NaN;
+        const puestoJerId = body_puesto_id != null && body_puesto_id !== "" ? parseInt(String(body_puesto_id), 10) : NaN;
+
         if (!marca_id ||
             !titulo ||
             !descripcion ||
@@ -376,7 +442,10 @@ export async function POST(req: NextRequest) {
             !firma_responsable ||
             !fecha ||
             !empleados ||
-            !puestos) {
+            !puestos ||
+            !Number.isFinite(divId) ||
+            !Number.isFinite(conId) ||
+            !Number.isFinite(puestoJerId)) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
@@ -478,6 +547,9 @@ export async function POST(req: NextRequest) {
                     empresa_id: empresaObj.id,
                     cliente_id: clienteObj.id,
                     corpo_id: corpoObj.id,
+                    division_id: divId,
+                    contrato_id: conId,
+                    puesto_id: puestoJerId,
                     titulo: titulo,
                     descripcion: descripcion,
                     tipo: tipo,
@@ -555,34 +627,53 @@ export async function POST(req: NextRequest) {
             });
         }
 
-        if (capacitacionObj && file) {
-            const matches = file.match(/^data:(.+);base64,(.+)$/);
-            if (!matches) throw new Error("Formato base64 inválido");
-            const extension = matches[1].split("/")[1]?.replace("jpeg", "jpg") || "jpg";
+        const dataUriList = collectTrainingUploadDataUrisFromBody({ files, file });
+
+        if (dataUriList.length > 0) {
+            const metaList = resolveTrainingFilesMetaList(body);
+            const uploadParts = buildTrainingUploadPartsFromDataUris(dataUriList, metaList);
             const uploadResp = await uploadDynamicFiles({
                 req,
                 folderPath: `training/${capacitacionObj.id}`,
-                files: [{ type: "image", extension, file_base64: file }],
+                files: uploadParts,
             });
             const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-            const file_name = uploaded[0]?.name || "";
-            if (file_name) {
+            for (let i = 0; i < uploaded.length; i++) {
+                const u = uploaded[i] as { name?: string; original_name?: string };
+                const name = u?.name || "";
+                if (!name) continue;
+                const part = uploadParts[i];
+                const extRaw = part?.extension || name.split(".").pop() || "bin";
+                const ext = String(extRaw).replace(/^\./, "").slice(0, 25);
+                const orig = (u?.original_name && String(u.original_name).trim() !== "")
+                    ? String(u.original_name)
+                    : name;
                 await callDynamicPrisma({
                     req,
                     data: {
-                        action: "UPDATE",
-                        table: "e_registro_capacitaciones",
-                        operation: "update",
-                        where: { id: capacitacionObj.id },
-                        data: { file: file_name }
-                    }
+                        action: "POST",
+                        table: "c_archivos_adjuntos_capacitaciones",
+                        operation: "create",
+                        data: {
+                            name,
+                            original_name: orig,
+                            type: (part?.type || "file").slice(0, 25),
+                            extension: ext,
+                            capacitacion_id: capacitacionObj.id,
+                        },
+                    },
                 });
             }
         }
 
         await sendNotificationByRole(req, effectiveCorpoIdPost, [marcaObj.plaza_id], "Capacitación creada", `Se ha registrado la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
 
-        return NextResponse.json({ status: true, message: "Capacitación creada correctamente" }, { status: 200 });
+        return NextResponse.json({
+            status: true,
+            message: "Capacitación creada correctamente",
+            id: capacitacionObj.id,
+            data: { id: capacitacionObj.id },
+        }, { status: 200 });
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

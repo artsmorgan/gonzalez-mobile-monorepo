@@ -48,6 +48,21 @@ function parseDateValue(dateValue: any): Date | null {
     return isNaN(parsed.getTime()) ? null : parsed;
 }
 
+/** Instante del artículo en el cliente; sin `created_at` válido se usa el de la entrega (`fallback`). */
+function articuloIncomingTimestampEntrega(articulo: any, fallback: Date): Date {
+    if (articulo?.created_at != null && String(articulo.created_at).trim()) {
+        const d = new Date(articulo.created_at);
+        if (!isNaN(d.getTime())) return d;
+    }
+    return fallback;
+}
+
+function cantidadNecesariaFromArticuloEntrega(articulo: any): number {
+    const n = Number(articulo?.cantidad_necesaria ?? articulo?.cantidad_requerida ?? 0);
+    if (!Number.isFinite(n)) return 1;
+    return Math.max(1, Math.floor(n));
+}
+
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, message } = await verifyAccessTokenByApi(req);
@@ -687,7 +702,7 @@ export async function POST(req: NextRequest) {
             ? firma_responsable.trim()
             : firmaRecibeFinal;
 
-        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firmaRecibeFinal || !division) {
+        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firmaRecibeFinal) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
@@ -946,108 +961,118 @@ export async function POST(req: NextRequest) {
 
             let articulos_desc = ".";
             let send_notification = false;
-            let articulos_reporte = [];
-            let articulos_reporte_update = [];
+            let articulos_reporte: any[] = [];
+            let articulos_reporte_update: any[] = [];
             if (JSON.parse(articulos_puesto).length > 0) {
                 const articulos_puesto_array = JSON.parse(articulos_puesto);
                 let init_desc = false;
                 for (const articulo of articulos_puesto_array) {
-                    let articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
-                    let add_desc = false;
-                    if (articulo.cantidad_requerida > articulo.cantidad_real) {
-                        add_desc = true;
-                    }
+                    const articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
+                    const newEst = String(articulo.estado ?? "").trim();
+                    const cantidadNec = cantidadNecesariaFromArticuloEntrega(articulo);
+                    const serverNow = new Date();
+                    const whereByTipo =
+                        articulo.tipo === "Plan"
+                            ? { articulo_plan_id: articulo.id }
+                            : { articulo_asignado_id: articulo.id };
 
-                    let last_estado = null;
-                    let last_mantenimiento = null;
-                    if (articulo.tipo == "Plan") {
-                        last_mantenimiento = await callDynamicPrisma({
-                            req,
-                            data: {
-                                action: "GET",
-                                table: "c_articulo_mantenimiento",
-                                operation: "findFirst",
-                                where: { articulo_plan_id: articulo.id },
-                                orderBy: { fecha_solucion: "desc" },
-                            },
-                        });
-                        if (last_mantenimiento) {
-                            last_estado = last_mantenimiento.estado;
-                        }
-                        else {
-                            last_estado = "Bueno";
-                        }
-                    }
-                    else {
-                        last_mantenimiento = await callDynamicPrisma({
-                            req,
-                            data: {
-                                action: "GET",
-                                table: "c_articulo_mantenimiento",
-                                operation: "findFirst",
-                                where: { articulo_asignado_id: articulo.id },
-                                orderBy: { fecha_solucion: "desc" },
-                            },
-                        });
-                        if (last_mantenimiento) {
-                            last_estado = last_mantenimiento.estado;
-                        }
-                        else {
-                            last_estado = "Bueno";
-                        }
-                    }
+                    const last_mantenimiento = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "c_articulo_mantenimiento",
+                            operation: "findFirst",
+                            where: whereByTipo,
+                            orderBy: { updated_at: "desc" },
+                        },
+                    });
 
-                    // Si el último mantenimiento tiene un updated_at más reciente que now, no crear/editar para este artículo
-                    if (last_mantenimiento && last_mantenimiento.updated_at) {
-                        const lastUpdated = new Date(last_mantenimiento.updated_at);
-                        const nowDate = new Date(now);
-                        if (!isNaN(lastUpdated.getTime()) && !isNaN(nowDate.getTime()) && lastUpdated.getTime() > nowDate.getTime()) {
+                    const incomingTs = articuloIncomingTimestampEntrega(articulo, now);
+                    if (last_mantenimiento?.updated_at) {
+                        const lastUpMs = new Date(last_mantenimiento.updated_at).getTime();
+                        if (!isNaN(lastUpMs) && incomingTs.getTime() < lastUpMs) {
                             continue;
                         }
                     }
 
-                    switch (articulo.estado) {
-                        case "Bueno":
-                            if (last_estado != "Bueno") {
-                                articulos_reporte_update.push({
-                                    id: last_mantenimiento.id,
-                                    estado: "Bueno",
-                                    cantidad_real: articulo.cantidad_requerida,
-                                    fecha_solucion: now,
-                                })
+                    const pushCreate = () => {
+                        const ts = articuloIncomingTimestampEntrega(articulo, now);
+                        articulos_reporte.push({
+                            id: articulo.id,
+                            nombre: articulo.nombre,
+                            tipo: articulo.tipo,
+                            marca: articulo.marca,
+                            serie: articulo.serie,
+                            cantidad_requerida: cantidadNec,
+                            cantidad_real: Number(articulo.cantidad_real ?? 0),
+                            estado: newEst,
+                            observaciones: articulo.observaciones ?? "",
+                            created_at: ts,
+                            updated_at: ts,
+                        });
+                    };
+
+                    if (!last_mantenimiento?.id) {
+                        pushCreate();
+                        if (newEst !== "Bueno") {
+                            send_notification = true;
+                            if (!init_desc) {
+                                articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                                init_desc = true;
                             }
-                            break;
-                        default:
-                            if (last_estado == "Bueno") {
-                                send_notification = true;
-                                if (!init_desc) {
-                                    articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
-                                    init_desc = true;
-                                }
-                                articulos_desc += articulo_desc;
-                                articulos_reporte.push({
-                                    id: articulo.id,
-                                    nombre: articulo.nombre,
-                                    tipo: articulo.tipo,
-                                    marca: articulo.marca,
-                                    serie: articulo.serie,
-                                    cantidad_requerida: articulo.cantidad_requerida,
-                                    cantidad_real: articulo.cantidad_real,
-                                    estado: articulo.estado,
-                                    observaciones: articulo.observaciones,
-                                    created_at: now,
-                                    updated_at: now,
-                                });
-                            } else if (articulo.estado != last_estado) {
-                                articulos_reporte_update.push({
-                                    id: last_mantenimiento.id,
-                                    estado: articulo.estado,
-                                    cantidad_real: articulo.cantidad_real,
-                                    fecha_solucion: null,
-                                    updated_at: now,
-                                });
-                            }
-                            break;
+                            articulos_desc += articulo_desc;
+                        }
+                        continue;
+                    }
+
+                    const lastEst = String(last_mantenimiento.estado ?? "").trim();
+
+                    if (lastEst !== "Bueno" && newEst === "Bueno") {
+                        articulos_reporte_update.push({
+                            id: last_mantenimiento.id,
+                            estado: newEst,
+                            cantidad_real: cantidadNec,
+                            cantidad_necesaria: cantidadNec,
+                            fecha_solucion: serverNow,
+                            observaciones: articulo.observaciones ?? "",
+                            marca: articulo.marca,
+                            serie_placa: articulo.serie,
+                            updated_at: serverNow,
+                        });
+                    } else if (lastEst !== "Bueno" && newEst !== "Bueno") {
+                        const upd: Record<string, unknown> = {
+                            id: last_mantenimiento.id,
+                            estado: newEst,
+                            cantidad_real: Number(articulo.cantidad_real ?? 0),
+                            cantidad_necesaria: cantidadNec,
+                            observaciones: articulo.observaciones ?? "",
+                            marca: articulo.marca,
+                            serie_placa: articulo.serie,
+                            updated_at: serverNow,
+                        };
+                        if (lastEst !== newEst) {
+                            upd.fecha_solucion = null;
+                        }
+                        articulos_reporte_update.push(upd);
+                    } else if (lastEst === "Bueno" && newEst !== "Bueno") {
+                        send_notification = true;
+                        if (!init_desc) {
+                            articulos_desc = ". Sin embargo, los artículos registrados presentan los siguientes detalles:\n";
+                            init_desc = true;
+                        }
+                        articulos_desc += articulo_desc;
+                        pushCreate();
+                    } else {
+                        articulos_reporte_update.push({
+                            id: last_mantenimiento.id,
+                            estado: newEst,
+                            cantidad_real: Number(articulo.cantidad_real ?? 0),
+                            cantidad_necesaria: cantidadNec,
+                            observaciones: articulo.observaciones ?? "",
+                            marca: articulo.marca,
+                            serie_placa: articulo.serie,
+                            updated_at: serverNow,
+                        });
                     }
                 }
             }

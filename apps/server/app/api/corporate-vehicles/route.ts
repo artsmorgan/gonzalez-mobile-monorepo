@@ -24,7 +24,7 @@ export async function GET(req: NextRequest) {
     const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
 
-    const where: any = {};
+    const where: any = { isActive: true };
 
     // Si hay filtros jerárquicos, usarlos
     if (corpoIdStr) {
@@ -147,6 +147,9 @@ export async function POST(req: NextRequest) {
       empresa_id,
       cliente_id,
       corpo_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       placa,
       tipo,
       tipo_autoria,
@@ -166,6 +169,9 @@ export async function POST(req: NextRequest) {
     const empresaId = Number(empresa_id);
     const clienteId = Number(cliente_id);
     const sucursalId = Number(corpo_id);
+    const divisionId = Number(division_id ?? 0);
+    const contratoIdNum = Number(contrato_id ?? 0);
+    const puestoIdNum = Number(puesto_id ?? 0);
     if (!empresaId || !clienteId || !sucursalId) {
       return NextResponse.json(
         { status: false, message: "Empresa, Cliente y Sucursal son requeridos" },
@@ -193,6 +199,10 @@ export async function POST(req: NextRequest) {
           empresa_id: empresaId,
           cliente_id: clienteId,
           sucursal_id: sucursalId,
+          division_id: divisionId > 0 ? divisionId : 0,
+          contrato_id: contratoIdNum > 0 ? contratoIdNum : 0,
+          puesto_id: puestoIdNum > 0 ? puestoIdNum : 0,
+          isActive: true,
           placa: String(placa ?? ""),
           tipo: String(tipo ?? ""),
           tipo_autoria: String(tipo_autoria ?? ""),

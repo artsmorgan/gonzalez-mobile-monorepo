@@ -26,6 +26,14 @@ interface DeleteNoteParams {
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
 
+interface DeleteNoteImageParams {
+    noteId: number;
+    puestoId: number;
+    imageId: number;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
 export async function createNote({
     requestData,
     marcaId,
@@ -209,6 +217,41 @@ export async function deleteNote({
     } catch (error) {
         console.error('Error deleting note:', error);
         return { status: false, message: 'Error al eliminar la nota' };
+    }
+}
+
+export async function deleteNoteImage({
+    noteId,
+    puestoId,
+    imageId,
+    refreshAccessToken,
+    logout
+}: DeleteNoteImageParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) throw new Error('Server URL not configured');
+        if (!puestoId) throw new Error('Puesto ID not found');
+        if (!noteId) throw new Error('Note ID not found');
+        if (!imageId) throw new Error('Image ID not found');
+        if (!refreshAccessToken || !logout) throw new Error('Auth handlers not provided');
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/puestos/${puestoId}/notas/${noteId}/images/${imageId}`,
+            init: {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            },
+            refreshAccessToken,
+            logout,
+        });
+        if (!response) return { status: false, message: 'Sesión expirada' };
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        return await response.json();
+    } catch (error) {
+        console.error('Error deleting note image:', error);
+        return { status: false, message: 'Error al eliminar el archivo de la nota' };
     }
 }
 

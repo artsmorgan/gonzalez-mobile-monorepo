@@ -69,7 +69,7 @@ async function validateLlaveOwnership(req: NextRequest, llaveId: number, marcaId
     data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveId } }
   });
   if (!llave) return { ok: false as const, llave: null, message: "Llave no encontrada" };
-  if (llave.cliente_id !== marcaDia.cliente_id || llave.corpo_id !== marcaDia.corpo_id) {
+  if (llave.cliente_id !== marcaDia.cliente_id) {
     return { ok: false as const, llave: null, message: "No autorizado" };
   }
   return { ok: true as const, llave, message: "" };

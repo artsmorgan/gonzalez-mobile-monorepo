@@ -6,6 +6,14 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
 import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 
+const getUsuarioInsercion = async (req: NextRequest, id: number) => {
+    const empleado = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id } }
+    });
+    return empleado.cedula ? (empleado.cedula) : "MonitoreApp";
+}
+
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -147,6 +155,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason);
                 }
 
+                marcaDia.usuario_marca_entrada = await getUsuarioInsercion(req, marcaDia.empleadoFijo_id ?? 0);
                 const updated = await callDynamicPrisma({
                     req,
                     data: {
@@ -286,9 +295,10 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
             });
         }
 
+        let usuario_insercion = await getUsuarioInsercion(req, marcaDia.empleadoFijo_id ?? 0);
         if (salidaAnticipada) {
             const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
-            const accionPersonal_response = await createAccionPersonal(req, marcaDia.id, 13, 0, 0, salidaAnticipada.id, reason, coordinadoPorId);
+            const accionPersonal_response = await createAccionPersonal(req, marcaDia.id, 13, 0, 0, salidaAnticipada.id, reason, coordinadoPorId, usuario_insercion);
             if (accionPersonal_response.status) {
                 const accionPersonal = accionPersonal_response.data;
                 marcaDia.accionPersonal_id = accionPersonal.id;
@@ -313,6 +323,8 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
                 await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
+
+        marcaDia.usuario_marca_salida = usuario_insercion;
 
         const updated = await callDynamicPrisma({
             req,

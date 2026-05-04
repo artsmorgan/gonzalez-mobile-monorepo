@@ -7,6 +7,136 @@ import { toZonedTime } from "date-fns-tz";
 import path from "path";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { visitorsResolveHierarchyFromPuestoId } from "../../../utils/visitorsResolveHierarchyFromPuesto";
+
+async function assertCorpoAllowedForMarca(
+    req: NextRequest,
+    marcaDia: any,
+    corpoIdReq: number
+): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (Number(marcaDia.corpo_id) === corpoIdReq) {
+        return { ok: true };
+    }
+    const marcaClienteId = marcaDia.cliente_id != null ? Number(marcaDia.cliente_id) : NaN;
+    if (!Number.isFinite(marcaClienteId) || marcaClienteId <= 0) {
+        return { ok: false, message: "La sucursal no corresponde a la marca indicada" };
+    }
+    const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdReq } }
+    });
+    if (!sucursal) {
+        return { ok: false, message: "Sucursal no encontrada" };
+    }
+    const contratoId = sucursal.contrato_id != null ? Number(sucursal.contrato_id) : NaN;
+    if (!Number.isFinite(contratoId) || contratoId <= 0) {
+        return { ok: false, message: "La sucursal no tiene contrato asociado" };
+    }
+    const contrato = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoId } }
+    });
+    const contratoClienteId = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
+    if (!Number.isFinite(contratoClienteId) || contratoClienteId !== marcaClienteId) {
+        return { ok: false, message: "La sucursal no pertenece al mismo cliente que la marca indicada" };
+    }
+    return { ok: true };
+}
+
+async function getClienteIdForSucursal(req: NextRequest, sucursalId: number): Promise<number | null> {
+    const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
+    });
+    if (!sucursal?.contrato_id) {
+        return null;
+    }
+    const contrato = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
+    });
+    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
+    return Number.isFinite(cliente_id) && cliente_id > 0 ? cliente_id : null;
+}
+
+async function clienteAndPuestoForCorpo(
+    req: NextRequest,
+    corpoId: number
+): Promise<{ cliente_id: number; puesto_id: number } | null> {
+    const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoId } }
+    });
+    if (!sucursal?.contrato_id) {
+        return null;
+    }
+    const contrato = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
+    });
+    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
+    if (!Number.isFinite(cliente_id) || cliente_id <= 0) {
+        return null;
+    }
+    const puestos = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpoId } }
+    });
+    const list = Array.isArray(puestos) ? puestos : [];
+    const puesto_id = list[0]?.id != null ? Number(list[0].id) : NaN;
+    if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+        return null;
+    }
+    return { cliente_id, puesto_id };
+}
+
+async function resolveClienteYPuestoParaAlta(
+    req: NextRequest,
+    marcaDia: any,
+    targetCorpoId: number,
+    bodyPuestoId: unknown
+): Promise<{ ok: true; cliente_id: number; puesto_id: number } | { ok: false; message: string }> {
+    const puestoParsed =
+        bodyPuestoId != null && bodyPuestoId !== ""
+            ? parseInt(String(bodyPuestoId), 10)
+            : NaN;
+
+    if (Number.isFinite(puestoParsed) && puestoParsed > 0) {
+        const puesto = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoParsed } }
+        });
+        if (!puesto) {
+            return { ok: false, message: "Puesto no encontrado" };
+        }
+        const sid = puesto.sucursal_id != null ? Number(puesto.sucursal_id) : NaN;
+        if (sid !== Number(targetCorpoId)) {
+            return { ok: false, message: "El puesto no pertenece a la sucursal indicada" };
+        }
+        const clienteId = await getClienteIdForSucursal(req, targetCorpoId);
+        if (clienteId == null) {
+            return { ok: false, message: "No se pudo resolver el cliente para la sucursal indicada" };
+        }
+        return { ok: true, cliente_id: clienteId, puesto_id: puestoParsed };
+    }
+
+    let clienteIdFinal = marcaDia.cliente_id;
+    let puestoIdFinal = marcaDia.puesto_id;
+    if (Number(targetCorpoId) !== Number(marcaDia.corpo_id)) {
+        const cp = await clienteAndPuestoForCorpo(req, targetCorpoId);
+        if (!cp) {
+            return { ok: false, message: "No se pudo resolver cliente/puesto para la sucursal indicada" };
+        }
+        clienteIdFinal = cp.cliente_id;
+        puestoIdFinal = cp.puesto_id;
+    }
+    const cid = Number(clienteIdFinal);
+    const pid = Number(puestoIdFinal);
+    if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(pid) || pid <= 0) {
+        return { ok: false, message: "Marca o sucursal sin cliente/puesto válido" };
+    }
+    return { ok: true, cliente_id: cid, puesto_id: pid };
+}
 
 export async function GET(req: NextRequest) {
     try {
@@ -34,11 +164,9 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
-        if (Number(marcaDia.corpo_id) !== corpoIdReq) {
-            return NextResponse.json(
-                { status: false, message: "La sucursal no corresponde a la marca indicada" },
-                { status: 200 }
-            );
+        const corpoOk = await assertCorpoAllowedForMarca(req, marcaDia, corpoIdReq);
+        if (!corpoOk.ok) {
+            return NextResponse.json({ status: false, message: corpoOk.message }, { status: 200 });
         }
 
         if (!marcaDia.empleadoFijo_id) {
@@ -50,7 +178,12 @@ export async function GET(req: NextRequest) {
 
         const visitas = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "e_registro_personas", operation: "findMany", where: { corpo_id: corpoIdReq } }
+            data: {
+                action: "GET",
+                table: "e_registro_personas",
+                operation: "findMany",
+                where: { corpo_id: corpoIdReq, isActive: true }
+            }
         });
 
         const visitas_return: any[] = [];
@@ -90,6 +223,16 @@ export async function GET(req: NextRequest) {
                 }
             }
 
+            let puesto_nombre: string | null = null;
+            const puestoIdNum = v.puesto_id != null ? Number(v.puesto_id) : NaN;
+            if (Number.isFinite(puestoIdNum) && puestoIdNum > 0) {
+                const puestoRow = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoIdNum } }
+                });
+                puesto_nombre = puestoRow?.nombre != null ? String(puestoRow.nombre) : null;
+            }
+
             visitas_return.push({
                 id: v.id,
                 nombre: v.nombre,
@@ -110,7 +253,14 @@ export async function GET(req: NextRequest) {
                 updated_at: v.updated_at,
                 activos: activos,
                 corpo_id: v.corpo_id,
-                id_local: ""
+                puesto_id: v.puesto_id,
+                puesto_nombre,
+                id_local: "",
+                empresa_id: v.empresa_id,
+                division_id: v.division_id,
+                contrato_id: v.contrato_id,
+                cliente_id: v.cliente_id,
+                isActive: v.isActive,
             });
         }
 
@@ -129,6 +279,8 @@ export async function POST(req: NextRequest) {
 
         const {
             marca_id,
+            corpo_id: bodyCorpoId,
+            puesto_id: bodyPuestoId,
             nombre,
             cedula,
             hora_entrada,
@@ -158,6 +310,38 @@ export async function POST(req: NextRequest) {
             );
         }
 
+        const bodyCorpoParsed =
+            bodyCorpoId != null && bodyCorpoId !== ""
+                ? parseInt(String(bodyCorpoId), 10)
+                : NaN;
+        const targetCorpoId =
+            Number.isFinite(bodyCorpoParsed) && bodyCorpoParsed > 0
+                ? bodyCorpoParsed
+                : Number(marcaDia.corpo_id);
+
+        const corpoOkPost = await assertCorpoAllowedForMarca(req, marcaDia, targetCorpoId);
+        if (!corpoOkPost.ok) {
+            return NextResponse.json({ status: false, message: corpoOkPost.message }, { status: 200 });
+        }
+
+        const resolvedCp = await resolveClienteYPuestoParaAlta(req, marcaDia, targetCorpoId, bodyPuestoId);
+        if (!resolvedCp.ok) {
+            return NextResponse.json({ status: false, message: resolvedCp.message }, { status: 200 });
+        }
+        const clienteIdFinal = resolvedCp.cliente_id;
+        const puestoIdFinal = resolvedCp.puesto_id;
+
+        const hierarchy = await visitorsResolveHierarchyFromPuestoId(req, puestoIdFinal, targetCorpoId);
+        if (!hierarchy.ok) {
+            return NextResponse.json({ status: false, message: hierarchy.message }, { status: 200 });
+        }
+        if (Number(hierarchy.cliente_id) !== Number(clienteIdFinal)) {
+            return NextResponse.json(
+                { status: false, message: "Inconsistencia entre cliente resuelto y jerarquía del puesto" },
+                { status: 200 }
+            );
+        }
+
         // Crear registro
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
         const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
@@ -168,9 +352,12 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "e_registro_personas",
                 data: {
-                    cliente_id: marcaDia.cliente_id,
-                    corpo_id: marcaDia.corpo_id,
-                    puesto_id: marcaDia.puesto_id,
+                    cliente_id: hierarchy.cliente_id,
+                    corpo_id: targetCorpoId,
+                    puesto_id: puestoIdFinal,
+                    empresa_id: hierarchy.empresa_id,
+                    division_id: hierarchy.division_id,
+                    contrato_id: hierarchy.contrato_id,
                     responsable_id: createdBy,
                     created_at: createdAt.toISOString(),
                     updated_at: createdAt.toISOString(),
@@ -184,6 +371,7 @@ export async function POST(req: NextRequest) {
                     observaciones,
                     tipo_accion,
                     pers_autoriza_salida,
+                    isActive: true,
                 }
             }
         });
@@ -232,7 +420,7 @@ export async function POST(req: NextRequest) {
                 const hora_entrada = entrada.split("T")[1].split(".")[0];
                 const tipo_visitante = es_funcionario ? "Funcionario" : "Visitante";
                 const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de ${nombre} con la cedula ${cedula} el día ${fecha_entrada} a las ${hora_entrada}. Tipo de visitante: ${tipo_visitante}. Razón de la visita: ${razon_visita}`;
-                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, targetCorpoId, [marcaDia.plaza_id], "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
 
             if (activos.length > 0) {
@@ -287,7 +475,11 @@ export async function POST(req: NextRequest) {
         }
 
         return NextResponse.json(
-            { status: true, message: "Visita registrada correctamente" },
+            {
+                status: true,
+                message: "Visita registrada correctamente",
+                data: { id: new_visita?.id != null ? Number(new_visita.id) : null }
+            },
             { status: 200 }
         );
     } catch (error: unknown) {

@@ -13,6 +13,10 @@ export async function GET(
 
         const resolvedParams = await context.params;
         const { corpo_id } = resolvedParams;
+        const corpoIdNum = parseInt(String(corpo_id), 10);
+        if (!corpoIdNum || Number.isNaN(corpoIdNum)) {
+            return NextResponse.json({ status: false, message: "corpo_id inválido", data: [] }, { status: 400 });
+        }
 
         const records = await callDynamicPrisma({
             req,
@@ -21,7 +25,8 @@ export async function GET(
                 table: "c_solicitud_permiso",
                 operation: "findMany",
                 where: {
-                    corpo_id: corpo_id
+                    corpo_id: corpoIdNum,
+                    isActive: true,
                 },
                 orderBy: {
                     created_at: 'desc'

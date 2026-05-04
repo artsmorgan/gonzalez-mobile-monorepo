@@ -5,5 +5,7 @@
  */
 export const FORCE_OFFLINE = false;
 
+// Hay que actualizar "apps\mobile\screens\BitacoraVehiculosDetenidosScreen.tsx" para que cumpla la lógica de "main-structure"
+
 /** @deprecated Usar FORCE_OFFLINE (mismo valor). */
 export const FORCE_OFFLINE_SYNC = FORCE_OFFLINE;

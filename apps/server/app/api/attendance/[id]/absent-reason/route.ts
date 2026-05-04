@@ -83,7 +83,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 // Crear la acción personal
                 const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
                 console.log(3);
-                const response = await createAccionPersonal(req, marcaDia.id, 5, 0, ausencia.id, 0, reason, coordinadoPorId);
+                let usuario_insercion = empleado.cedula ? (empleado.cedula + " - MonitoreApp") : "MonitoreApp";
+                const response = await createAccionPersonal(req, marcaDia.id, 5, 0, ausencia.id, 0, reason, coordinadoPorId, usuario_insercion);
                 console.log(4);
                 if (response.status) {
                     accionPersonal = response.data;

@@ -43,6 +43,9 @@ export async function GET(
     if (!record) {
       return NextResponse.json({ status: false, message: "Solicitud no encontrada" }, { status: 404 });
     }
+    if ((record as any).isActive === false) {
+      return NextResponse.json({ status: false, message: "Solicitud no disponible" }, { status: 404 });
+    }
     const mainFile = await callDynamicPrisma({
       req,
       data: {

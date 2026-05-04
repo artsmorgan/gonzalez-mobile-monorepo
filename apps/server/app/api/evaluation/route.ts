@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
-import path from "path";
-import fs from "fs";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 
@@ -12,8 +10,37 @@ export async function POST(req: NextRequest) {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
+        const contentType = req.headers.get("content-type") || "";
+        let body: Record<string, any>;
+        /** `Request#formData()`; doble aserción por colisión de tipos `FormData` en el entorno. */
+        type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
+        let multipartForm: MultipartBody | null = null;
+        if (contentType.includes("multipart/form-data")) {
+            try {
+                const formData = (await req.formData()) as unknown as MultipartBody;
+                multipartForm = formData;
+                const rawMeta = formData.get("metadata");
+                if (typeof rawMeta !== "string") {
+                    return NextResponse.json({ message: "metadata faltante o inválido" }, { status: 400 });
+                }
+                body = JSON.parse(rawMeta);
+            } catch {
+                return NextResponse.json({ message: "Cuerpo multipart inválido" }, { status: 400 });
+            }
+        } else {
+            try {
+                body = await req.json();
+            } catch {
+                return NextResponse.json({ message: "JSON inválido" }, { status: 400 });
+            }
+        }
+
         const { marca_id,
             corpo_id,
+            empresa_id,
+            cliente_id,
+            division_id,
+            contrato_id,
             puesto_id,
             plaza_id,
             nombre_colaborador,
@@ -27,7 +54,7 @@ export async function POST(req: NextRequest) {
             firma_evaluador,
             firma_empleado,
             firma_empleado_manual,
-            tipo } = await req.json();
+            tipo } = body;
 
         console.log("marca_id", marca_id);
         console.log("nombre_colaborador", nombre_colaborador);
@@ -66,6 +93,18 @@ export async function POST(req: NextRequest) {
         const corpoIdToUse = corpo_id ?? marca.corpo_id;
         const puestoIdToUse = puesto_id ?? marca.puesto_id;
         const plazaIdToUse = plaza_id ?? marca.plaza_id;
+        const empresaIdToUse = empresa_id != null && Number(empresa_id) > 0 ? Number(empresa_id) : null;
+        const clienteIdToUse = cliente_id != null && Number(cliente_id) > 0 ? Number(cliente_id) : null;
+        const divisionIdToUse = division_id != null && Number(division_id) > 0 ? Number(division_id) : null;
+        const contratoIdToUse = contrato_id != null && Number(contrato_id) > 0 ? Number(contrato_id) : null;
+        if (
+            empresaIdToUse == null || !Number.isFinite(empresaIdToUse) ||
+            clienteIdToUse == null || !Number.isFinite(clienteIdToUse) ||
+            divisionIdToUse == null || !Number.isFinite(divisionIdToUse) ||
+            contratoIdToUse == null || !Number.isFinite(contratoIdToUse)
+        ) {
+            return NextResponse.json({ message: "Jerarquía incompleta (empresa, cliente, división y contrato requeridos)" }, { status: 400 });
+        }
 
         const corpo = await callDynamicPrisma({
             req,
@@ -121,6 +160,11 @@ export async function POST(req: NextRequest) {
                     corpo_id: corpo.id,
                     puesto_id: puesto.id,
                     plaza_id: plaza.id,
+                    empresa_id: empresaIdToUse,
+                    cliente_id: clienteIdToUse,
+                    division_id: divisionIdToUse,
+                    contrato_id: contratoIdToUse,
+                    isActive: true,
                     nombre_empleado: nombre_colaborador,
                     nombre_evaluador: evaluador.nombre + " " + evaluador.primer_apellido + (evaluador.segundo_apellido ? " " + evaluador.segundo_apellido : ""),
                     cedula_empleado: cedula_colaborador,
@@ -132,7 +176,47 @@ export async function POST(req: NextRequest) {
         if (evaluacion_empleado) {
             const description = `Se ha registrado tu evaluación realizada por ${nombre_colaborador} el día ${fecha_evaluacion} para la sucursal ${corpo.nombre} de la empresa ${cliente.nombre}`;
             await sendNotificationByEmployee(req, corpo.id, [empleado_id], "Evaluación realizada", description, [evaluador_id]);
-            const evaluacion_json = JSON.parse(evaluacion);
+
+            let evaluacionStr = typeof evaluacion === "string" ? evaluacion : JSON.stringify(evaluacion);
+
+            if (multipartForm) {
+                const matches = Array.from(evaluacionStr.matchAll(/__STAFFEVAL_FILE__:(\d+)__/g));
+                const uniqueSorted = [...new Set(matches.map((m) => parseInt(m[1], 10)))].sort((a, b) => a - b);
+                if (uniqueSorted.length > 0) {
+                    const filePayload: { type: "image"; extension: string; file_base64: string }[] = [];
+                    for (const idx of uniqueSorted) {
+                        const part = multipartForm.get(`file_${idx}`);
+                        if (part == null || typeof part === "string") {
+                            return NextResponse.json({ message: `Archivo file_${idx} faltante` }, { status: 400 });
+                        }
+                        const fileBlob = part as unknown as Blob;
+                        const ab = await fileBlob.arrayBuffer();
+                        const mime = (fileBlob as { type?: string }).type || "image/jpeg";
+                        const b64 = Buffer.from(ab).toString("base64");
+                        const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+                        filePayload.push({ type: "image", extension: ext, file_base64: `data:${mime};base64,${b64}` });
+                    }
+                    const uploadResp = await uploadDynamicFiles({
+                        req,
+                        folderPath: `evaluations/${evaluacion_empleado.id}/images`,
+                        files: filePayload,
+                    });
+                    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+                    for (let i = 0; i < uniqueSorted.length; i++) {
+                        if (!uploaded[i] || !uploaded[i].name) {
+                            return NextResponse.json({ message: "Error al subir imágenes" }, { status: 500 });
+                        }
+                    }
+                    for (let i = 0; i < uniqueSorted.length; i++) {
+                        const idx = uniqueSorted[i];
+                        const name = uploaded[i]!.name;
+                        const token = `__STAFFEVAL_FILE__:${idx}__`;
+                        evaluacionStr = evaluacionStr.split(token).join(name);
+                    }
+                }
+            }
+
+            const evaluacion_json = JSON.parse(evaluacionStr);
 
             const imagesToUpload: { question: any; file: string; index?: number; fromArray: boolean }[] = [];
             for (const item of evaluacion_json) {
@@ -199,7 +283,49 @@ export async function POST(req: NextRequest) {
                 }
             });
         }
-        return NextResponse.json({ status: true, message: "Evaluación creada correctamente" }, { status: 200 });
+        if (!evaluacion_empleado) {
+            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 400 });
+        }
+
+        const finalRow = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_evaluacion_empleado",
+                operation: "findUnique",
+                where: { id: evaluacion_empleado.id },
+            },
+        });
+        const row = (finalRow ?? evaluacion_empleado) as {
+            id: number;
+            evaluacion?: string;
+            comentarios?: string;
+            firma_evaluador?: string;
+            firma_empleado?: string | null;
+            firma_empleado_manual?: string | null;
+            tipo?: string;
+            fecha_ingreso?: string | Date;
+            fecha_evaluacion?: string | Date;
+        };
+
+        return NextResponse.json(
+            {
+                status: true,
+                message: "Evaluación creada correctamente",
+                data: {
+                    id: row.id,
+                    evaluacion: row.evaluacion ?? null,
+                    comentarios: row.comentarios ?? null,
+                    firma_evaluador: row.firma_evaluador ?? null,
+                    firma_empleado: row.firma_empleado ?? null,
+                    firma_empleado_manual: row.firma_empleado_manual ?? null,
+                    tipo: row.tipo ?? null,
+                    fecha_ingreso: row.fecha_ingreso instanceof Date ? row.fecha_ingreso.toISOString() : row.fecha_ingreso,
+                    fecha_evaluacion: row.fecha_evaluacion instanceof Date ? row.fecha_evaluacion.toISOString() : row.fecha_evaluacion,
+                },
+            },
+            { status: 200 }
+        );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);

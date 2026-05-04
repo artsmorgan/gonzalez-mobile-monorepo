@@ -44,6 +44,8 @@ export async function PUT(
             corpo_id,
             puesto_id,
             division_id,
+            empresa_id,
+            contrato_id,
             fecha,
             tipo,
             nombre_representante_cliente,
@@ -153,6 +155,8 @@ export async function PUT(
         if (corpo_id !== undefined) updateData.corpo_id = parseInt(String(corpo_id), 10);
         if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id), 10);
         if (division_id !== undefined) updateData.division_id = parseInt(String(division_id), 10);
+        if (empresa_id !== undefined) updateData.empresa_id = parseInt(String(empresa_id), 10);
+        if (contrato_id !== undefined) updateData.contrato_id = parseInt(String(contrato_id), 10);
         if (fecha !== undefined) updateData.fecha = new Date(String(fecha)).toISOString();
         if (tipo !== undefined) updateData.tipo = String(tipo);
         if (nombre_representante_cliente !== undefined) updateData.nombre_representante_cliente = String(nombre_representante_cliente);
@@ -255,13 +259,53 @@ export async function PUT(
 
         const baseUrl = req.nextUrl.origin;
 
+        let empresaNombrePut: string | null = null;
+        let contratoNombrePut: string | null = null;
+        const rec = fullRecord as any;
+        const empIdPut = Number(rec?.empresa_id);
+        const conIdPut = Number(rec?.contrato_id);
+        if (Number.isFinite(empIdPut) && empIdPut > 0) {
+            try {
+                const emp = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_empresa",
+                        operation: "findUnique",
+                        where: { id: empIdPut },
+                    },
+                });
+                empresaNombrePut = emp && typeof (emp as any).nombre === "string" ? String((emp as any).nombre) : null;
+            } catch {
+                empresaNombrePut = null;
+            }
+        }
+        if (Number.isFinite(conIdPut) && conIdPut > 0) {
+            try {
+                const con = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_contrato",
+                        operation: "findUnique",
+                        where: { id: conIdPut },
+                    },
+                });
+                contratoNombrePut = con && typeof (con as any).nombre === "string" ? String((con as any).nombre) : null;
+            } catch {
+                contratoNombrePut = null;
+            }
+        }
+
         return NextResponse.json({
             status: true,
             message: "Apertura-Cierre de Puesto actualizado correctamente",
             data: {
                 ...(fullRecord ?? updated_record),
                 id_local: "",
+                empresa_nombre: empresaNombrePut,
                 cliente_nombre: (fullRecord as any)?.e_estructura_cliente?.nombre || null,
+                contrato_nombre: contratoNombrePut,
                 corpo_nombre: (fullRecord as any)?.e_estructura_sucursal?.nombre || null,
                 puesto_nombre: (fullRecord as any)?.e_estructura_puesto?.nombre || null,
                 division_nombre: (fullRecord as any)?.n_division?.nombre || null,
@@ -362,10 +406,11 @@ export async function DELETE(
         await callDynamicPrisma({
             req,
             data: {
-                action: "DELETE",
+                action: "UPDATE",
                 table: "c_apertura_cierre_puesto",
-                operation: "delete",
+                operation: "update",
                 where: { id },
+                data: { isActive: false },
             },
         });
 

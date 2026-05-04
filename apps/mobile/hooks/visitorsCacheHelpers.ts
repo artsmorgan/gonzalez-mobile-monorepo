@@ -7,12 +7,23 @@ const VISITORS_CACHE_KEY = 'visitors_cache';
 export type VisitorCacheRow = {
   id: number;
   corpo_id?: number;
+  puesto_id?: number;
+  puesto_nombre?: string | null;
+  /** Algunos flujos usan `sucursal_id` como alias de sucursal/corpo */
+  sucursal_id?: number;
   id_local?: string;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  cliente_id?: number;
+  /** Si el servidor envía isActive: false, no debería mostrarse; pendientes offline sin campo se tratan como activos. */
+  isActive?: boolean;
 };
 
 export function getVisitorCorpoId(v: VisitorCacheRow): number | null {
-  if (v.corpo_id != null && !Number.isNaN(Number(v.corpo_id))) {
-    return Number(v.corpo_id);
+  const raw = v.corpo_id ?? v.sucursal_id;
+  if (raw != null && !Number.isNaN(Number(raw))) {
+    return Number(raw);
   }
   return null;
 }
@@ -27,10 +38,12 @@ export function mergeVisitorsCacheForCorpo<T extends VisitorCacheRow>(
   freshForCorpo: T[],
   corpoId: number
 ): T[] {
-  const normalizedFresh = freshForCorpo.map((t) => ({
-    ...t,
-    corpo_id: t.corpo_id ?? corpoId,
-  })) as T[];
+  const normalizedFresh = freshForCorpo
+    .filter((t) => (t as { isActive?: boolean }).isActive !== false)
+    .map((t) => ({
+      ...t,
+      corpo_id: t.corpo_id ?? corpoId,
+    })) as T[];
   const others = existing.filter((t) => getVisitorCorpoId(t) !== corpoId);
   const sameCorpoPending = existing.filter(
     (t) => getVisitorCorpoId(t) === corpoId && isVisitorLocalPending(t)
@@ -95,4 +108,26 @@ export async function syncVisitorsCacheFromNetwork(params: {
   const merged = mergeVisitorsCacheForCorpo(prev, data.data, corpoId);
   await AsyncStorage.setItem(VISITORS_CACHE_KEY, JSON.stringify(merged));
   return { ok: true };
+}
+
+/** Sustituye un borrador local (`id_local`) por el `id` del servidor tras POST exitoso o sync. */
+export async function replaceLocalVisitorIdInCache(
+  idLocal: string,
+  serverId: number,
+  corpoId: number
+): Promise<void> {
+  const list = await readVisitorsCacheRaw();
+  const out = list.map((row) => {
+    if (row.id_local === idLocal) {
+      return {
+        ...row,
+        id: serverId,
+        id_local: '',
+        corpo_id: getVisitorCorpoId(row) ?? corpoId,
+        isActive: true,
+      };
+    }
+    return row;
+  });
+  await AsyncStorage.setItem(VISITORS_CACHE_KEY, JSON.stringify(out));
 }

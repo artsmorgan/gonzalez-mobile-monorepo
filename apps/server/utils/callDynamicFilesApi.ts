@@ -136,4 +136,34 @@ export async function fetchDynamicFile(params: {
     };
 }
 
+export async function deleteDynamicFile(params: {
+    req: NextRequest;
+    url: string;
+    shouldVerifyAccessToken?: boolean;
+}) {
+    const { req, url, shouldVerifyAccessToken = true } = params;
+    const baseUrl = resolveBaseUrl(req);
+    const endpoint = `${baseUrl}/api/dynamic-prisma/files`;
+    const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
+    const accessToken = getAccessToken(req);
+    const authHeader = getAuthHeader(req) || (accessToken ? `Bearer ${accessToken}` : "");
+
+    const response = await axios.delete(endpoint, {
+        params: {
+            url,
+            token: accessToken || undefined,
+            mobileAccessToken,
+            shouldVerifyAccessToken,
+        },
+        headers: {
+            Authorization: authHeader,
+            "Content-Type": "application/json",
+        },
+        validateStatus: () => true,
+    });
+
+    ensureOk(response.status, response.data, endpoint);
+    return response.data;
+}
+
 

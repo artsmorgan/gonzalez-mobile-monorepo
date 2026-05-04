@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -38,6 +39,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const body = await req.json();
     const {
       cliente_id,
+      empresa_id,
+      division_id,
+      contrato_id,
       corpo_id,
       puesto_id,
       fecha,
@@ -48,6 +52,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       observaciones,
       firma_solicitante,
       firma_responsable,
+      imagenes,
     } = body ?? {};
 
     const fechaDate = fecha ? parseDateTime(fecha) : null;
@@ -96,6 +101,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const existingObj = existing as any;
     const updateData: any = {
       cliente_id: cliente_id ? parseInt(String(cliente_id)) : existingObj.cliente_id,
+      empresa_id: empresa_id != null ? (Number(empresa_id) > 0 ? parseInt(String(empresa_id)) : 0) : existingObj.empresa_id,
+      division_id: division_id != null ? (Number(division_id) > 0 ? parseInt(String(division_id)) : 0) : existingObj.division_id,
+      contrato_id: contrato_id != null ? (Number(contrato_id) > 0 ? parseInt(String(contrato_id)) : 0) : existingObj.contrato_id,
       corpo_id: corpo_id ? parseInt(String(corpo_id)) : existingObj.corpo_id,
       puesto_id: puesto_id ? parseInt(String(puesto_id)) : existingObj.puesto_id,
       fecha: fechaDate ? fechaDate.toISOString() : (existingObj.fecha instanceof Date ? existingObj.fecha.toISOString() : existingObj.fecha),
@@ -142,6 +150,45 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         data: updateData,
       },
     });
+
+    let imagesParsed: Array<{ file_base64: string; extension?: string; original_name?: string }> = [];
+    if (imagenes) {
+      try {
+        imagesParsed = typeof imagenes === "string" ? JSON.parse(imagenes) : imagenes;
+      } catch {
+        imagesParsed = [];
+      }
+    }
+    if (Array.isArray(imagesParsed) && imagesParsed.length > 0) {
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `apreciacion-vulnerabilidad/${id}`,
+        files: imagesParsed
+          .filter((img) => img?.file_base64)
+          .map((img) => ({
+            type: "image",
+            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+            original_name: img.original_name,
+            file_base64: img.file_base64,
+          })),
+      });
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_imagenes_boleta_apreciacion_vulnerabilidad",
+            operation: "create",
+            data: {
+              name: uploaded.name,
+              original_name: uploaded.original_name || uploaded.name,
+              boleta_id: id,
+            },
+          },
+        });
+      }
+    }
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
@@ -233,10 +280,13 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     await callDynamicPrisma({
       req,
       data: {
-        action: "DELETE",
+        action: "UPDATE",
         table: "c_boleta_apreciacion_vulnerabilidad",
-        operation: "delete",
+        operation: "update",
         where: { id },
+        data: {
+          isActive: false,
+        },
       },
     });
     return NextResponse.json({ status: true, message: "Registro eliminado correctamente" }, { status: 200 });

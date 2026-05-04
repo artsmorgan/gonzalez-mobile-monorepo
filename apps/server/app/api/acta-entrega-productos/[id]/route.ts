@@ -5,6 +5,7 @@ import { toZonedTime } from 'date-fns-tz';
 import fs from 'fs';
 import path from 'path';
 import { uploadDynamicFiles } from '../../../../utils/callDynamicFilesApi';
+import { mapActaEntregaImagesForClient } from '../mapActaEntregaImagesForClient';
 
 export const runtime = 'nodejs';
 
@@ -44,6 +45,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       division_id,
       contrato_id,
       corpo_id,
+      puesto_id,
       mensual,
       detalle,
       observaciones,
@@ -77,6 +79,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (division_id !== undefined) updateData.division_id = Number(division_id);
     if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id);
     if (corpo_id !== undefined) updateData.corpo_id = Number(corpo_id);
+    if (puesto_id !== undefined) updateData.puesto_id = Number(puesto_id);
     if (tipo_entrega !== undefined) updateData.tipo_entrega = String(tipo_entrega ?? '');
     if (mensual !== undefined) updateData.mensual = String(mensual ?? '');
     if (detalle !== undefined) updateData.detalle = String(detalle ?? '');
@@ -148,30 +151,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    // Reemplazo de imágenes (si viene `imagenes`)
+    // Agregar imágenes nuevas (si viene `imagenes`), sin borrar las existentes.
     let imagesParsed: ActaImageInput[] = [];
     if (imagenes !== undefined) imagesParsed = safeParseJson<ActaImageInput[]>(imagenes, []);
 
     if (imagenes !== undefined) {
-      await callDynamicPrisma({
-        req,
-        data: {
-          action: "DELETE",
-          table: "c_imagenes_acta_entrega_producto",
-          operation: "deleteMany",
-          where: { acta_id: updatedObj.id },
-        },
-      });
-
-      const dir = path.join(process.cwd(), 'public', 'uploads', 'acta-entrega-productos', `${updatedObj.id}`);
-      if (fs.existsSync(dir)) {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-        } catch {
-          // ignore
-        }
-      }
-
       if (imagesParsed.length > 0) {
         const uploadResp = await uploadDynamicFiles({
           req,
@@ -214,18 +198,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const baseUrl = req.nextUrl.origin;
     const fullRecordObj = fullRecord as any;
+    const aid = Number(fullRecordObj?.id ?? updatedObj?.id ?? actaId);
+    const { c_imagenes_acta_entrega_producto: _cimg, ...actaRest } = (fullRecordObj ?? updatedObj) || {};
     return NextResponse.json(
       {
         status: true,
         message: 'Acta actualizada correctamente',
         data: {
-          ...(fullRecord ?? updated),
+          ...actaRest,
           id_local: '',
-          images: ((fullRecordObj?.c_imagenes_acta_entrega_producto || []) as any[]).map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${fullRecordObj?.id}/get-image/${f.name}` : '',
-          })),
+          images: mapActaEntregaImagesForClient(aid, fullRecordObj?.c_imagenes_acta_entrega_producto, baseUrl),
         },
       },
       { status: 200 }
@@ -305,10 +287,11 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     await callDynamicPrisma({
       req,
       data: {
-        action: "DELETE",
+        action: "UPDATE",
         table: "c_acta_entre_producto",
-        operation: "delete",
+        operation: "update",
         where: { id: actaId },
+        data: { isActive: false },
       },
     });
 

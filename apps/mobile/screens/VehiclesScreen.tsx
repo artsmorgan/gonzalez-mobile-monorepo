@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -16,7 +16,20 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { createVehicle as createVehicleAPI, updateVehicle as updateVehicleAPI, deleteVehicle as deleteVehicleAPI } from '@/hooks/vehiclesFunctions';
+import {
+  createVehicle as createVehicleAPI,
+  updateVehicle as updateVehicleAPI,
+  deleteVehicle as deleteVehicleAPI,
+  deleteVehicleAttachment as deleteVehicleAttachmentAPI,
+} from '@/hooks/vehiclesFunctions';
+import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  loadMainStructureFragmentsObjectAllowPartial,
+  persistMainStructureFragments,
+} from '@/hooks/mainStructureFragmentsStorage';
+import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri as getStoredFileDisplayUri } from '@/hooks/fileStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
@@ -24,6 +37,7 @@ import {
   filterVehiclesVisitasCacheForCorpo,
   readVehiclesVisitasCacheRaw,
   syncVehiclesVisitasCacheFromNetwork,
+  stripVehicleVisitasAttachmentForRow,
 } from '@/hooks/vehiclesVisitasCacheHelpers';
 
 type VehiclesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Vehicles'>;
@@ -50,6 +64,106 @@ interface Vehicle {
   base64_image: string;
   /** Sucursal (`e_registro_vehiculos.corpo_id`) para caché / filtrado offline */
   corpo_id?: number;
+  puesto_id?: number;
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  file_name?: string | null;
+  local_attachment_file?: string | null;
+  isActive?: boolean;
+}
+
+type MainStructureSucursalNode = { id: number; nombre: string; puestos?: { id: number; nombre: string }[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type HierarchyCorpoIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+};
+
+type HierarchyFormIds = HierarchyCorpoIds & { puestoId: number };
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function getClienteDivisionArray(cliente: MainStructureClienteNode | any): MainStructureDivisionNode[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray((cliente as any).divisiones)) return (cliente as any).divisiones;
+  return [];
+}
+
+function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number): HierarchyCorpoIds | null {
+  const cid = Number(corpoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return {
+                empresaId: empresa.id,
+                clienteId: cliente.id,
+                divisionId: division.id,
+                contratoId: contrato.id,
+                corpoId: sucursal.id,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyFormIds | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /** Extrae solo la parte base64 de una imagen (con o sin prefijo data:...;base64,) para enviar al servidor. Referencia: NonConformingProductScreen. */
@@ -143,6 +257,24 @@ export default function VehiclesScreen() {
   // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [roleName, setRoleName] = useState<string | null>(null);
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const filterSucursalIdRef = useRef<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Editing state
   const [editingVehicle, setEditingVehicle] = useState<EditingVehicle | null>(null);
@@ -176,8 +308,8 @@ export default function VehiclesScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [vehicleImageBase64, setVehicleImageBase64] = useState<string | null>(null);
-  const [isEditingImage, setIsEditingImage] = useState(false);
-  const [editingVehicleServerImage, setEditingVehicleServerImage] = useState<string | null>(null);
+  /** Archivo en `fileStorage` (foto capturada) pendiente de enviar */
+  const [vehicleImageLocalFileName, setVehicleImageLocalFileName] = useState<string | null>(null);
 
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -355,23 +487,6 @@ export default function VehiclesScreen() {
   const [selectedTipo, setSelectedTipo] = useState<string>('all');
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchVehicles();
-    }, [])
-  );
-
-  useEffect(() => {
-    const handler = () => {
-      fetchVehicles();
-    };
-
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
-
   // Función auxiliar para generar ID aleatorio
   const generateRandomId = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -383,63 +498,460 @@ export default function VehiclesScreen() {
   };
 
   const mapCacheBase64 = (list: Vehicle[]): Vehicle[] =>
-    list.map((v) => ({
-      ...v,
-      base64_image: v.base64_image || '',
-    }));
+    list
+      .filter((v) => v.isActive !== false)
+      .map((v) => ({
+        ...v,
+        base64_image: v.base64_image || '',
+      }));
 
-  const fetchVehicles = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      setOfflineMessage(null);
+  const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
+    const networkState = await Network.getNetworkStateAsync();
+    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+  };
 
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
+  type MarcaSnapshot = {
+    current: Record<string, any>;
+    roleName: string | null;
+    isOperativo: boolean;
+    marcaCorpoId: number | null;
+    filterEmpresaId: number | null;
+    filterClienteId: number | null;
+    filterDivisionId: number | null;
+    filterContratoId: number | null;
+    filterSucursalId: number | null;
+  };
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
         setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
       }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const corpoId = numOrNull(corpoIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? role : null;
+        setRoleName(rn);
 
-      const currentMarcaData = JSON.parse(currentMarca);
-      const marcaId = Number(currentMarcaData?.id);
-      const corpoIdRaw =
-      currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
-      const corpoId =
-        corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id ?? current?.corpo_id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
 
-      setHasCurrentMarca(true);
-
-      if (
-        !Number.isFinite(marcaId) ||
-        marcaId <= 0 ||
-        !Number.isFinite(corpoId) ||
-        corpoId <= 0
-      ) {
-        setVehicles([]);
-        setOfflineMessage(
-          'No hay sucursal en la marca actual; no se puede cargar el listado de visitas.'
-        );
-        setIsLoading(false);
-        return;
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaCorpoId: corpoId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        setRoleName(null);
+        return null;
       }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = numOrNull(currentMarca.corpo?.id ?? currentMarca.corpo_id);
+      setFilterSucursalId(fs);
+      filterSucursalIdRef.current = fs;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (Vehicles):', e);
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    setIsStructureLoading(true);
+
+    const loadMergedTreeFromCache = async (): Promise<MainStructureTree> => {
+      const fragments = await loadMainStructureFragmentsObjectAllowPartial();
+      if (fragments && Object.keys(fragments).length > 0) {
+        const merged = mergeMainStructureFragments(fragments) as MainStructureTree;
+        if (Array.isArray(merged) && merged.length > 0) {
+          return merged;
+        }
+      }
+      const fallback = (await loadMainStructureTreeMerged().catch(() => [])) as MainStructureTree;
+      return Array.isArray(fallback) ? fallback : [];
+    };
+
+    try {
+      let tree = await loadMergedTreeFromCache();
+      setStructure(tree);
 
       const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        return tree;
+      }
 
-      const applyFilteredCache = async (offlineHint: string | null) => {
-        const cached = await readVehiclesVisitasCacheRaw();
-        const filtered = filterVehiclesVisitasCacheForCorpo(
-          cached as Vehicle[],
-          corpoId
-        );
-        setVehicles(mapCacheBase64(filtered));
-        if (offlineHint) setOfflineMessage(offlineHint);
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        return tree;
+      }
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/main-structure`,
+        init: {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response?.ok) {
+        return tree;
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!data.status) {
+        return tree;
+      }
+
+      if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
+        await persistMainStructureFragments(data.fragments as Record<string, unknown>);
+        const reloaded = await loadMainStructureFragmentsObjectAllowPartial();
+        if (reloaded && Object.keys(reloaded).length > 0) {
+          const merged = mergeMainStructureFragments(reloaded) as MainStructureTree;
+          if (Array.isArray(merged) && merged.length > 0) {
+            tree = merged;
+            setStructure(tree);
+            if (data.created_at != null && data.created_at !== undefined) {
+              await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+            }
+            return tree;
+          }
+        }
+        tree = await loadMergedTreeFromCache();
+        setStructure(tree);
+      } else {
+        let rawStructure = data.structure;
+        if (typeof rawStructure === 'string') {
+          try {
+            rawStructure = JSON.parse(rawStructure);
+          } catch {
+            rawStructure = null;
+          }
+        }
+        if (Array.isArray(rawStructure)) {
+          await persistMainStructureFragments({});
+          await writeMainStructureCacheString(JSON.stringify(rawStructure));
+          tree = rawStructure as MainStructureTree;
+          setStructure(tree);
+        }
+      }
+
+      if (data.created_at != null && data.created_at !== undefined) {
+        await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+      }
+
+      return tree;
+    } catch (e) {
+      console.error('Error loading main structure (Vehicles):', e);
+      try {
+        const recovered = await loadMergedTreeFromCache();
+        setStructure(recovered);
+        return recovered;
+      } catch {
+        setStructure([]);
+        return [];
+      }
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return getClienteDivisionArray(cliente);
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const formEmpresaNode = useMemo(() => {
+    if (formEmpresaId === null) return null;
+    return structure.find((e) => e.id === formEmpresaId) ?? null;
+  }, [structure, formEmpresaId]);
+  const formClienteOptions = useMemo(() => {
+    if (!formEmpresaNode) return [];
+    return (formEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formEmpresaNode]);
+  const formClienteNode = useMemo(() => {
+    if (!formEmpresaNode || formClienteId === null) return null;
+    return formEmpresaNode.clientes.find((c) => c.id === formClienteId) ?? null;
+  }, [formEmpresaNode, formClienteId]);
+  const formDivisionOptions = useMemo(() => {
+    if (!formClienteNode) return [];
+    return getClienteDivisionArray(formClienteNode).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [formClienteNode]);
+  const formDivisionNode = useMemo(() => {
+    if (!formClienteNode || formDivisionId === null) return null;
+    return getClienteDivisionArray(formClienteNode).find((d) => d.id === formDivisionId) ?? null;
+  }, [formClienteNode, formDivisionId]);
+  const formContratoOptions = useMemo(() => {
+    if (!formDivisionNode) return [];
+    return (formDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formDivisionNode]);
+  const formContratoNode = useMemo(() => {
+    if (!formDivisionNode || formContratoId === null) return null;
+    return (formDivisionNode.contratos || []).find((c) => c.id === formContratoId) ?? null;
+  }, [formDivisionNode, formContratoId]);
+  const formSucursalOptions = useMemo(() => {
+    if (!formContratoNode) return [];
+    return (formContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [formContratoNode]);
+  const formSucursalNode = useMemo(() => {
+    if (!formContratoNode || formSucursalId === null) return null;
+    return (formContratoNode.sucursales || []).find((s) => s.id === formSucursalId) ?? null;
+  }, [formContratoNode, formSucursalId]);
+  const formPuestoOptions = useMemo(() => {
+    if (!formSucursalNode) return [];
+    return (formSucursalNode.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre }));
+  }, [formSucursalNode]);
+
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setFormEmpresaId(empresaId);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setFormClienteId(clienteId);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const resetFormHierarchyFields = useCallback(() => {
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  }, []);
+
+  const applyCurrentMarcaToCreateFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') return;
+
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setFormPuestoId(
+        marca.puesto?.id != null
+          ? Number(marca.puesto.id)
+          : marca.puesto_id != null
+            ? Number(marca.puesto_id)
+            : null
+      );
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateFormHierarchy (Vehicles):', e);
+    }
+  }, []);
+
+  const resolveCorpoIdForSave = useCallback(async (): Promise<number | null> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn === 'OPERATIVO') {
+      return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+    }
+    return numOrNull(formSucursalId) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+  }, [formSucursalId]);
+
+  const resolvePuestoIdForSave = useCallback(async (): Promise<number | null> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn === 'OPERATIVO') {
+      return numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
+    }
+    return numOrNull(formPuestoId);
+  }, [formPuestoId]);
+
+  const resolveHierarchyIdsForSave = useCallback(async (): Promise<{
+    empresa_id: number | null;
+    cliente_id: number | null;
+    division_id: number | null;
+    contrato_id: number | null;
+  }> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      return { empresa_id: null, cliente_id: null, division_id: null, contrato_id: null };
+    }
+    const marca = JSON.parse(currentMarcaStr);
+    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn === 'OPERATIVO') {
+      return {
+        empresa_id: numOrNull(marca?.empresa?.id ?? marca?.empresa_id),
+        cliente_id: numOrNull(marca?.cliente?.id ?? marca?.cliente_id),
+        division_id: getDivisionIdFromMarcaJson(marca),
+        contrato_id: numOrNull(marca?.contrato?.id ?? marca?.contrato_id),
       };
+    }
+    return {
+      empresa_id: numOrNull(formEmpresaId),
+      cliente_id: numOrNull(formClienteId),
+      division_id: numOrNull(formDivisionId),
+      contrato_id: numOrNull(formContratoId),
+    };
+  }, [formEmpresaId, formClienteId, formDivisionId, formContratoId]);
 
-      if (isConnected) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
+  const buildVehicleFilePayloadForApi = useCallback(async (): Promise<string | null> => {
+    if (vehicleImageLocalFileName) {
+      try {
+        const g = await getFile(vehicleImageLocalFileName);
+        return g.base64 || null;
+      } catch {
+        return null;
+      }
+    }
+    const b = getBase64Only(vehicleImageBase64);
+    return b || null;
+  }, [vehicleImageLocalFileName, vehicleImageBase64]);
+
+  const clearPendingVehicleCaptureFiles = useCallback(async () => {
+    if (vehicleImageLocalFileName) {
+      try {
+        await deleteFile(vehicleImageLocalFileName);
+      } catch {
+        /* idempotente */
+      }
+      setVehicleImageLocalFileName(null);
+    }
+    setVehicleImageBase64(null);
+  }, [vehicleImageLocalFileName]);
+
+  const runFetchVehicles = useCallback(
+    async (snap: MarcaSnapshot) => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        setOfflineMessage(null);
+
+        await fetchMainStructure();
+
+        const marcaId = numOrNull(snap.current?.id);
+        const corpoId = snap.isOperativo
+          ? numOrNull(snap.marcaCorpoId)
+          : numOrNull(snap.filterSucursalId) ?? numOrNull(filterSucursalIdRef.current);
+
+        if (!marcaId || marcaId <= 0) {
+          setVehicles([]);
+          setOfflineMessage('Marca no válida.');
+          return;
+        }
+
+        if (!corpoId || corpoId <= 0) {
+          setVehicles([]);
+          setError(
+            snap.isOperativo
+              ? 'No se encontró la sucursal (corpo) en la marca actual.'
+              : 'Seleccione sucursal en el filtro para cargar o sincronizar visitas de vehículos.'
+          );
+          return;
+        }
+
+        const applyFilteredCache = async (hint: string | null) => {
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoId);
+          setVehicles(mapCacheBase64(filtered));
+          if (hint) setOfflineMessage(hint);
+        };
+
+        const isConnected = await getConnectionStatus();
+
+        if (!isConnected) {
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoId);
+          setVehicles(mapCacheBase64(filtered));
+          setOfflineMessage(
+            filtered.length > 0
+              ? 'Modo Offline: mostrando visitas de vehículos guardadas para esta sucursal.'
+              : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
+          );
+          return;
         }
 
         const syncResult = await syncVehiclesVisitasCacheFromNetwork({
@@ -457,61 +969,36 @@ export default function VehiclesScreen() {
           );
           if (syncResult.message) {
             setError(syncResult.message);
-          }
         }
-      } else {
-        const cached = await readVehiclesVisitasCacheRaw();
-        const filtered = filterVehiclesVisitasCacheForCorpo(
-          cached as Vehicle[],
-          corpoId
-        );
-        setVehicles(mapCacheBase64(filtered));
-        setOfflineMessage(
-          filtered.length > 0
-            ? 'Modo Offline: no hay conexión a internet. Mostrando visitas guardadas para esta sucursal.'
-            : 'Sin conexión: no hay visitas guardadas para esta sucursal. Puedes registrar offline y se sincronizarán al volver la conexión.'
-        );
       }
     } catch (err) {
       console.error('Error fetching vehicles:', err);
-      try {
-        const currentMarca = await AsyncStorage.getItem('current_marca');
-        if (!currentMarca) {
-          setVehicles([]);
-          return;
-        }
-        const currentMarcaData = JSON.parse(currentMarca);
-        const corpoIdRaw =
-          currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
-        const corpoId =
-          corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
-        if (!Number.isFinite(corpoId) || corpoId <= 0) {
-          setVehicles([]);
-          return;
-        }
-        const cached = await readVehiclesVisitasCacheRaw();
-        const filtered = filterVehiclesVisitasCacheForCorpo(
-          cached as Vehicle[],
-          corpoId
-        );
-        if (filtered.length > 0) {
-          setVehicles(mapCacheBase64(filtered));
-          setOfflineMessage(
-            'Modo Offline: error de conexión. Mostrando visitas guardadas para esta sucursal.'
-          );
-        } else if (isProbablyNetworkError(err)) {
-          setOfflineMessage(
-            'Sin conexión: no hay visitas guardadas para esta sucursal.'
-          );
-          setVehicles([]);
-        } else {
-          setError('Error al cargar los vehículos');
-        }
-      } catch {
-        if (isProbablyNetworkError(err)) {
-          setOfflineMessage(
-            'Sin conexión: no hay visitas guardadas para esta sucursal.'
-          );
+        try {
+          const snap2 = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          const marcaId2 = numOrNull(snap2?.current?.id);
+          const corpoErr = snap2?.isOperativo
+            ? numOrNull(snap2.marcaCorpoId)
+            : numOrNull(filterSucursalIdRef.current) ?? numOrNull(snap2?.filterSucursalId);
+          if (!marcaId2 || !corpoErr || corpoErr <= 0) {
+            setVehicles([]);
+            return;
+          }
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoErr);
+          if (filtered.length > 0) {
+            setVehicles(mapCacheBase64(filtered));
+            setOfflineMessage(
+              'Error de conexión. Mostrando visitas de vehículos guardadas para esta sucursal.'
+            );
+          } else if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setVehicles([]);
+          } else {
+            setError('Error al cargar los vehículos');
+          }
+        } catch {
+          if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
           setVehicles([]);
         } else {
           setError('Error al cargar los vehículos');
@@ -520,7 +1007,47 @@ export default function VehiclesScreen() {
     } finally {
       setIsLoading(false);
     }
-  };
+    },
+    [fetchMainStructure, refreshAccessToken, logout, syncMarcaFromStorage]
+  );
+
+  const fetchVehicles = useCallback(async () => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap) return;
+    await runFetchVehicles({
+      ...snap,
+      filterSucursalId: filterSucursalIdRef.current,
+    });
+  }, [syncMarcaFromStorage, runFetchVehicles]);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+          if (cancelled) return;
+          if (snap) await runFetchVehicles(snap);
+          else await fetchVehicles();
+        } else {
+          await fetchVehicles();
+        }
+      })();
+      const handler = () => {
+        void fetchVehicles();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, runFetchVehicles, fetchVehicles])
+  );
 
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
@@ -563,22 +1090,6 @@ export default function VehiclesScreen() {
       }
     }
     return String(value ?? '');
-  };
-
-  const getConnectionStatus = async (): Promise<boolean> => {
-    const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
-  };
-
-  const isProbablyNetworkError = (err: any) => {
-    const msg = String(err?.message ?? err ?? '').toLowerCase();
-    return (
-      msg.includes('network request failed') ||
-      msg.includes('failed to fetch') ||
-      msg.includes('networkerror') ||
-      msg.includes('timeout') ||
-      msg.includes('timed out')
-    );
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -643,34 +1154,37 @@ export default function VehiclesScreen() {
     }
 
     try {
+      if (vehicleImageLocalFileName) {
+        try {
+          await deleteFile(vehicleImageLocalFileName);
+        } catch {
+          /* reemplazo */
+        }
+        setVehicleImageLocalFileName(null);
+      }
+      setVehicleImageBase64(null);
+
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
-        skipProcessing: false
+        skipProcessing: false,
       });
 
-      if (!photo) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
 
-      if (!photo.base64) {
-        Alert.alert('Error', 'No se pudo procesar la imagen. Por favor intente nuevamente.');
-        setIsCameraVisible(false);
-        return;
-      }
+      const fileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'vehiculo_visita',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'vehicle_visita',
+      });
 
       setIsCameraVisible(false);
-
-      // Almacenar solo base64 crudo (como NonConformingProductScreen: file_base64). El prefijo data: se añade solo para mostrar.
-      const rawBase64 = (photo.base64 || '').trim();
-      if (!rawBase64) {
-        Alert.alert('Error', 'No se pudo procesar la imagen. Por favor intente nuevamente.');
-        return;
-      }
-
-      setVehicleImageBase64(rawBase64);
+      setVehicleImageLocalFileName(fileName);
     } catch (error) {
       console.error('Error capturing image:', error);
       Alert.alert('Error', 'No se pudo capturar la imagen');
@@ -759,13 +1273,43 @@ export default function VehiclesScreen() {
                 razon_visita: razonVisitaRef.current,
               };
 
-              // Imagen: enviar solo base64 crudo (referencia NonConformingProductScreen file_base64). El servidor acepta ambos formatos.
-              const fileBase64 = getBase64Only(vehicleImageBase64);
-              if (fileBase64) {
-                requestBody.file = fileBase64;
-              } else {
-                requestBody.file = null;
+              const corpoForSave = await resolveCorpoIdForSave();
+              const puestoForSave = await resolvePuestoIdForSave();
+              if (!corpoForSave || corpoForSave <= 0) {
+                Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
+                return;
               }
+              if (!puestoForSave || puestoForSave <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
+                return;
+              }
+              requestBody.corpo_id = corpoForSave;
+              requestBody.puesto_id = puestoForSave;
+
+              const hierarchyIds = await resolveHierarchyIdsForSave();
+              if (
+                hierarchyIds.empresa_id == null ||
+                hierarchyIds.empresa_id <= 0 ||
+                hierarchyIds.cliente_id == null ||
+                hierarchyIds.cliente_id <= 0 ||
+                hierarchyIds.division_id == null ||
+                hierarchyIds.division_id <= 0 ||
+                hierarchyIds.contrato_id == null ||
+                hierarchyIds.contrato_id <= 0
+              ) {
+                Alert.alert(
+                  'Error',
+                  'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía o la marca actual.'
+                );
+                return;
+              }
+              requestBody.empresa_id = hierarchyIds.empresa_id;
+              requestBody.cliente_id = hierarchyIds.cliente_id;
+              requestBody.division_id = hierarchyIds.division_id;
+              requestBody.contrato_id = hierarchyIds.contrato_id;
+
+              const fileBase64 = await buildVehicleFilePayloadForApi();
+              requestBody.file = fileBase64 || null;
 
               // Verificar conectividad
               const isConnected = await getConnectionStatus();
@@ -825,7 +1369,7 @@ export default function VehiclesScreen() {
                   setHoraSalidaPickerValue(baseDate);
                   setShowHoraEntradaPicker(false);
                   setShowHoraSalidaPicker(false);
-                  setVehicleImageBase64(null);
+                  await clearPendingVehicleCaptureFiles();
                   fetchVehicles();
                 } else {
                   Alert.alert('Error', data.message || 'Error al registrar la visita de vehículo');
@@ -842,11 +1386,15 @@ export default function VehiclesScreen() {
                 actions = actions.filter(
                   (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
                 );
+                const offlineBody = { ...requestBody, file: null };
                 actions.push({
-                  requestData: requestBody,
+                  requestData: offlineBody,
                   marcaId: currentMarcaData.id,
                   id: localId,
                   type: 'create',
+                  ...(vehicleImageLocalFileName
+                    ? { attachmentLocalFileName: vehicleImageLocalFileName }
+                    : {}),
                 });
                 await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
 
@@ -854,12 +1402,6 @@ export default function VehiclesScreen() {
                 const cacheStr = await AsyncStorage.getItem('vehicles_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                const corpoOffline =
-                  currentMarcaData?.corpo?.id != null
-                    ? Number(currentMarcaData.corpo.id)
-                    : currentMarcaData?.corpo_id != null
-                      ? Number(currentMarcaData.corpo_id)
-                      : NaN;
                 const newVehicleCache = {
                   id: 0,
                   tipo: tipoRef.current,
@@ -877,10 +1419,16 @@ export default function VehiclesScreen() {
                   },
                   created_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
-                  base64_image: (vehicleImageBase64 && vehicleImageBase64.trim() !== '') ? vehicleImageBase64 : '',
-                  ...(Number.isFinite(corpoOffline) && corpoOffline > 0
-                    ? { corpo_id: corpoOffline }
-                    : {}),
+                  base64_image: '',
+                  local_attachment_file: vehicleImageLocalFileName || null,
+                  file_name: null,
+                  corpo_id: corpoForSave,
+                  puesto_id: puestoForSave,
+                  empresa_id: hierarchyIds.empresa_id ?? undefined,
+                  cliente_id: hierarchyIds.cliente_id ?? undefined,
+                  division_id: hierarchyIds.division_id ?? undefined,
+                  contrato_id: hierarchyIds.contrato_id ?? undefined,
+                  isActive: true,
                 };
 
                 cache.push(newVehicleCache);
@@ -926,6 +1474,7 @@ export default function VehiclesScreen() {
                 setHoraSalidaPickerValue(baseDate);
                 setShowHoraEntradaPicker(false);
                 setShowHoraSalidaPicker(false);
+                setVehicleImageLocalFileName(null);
                 setVehicleImageBase64(null);
                 fetchVehicles();
               }
@@ -1020,13 +1569,48 @@ export default function VehiclesScreen() {
                 razon_visita: razonVisitaRef.current,
               };
 
-              // Imagen: enviar solo base64 crudo (referencia NonConformingProductScreen file_base64). El servidor acepta ambos formatos.
-              const fileBase64 = getBase64Only(vehicleImageBase64);
-              if (fileBase64) {
-                requestBody.file = fileBase64;
-              } else {
-                requestBody.file = null;
+              const rnEdit =
+                currentMarcaData?.roleDivision?.role?.nombre ??
+                currentMarcaData?.role_division?.role?.nombre ??
+                null;
+              if (rnEdit !== 'OPERATIVO') {
+                const corpoUp = await resolveCorpoIdForSave();
+                const puestoUp = await resolvePuestoIdForSave();
+                if (!corpoUp || corpoUp <= 0) {
+                  Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
+                  return;
+                }
+                if (!puestoUp || puestoUp <= 0) {
+                  Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
+                  return;
+                }
+                requestBody.corpo_id = corpoUp;
+                requestBody.puesto_id = puestoUp;
+                const hierarchyUp = await resolveHierarchyIdsForSave();
+                if (
+                  hierarchyUp.empresa_id == null ||
+                  hierarchyUp.empresa_id <= 0 ||
+                  hierarchyUp.cliente_id == null ||
+                  hierarchyUp.cliente_id <= 0 ||
+                  hierarchyUp.division_id == null ||
+                  hierarchyUp.division_id <= 0 ||
+                  hierarchyUp.contrato_id == null ||
+                  hierarchyUp.contrato_id <= 0
+                ) {
+                  Alert.alert(
+                    'Error',
+                    'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía.'
+                  );
+                  return;
+                }
+                requestBody.empresa_id = hierarchyUp.empresa_id;
+                requestBody.cliente_id = hierarchyUp.cliente_id;
+                requestBody.division_id = hierarchyUp.division_id;
+                requestBody.contrato_id = hierarchyUp.contrato_id;
               }
+
+              const newFilePayload = await buildVehicleFilePayloadForApi();
+              requestBody.file = newFilePayload || null;
 
               // Verificar conectividad
               const isConnected = await getConnectionStatus();
@@ -1044,9 +1628,7 @@ export default function VehiclesScreen() {
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Vehículo actualizado correctamente');
                   setEditingVehicle(null);
-                  setVehicleImageBase64(null);
-                  setIsEditingImage(false);
-                  setEditingVehicleServerImage(null);
+                  await clearPendingVehicleCaptureFiles();
                   // Wait a bit for server to process, then fetch vehicles
                   setTimeout(() => {
                     fetchVehicles();
@@ -1060,6 +1642,12 @@ export default function VehiclesScreen() {
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
                 if (!Array.isArray(actions)) actions = [];
 
+                const offlineBody = { ...requestBody, file: null };
+                const attachMeta =
+                  vehicleImageLocalFileName != null && vehicleImageLocalFileName !== ''
+                    ? { attachmentLocalFileName: vehicleImageLocalFileName }
+                    : {};
+
                 if (editingVehicle.id_local !== '') {
                   actions = stripErroneousVehicleUpdatesForLocalQueueId(actions, editingVehicle.id_local);
                   const actionIndex = actions.findIndex(
@@ -1067,16 +1655,24 @@ export default function VehiclesScreen() {
                       a?.type === 'create' && String(a.id) === String(editingVehicle.id_local)
                   );
                   if (actionIndex !== -1) {
-                    actions[actionIndex].requestData = requestBody;
+                    actions[actionIndex].requestData = offlineBody;
                     if (actions[actionIndex].marcaId == null && currentMarcaData.id != null) {
                       actions[actionIndex].marcaId = currentMarcaData.id;
+                  }
+                    if ('attachmentLocalFileName' in attachMeta) {
+                      (actions[actionIndex] as any).attachmentLocalFileName = (
+                        attachMeta as any
+                      ).attachmentLocalFileName;
+                } else {
+                      delete (actions[actionIndex] as any).attachmentLocalFileName;
                     }
                   } else {
                     actions.push({
-                      requestData: requestBody,
+                      requestData: offlineBody,
                       marcaId: currentMarcaData.id,
                       id: editingVehicle.id_local,
                       type: 'create',
+                      ...attachMeta,
                     });
                   }
                   await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
@@ -1086,9 +1682,10 @@ export default function VehiclesScreen() {
                       !(a?.type === 'update' && Number(a.id) === Number(vehicleId))
                   );
                   filteredActions.push({
-                    requestData: requestBody,
+                    requestData: offlineBody,
                     id: vehicleId,
                     type: 'update',
+                    ...attachMeta,
                   });
                   await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
                 }
@@ -1102,18 +1699,17 @@ export default function VehiclesScreen() {
                 );
 
                 if (vehicleIndex !== -1) {
-                  // Determine base64_image: use new image if captured, otherwise keep existing
-                  let updatedBase64Image = '';
-                  if (vehicleImageBase64 && vehicleImageBase64.trim() !== '') {
-                    // New image was captured, use it
-                    updatedBase64Image = vehicleImageBase64;
-                  } else if (cache[vehicleIndex].base64_image && cache[vehicleIndex].base64_image.trim() !== '') {
-                    // No new image captured, preserve existing base64_image
-                    updatedBase64Image = cache[vehicleIndex].base64_image;
+                  const prevRow = cache[vehicleIndex] as Vehicle;
+                  let nextLocalAtt = prevRow.local_attachment_file || null;
+                  let nextFileName = prevRow.file_name ?? null;
+                  let nextBase64 = prevRow.base64_image || '';
+                  if (vehicleImageLocalFileName) {
+                    nextLocalAtt = vehicleImageLocalFileName;
+                    nextBase64 = '';
                   }
 
                   cache[vehicleIndex] = {
-                    ...cache[vehicleIndex],
+                    ...prevRow,
                     tipo: tipoRef.current,
                     placa: placaRef.current,
                     nombre_propietario: nombrePropietarioRef.current,
@@ -1123,16 +1719,29 @@ export default function VehiclesScreen() {
                     hora_entrada: entradaIso,
                     hora_salida: salidaIso,
                     razon_visita: razonVisitaRef.current,
-                    base64_image: updatedBase64Image,
+                    base64_image: nextBase64,
+                    local_attachment_file: nextLocalAtt,
+                    file_name: nextFileName,
+                    ...(rnEdit !== 'OPERATIVO' &&
+                    requestBody.corpo_id != null &&
+                    requestBody.puesto_id != null
+                      ? {
+                          corpo_id: requestBody.corpo_id,
+                          puesto_id: requestBody.puesto_id,
+                          empresa_id: requestBody.empresa_id,
+                          cliente_id: requestBody.cliente_id,
+                          division_id: requestBody.division_id,
+                          contrato_id: requestBody.contrato_id,
+                        }
+                      : {}),
                   };
                   await AsyncStorage.setItem('vehicles_cache', JSON.stringify(cache));
                 }
 
                 Alert.alert('Modo Offline', 'Vehículo actualizado localmente. Se sincronizará cuando haya conexión.');
                 setEditingVehicle(null);
+                setVehicleImageLocalFileName(null);
                 setVehicleImageBase64(null);
-                setIsEditingImage(false);
-                setEditingVehicleServerImage(null);
                 // Wait a bit to ensure cache is written, then fetch vehicles
                 setTimeout(() => {
                   fetchVehicles();
@@ -1150,6 +1759,84 @@ export default function VehiclesScreen() {
     );
   };
 
+  const confirmRemoveVehicleAttachment = (vehicle: Vehicle) => {
+    const hasAtt =
+      Boolean(vehicle.local_attachment_file) ||
+      Boolean(vehicle.file_name && String(vehicle.file_name).trim() !== '') ||
+      Boolean(vehicle.base64_image && vehicle.base64_image.trim() !== '');
+    if (!hasAtt) return;
+
+    Alert.alert('Confirmar', '¿Eliminar la foto de la matrícula de este registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              const isDraft = vehicle.id === 0 && vehicle.id_local;
+              if (isDraft) {
+                if (vehicle.local_attachment_file) {
+                  try {
+                    await deleteFile(String(vehicle.local_attachment_file));
+                  } catch {
+                    /* */
+                  }
+                }
+                const actionsStr0 = await AsyncStorage.getItem('vehicles_actions');
+                let actions0: any[] = actionsStr0 ? JSON.parse(actionsStr0) : [];
+                if (!Array.isArray(actions0)) actions0 = [];
+                const idx0 = actions0.findIndex(
+                  (a: any) => a?.type === 'create' && String(a?.id) === String(vehicle.id_local)
+                );
+                if (idx0 !== -1) {
+                  delete actions0[idx0].attachmentLocalFileName;
+                  if (actions0[idx0].requestData) {
+                    actions0[idx0].requestData = { ...actions0[idx0].requestData, file: null };
+                  }
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions0));
+                }
+                await stripVehicleVisitasAttachmentForRow(0, vehicle.id_local);
+                fetchVehicles();
+                return;
+              }
+
+              const connected = await getConnectionStatus();
+              if (vehicle.id > 0 && connected) {
+                const r = await deleteVehicleAttachmentAPI({
+                  vehicleId: vehicle.id,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (!r?.status) {
+                  Alert.alert('Error', (r as any)?.message || 'No se pudo eliminar el adjunto');
+                  return;
+                }
+                await stripVehicleVisitasAttachmentForRow(vehicle.id, '');
+                fetchVehicles();
+              } else if (vehicle.id > 0 && !connected) {
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = actions.filter(
+                  (a: any) =>
+                    !(a?.type === 'delete_vehicle_attachment' && Number(a?.id) === Number(vehicle.id))
+                );
+                actions.push({ type: 'delete_vehicle_attachment', id: vehicle.id });
+                await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                await stripVehicleVisitasAttachmentForRow(vehicle.id, '');
+                fetchVehicles();
+              }
+            } catch (e) {
+              console.error('confirmRemoveVehicleAttachment:', e);
+              Alert.alert('Error', 'No se pudo eliminar el adjunto');
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
   const deleteVehicle = (vehicleId: number, id_local: string) => {
     if (deletingVehicleKey) return;
     Alert.alert(
@@ -1164,55 +1851,55 @@ export default function VehiclesScreen() {
             const key = getVehicleRowKey(vehicleId, id_local);
             void (async () => {
               setDeletingVehicleKey(key);
-              try {
-                const isConnected = await getConnectionStatus();
+            try {
+              const isConnected = await getConnectionStatus();
 
-                if (isConnected) {
-                  const data = await deleteVehicleAPI({
-                    vehicleId: vehicleId,
-                    refreshAccessToken,
-                    logout,
-                  });
+              if (isConnected) {
+                const data = await deleteVehicleAPI({
+                  vehicleId: vehicleId,
+                  refreshAccessToken,
+                  logout,
+                });
 
-                  if (data.status) {
-                    Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
-                    fetchVehicles();
-                  } else {
-                    Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
-                  }
+                if (data.status) {
+                  Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
+                  fetchVehicles();
                 } else {
-                  const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                  Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
                   let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
                   if (!Array.isArray(actions)) actions = [];
 
-                  if (id_local !== '') {
+                if (id_local !== '') {
                     const filteredActions = actions.filter(
                       (a: any) =>
                         !(a?.type === 'create' && String(a?.id) === String(id_local))
                     );
-                    await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
-                  } else {
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
+                } else {
                     actions = appendOfflineVehicleDelete(actions, vehicleId);
-                    await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
-                  }
-
-                  const cacheStr = await AsyncStorage.getItem('vehicles_cache');
-                  const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                  const filteredCache = cache.filter((v: Vehicle) =>
-                    id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
-                  );
-                  await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
-
-                  Alert.alert('Modo Offline', 'Vehículo eliminado localmente. Se sincronizará cuando haya conexión.');
-                  fetchVehicles();
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
                 }
-              } catch (err) {
-                console.error('Error deleting vehicle:', err);
-                Alert.alert('Error', 'No se pudo eliminar el vehículo');
+
+                const cacheStr = await AsyncStorage.getItem('vehicles_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                const filteredCache = cache.filter((v: Vehicle) =>
+                  id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
+                );
+                await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
+
+                Alert.alert('Modo Offline', 'Vehículo eliminado localmente. Se sincronizará cuando haya conexión.');
+                fetchVehicles();
+              }
+            } catch (err) {
+              console.error('Error deleting vehicle:', err);
+              Alert.alert('Error', 'No se pudo eliminar el vehículo');
               } finally {
                 setDeletingVehicleKey(null);
-              }
+            }
             })();
           },
         },
@@ -1238,6 +1925,164 @@ export default function VehiclesScreen() {
         <ThemedText style={styles.formTitle}>
           {isCreating ? 'Nuevo Vehículo' : 'Editar Vehículo'}
         </ThemedText>
+
+        {roleName != null && roleName !== 'OPERATIVO' ? (
+          <ThemedView style={styles.formHierarchySection}>
+            <ThemedText style={styles.formHierarchyHint}>
+              Ubicación del registro (empresa → puesto)
+            </ThemedText>
+            {isStructureLoading ? (
+              <ThemedView style={styles.inlineLoading}>
+                <ActivityIndicator size="small" color="#007AFF" />
+                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+              </ThemedView>
+            ) : structure.length === 0 ? (
+              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            ) : (
+              <>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Empresa</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formEmpresaId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        handleFormEmpresaChange(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                      {structure.map((e) => (
+                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Cliente</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formEmpresaId != null && formClienteOptions.length > 0}
+                      selectedValue={formClienteId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        handleFormClienteChange(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formClienteOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>División</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formClienteId != null && formDivisionOptions.length > 0}
+                      selectedValue={formDivisionId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormDivisionId(next === 0 ? null : next);
+                        setFormContratoId(null);
+                        setFormSucursalId(null);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formDivisionOptions.map((d) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Contrato</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formDivisionId != null && formContratoOptions.length > 0}
+                      selectedValue={formContratoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormContratoId(next === 0 ? null : next);
+                        setFormSucursalId(null);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formContratoOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formContratoId != null && formSucursalOptions.length > 0}
+                      selectedValue={formSucursalId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormSucursalId(next === 0 ? null : next);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formSucursalOptions.map((s) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Puesto *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formSucursalId != null && formPuestoOptions.length > 0}
+                      selectedValue={formPuestoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormPuestoId(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formPuestoOptions.map((p) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              </>
+            )}
+          </ThemedView>
+        ) : null}
 
         {/* Tipo */}
         <ThemedView style={styles.formGroup}>
@@ -1424,52 +2269,46 @@ export default function VehiclesScreen() {
         {/* Foto de la matrícula */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Foto de la matrícula (opcional):</ThemedText>
-          <TouchableOpacity
-            style={styles.captureImageButton}
-            onPress={openCamera}
-          >
+          <ThemedText style={styles.formHierarchyHint}>
+            {isCreating
+              ? 'La imagen se guarda en el dispositivo y se sube al confirmar.'
+              : 'Solo se envían fotos nuevas. Use el detalle del registro para ver o eliminar la foto actual.'}
+          </ThemedText>
+          <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
             <Ionicons name="camera" size={20} color="#007AFF" />
             <ThemedText style={styles.captureImageButtonText}>
-              {vehicleImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
+              {vehicleImageLocalFileName || vehicleImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
             </ThemedText>
           </TouchableOpacity>
 
-          {/* Show captured image preview */}
-          {vehicleImageBase64 && (() => {
-            const displayUri = getVehicleImageDisplayUri(vehicleImageBase64);
+          {(vehicleImageLocalFileName || vehicleImageBase64) && (() => {
+            const displayUri = vehicleImageLocalFileName
+              ? getStoredFileDisplayUri(vehicleImageLocalFileName) || null
+              : getVehicleImageDisplayUri(vehicleImageBase64);
             if (!displayUri) return null;
             return (
               <ThemedView style={styles.imagePreviewContainer}>
-                <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
-                <Image
-                  source={{ uri: displayUri }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                />
-              </ThemedView>
-            );
-          })()}
-
-          {/* Show existing image in edit mode */}
-          {!isCreating && !vehicleImageBase64 && isEditingImage && (() => {
-            // Priority: 
-            // 1. If online and server image loaded: use server image
-            // 2. Otherwise: use base64_image from cache
-            // This ensures offline mode always shows base64_image
-            const imageToShow = editingVehicleServerImage
-              ? editingVehicleServerImage
-              : getVehicleImageDisplayUri(editingVehicle?.base64_image) || null;
-
-            if (!imageToShow) return null;
-
-            return (
-              <ThemedView style={styles.imagePreviewContainer}>
-                <ThemedText style={styles.imagePreviewTitle}>Imagen actual:</ThemedText>
-                <Image
-                  source={{ uri: imageToShow }}
-                  style={styles.imagePreview}
-                  resizeMode="contain"
-                />
+                <ThemedText style={styles.imagePreviewTitle}>Nueva imagen:</ThemedText>
+                <View style={{ position: 'relative' }}>
+                  <Image source={{ uri: displayUri }} style={styles.imagePreview} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.vehicleImageTrashButton}
+                    onPress={() => {
+                      Alert.alert('Confirmar', '¿Quitar esta imagen del formulario?', [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                          text: 'Quitar',
+                          style: 'destructive',
+                          onPress: () => {
+                            void clearPendingVehicleCaptureFiles();
+                          },
+                        },
+                      ]);
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={22} color="#fff" />
+                  </TouchableOpacity>
+                </View>
               </ThemedView>
             );
           })()}
@@ -1479,14 +2318,25 @@ export default function VehiclesScreen() {
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
             style={[styles.confirmButton, isSubmittingForm && styles.disabledButton]}
-            onPress={isCreating ? createVehicle : () => updateVehicle(vehicle.id!)}
+            onPress={
+              isCreating
+                ? createVehicle
+                : () => {
+                    const vid = vehicle.id != null ? Number(vehicle.id) : NaN;
+                    if (!Number.isFinite(vid)) {
+                      Alert.alert('Error', 'No se pudo identificar el registro a actualizar.');
+                      return;
+                    }
+                    void updateVehicle(vid);
+                  }
+            }
             disabled={isSubmittingForm}
           >
             {isSubmittingForm ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
               <View style={styles.confirmButtonInner}>
-                {getActionIcon('confirm')}
+              {getActionIcon('confirm')}
               </View>
             )}
           </TouchableOpacity>
@@ -1531,6 +2381,10 @@ export default function VehiclesScreen() {
 
   const startEditing = async (vehicle: Vehicle) => {
     const entradaDate = new Date(vehicle.hora_entrada);
+    if (Number.isNaN(entradaDate.getTime())) {
+      Alert.alert('Error', 'La fecha/hora de entrada del registro no es válida.');
+      return;
+    }
     const hours = entradaDate.getUTCHours().toString().padStart(2, '0');
     const minutes = entradaDate.getUTCMinutes().toString().padStart(2, '0');
     const fechaEntrada = entradaDate.toISOString().split('T')[0];
@@ -1540,9 +2394,11 @@ export default function VehiclesScreen() {
     let fechaSalida = '';
     if (vehicle.hora_salida) {
       const salidaDate = new Date(vehicle.hora_salida);
+      if (!Number.isNaN(salidaDate.getTime())) {
       exitHours = salidaDate.getUTCHours().toString().padStart(2, '0');
       exitMinutes = salidaDate.getUTCMinutes().toString().padStart(2, '0');
       fechaSalida = salidaDate.toISOString().split('T')[0];
+      }
     }
 
     const horaAccion = await getHoraAccion();
@@ -1550,34 +2406,6 @@ export default function VehiclesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-
-    setEditingVehicle({
-      id: vehicle.id,
-      id_local: vehicle.id_local,
-      tipo: vehicle.tipo,
-      placa: vehicle.placa,
-      nombre_propietario: vehicle.nombre_propietario,
-      cedula_propietario: vehicle.cedula_propietario,
-      departamento_visita: vehicle.departamento_visita || '',
-      persona_visita: vehicle.persona_visita || '',
-      fecha_entrada: fechaEntrada,
-      fecha_salida: fechaSalida,
-      hora_entrada_h: hours,
-      hora_entrada_m: minutes,
-      hora_salida_h: exitHours,
-      hora_salida_m: exitMinutes,
-      razon_visita: vehicle.razon_visita,
-      base64_image: vehicle.base64_image || '',
-    });
-    syncTimeFields(hours, minutes, exitHours, exitMinutes);
-    fechaEntradaRef.current = fechaEntrada;
-    fechaSalidaRef.current = fechaSalida;
-    setFechaEntradaDisplay(fechaEntrada);
-    setFechaSalidaDisplay(fechaSalida);
-    setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
-    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date(horaAccion));
-    setShowFechaEntradaPicker(false);
-    setShowFechaSalidaPicker(false);
 
     const baseDateEntrada = await buildDateFromParts('', '');
     if (!baseDateEntrada) {
@@ -1591,12 +2419,97 @@ export default function VehiclesScreen() {
       return;
     }
 
+    /**
+     * Cargar jerarquía ANTES de `setEditingVehicle`: si el formulario se pinta con Pickers
+     * cuyo `selectedValue` no existe entre los `Picker.Item`, Android puede cerrar la app.
+     */
+    const tree = await fetchMainStructure();
+    const marcaStrEdit = await AsyncStorage.getItem('current_marca');
+    const marcaJsonEdit = marcaStrEdit ? JSON.parse(marcaStrEdit) : null;
+    const rnStart =
+      marcaJsonEdit?.roleDivision?.role?.nombre ?? marcaJsonEdit?.role_division?.role?.nombre ?? null;
+    if (rnStart !== 'OPERATIVO' && tree.length > 0) {
+      const pid = numOrNull(vehicle.puesto_id);
+      const byPuesto = pid ? findHierarchyByPuestoIn(tree, pid) : null;
+      if (byPuesto) {
+        setFormEmpresaId(byPuesto.empresaId);
+        setFormClienteId(byPuesto.clienteId);
+        setFormDivisionId(byPuesto.divisionId);
+        setFormContratoId(byPuesto.contratoId);
+        setFormSucursalId(byPuesto.corpoId);
+        setFormPuestoId(byPuesto.puestoId);
+      } else {
+        const cid = numOrNull(vehicle.corpo_id);
+        const h = cid ? findHierarchyByCorpoIn(tree, cid) : null;
+        if (h) {
+          setFormEmpresaId(h.empresaId);
+          setFormClienteId(h.clienteId);
+          setFormDivisionId(h.divisionId);
+          setFormContratoId(h.contratoId);
+          setFormSucursalId(h.corpoId);
+          let pId = numOrNull(vehicle.puesto_id);
+          if (!pId || pId <= 0) {
+            outerLoop:
+            for (const empresa of tree) {
+              for (const cliente of empresa.clientes || []) {
+                for (const division of getClienteDivisionArray(cliente)) {
+                  for (const contrato of division.contratos || []) {
+                    for (const sucursal of contrato.sucursales || []) {
+                      if (Number(sucursal.id) === h.corpoId) {
+                        const first = sucursal.puestos?.[0];
+                        pId = first?.id != null ? Number(first.id) : null;
+                        break outerLoop;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          setFormPuestoId(pId);
+        } else {
+          resetFormHierarchyFields();
+        }
+      }
+    } else {
+      resetFormHierarchyFields();
+    }
+
+    const razonSafe = vehicle.razon_visita != null ? String(vehicle.razon_visita) : '';
+
+    setEditingVehicle({
+      id: vehicle.id,
+      id_local: vehicle.id_local ?? '',
+      tipo: vehicle.tipo,
+      placa: vehicle.placa,
+      nombre_propietario: vehicle.nombre_propietario,
+      cedula_propietario: vehicle.cedula_propietario,
+      departamento_visita: vehicle.departamento_visita || '',
+      persona_visita: vehicle.persona_visita || '',
+      fecha_entrada: fechaEntrada,
+      fecha_salida: fechaSalida,
+      hora_entrada_h: hours,
+      hora_entrada_m: minutes,
+      hora_salida_h: exitHours,
+      hora_salida_m: exitMinutes,
+      razon_visita: razonSafe,
+      base64_image: vehicle.base64_image || '',
+    });
+    syncTimeFields(hours, minutes, exitHours, exitMinutes);
+    fechaEntradaRef.current = fechaEntrada;
+    fechaSalidaRef.current = fechaSalida;
+    setFechaEntradaDisplay(fechaEntrada);
+    setFechaSalidaDisplay(fechaSalida);
+    setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
+    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date(horaAccion));
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
+
     setHoraEntradaPickerValue(baseDateEntrada);
     setHoraSalidaPickerValue(baseDateSalida);
     setShowHoraEntradaPicker(false);
     setShowHoraSalidaPicker(false);
 
-    // Initialize refs with vehicle values
     tipoRef.current = vehicle.tipo;
     setVehicleTipo(vehicle.tipo);
     placaRef.current = vehicle.placa;
@@ -1608,90 +2521,16 @@ export default function VehiclesScreen() {
     horaEntradaMRef.current = minutes;
     horaSalidaHRef.current = exitHours;
     horaSalidaMRef.current = exitMinutes;
-    razonVisitaRef.current = vehicle.razon_visita;
+    razonVisitaRef.current = razonSafe;
 
-    // Set image state
     setVehicleImageBase64(null);
-    setIsEditingImage(true);
-    setEditingVehicleServerImage(null);
-
-    // Load image based on network status
-    const isConnected = await getConnectionStatus();
-    if (isConnected && vehicle.id) {
-      // CON INTERNET: Cargar desde API
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (apiUrl) {
-        try {
-          const imageUrl = appendTokenToUrl(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`);
-          const response = await authedFetch({
-            url: imageUrl,
-            init: {
-              method: 'GET',
-            },
-            refreshAccessToken,
-            logout,
-          });
-          if (!response) return;
-
-          if (response.ok) {
-            const blob = await response.blob();
-
-            // Convert blob to base64
-            const base64Image = await new Promise<string | null>((resolve) => {
-              const reader = new FileReader();
-
-              reader.onerror = () => {
-                console.error('Error al leer la imagen con FileReader');
-                resolve(null);
-              };
-
-              reader.onloadend = () => {
-                try {
-                  const base64data = reader.result as string;
-                  if (!base64data) {
-                    console.warn('No se pudo convertir la imagen a base64');
-                    resolve(null);
-                  } else {
-                    resolve(base64data);
-                  }
-                } catch (error) {
-                  console.error('Error al procesar base64:', error);
-                  resolve(null);
-                }
-              };
-
-              reader.readAsDataURL(blob);
-            });
-
-            if (base64Image) {
-              setEditingVehicleServerImage(base64Image);
-            }
-          } else {
-            console.warn(`Failed to load vehicle image for edit: ${response.status} ${response.statusText}`);
-            // If server image fails, fallback to base64_image if available
-            if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
-              setEditingVehicleServerImage(null); // Clear server image to use base64
-            }
-          }
-        } catch (error) {
-          console.error('Error fetching vehicle image for edit:', error);
-          // If error, fallback to base64_image if available
-          if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
-            setEditingVehicleServerImage(null); // Clear server image to use base64
-          }
-        }
-      }
-    } else {
-      // SIN INTERNET: No intentar cargar desde servidor, usar base64_image si existe
-      // El base64_image ya está en editingVehicle.base64_image
-    }
+    setVehicleImageLocalFileName(null);
   };
 
   const cancelEditing = () => {
+    void clearPendingVehicleCaptureFiles();
     setEditingVehicle(null);
-    setVehicleImageBase64(null);
-    setIsEditingImage(false);
-    setEditingVehicleServerImage(null);
+    setVehicleImageLocalFileName(null);
     fechaEntradaRef.current = '';
     fechaSalidaRef.current = '';
     setFechaEntradaDisplay('');
@@ -1700,6 +2539,7 @@ export default function VehiclesScreen() {
     setShowFechaSalidaPicker(false);
     setVehicleTipo('Particular');
     tipoRef.current = 'Particular';
+    resetFormHierarchyFields();
   };
 
   const startCreating = async () => {
@@ -1758,10 +2598,13 @@ export default function VehiclesScreen() {
     horaSalidaHRef.current = '';
     horaSalidaMRef.current = '';
     razonVisitaRef.current = '';
-    setVehicleImageBase64(null);
+    void clearPendingVehicleCaptureFiles();
+    await fetchMainStructure();
+    await applyCurrentMarcaToCreateFormHierarchy();
   };
 
   const cancelCreating = () => {
+    void clearPendingVehicleCaptureFiles();
     setIsCreating(false);
     setNewVehicle({
       id: null,
@@ -1781,7 +2624,7 @@ export default function VehiclesScreen() {
       razon_visita: '',
       base64_image: '',
     });
-    setVehicleImageBase64(null);
+    setVehicleImageLocalFileName(null);
     fechaEntradaRef.current = '';
     fechaSalidaRef.current = '';
     setFechaEntradaDisplay('');
@@ -1790,11 +2633,16 @@ export default function VehiclesScreen() {
     setShowFechaSalidaPicker(false);
     setVehicleTipo('Particular');
     tipoRef.current = 'Particular';
+    resetFormHierarchyFields();
   };
 
   const resetAllFilters = () => {
     setSearchText('');
     setSelectedTipo('all');
+    if (roleName != null && roleName !== 'OPERATIVO') {
+      void resetListFiltersFromCurrentMarca();
+      void fetchVehicles();
+    }
   };
 
   const filteredVehicles = vehicles.filter(vehicle => {
@@ -1924,6 +2772,158 @@ export default function VehiclesScreen() {
             {/* Filter Content */}
             {isFiltersExpanded && (
               <ThemedView style={styles.filterContent}>
+                {hasCurrentMarca && roleName != null && roleName !== 'OPERATIVO' ? (
+                  <>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>
+                        Ubicación del listado (empresa → sucursal)
+                      </ThemedText>
+                    </ThemedView>
+                    {isStructureLoading ? (
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedView style={styles.inlineLoading}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                        </ThemedView>
+                      </ThemedView>
+                    ) : structure.length === 0 ? (
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      </ThemedView>
+                    ) : (
+                      <>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterEmpresaId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterEmpresaId(next === 0 ? null : next);
+                                setFilterClienteId(null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterSucursalIdRef.current = null;
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                              {filterEmpresaOptions.map((e) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                              selectedValue={filterClienteId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterClienteId(next === 0 ? null : next);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterSucursalIdRef.current = null;
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterClienteOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>División</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                              selectedValue={filterDivisionId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterDivisionId(next === 0 ? null : next);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterSucursalIdRef.current = null;
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterDivisionOptionsMemo.map((d) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                              selectedValue={filterContratoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterContratoId(next === 0 ? null : next);
+                                setFilterSucursalId(null);
+                                filterSucursalIdRef.current = null;
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterContratoOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Sucursal (sincroniza listado)</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                              selectedValue={filterSucursalId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                const nextSuc = next === 0 ? null : next;
+                                filterSucursalIdRef.current = nextSuc;
+                                setFilterSucursalId(nextSuc);
+                                void fetchVehicles();
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterSucursalOptionsMemo.map((s) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </ThemedView>
+                      </>
+                    )}
+                  </>
+                ) : null}
+
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Buscar por placa, conductor, cédula, departamento, persona, razón o responsable:</ThemedText>
                   <TextInput
@@ -1984,6 +2984,7 @@ export default function VehiclesScreen() {
                     vehicle={vehicle}
                     onEdit={() => startEditing(vehicle)}
                     onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
+                    onRemoveAttachment={() => confirmRemoveVehicleAttachment(vehicle)}
                     isDeleting={
                       deletingVehicleKey === getVehicleRowKey(vehicle.id, vehicle.id_local)
                     }
@@ -2139,6 +3140,7 @@ interface VehicleItemComponentProps {
   vehicle: Vehicle;
   onEdit: () => void;
   onDelete: () => void;
+  onRemoveAttachment: () => void;
   onViewChanges?: () => void;
   isDeleting?: boolean;
   getActionIcon: (action: string) => React.ReactElement;
@@ -2151,6 +3153,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   vehicle,
   onEdit,
   onDelete,
+  onRemoveAttachment,
   onViewChanges,
   isDeleting = false,
   getActionIcon,
@@ -2164,13 +3167,15 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
   const [isImageExpanded, setIsImageExpanded] = React.useState<boolean>(false);
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
 
-  // Determinar si hay imagen disponible
-  // Siempre mostrar la sección para permitir expandir y ver si hay imagen
+  const hasAttachment =
+    Boolean(vehicle.local_attachment_file) ||
+    Boolean(vehicle.file_name && String(vehicle.file_name).trim() !== '') ||
+    Boolean(vehicle.base64_image && vehicle.base64_image.trim() !== '');
+
   const hasImage = true;
 
-  // Function to load image from server
   const loadImageFromServer = React.useCallback(async () => {
-    if (!apiUrl || !vehicle.id) {
+    if (!apiUrl || !vehicle.id || vehicle.id <= 0) {
       console.warn('No API URL or vehicle ID available');
       return;
     }
@@ -2225,12 +3230,10 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
     } catch (error) {
       console.error('Error fetching vehicle image:', error);
     }
-  }, [apiUrl, vehicle.id, refreshAccessToken]);
+  }, [apiUrl, vehicle.id, refreshAccessToken, appendTokenToUrl, logout]);
 
-  // Single effect to handle image loading based on network state (same pattern as ActivitiesScreen)
   React.useEffect(() => {
     if (!isImageExpanded) {
-      // Don't load if not expanded
       setImageBase64(null);
       setIsLoadingImage(false);
       return;
@@ -2239,10 +3242,16 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
     const checkConnectionAndLoadImage = async () => {
       setIsLoadingImage(true);
 
-      // Check connection status first
+      if (vehicle.local_attachment_file) {
+        const u = getStoredFileDisplayUri(String(vehicle.local_attachment_file));
+        if (u) setImageBase64(u);
+        else setImageBase64(null);
+        setIsLoadingImage(false);
+        return;
+      }
+
       const connectionStatus = await getConnectionStatus();
 
-      // Always load cached image first (base64_image from vehicle)
       if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
         const formattedImage = getVehicleImageDisplayUri(vehicle.base64_image);
         if (formattedImage) setImageBase64(formattedImage);
@@ -2251,17 +3260,25 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
       }
 
       if (!connectionStatus) {
-        // Offline: use cached image only, don't try to load from server
+        setIsLoadingImage(false);
+      } else if (vehicle.file_name && String(vehicle.file_name).trim() !== '' && vehicle.id > 0) {
+        await loadImageFromServer();
         setIsLoadingImage(false);
       } else {
-        // Online: fetch image from server (will override cache if successful)
-        await loadImageFromServer();
         setIsLoadingImage(false);
       }
     };
 
     checkConnectionAndLoadImage();
-  }, [vehicle.id, vehicle.base64_image, isImageExpanded, getConnectionStatus, loadImageFromServer]);
+  }, [
+    vehicle.id,
+    vehicle.base64_image,
+    vehicle.local_attachment_file,
+    vehicle.file_name,
+    isImageExpanded,
+    getConnectionStatus,
+    loadImageFromServer,
+  ]);
 
   return (
     <ThemedView style={styles.vehicleCard}>
@@ -2308,15 +3325,27 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
                 </ThemedView>
               ) : imageBase64 ? (
                 <ThemedView style={styles.imagePreviewContainer}>
+                  <View style={{ position: 'relative' }}>
                   <Image
                     source={{ uri: imageBase64 }}
                     style={styles.imagePreview}
                     resizeMode="contain"
                   />
+                    {hasAttachment ? (
+                      <TouchableOpacity
+                        style={styles.vehicleImageTrashButton}
+                        onPress={onRemoveAttachment}
+                      >
+                        <Ionicons name="trash-outline" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.imageLoadingContainer}>
-                  <ThemedText style={styles.imageLoadingText}>No hay imagen disponible</ThemedText>
+                  <ThemedText style={styles.imageLoadingText}>
+                    {!hasAttachment ? 'No hay imagen para este registro' : 'No hay imagen disponible'}
+                  </ThemedText>
                 </ThemedView>
               )}
             </ThemedView>
@@ -2343,7 +3372,7 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
             {isDeleting ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+            <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
             )}
           </TouchableOpacity>
         </ThemedView>
@@ -2520,6 +3549,26 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
     backgroundColor: '#F8F9FA',
+  },
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  inlineLoadingText: {
+    color: '#666666',
+  },
+  formHierarchySection: {
+    marginBottom: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  formHierarchyHint: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 8,
   },
   filterGroupSearch: {
     flex: 1,
@@ -2808,6 +3857,14 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 200,
     borderRadius: 8,
+  },
+  vehicleImageTrashButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 18,
+    padding: 8,
   },
   cameraCloseButton: {
     position: 'absolute',

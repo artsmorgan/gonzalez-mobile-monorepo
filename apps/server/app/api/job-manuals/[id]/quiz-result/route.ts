@@ -74,6 +74,18 @@ export async function PUT(
       );
     }
 
+    const tokenEmpleadoId = payload?.id != null ? Number(payload.id) : NaN;
+    if (
+      Number.isFinite(tokenEmpleadoId) &&
+      tokenEmpleadoId > 0 &&
+      tokenEmpleadoId === empleado_id
+    ) {
+      return NextResponse.json(
+        { status: false, message: "No puedes calificar tu propio intento de quiz" },
+        { status: 200 }
+      );
+    }
+
     const existing = await callDynamicPrisma({
       req,
       data: {

@@ -5,6 +5,13 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
+/** Jerarquía: empresa_id, cliente_id, division_id, contrato_id, corpo_id, puesto_id (sucursal_id = corpo). */
+function parseId(v: unknown): number | null {
+  if (v === undefined || v === null || v === "") return null;
+  const n = parseInt(String(v), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -30,6 +37,7 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where: {
           corpo_id: targetCorpoId,
+          isActive: true,
         },
         include: {
           e_movimiento_llave: {
@@ -40,11 +48,16 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    const mapped = rows.map((r: any) => ({
+    const mapped = (rows || []).map((r: any) => ({
       id: r.id,
       cliente_id: r.cliente_id,
       corpo_id: r.corpo_id,
+      sucursal_id: r.corpo_id,
       puesto_id: r.puesto_id,
+      empresa_id: r.empresa_id,
+      division_id: r.division_id,
+      contrato_id: r.contrato_id,
+      isActive: r.isActive !== false,
       lugar_abre: r.lugar_abre,
       cantidad_copias: r.cantidad_copias,
       observaciones: r.observaciones,
@@ -72,6 +85,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
+    console.log(error);
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/llaves:", errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
@@ -86,7 +100,19 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { marca_id, lugar_abre, cantidad_copias, observaciones, firma_responsable } = body ?? {};
+    const {
+      marca_id,
+      lugar_abre,
+      cantidad_copias,
+      observaciones,
+      firma_responsable,
+      empresa_id: bodyEmpresaId,
+      division_id: bodyDivisionId,
+      contrato_id: bodyContratoId,
+      cliente_id: bodyClienteId,
+      corpo_id: bodyCorpoId,
+      puesto_id: bodyPuestoId,
+    } = body ?? {};
 
     if (!marca_id || !lugar_abre || cantidad_copias === undefined || cantidad_copias === null || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
@@ -103,6 +129,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Puesto no encontrado en marca" }, { status: 200 });
     }
 
+    const useCliente =
+      bodyClienteId != null && String(bodyClienteId).trim() !== ""
+        ? parseInt(String(bodyClienteId), 10)
+        : marcaDia.cliente_id;
+    const useCorpo =
+      bodyCorpoId != null && String(bodyCorpoId).trim() !== ""
+        ? parseInt(String(bodyCorpoId), 10)
+        : marcaDia.corpo_id;
+    const usePuesto =
+      bodyPuestoId != null && String(bodyPuestoId).trim() !== ""
+        ? parseInt(String(bodyPuestoId), 10)
+        : marcaDia.puesto_id;
+
+    if (useCliente !== marcaDia.cliente_id) {
+      return NextResponse.json({ status: false, message: "Cliente de la llave no coincide con la marca" }, { status: 200 });
+    }
+
+    const useEmpresa = parseId(bodyEmpresaId);
+    const useDivision = parseId(bodyDivisionId);
+    const useContrato = parseId(bodyContratoId);
+    if (useEmpresa == null || useDivision == null || useContrato == null) {
+      return NextResponse.json(
+        { status: false, message: "Incluya empresa_id, division_id y contrato_id (jerarquía desde el formulario o current_marca vía app)" },
+        { status: 200 }
+      );
+    }
+
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
     const created = await callDynamicPrisma({
       req,
@@ -110,9 +163,13 @@ export async function POST(req: NextRequest) {
         action: "POST",
         table: "e_llave",
         data: {
-          cliente_id: marcaDia.cliente_id,
-          corpo_id: marcaDia.corpo_id,
-          puesto_id: marcaDia.puesto_id,
+          cliente_id: useCliente,
+          corpo_id: useCorpo,
+          puesto_id: usePuesto,
+          empresa_id: useEmpresa,
+          division_id: useDivision,
+          contrato_id: useContrato,
+          isActive: true,
           lugar_abre: String(lugar_abre),
           cantidad_copias: parseInt(String(cantidad_copias)) || 0,
           observaciones: typeof observaciones === "string" ? observaciones : "",
@@ -138,10 +195,10 @@ export async function POST(req: NextRequest) {
           empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
         }
       }
-      if (marcaDia.corpo_id) {
+      if (created.corpo_id) {
         const sucursal = await callDynamicPrisma({
           req,
-          data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marcaDia.corpo_id } }
+          data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: created.corpo_id } }
         });
         if (sucursal) {
           sucursalNombre = sucursal.nombre;
@@ -157,7 +214,7 @@ export async function POST(req: NextRequest) {
         }
       }
       const description = "El empleado " + empNombre + " ha creado una llave en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-      await sendNotificationByRole(req, marcaDia.corpo_id, [created.created_by], "Llave registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+      await sendNotificationByRole(req, created.corpo_id, [created.created_by], "Llave registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
     }
 
     // Registrar cambio de creación
@@ -190,7 +247,21 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    return NextResponse.json({ status: true, message: "Llave creada correctamente", id: created.id }, { status: 200 });
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Llave creada correctamente",
+        id: created.id,
+        empresa_id: useEmpresa,
+        cliente_id: useCliente,
+        division_id: useDivision,
+        contrato_id: useContrato,
+        corpo_id: useCorpo,
+        sucursal_id: useCorpo,
+        puesto_id: usePuesto,
+      },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/llaves:", errorMessage);

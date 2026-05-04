@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
         action: "GET",
         table: "c_puesto_notas",
         operation: "findMany",
-        where: { puesto_id: puestoId },
+        where: { puesto_id: puestoId, isActive: true },
         orderBy: { updated_at: "desc" },
       },
     });

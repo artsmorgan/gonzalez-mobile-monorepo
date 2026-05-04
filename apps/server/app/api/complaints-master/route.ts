@@ -4,6 +4,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { mapComplaintMasterPublicRow } from "./mapPublicRow";
 
 export const runtime = "nodejs";
 
@@ -26,22 +27,6 @@ function safeParseJson<T>(value: any, fallback: T): T {
     } catch {
         return fallback;
     }
-}
-
-function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
-    const fileName = file.name;
-    const type = String(file.type || "file").toLowerCase();
-    let urlPath: string;
-    if (type === "image") {
-        urlPath = `/api/complaints-master/${recordId}/get-image/${fileName}`;
-    } else if (type === "audio") {
-        urlPath = `/api/complaints-master/${recordId}/get-audio/${fileName}`;
-    } else if (type === "video") {
-        urlPath = `/api/complaints-master/${recordId}/get-video/${fileName}`;
-    } else {
-        urlPath = `/api/complaints-master/${recordId}/get-file/${fileName}`;
-    }
-    return `${baseUrl}${urlPath}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -78,7 +63,10 @@ export async function POST(req: NextRequest) {
             corpo_id: bodyCorpoId,
             puesto_id: bodyPuestoId,
             plaza_id: bodyPlazaId,
+            division_id: bodyDivisionId,
         } = body;
+
+        console.log("archivos", Array.isArray(archivos) ? archivos.length : 0);
 
         const pickNumericId = (value: unknown, fallback: number): number => {
             const n = parseInt(String(value ?? ""), 10);
@@ -119,6 +107,13 @@ export async function POST(req: NextRequest) {
         const corpo_id = pickNumericId(bodyCorpoId, marcaDiaObj.corpo_id);
         const puesto_id = pickNumericId(bodyPuestoId, marcaDiaObj.puesto_id);
         const plaza_id = pickNumericId(bodyPlazaId, marcaDiaObj.plaza_id);
+        const division_id = pickNumericId(bodyDivisionId, 0);
+        if (!division_id) {
+            return NextResponse.json(
+                { status: false, message: "División requerida (division_id)" },
+                { status: 400 }
+            );
+        }
 
         // Autocompletar campos desde la marca; el cliente puede sobreescribir empresa…corpo y puesto/plaza vía body
         const new_record = await callDynamicPrisma({
@@ -134,6 +129,8 @@ export async function POST(req: NextRequest) {
                     corpo_id,
                     puesto_id,
                     plaza_id,
+                    division_id,
+                    isActive: true,
                     sociedad: String(sociedad ?? ""),
                     nombre_realiza_queja: String(nombre_realiza_queja ?? ""),
                     cliente: String(cliente ?? ""),
@@ -277,23 +274,13 @@ export async function POST(req: NextRequest) {
         });
 
         const fullRecordObj = fullRecord as any;
-        const anexosArray = Array.isArray(fullRecordObj?.c_anexos_quejas) ? fullRecordObj.c_anexos_quejas : [];
         const baseUrl = req.nextUrl.origin;
+        const mapped = mapComplaintMasterPublicRow(fullRecordObj ?? newRecordObj, baseUrl, newRecordObj.id);
         return NextResponse.json({
             status: true,
             message: "Queja creada correctamente",
-            data: {
-                ...(fullRecordObj ?? newRecordObj),
-                id_local: "",
-                files: anexosArray.map((f: any) => ({
-                    id: f.id,
-                    name: f.name,
-                    original_name: f.original_name,
-                    type: f.type,
-                    extension: f.extension,
-                    url: buildFileUrl(baseUrl, newRecordObj.id, f),
-                })),
-            }
+            id: newRecordObj.id,
+            data: mapped,
         }, { status: 200 });
 
     } catch (error: unknown) {

@@ -6,8 +6,11 @@ type BasicResponse = { status: boolean; message?: string;[k: string]: any };
 
 export type ApreciacionVulnerabilidadItem = {
   id: number;
+  empresa_id?: number;
   cliente_id: number;
   cliente_nombre?: string;
+  division_id?: number;
+  contrato_id?: number;
   corpo_id: number;
   corpo_nombre?: string;
   puesto_id: number;
@@ -20,6 +23,8 @@ export type ApreciacionVulnerabilidadItem = {
   observaciones?: string;
   firma_solicitante: string; // dataURL
   firma_responsable: string; // QR hash
+  isActive?: boolean;
+  images?: Array<{ id: number; name: string; original_name?: string; url?: string; localFileName?: string }>;
   id_local?: string;
 };
 
@@ -190,6 +195,77 @@ export async function deleteApreciacionVulnerabilidad({
   } catch (error: any) {
     console.error('Error deleting apreciacion vulnerabilidad:', error);
     return { status: false, message: error.message || 'Error al eliminar registro' };
+  }
+}
+
+export async function deleteApreciacionVulnerabilidadImage({
+  boletaId,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: {
+  boletaId: number;
+  imageId: number;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+}): Promise<BasicResponse> {
+  try {
+    const apiUrl = getApiUrl();
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const response = await authedFetch({
+      url: `${apiUrl}/api/apreciacion-vulnerabilidad/${boletaId}/image/${imageId}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken: refresh,
+      logout: doLogout,
+    });
+    if (!response) return { status: false, message: 'Sesión expirada' };
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    return data;
+  } catch (error: any) {
+    console.error('Error deleting apreciacion vulnerabilidad image:', error);
+    return { status: false, message: error.message || 'Error al eliminar archivo' };
+  }
+}
+
+export async function updateApreciacionVulnerabilidadFirmaSolicitante({
+  id,
+  firma_solicitante,
+  refreshAccessToken,
+  logout,
+}: {
+  id: number;
+  firma_solicitante: string;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+}): Promise<BasicResponse> {
+  try {
+    const apiUrl = getApiUrl();
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const response = await authedFetch({
+      url: `${apiUrl}/api/apreciacion-vulnerabilidad/${id}/firma-solicitante`,
+      init: {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ firma_solicitante }),
+      },
+      refreshAccessToken: refresh,
+      logout: doLogout,
+    });
+    if (!response) return { status: false, message: 'Sesión expirada' };
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    return data;
+  } catch (error: any) {
+    console.error('Error updating apreciacion firma solicitante:', error);
+    return { status: false, message: error.message || 'Error al actualizar firma del solicitante' };
   }
 }
 

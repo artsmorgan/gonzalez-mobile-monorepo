@@ -30,6 +30,23 @@ export async function createReport(req: NextRequest, articulos_reporte: any[]) {
 
 export async function updateReport(req: NextRequest, articulos_reporte_update: any[]) {
     for (const reporte of articulos_reporte_update) {
+        const data: Record<string, any> = {};
+        if ("estado" in reporte) {
+            data.estado = reporte.estado == null ? "" : String(reporte.estado);
+        }
+        if (reporte.cantidad_real !== undefined) data.cantidad_real = reporte.cantidad_real;
+        if (Object.prototype.hasOwnProperty.call(reporte, "fecha_solucion")) {
+            data.fecha_solucion = reporte.fecha_solucion;
+        }
+        if (reporte.cantidad_necesaria !== undefined) {
+            data.cantidad_necesaria = reporte.cantidad_necesaria;
+        }
+        if (reporte.observaciones !== undefined) data.observaciones = reporte.observaciones;
+        if (reporte.marca !== undefined) data.marca = reporte.marca;
+        const seriePlaca =
+            reporte.serie_placa !== undefined ? reporte.serie_placa : reporte.serie;
+        if (seriePlaca !== undefined) data.serie_placa = seriePlaca;
+        if (reporte.updated_by !== undefined) data.updated_by = reporte.updated_by;
         await callDynamicPrisma({
             req,
             data: {
@@ -37,7 +54,7 @@ export async function updateReport(req: NextRequest, articulos_reporte_update: a
                 table: "c_articulo_mantenimiento",
                 operation: "update",
                 where: { id: reporte.id },
-                data: { estado: reporte.estado, fecha_solucion: reporte.fecha_solucion, cantidad_real: reporte.cantidad_real, updated_by: reporte.updated_by },
+                data,
                 returning: false,
                 updated_at: reporte.updated_at,
             },

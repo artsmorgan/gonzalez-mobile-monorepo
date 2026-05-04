@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Network from 'expo-network';
 import * as Location from 'expo-location';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -10,7 +9,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { jwtDecode } from 'jwt-decode';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
-
+import * as Network from 'expo-network';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
@@ -19,6 +18,7 @@ import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
+import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import {
@@ -27,52 +27,68 @@ import {
   listChecklistSupervision,
   ChecklistSupervisionItem,
   updateChecklistSupervision,
+  updateChecklistSupervisionFirmaSupervisor,
 } from '../hooks/checklistSupervisionFunctions';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  loadChecklistSupervisionCacheFlat,
+  mergeChecklistSupervisionServerIntoCacheForCorpo,
+  saveChecklistSupervisionCacheFlat,
+  filterChecklistFlatByCorpoId,
+} from '@/hooks/checklistSupervisionCacheStorage';
+import {
+  loadPuestoArticulosForTable,
+  rewritePuestoArticulosInMainStructure,
+} from '@/hooks/puestoArticulosSync';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
+import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import Constants from 'expo-constants';
+
+const CHECKLIST_SUPERVISION_PHOTO_PREFIX = 'checklist_supervision';
 
 /** Alcance listado/caché: sucursal (corpo_id). */
 type ChecklistListCorpoScope = { filterCorpoId: number | null };
 
-function makeChecklistCorpoListMatcher(filterCorpoId: number | null): (it: any) => boolean {
-  return (it: any) => {
-    if (filterCorpoId == null) return true;
-    return Number(it?.corpo_id) === Number(filterCorpoId);
-  };
-}
-
-function checklistItemIsPendingLocal(it: any): boolean {
-  if (it?.id_local != null && String(it.id_local).trim() !== '') return true;
-  if (Number(it?.id) === 0) return true;
-  return false;
-}
-
-/** Solo sustituye en caché filas del mismo corpo; conserva otras sucursales y borradores locales. */
-async function mergeChecklistSupervisionServerIntoCache(
-  serverList: ChecklistSupervisionItem[],
-  matchesScope: (it: any) => boolean
-): Promise<ChecklistSupervisionItem[]> {
-  let raw: any[] = [];
-  try {
-    const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
-    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
-    raw = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    raw = [];
-  }
-
-  const preserved = raw.filter((it: any) => !matchesScope(it) || checklistItemIsPendingLocal(it));
-
-  const scopedServer = serverList
-    .filter(matchesScope)
-    .map((it: any) => ({ ...it, id_local: it.id_local || '' }));
-
-  const merged = [...preserved, ...scopedServer] as ChecklistSupervisionItem[];
-  await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(merged));
-  return merged;
-}
-
 type ChecklistSupervisionUI = ChecklistSupervisionItem & { id_local?: string };
+
+function checklistRowShowsOfflineBadge(it: ChecklistSupervisionUI): boolean {
+  if (Number(it.id) === 0) return true;
+  const loc = it.id_local;
+  return loc != null && String(loc).trim() !== '';
+}
+
+/** Nombres para título de fila; offline/API sin include suele venir sin `cliente`/`corpo`/`puesto`. */
+function resolveChecklistHierarchyLabels(
+  tree: any[],
+  puestoId: number | null | undefined
+): { cliente: string; corpo: string; puesto: string; codigo: string } {
+  const pid = Number(puestoId);
+  const empty = { cliente: '', corpo: '', puesto: '', codigo: '' };
+  if (!Array.isArray(tree) || !Number.isFinite(pid) || pid <= 0) return empty;
+
+  for (const empresa of tree) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            for (const puesto of sucursal?.puestos || []) {
+              if (Number(puesto?.id) === pid) {
+                return {
+                  cliente: String(cliente?.nombre ?? '').trim(),
+                  corpo: String(sucursal?.nombre ?? '').trim(),
+                  puesto: String(puesto?.nombre ?? '').trim(),
+                  codigo: String((puesto as any)?.codigo ?? '').trim(),
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return empty;
+}
 
 // Tipos para estructura jerárquica
 type StructureNode = {
@@ -103,6 +119,8 @@ type EvaluationInput = {
   options?: string[]; // Para select
   imageOrientation?: 'horizontal' | 'vertical'; // Para fotos (como StaffEvaluationsScreen)
   file_name?: string; // Solo para registros sincronizados (se establece en backend)
+  /** Archivo en `Paths.document` (solo borrador/local; el base64 va al API al enviar). */
+  localFileName?: string;
 };
 
 type EvaluationSubsection = {
@@ -779,12 +797,6 @@ function generateRandomId(): string {
   return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
-function generateRandomMaintenanceId(): number {
-  const ts = Date.now();
-  const rand = Math.floor(Math.random() * 1000000);
-  return Number(`${ts}${rand}`);
-}
-
 function normalizeCantidadNecesaria(value: any): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return 1;
@@ -794,6 +806,8 @@ function normalizeCantidadNecesaria(value: any): number {
 /**
  * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto
  * supervisado usando el estado actual del formulario de checklist.
+ * Con esquema de fragmentos: lee/escribe `puesto_{id}_articulos` y mantiene compatibilidad
+ * con `puestos_{id}_articulos` si existe en datos previos.
  * Solo actualiza caché local; no encola acciones de articulo_mantenimiento_actions.
  */
 async function updateMainStructureCacheWithChecklist(
@@ -803,174 +817,16 @@ async function updateMainStructureCacheWithChecklist(
 ) {
   try {
     if (!selectedPuestoId || !Array.isArray(articulos) || articulos.length === 0) return;
-    const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-    if (!cacheStr) return;
-    const parsed: any = JSON.parse(cacheStr);
-    if (!Array.isArray(parsed)) return;
-
     const horaAccionValue = options?.horaAccion ?? Date.now();
-    const horaAccionIso = new Date(horaAccionValue).toISOString();
-
     const articulosById = new Map<number, ArticuloForm>(
       articulos.map((a) => [a.id, a] as [number, ArticuloForm])
     );
-
-    const updated = parsed.map((empresa: any) => {
-      if (!empresa?.clientes) return empresa;
-      return {
-        ...empresa,
-        clientes: empresa.clientes.map((cliente: any) => {
-          if (!cliente?.division) return cliente;
-          return {
-            ...cliente,
-            division: cliente.division.map((division: any) => {
-              if (!division?.contratos) return division;
-              return {
-                ...division,
-                contratos: division.contratos.map((contrato: any) => {
-                  if (!contrato?.sucursales) return contrato;
-                  return {
-                    ...contrato,
-                    sucursales: contrato.sucursales.map((sucursal: any) => {
-                      if (!sucursal?.puestos) return sucursal;
-                      return {
-                        ...sucursal,
-                        puestos: sucursal.puestos.map((puesto: any) => {
-                          if (!puesto || puesto.id !== selectedPuestoId || !Array.isArray(puesto.articulos)) {
-                            return puesto;
-                          }
-
-                          const updatedArticulos = puesto.articulos.map((art: any) => {
-                            const form = articulosById.get(Number(art.id));
-                            if (!form) return art;
-
-                            const existingUltimo =
-                              art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
-                                ? { ...art.ultimo_mantenimiento }
-                                : null;
-                            const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
-
-                            const isPlan = String(form.tipo || art.tipo || '').toLowerCase() === 'plan';
-                            const articuloEstructuraId = Number(form.id || art.id || 0) || null;
-
-                            const estadoActual = form.estado;
-                            const lastEstado = String(existingUltimo?.estado || 'Bueno');
-                            const shouldCreate =
-                              estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
-                            const shouldUpdate =
-                              !shouldCreate &&
-                              existingUltimo != null &&
-                              ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || estadoActual !== lastEstado);
-
-                            const newBasic = {
-                              id: generateRandomMaintenanceId(),
-                              articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                              articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                              estado: estadoActual,
-                              cantidad_necesaria: normalizeCantidadNecesaria(form.cantidad_requerida),
-                              cantidad_real: Number(form.cantidad_real || 0),
-                              observaciones: form.observaciones || '',
-                              fecha_solucion: null,
-                              accion: null,
-                              fecha_inicio: null,
-                              numero_boleta_proveeduria: null,
-                              tipo: null,
-                              marca: null,
-                              modelo: null,
-                              serie_placa: null,
-                              marca_nuevo: null,
-                              modelo_nuevo: null,
-                              serie_placa_nuevo: null,
-                              categoria: null,
-                              tipo_mantenimiento_art: null,
-                              fecha_salida: null,
-                              fecha_entrada: null,
-                              kilometraje: null,
-                              mant_armas_form: null,
-                              categoria_mantenimiento: null,
-                              detalle: null,
-                              numero_fc: null,
-                              proveedor: null,
-                              costo_mo: null,
-                              costo_i: null,
-                              iva: null,
-                              costo_total: null,
-                              fecha_fin: null,
-                              reincidencia_treinta_dias: null,
-                              tipo_mant_art_reincid: null,
-                              c_archivos_adjuntos_articulo_mantenimiento: [],
-                              created_at: horaAccionIso,
-                              updated_at: horaAccionIso,
-                              /** Opcional: indica que el registro se creó/actualizó desde Checklist de supervisión */
-                              evaluacion_mantenimiento_origen: 'checklist_supervision' as const,
-                            };
-
-                            let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
-                            let nextMantenimientos: any[] = [...existingMaints];
-
-                            if (shouldCreate) {
-                              nextUltimo = { ...newBasic };
-                              nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                            } else {
-                              nextUltimo = {
-                                ...(existingUltimo ?? newBasic),
-                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                                estado: estadoActual,
-                                cantidad_necesaria:
-                                  existingUltimo?.cantidad_necesaria != null
-                                    ? existingUltimo.cantidad_necesaria
-                                    : normalizeCantidadNecesaria(form.cantidad_requerida),
-                                cantidad_real: Number(form.cantidad_real || 0),
-                                observaciones: form.observaciones || '',
-                                fecha_solucion: estadoActual === 'Bueno' ? horaAccionIso : null,
-                                updated_at: horaAccionIso,
-                                evaluacion_mantenimiento_origen: 'checklist_supervision' as const,
-                              };
-
-                              if (existingUltimo?.id) {
-                                let replaced = false;
-                                nextMantenimientos = nextMantenimientos.map((m: any) => {
-                                  if (Number(m?.id) !== Number(existingUltimo.id)) return m;
-                                  replaced = true;
-                                  return { ...m, ...nextUltimo };
-                                });
-                                if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                              } else {
-                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                              }
-
-                            }
-
-                            const nuevoUltimo = {
-                              ...nextUltimo,
-                            };
-
-                            return {
-                              ...art,
-                              mantenimientos: nextMantenimientos,
-                              ultimo_mantenimiento: nuevoUltimo,
-                              ultimo_registro_mantenimiento: nuevoUltimo,
-                            };
-                          });
-
-                          return {
-                            ...puesto,
-                            articulos: updatedArticulos,
-                          };
-                        }),
-                      };
-                    }),
-                  };
-                }),
-              };
-            }),
-          };
-        }),
-      };
+    await rewritePuestoArticulosInMainStructure({
+      puestoId: Number(selectedPuestoId),
+      formsById: articulosById,
+      horaAccionMs: horaAccionValue,
+      origin: 'checklist_supervision',
     });
-
-    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
   } catch (e) {
     console.error('Error updating main_structure_cache from checklist:', e);
   }
@@ -1091,13 +947,31 @@ export default function ChecklistSupervisionScreen() {
   const navigation = useNavigation<any>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
-  const appendTokenToUrl = (url: string) => {
+
+  const [queryAccessToken, setQueryAccessToken] = useState('');
+  const refreshQueryAccessToken = useCallback(async () => {
+    try {
+      const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
+    } catch {
+      setQueryAccessToken('');
+    }
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    void refreshQueryAccessToken();
+  }, [accessToken, refreshQueryAccessToken]);
+
+  const appendTokenToUrl = useCallback((url: string) => {
     if (!url) return '';
-    if (!accessToken || accessToken.trim().length === 0) return url;
+    const fromContext = accessToken != null ? String(accessToken).trim() : '';
+    const fromRefresh = queryAccessToken.trim();
+    const token = fromContext || fromRefresh;
+    if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
-  };
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [accessToken, queryAccessToken]);
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const handleMenuPress = () => setIsMenuVisible(true);
@@ -1144,8 +1018,12 @@ export default function ChecklistSupervisionScreen() {
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
-  // Estados para firma dibujada
+  // Estados para firma dibujada (formulario y firma supervisor desde lista)
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  /** Si no es null, el lienzo corresponde a la firma del supervisor de este registro en lista. */
+  const [signatureModalListTarget, setSignatureModalListTarget] = useState<ChecklistSupervisionUI | null>(null);
+  const [isSavingSupervisorFirma, setIsSavingSupervisorFirma] = useState(false);
+  const savingSupervisorFirmaRef = useRef(false);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
 
@@ -1173,6 +1051,7 @@ export default function ChecklistSupervisionScreen() {
 
   // Estado para items expandidos (como StaffEvaluationsScreen)
   const [expandedChecklists, setExpandedChecklists] = useState<Set<string>>(new Set());
+  const [expandedChecklistFirmas, setExpandedChecklistFirmas] = useState<Set<string>>(new Set());
 
   // Estados para artículos del puesto
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
@@ -1310,52 +1189,19 @@ export default function ChecklistSupervisionScreen() {
     return contrato?.sucursales || [];
   }, [filterContratos, filterContratoId]);
 
-  // Cargar estructura principal
+  // Cargar estructura principal (fragmentos mergeados o caché legada)
   const fetchMainStructure = useCallback(async (): Promise<StructureNode[]> => {
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        const parsed = JSON.parse(cacheStr);
-        if (Array.isArray(parsed)) {
-          setStructure(parsed);
-          return parsed;
-        }
-      }
-      else {
-        setStructure([]);
-      }
-/*
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response) return;
-
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status && Array.isArray(data.structure)) {
-          setStructure(data.structure);
-          await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-        }
-      }
-      */
+      const parsed = await loadMainStructureTreeMerged();
+      const tree = Array.isArray(parsed) ? parsed : [];
+      setStructure(tree);
+      return tree;
     } catch (error) {
       console.error('Error fetching main structure:', error);
+      setStructure([]);
     }
     return [];
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
@@ -1408,7 +1254,7 @@ export default function ChecklistSupervisionScreen() {
                 if (input.type === 'checkbox') {
                   value = value === 'true' ? 'Marcado' : 'No marcado';
                 } else if (input.type === 'photo') {
-                  value = value || input.file_name ? 'Imagen adjunta' : '-';
+                  value = input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-';
                 }
                 lines.push(`    • ${title}: ${value}`);
               });
@@ -1512,21 +1358,21 @@ export default function ChecklistSupervisionScreen() {
     setIsLoading(true);
     setError(null);
     try {
-      const loadCacheToState = async () => {
-        const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
-        if (!cacheStr) {
-          setChecklists([]);
-          return;
-        }
+      const scope: ChecklistListCorpoScope =
+        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
+
+      const applyCachedRowsForScope = async (corpoScope: number | null) => {
         try {
-          const cached = JSON.parse(cacheStr);
-          setChecklists(Array.isArray(cached) ? cached : []);
+          const cached = await loadChecklistSupervisionCacheFlat();
+          const onlyActive = cached.filter((it: any) => it?.isActive !== false);
+          const scoped = filterChecklistFlatByCorpoId(onlyActive, corpoScope);
+          setChecklists(scoped as ChecklistSupervisionUI[]);
         } catch {
           setChecklists([]);
         }
       };
 
-      await loadCacheToState();
+      await applyCachedRowsForScope(scope.filterCorpoId);
 
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
@@ -1534,15 +1380,10 @@ export default function ChecklistSupervisionScreen() {
         return;
       }
 
-      const scope: ChecklistListCorpoScope =
-        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
-
       if (scope.filterCorpoId == null) {
         setIsLoading(false);
         return;
       }
-
-      const matchesScope = makeChecklistCorpoListMatcher(scope.filterCorpoId);
 
       const result = await listChecklistSupervision({
         corpoId: scope.filterCorpoId,
@@ -1551,9 +1392,15 @@ export default function ChecklistSupervisionScreen() {
       });
 
       if (result.status && result.data) {
-        const list = result.data.map((it: any) => ({ ...it, id_local: it.id_local || '' }));
-        const merged = await mergeChecklistSupervisionServerIntoCache(list, matchesScope);
-        setChecklists(merged as ChecklistSupervisionUI[]);
+        const list = result.data.map((it: any) => {
+          const row = { ...it } as ChecklistSupervisionUI;
+          if (row.id_local != null && String(row.id_local).trim() !== '') return row;
+          delete (row as any).id_local;
+          return row;
+        });
+        const merged = await mergeChecklistSupervisionServerIntoCacheForCorpo(scope.filterCorpoId, list);
+        const mergedScoped = filterChecklistFlatByCorpoId(merged, scope.filterCorpoId) as ChecklistSupervisionUI[];
+        setChecklists(mergedScoped);
       } else {
         setError(result.message || 'Error al cargar checklists');
       }
@@ -1635,13 +1482,13 @@ export default function ChecklistSupervisionScreen() {
     if (editing) return;
 
     if (selectedPuestoId && isCreating && selectedDivisionId) {
-      // Buscar el puesto en la estructura (usar sucursales del useMemo)
-      const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
-      const puesto = sucursal?.puestos?.find((p: any) => p.id === selectedPuestoId);
-
-      if (puesto && (puesto as any).articulos && Array.isArray((puesto as any).articulos)) {
-        // Inicializar artículos: precargar estado + cantidad_real según último mantenimiento (si existe)
-        const articulosForm: ArticuloForm[] = (puesto as any).articulos.map((art: any) => {
+      (async () => {
+        const sourceArticulos = await loadPuestoArticulosForTable(Number(selectedPuestoId));
+        if (!Array.isArray(sourceArticulos) || sourceArticulos.length === 0) {
+          setArticulos([]);
+          return;
+        }
+        const articulosForm: ArticuloForm[] = sourceArticulos.map((art: any) => {
           const ultimo = art?.ultimo_mantenimiento ?? null;
           const estadoUltimo = ultimo?.estado;
           const estado =
@@ -1671,9 +1518,7 @@ export default function ChecklistSupervisionScreen() {
           };
         });
         setArticulos(articulosForm);
-      } else {
-        setArticulos([]);
-      }
+      })().catch(() => setArticulos([]));
     } else if (!selectedPuestoId && isCreating) {
       setArticulos([]);
     }
@@ -1925,8 +1770,110 @@ export default function ChecklistSupervisionScreen() {
 
   // Funciones para firma supervisor (dibujo)
   const openSignatureModal = () => {
+    setSignatureModalListTarget(null);
+    savingSupervisorFirmaRef.current = false;
+    setIsSavingSupervisorFirma(false);
     setIsSignatureModalVisible(true);
     setSignatureKey((prev) => prev + 1);
+  };
+
+  const openListSupervisorSignatureModal = (row: ChecklistSupervisionUI) => {
+    setSignatureModalListTarget(row);
+    savingSupervisorFirmaRef.current = false;
+    setIsSavingSupervisorFirma(false);
+    setSignatureKey((prev) => prev + 1);
+    setIsSignatureModalVisible(true);
+  };
+
+  const closeSignatureModal = () => {
+    setIsSignatureModalVisible(false);
+    setSignatureModalListTarget(null);
+    savingSupervisorFirmaRef.current = false;
+    setIsSavingSupervisorFirma(false);
+  };
+
+  const rowMatchesSignatureTarget = (c: ChecklistSupervisionUI, row: ChecklistSupervisionUI) => {
+    if (row.id && Number(row.id) > 0) return Number(c.id) === Number(row.id);
+    return String(c.id_local || '') === String(row.id_local || '');
+  };
+
+  const persistListSupervisorSignature = async (row: ChecklistSupervisionUI, formattedSignature: string): Promise<boolean> => {
+    const matchesRow = (c: ChecklistSupervisionUI) => rowMatchesSignatureTarget(c, row);
+    const isLocalOnly = !row.id || Number(row.id) === 0;
+
+    if (isLocalOnly && row.id_local) {
+      const flat = await loadChecklistSupervisionCacheFlat();
+      const next = flat.map((c) => (matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c));
+      const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id_local) === String(row.id_local));
+      if (idx !== -1) {
+        actions[idx] = {
+          ...actions[idx],
+          requestData: { ...actions[idx].requestData, firma_supervisor: formattedSignature },
+        };
+        await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+      }
+      await saveChecklistSupervisionCacheFlat(next);
+      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      return true;
+    }
+
+    const isConnected = await getConnectionStatus();
+    if (Number(row.id) > 0 && isConnected) {
+      const result = await updateChecklistSupervisionFirmaSupervisor({
+        id: Number(row.id),
+        firma_supervisor: formattedSignature,
+        refreshAccessToken,
+        logout,
+      });
+      if (!result.status) {
+        Alert.alert('Error', result.message || 'No se pudo guardar la firma del supervisor');
+        return false;
+      }
+      const sr = (result as any).data;
+      const flat = await loadChecklistSupervisionCacheFlat();
+      const next = flat.map((c) =>
+        Number(c.id) === Number(row.id)
+          ? { ...c, ...(sr && typeof sr === 'object' ? sr : {}), firma_supervisor: sr?.firma_supervisor ?? formattedSignature }
+          : c
+      );
+      await saveChecklistSupervisionCacheFlat(next);
+      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      return true;
+    }
+
+    if (Number(row.id) > 0 && !isConnected) {
+      const flat = await loadChecklistSupervisionCacheFlat();
+      const next = flat.map((c) => (matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c));
+      const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      const uidx = actions.findIndex((a: any) => a.type === 'update' && Number(a.id) === Number(row.id));
+      if (uidx !== -1) {
+        actions[uidx] = {
+          ...actions[uidx],
+          requestData: { ...actions[uidx].requestData, firma_supervisor: formattedSignature },
+        };
+      } else {
+        const fidx = actions.findIndex(
+          (a: any) => a.type === 'update_supervisor_firma' && Number(a.id) === Number(row.id)
+        );
+        const entry = {
+          type: 'update_supervisor_firma' as const,
+          id: row.id,
+          id_local: row.id_local || '',
+          firma_supervisor: formattedSignature,
+        };
+        if (fidx !== -1) actions[fidx] = entry;
+        else actions.push(entry);
+      }
+      await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+      await saveChecklistSupervisionCacheFlat(next);
+      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      return true;
+    }
+
+    return true;
   };
 
   const handleSignatureRead = (signature: string) => {
@@ -1935,8 +1882,23 @@ export default function ChecklistSupervisionScreen() {
       if (!signature.startsWith('data:')) {
         formattedSignature = `data:image/png;base64,${signature}`;
       }
+      if (signatureModalListTarget) {
+        if (savingSupervisorFirmaRef.current) return;
+        savingSupervisorFirmaRef.current = true;
+        const target = signatureModalListTarget;
+        void (async () => {
+          try {
+            const ok = await persistListSupervisorSignature(target, formattedSignature);
+            if (ok) closeSignatureModal();
+          } finally {
+            savingSupervisorFirmaRef.current = false;
+            setIsSavingSupervisorFirma(false);
+          }
+        })();
+        return;
+      }
       setFirmaSupervisor(formattedSignature);
-      setIsSignatureModalVisible(false);
+      closeSignatureModal();
     }
   };
 
@@ -2037,44 +1999,52 @@ export default function ChecklistSupervisionScreen() {
       hasValue: !!input.value,
       valuePrefix: typeof input.value === 'string' ? input.value.substring(0, 30) : null,
       file_name: input.file_name,
+      localFileName: input.localFileName,
     });
-    // Si input.value es un data URI válido, usarlo directamente
+
+    if (input.localFileName && String(input.localFileName).trim() !== '') {
+      const u = getLocalFileDisplayUri(String(input.localFileName).trim());
+      if (u) return u;
+    }
+
+    const draftEditing = editing != null && checklistRowShowsOfflineBadge(editing);
+
+    // Borrador local: solo base64 en value (no get-image sin id de servidor estable)
+    if (draftEditing) {
+      if (input.value && typeof input.value === 'string') {
+        if (input.value.startsWith('data:image/')) {
+          return input.value;
+        }
+        if (input.value.length > 100 && !input.value.startsWith('http')) {
+          return `data:image/jpeg;base64,${input.value}`;
+        }
+      }
+      return '';
+    }
+
+    // Sincronizado: data URI si aún viene en el JSON; si no, get-image con API_SERVER
     if (input.value && typeof input.value === 'string') {
       if (input.value.startsWith('data:image/')) {
-        console.log('[ChecklistSupervision] getImageUri returning data URI for input:', input.id);
         return input.value;
       }
-      // Si parece base64 sin encabezado, envolverlo en un data URI (mejora robustez de la vista previa)
       if (input.value.length > 100 && !input.value.startsWith('http')) {
         const wrapped = `data:image/jpeg;base64,${input.value}`;
-        console.log('[ChecklistSupervision] getImageUri wrapping base64 without header for input:', input.id);
         return wrapped;
       }
     }
 
-    // Para registros sincronizados, usar la API
-    if (editing?.id && editing.id > 0 && input.file_name) {
+    const serverId = editing?.id != null ? Number(editing.id) : 0;
+    if (Number.isFinite(serverId) && serverId > 0 && input.file_name) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        const uri = appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
-        console.log('[ChecklistSupervision] getImageUri using file_name URL for input:', input.id, 'url:', uri);
+        const uri = appendTokenToUrl(
+          `${apiUrl}/api/checklist-supervision/${serverId}/get-image/${encodeURIComponent(input.file_name)}?t=${Date.now()}`,
+        );
         return uri;
       }
     }
 
-    // Si tenemos file_name pero no value, construir la URL (para registros cargados desde backend)
-    if (input.file_name && editing?.id && editing.id > 0) {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (apiUrl) {
-        const uri = appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${editing.id}/get-image/${encodeURIComponent(input.file_name)}`);
-        console.log('[ChecklistSupervision] getImageUri using fallback file_name URL for input:', input.id, 'url:', uri);
-        return uri;
-      }
-    }
-
-    // Fallback: usar input.value si existe
     const fallback = (input.value && typeof input.value === 'string') ? input.value : '';
-    console.log('[ChecklistSupervision] getImageUri using fallback for input:', input.id, 'valuePrefix:', fallback.substring(0, 30));
     return fallback;
   };
 
@@ -2093,34 +2063,45 @@ export default function ChecklistSupervisionScreen() {
     }
     try {
       const photo: any = await cameraRef.current.takePictureAsync({
-        base64: true,
+        base64: false,
         quality: 0.7,
         skipProcessing: false,
       });
       console.log('[ChecklistSupervision] takePicture received photo:', {
-        hasBase64: !!photo?.base64,
+        hasUri: !!photo?.uri,
         width: photo?.width,
         height: photo?.height,
       });
       setIsCameraVisible(false);
-      if (!photo || !photo.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la imagen');
         return;
       }
-      const formattedBase64 = `data:image/jpeg;base64,${photo.base64}`;
-      console.log('[ChecklistSupervision] takePicture formattedBase64 length:', formattedBase64.length);
+
+      let storedFileName: string;
+      try {
+        storedFileName = await saveFile({
+          uri: photo.uri,
+          originalName: 'foto',
+          extension: 'jpg',
+          type: 'image',
+          prefix: CHECKLIST_SUPERVISION_PHOTO_PREFIX,
+        });
+      } catch (saveErr) {
+        console.error('[ChecklistSupervision] saveFile failed:', saveErr);
+        Alert.alert('Error', 'No se pudo guardar la foto en el dispositivo');
+        return;
+      }
 
       let sectionId: string | undefined;
       let subsectionId: string | undefined;
       let inputId: string | undefined;
 
       if (cameraTarget.includes('|')) {
-        // Nuevo formato seguro: sectionId|subsectionId|inputId
         const parts = cameraTarget.split('|');
         [sectionId, subsectionId, inputId] = parts;
         console.log('[ChecklistSupervision] takePicture target parsed from |:', { sectionId, subsectionId, inputId });
       } else {
-        // Compatibilidad con formato antiguo basado en guiones
         const parts = cameraTarget.split('-');
         if (parts.length >= 3) {
           sectionId = parts[0];
@@ -2135,18 +2116,30 @@ export default function ChecklistSupervisionScreen() {
       }
 
       if (sectionId && subsectionId && inputId) {
-
-        // Actualizar usando updateInputField (como StaffEvaluationsScreen)
-        console.log('[ChecklistSupervision] Updating inputField with captured image.');
-        updateInputField(sectionId, subsectionId, inputId, 'value', formattedBase64);
-
-        // Calcular orientación a partir de las dimensiones de la foto
-        if (photo.width && photo.height) {
-          const orientation: 'horizontal' | 'vertical' =
-            photo.width >= photo.height ? 'horizontal' : 'vertical';
-          console.log('[ChecklistSupervision] Calculated image orientation:', orientation);
-          updateInputField(sectionId, subsectionId, inputId, 'imageOrientation', orientation);
+        const sec = evaluation.find((s) => s.id === sectionId);
+        const sub = sec?.subsections.find((ss) => ss.id === subsectionId);
+        const prevInp = sub?.inputs.find((i) => i.id === inputId);
+        if (prevInp?.localFileName && String(prevInp.localFileName).trim() !== String(storedFileName)) {
+          try {
+            await deleteFile(String(prevInp.localFileName).trim());
+          } catch {
+            /* noop */
+          }
         }
+
+        console.log('[ChecklistSupervision] Updating input with local file reference (no base64 en estado).');
+        const orientation: 'horizontal' | 'vertical' | undefined =
+          photo.width && photo.height
+            ? photo.width >= photo.height
+              ? 'horizontal'
+              : 'vertical'
+            : undefined;
+        updateInput(sectionId, subsectionId, inputId, {
+          value: '',
+          localFileName: storedFileName,
+          file_name: undefined,
+          ...(orientation ? { imageOrientation: orientation } : {}),
+        });
       } else {
         console.error('[ChecklistSupervision] takePicture: cameraTarget no tiene el formato correcto:', cameraTarget);
         Alert.alert('Error', 'Error al procesar la imagen capturada');
@@ -2254,10 +2247,12 @@ export default function ChecklistSupervisionScreen() {
       applyFormHierarchyPath(resolved);
     } else {
       // Fallback if puesto_id cannot be resolved in structure.
-      const empresa = structure.find((e: any) => e.clientes?.some((c: any) => c.id === it.cliente_id));
+      const empresa = structure.find((e: any) => e.clientes?.some((cl: any) => cl.id === it.cliente_id));
       if (empresa) setSelectedEmpresaId(empresa.id);
+      else if (it.empresa_id != null) setSelectedEmpresaId(Number(it.empresa_id));
       setSelectedClienteId(it.cliente_id || null);
       setSelectedDivisionId(it.division_id || null);
+      if (it.contrato_id != null) setSelectedContratoId(Number(it.contrato_id));
       setSelectedCorpoId(it.corpo_id || null);
       setSelectedPuestoId(it.puesto_id || null);
     }
@@ -2296,58 +2291,68 @@ export default function ChecklistSupervisionScreen() {
     }
 
     try {
-      // Verificar que las imágenes estén en la evaluación antes de enviar (como StaffEvaluationsScreen)
-      const evaluationWithImages = JSON.parse(JSON.stringify(evaluation));
+      const evalSnapshot = JSON.parse(JSON.stringify(evaluation)) as EvaluationSection[];
       let hasImages = false;
       let imageCount = 0;
       const checkForImages = (obj: any) => {
         if (Array.isArray(obj)) {
           obj.forEach(item => checkForImages(item));
         } else if (obj && typeof obj === 'object') {
-          // Buscar imágenes en value (data URI) como StaffEvaluationsScreen
-          if (obj.type === 'photo' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) {
+          if (
+            obj.type === 'photo' &&
+            ((obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) ||
+              (obj.localFileName && String(obj.localFileName).trim() !== ''))
+          ) {
             hasImages = true;
             imageCount++;
             console.log(`Imagen #${imageCount} encontrada en evaluación:`, {
               id: obj.id,
-              hasValue: !!obj.value,
-              valueLength: obj.value.length,
-              imageOrientation: obj.imageOrientation
+              hasLocalFile: !!obj.localFileName,
+              imageOrientation: obj.imageOrientation,
             });
           }
           Object.values(obj).forEach(value => checkForImages(value));
         }
       };
-      checkForImages(evaluationWithImages);
+      checkForImages(evalSnapshot);
       console.log(`Evaluación a enviar tiene ${imageCount} imagen(es):`, hasImages);
 
-      // Log del tamaño del JSON para verificar que las imágenes estén incluidas
-      const evaluationString = JSON.stringify(evaluationWithImages);
-      console.log('Tamaño del JSON de evaluación:', evaluationString.length, 'caracteres');
-
-      const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
+      const isConnected = await getConnectionStatus();
+      /** JSON con `localFileName`; la hidratación a base64 ocurre dentro de create/update en checklistSupervisionFunctions (como en la cola de sync). */
+      const evaluacionStr = JSON.stringify(evalSnapshot);
+      console.log(
+        'Tamaño del JSON de evaluación (local):',
+        evaluacionStr.length,
+        'caracteres; envío API:',
+        isConnected
+      );
 
       const horaAccionIso = new Date(horaAccion).toISOString();
+      const articulosPuesto =
+        articulos && articulos.length > 0
+          ? JSON.stringify(articulos.map((a) => ({ ...a, created_at: horaAccionIso })))
+          : '[]';
       const requestData = {
+        empresa_id: selectedEmpresaId,
         cliente_id: selectedClienteId,
         division_id: selectedDivisionId,
+        contrato_id: selectedContratoId,
         corpo_id: selectedCorpoId,
         puesto_id: selectedPuestoId,
         division: selectedDivisionId,
         fecha: fecha.toISOString(),
         ejecutivo_cuenta: ejecutivoCuenta,
-        evaluacion: JSON.stringify(evaluationWithImages),
+        evaluacion: evaluacionStr,
         articulos_puesto: articulosPuesto,
         firma_supervisor: firmaSupervisor,
         firma_responsable: firmaResponsable,
         created_at: horaAccionIso,
         hora_accion: horaAccionIso,
+        isActive: true,
       };
 
-      const isConnected = await getConnectionStatus();
-
       if (editing && editing.id && editing.id !== 0) {
-        // Actualizar
+        // Actualizar (PUT): el servidor aplica la misma lógica que en POST sobre c_articulo_mantenimiento
         if (isConnected) {
           const result = await updateChecklistSupervision({
             id: editing.id,
@@ -2372,7 +2377,10 @@ export default function ChecklistSupervisionScreen() {
           }
         } else {
           // Offline: una sola acción "update" por id de servidor (reemplazar, no apilar).
-          const localId = editing.id_local || generateRandomId();
+          const localId =
+            editing.id_local && String(editing.id_local).length > 0
+              ? editing.id_local
+              : `local-checklist-${Date.now()}-${generateRandomId()}`;
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
           const entry = {
@@ -2386,12 +2394,32 @@ export default function ChecklistSupervisionScreen() {
           else actions.push(entry);
           await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
 
-          // Actualizar cache
-          const updated: ChecklistSupervisionUI[] = checklists.map((c) =>
-            c.id === editing.id ? { ...c, ...requestData, id_local: localId } as ChecklistSupervisionUI : c
-          );
-          setChecklists(updated);
-          await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+          // Actualizar cache (lista en estado solo incluye la sucursal del filtro: mezclar con el flat completo)
+          const lblUp = resolveChecklistHierarchyLabels(structure, selectedPuestoId);
+          const flat = await loadChecklistSupervisionCacheFlat();
+          const nextFlat = flat.map((c) => {
+            if (c.id !== editing.id) return c;
+            return {
+              ...c,
+              ...requestData,
+              id_local: localId,
+              cliente: {
+                id: selectedClienteId!,
+                nombre: (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lblUp.cliente || '-',
+              },
+              corpo: {
+                id: selectedCorpoId!,
+                nombre: (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lblUp.corpo || '-',
+              },
+              puesto: {
+                id: selectedPuestoId!,
+                nombre: (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lblUp.puesto || '-',
+                codigo: (c.puesto as any)?.codigo || lblUp.codigo || '',
+              },
+            } as ChecklistSupervisionItem;
+          });
+          await saveChecklistSupervisionCacheFlat(nextFlat);
+          setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2404,7 +2432,7 @@ export default function ChecklistSupervisionScreen() {
             cancelCreating();
           }, 2000);
         }
-        } else {
+      } else {
         // Crear
         if (isConnected) {
           const result = await createChecklistSupervision({
@@ -2413,6 +2441,48 @@ export default function ChecklistSupervisionScreen() {
             logout,
           });
           if (result.status) {
+            const newId = Number((result as any).id ?? (result as any).data?.id ?? 0);
+            const payload = (result as any).data;
+            if (newId > 0 && selectedCorpoId) {
+              const empresaNode = structure.find((e: any) => e.id === selectedEmpresaId);
+              const clienteNode = empresaNode?.clientes?.find((c: any) => c.id === selectedClienteId);
+              const sucursalNode = sucursales.find((s: any) => s.id === selectedCorpoId);
+              const puestoNode = puestos.find((p: any) => p.id === selectedPuestoId);
+              const serverRow: ChecklistSupervisionUI =
+                payload && typeof payload === 'object' && Number((payload as any).id) === newId
+                  ? ({ ...(payload as ChecklistSupervisionUI), id_local: '' } as ChecklistSupervisionUI)
+                  : {
+                      id: newId,
+                      empresa_id: selectedEmpresaId!,
+                      cliente_id: selectedClienteId!,
+                      division_id: selectedDivisionId!,
+                      contrato_id: selectedContratoId!,
+                      corpo_id: selectedCorpoId!,
+                      puesto_id: selectedPuestoId!,
+                      isActive: true,
+                      fecha: fecha.toISOString(),
+                      ejecutivo_cuenta: ejecutivoCuenta,
+                      evaluacion: evaluacionStr,
+                      articulos_puesto: articulosPuesto as any,
+                      firma_supervisor: firmaSupervisor,
+                      firma_responsable: firmaResponsable,
+                      created_by: typeof employee?.id === 'number' ? employee.id : Number(employee?.id ?? 0),
+                      created_at: horaAccionIso,
+                      cliente: clienteNode ? { id: clienteNode.id, nombre: clienteNode.nombre } : undefined,
+                      corpo: sucursalNode ? { id: sucursalNode.id, nombre: sucursalNode.nombre } : undefined,
+                      puesto: puestoNode
+                        ? {
+                            id: puestoNode.id,
+                            nombre: puestoNode.nombre,
+                            codigo: String((puestoNode as any).codigo ?? ''),
+                          }
+                        : undefined,
+                    };
+              const flat = await loadChecklistSupervisionCacheFlat();
+              const nextFlat = [serverRow, ...flat.filter((x) => Number(x.id) !== newId)];
+              await saveChecklistSupervisionCacheFlat(nextFlat);
+              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+            }
             // Online: actualizar caches sin encolar acciones de mantenimiento
             await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
               horaAccion,
@@ -2430,7 +2500,9 @@ export default function ChecklistSupervisionScreen() {
         } else {
           // Offline: crear o re-guardar borrador local (id 0 / solo id_local) sin duplicar la cola
           const localId =
-            editing?.id_local && String(editing.id_local).length > 0 ? editing.id_local : generateRandomId();
+            editing?.id_local && String(editing.id_local).length > 0
+              ? editing.id_local
+              : `local-checklist-${Date.now()}-${generateRandomId()}`;
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
           const entry = { type: 'create' as const, id_local: localId, requestData };
@@ -2445,27 +2517,38 @@ export default function ChecklistSupervisionScreen() {
             setIsSubmitting(false);
             return;
           }
+          const lblNew = resolveChecklistHierarchyLabels(structure, selectedPuestoId);
           const newItem: ChecklistSupervisionUI = {
             id: 0,
             id_local: localId,
+            empresa_id: selectedEmpresaId!,
             cliente_id: selectedClienteId,
             division_id: selectedDivisionId,
+            contrato_id: selectedContratoId!,
             corpo_id: selectedCorpoId,
             puesto_id: selectedPuestoId,
+            isActive: true,
             fecha: fecha.toISOString(),
             ejecutivo_cuenta: ejecutivoCuenta,
-            evaluacion: JSON.stringify(evaluation),
+            evaluacion: evaluacionStr,
+            articulos_puesto: articulosPuesto,
             firma_supervisor: firmaSupervisor,
             firma_responsable: firmaResponsable,
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
             created_at: new Date(horaAccion).toISOString(),
+            cliente: { id: selectedClienteId, nombre: lblNew.cliente || '-' },
+            corpo: { id: selectedCorpoId, nombre: lblNew.corpo || '-' },
+            puesto: { id: selectedPuestoId, nombre: lblNew.puesto || '-', codigo: lblNew.codigo || '' },
           };
-          const updated =
+          const flat = await loadChecklistSupervisionCacheFlat();
+          const nextFlat =
             editing?.id_local && String(editing.id_local).length > 0
-              ? checklists.map((c) => (c.id_local === editing.id_local ? newItem : c))
-              : [...checklists, newItem];
-          setChecklists(updated);
-          await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+              ? flat.map((c) =>
+                  String((c as ChecklistSupervisionUI).id_local) === String(editing.id_local) ? (newItem as ChecklistSupervisionItem) : c
+                )
+              : [...flat, newItem as ChecklistSupervisionItem];
+          await saveChecklistSupervisionCacheFlat(nextFlat);
+          setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2528,16 +2611,22 @@ export default function ChecklistSupervisionScreen() {
             } else if (it.id && it.id !== 0 && !isConnected) {
               const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
               const actions = actionsStr ? JSON.parse(actionsStr) : [];
-              actions.push({
+              const cleaned = actions.filter((a: any) => {
+                if (a.type === 'update_supervisor_firma' && Number(a.id) === Number(it.id)) return false;
+                if (a.type === 'update' && Number(a.id) === Number(it.id)) return false;
+                return true;
+              });
+              cleaned.push({
                 type: 'delete',
                 id: it.id,
                 id_local: it.id_local,
               });
-              await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
+              await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(cleaned));
 
-              const updated = checklists.filter((c) => c.id !== it.id);
-              setChecklists(updated);
-              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+              const flat = await loadChecklistSupervisionCacheFlat();
+              const nextFlat = flat.filter((c) => c.id !== it.id);
+              await saveChecklistSupervisionCacheFlat(nextFlat);
+              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
 
               Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
             } else if (it.id_local) {
@@ -2550,9 +2639,10 @@ export default function ChecklistSupervisionScreen() {
               });
               await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
 
-              const updated = checklists.filter((c) => c.id_local !== it.id_local);
-              setChecklists(updated);
-              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updated));
+              const flat = await loadChecklistSupervisionCacheFlat();
+              const nextFlat = flat.filter((c) => String((c as ChecklistSupervisionUI).id_local || '') !== String(it.id_local));
+              await saveChecklistSupervisionCacheFlat(nextFlat);
+              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
 
               Alert.alert('Éxito', 'Registro pendiente eliminado (no requiere sincronizar borrado en servidor).');
             }
@@ -2577,19 +2667,24 @@ export default function ChecklistSupervisionScreen() {
   const filteredChecklists = useMemo(() => {
     if (filterCorpoId == null) return [];
     return checklists.filter((c) => {
+      if ((c as any).isActive === false) return false;
       if (Number(c.corpo_id) !== Number(filterCorpoId)) return false;
       if (filterSearch) {
+        const lbl = resolveChecklistHierarchyLabels(structure, c.puesto_id);
+        const nc = (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lbl.cliente || '';
+        const ns = (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lbl.corpo || '';
+        const np = (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lbl.puesto || '';
         const searchLower = filterSearch.toLowerCase();
         const matchesSearch =
           c.ejecutivo_cuenta?.toLowerCase().includes(searchLower) ||
-          (c.cliente?.nombre || '').toLowerCase().includes(searchLower) ||
-          (c.corpo?.nombre || '').toLowerCase().includes(searchLower) ||
-          (c.puesto?.nombre || '').toLowerCase().includes(searchLower);
+          nc.toLowerCase().includes(searchLower) ||
+          ns.toLowerCase().includes(searchLower) ||
+          np.toLowerCase().includes(searchLower);
         if (!matchesSearch) return false;
       }
       return true;
     });
-  }, [checklists, filterSearch, filterCorpoId]);
+  }, [checklists, filterSearch, filterCorpoId, structure]);
 
   // Renderizar evaluación dinámica (como StaffEvaluationsScreen)
   const renderEvaluationInput = (input: EvaluationInput, sectionId: string, subsectionId: string) => {
@@ -2750,6 +2845,15 @@ export default function ChecklistSupervisionScreen() {
     });
   };
 
+  const toggleChecklistFirmasExpanded = (key: string) => {
+    setExpandedChecklistFirmas((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   // Función para parsear evaluación desde JSON
   const parseEvaluation = (evaluacionStr: string | null): EvaluationSection[] => {
     if (!evaluacionStr) return [];
@@ -2771,14 +2875,27 @@ export default function ChecklistSupervisionScreen() {
   };
 
   // Función para obtener URI de imagen en lista
-  const getImageUriForList = (input: EvaluationInput, checklistId: number | string): string => {
+  const getImageUriForList = (input: EvaluationInput, row: ChecklistSupervisionUI): string => {
+    if (input.localFileName && String(input.localFileName).trim() !== '') {
+      const u = getLocalFileDisplayUri(String(input.localFileName).trim());
+      if (u) return u;
+    }
     if (input.value && typeof input.value === 'string' && input.value.startsWith('data:image/')) {
       return input.value;
     }
-    if (input.file_name && typeof checklistId === 'number' && checklistId > 0) {
+    if (input.value && typeof input.value === 'string' && input.value.length > 100 && !input.value.startsWith('http')) {
+      return `data:image/jpeg;base64,${input.value}`;
+    }
+    if (checklistRowShowsOfflineBadge(row) && !input.localFileName) {
+      return '';
+    }
+    const checklistId = row.id != null ? Number(row.id) : 0;
+    if (input.file_name && Number.isFinite(checklistId) && checklistId > 0) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        return appendTokenToUrl(`${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}`);
+        return appendTokenToUrl(
+          `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}?t=${Date.now()}`,
+        );
       }
     }
     return '';
@@ -2787,6 +2904,7 @@ export default function ChecklistSupervisionScreen() {
   const renderItem = (it: ChecklistSupervisionUI, index: number) => {
     const key = it.id !== 0 ? `checklist-${it.id}` : it.id_local ? `checklist-${it.id_local}` : `checklist-${index}`;
     const isExpanded = expandedChecklists.has(key);
+    const firmasExpanded = expandedChecklistFirmas.has(key);
     const fechaStr = it.fecha ? new Date(it.fecha).toLocaleDateString() : '-';
     const evaluationSections = parseEvaluation(it.evaluacion);
     console.log('renderItem: Evaluation sections for item:', {
@@ -2796,16 +2914,99 @@ export default function ChecklistSupervisionScreen() {
       firstInputValue: evaluationSections[0]?.subsections?.[0]?.inputs?.[0]?.value
     });
 
+    const lbl = resolveChecklistHierarchyLabels(structure, it.puesto_id);
+    const nombreCliente = (it.cliente?.nombre && String(it.cliente.nombre).trim()) || lbl.cliente || '-';
+    const nombreCorpo = (it.corpo?.nombre && String(it.corpo.nombre).trim()) || lbl.corpo || '-';
+    const nombrePuesto = (it.puesto?.nombre && String(it.puesto.nombre).trim()) || lbl.puesto || '-';
+
     return (
       <ThemedView key={key} style={styles.bitacoraCard}>
         <ThemedText style={styles.bitTitle}>
-          {it.cliente?.nombre || '-'} - {it.corpo?.nombre || '-'} - {it.puesto?.nombre || '-'}
-          {it.id_local ? ' (offline)' : ''}
+          {nombreCliente} - {nombreCorpo} - {nombrePuesto}
+          {checklistRowShowsOfflineBadge(it) ? ' (offline)' : ''}
         </ThemedText>
         <ThemedText style={styles.bitLine}>
           <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
           <ThemedText style={styles.bitValue}>{fechaStr}</ThemedText>
         </ThemedText>
+
+        <TouchableOpacity
+          style={styles.collapseButton}
+          onPress={() => toggleChecklistFirmasExpanded(key)}
+        >
+          <ThemedText style={styles.collapseButtonText}>
+            {firmasExpanded ? 'Ocultar firmas' : 'Ver firmas'}
+          </ThemedText>
+          <Ionicons
+            name={firmasExpanded ? 'chevron-up' : 'chevron-down'}
+            size={20}
+            color="#007AFF"
+          />
+        </TouchableOpacity>
+
+        {firmasExpanded && (
+          <ThemedView style={styles.collapsableContent}>
+            <ThemedView style={styles.listSignaturesStack}>
+              <ThemedView style={styles.listSignatureBlock}>
+                <ThemedText style={styles.bitLabel}>Firma supervisor</ThemedText>
+                {it.firma_supervisor && String(it.firma_supervisor).trim() !== '' ? (
+                  <>
+                    <Image
+                      source={{ uri: formatSignatureForDisplay(it.firma_supervisor) }}
+                      style={styles.listSignatureImage}
+                      resizeMode="contain"
+                    />
+                    <TouchableOpacity onPress={() => openListSupervisorSignatureModal(it)} activeOpacity={0.7}>
+                      <ThemedText style={styles.listSignatureLink}>Cambiar firma</ThemedText>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.listAddSupervisorSigButton}
+                    onPress={() => openListSupervisorSignatureModal(it)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="create-outline" size={20} color="#007AFF" />
+                    <ThemedText style={styles.listAddSupervisorSigButtonText}>Añadir firma supervisor</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </ThemedView>
+              <ThemedView style={styles.listSignatureBlock}>
+                <ThemedText style={styles.bitLabel}>Firma responsable</ThemedText>
+                {it.firma_responsable && String(it.firma_responsable).trim() !== '' ? (
+                  <ThemedView style={styles.listFirmaResponsableBox}>
+                    {(() => {
+                      const info = decodeFirmaHash(it.firma_responsable);
+                      if (!info) {
+                        return (
+                          <ThemedText style={styles.listFirmaMeta}>Registrada (detalle no disponible)</ThemedText>
+                        );
+                      }
+                      return (
+                        <>
+                          <ThemedText style={styles.listFirmaMeta}>
+                            Sesión: {info.sessionId || 'N/A'} · Empleado: {info.empleadoId || 'N/A'}
+                          </ThemedText>
+                          <ThemedText style={styles.listFirmaMeta}>
+                            Ubicación: {info.latitud || '-'}, {info.longitud || '-'}
+                          </ThemedText>
+                          <ThemedText style={styles.listFirmaMeta}>
+                            Hora:{' '}
+                            {info.timestamp
+                              ? convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'
+                              : 'N/A'}
+                          </ThemedText>
+                        </>
+                      );
+                    })()}
+                  </ThemedView>
+                ) : (
+                  <ThemedText style={styles.listFirmaPending}>Sin firma</ThemedText>
+                )}
+              </ThemedView>
+            </ThemedView>
+          </ThemedView>
+        )}
 
         {/* Botón para expandir/colapsar evaluación */}
         <TouchableOpacity
@@ -2837,6 +3038,7 @@ export default function ChecklistSupervisionScreen() {
                         <ThemedText style={styles.questionTitleList}>{subsection.title}</ThemedText>
                       )}
                       {subsection.inputs.map((input) => {
+                        const listPhotoUri = getImageUriForList(input, it);
                         console.log('renderItem: Rendering input:', {
                           inputId: input.id,
                           inputType: input.type,
@@ -2854,7 +3056,7 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
-                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
                                     : input.type === 'checkbox'
                                       ? (input.value === 'true' ? 'Marcado' : 'No marcado')
                                       : (input.value || '-')}
@@ -2867,7 +3069,7 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
-                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
                                     : input.type === 'checkbox'
                                       ? (input.value === 'true' ? 'Marcado' : 'No marcado')
                                       : (input.value || '-')}
@@ -2880,7 +3082,7 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalLabel}>Valor: </ThemedText>
                                 <ThemedText style={styles.evalValue}>
                                   {input.type === 'photo'
-                                    ? (input.value || input.file_name ? 'Imagen adjunta' : '-')
+                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
                                     : input.type === 'checkbox'
                                       ? (input.value === 'true' ? 'Marcado' : 'No marcado')
                                       : (input.value || '-')}
@@ -2888,10 +3090,12 @@ export default function ChecklistSupervisionScreen() {
                               </ThemedText>
                             )}
                             {/* Mostrar imagen si es tipo photo */}
-                            {input.type === 'photo' && (input.value || input.file_name) && (
+                            {input.type === 'photo' &&
+                              (input.value || input.file_name || input.localFileName) &&
+                              listPhotoUri.length > 0 && (
                               <Image
                                 source={{
-                                  uri: getImageUriForList(input, it.id || it.id_local || 0),
+                                  uri: listPhotoUri,
                                 }}
                                 style={[
                                   styles.questionImagePreviewList,
@@ -2917,11 +3121,13 @@ export default function ChecklistSupervisionScreen() {
         )}
 
         <ThemedView style={styles.listItemButtons}>
-          <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(it)}>
-            <Ionicons name="pencil" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
-          </TouchableOpacity>
-          {!(it.id_local || it.id === 0) && (
+          {false && (
+            <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(it)}>
+              <Ionicons name="pencil" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+            </TouchableOpacity>
+          )}
+          {false && !checklistRowShowsOfflineBadge(it) && (
             <TouchableOpacity
               style={[styles.listItemButton, styles.changesButton]}
               onPress={() => {
@@ -3363,6 +3569,7 @@ export default function ChecklistSupervisionScreen() {
                               }
                             }
                           }
+                          const formPhotoUri = getImageUri(input);
                           return (
                             <ThemedView key={input.id} style={styles.inputCard}>
                               {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
@@ -3372,10 +3579,13 @@ export default function ChecklistSupervisionScreen() {
                               )}
                               {input.type === 'photo' || (input.type === 'text' && input.title?.toLowerCase().includes('foto')) ? (
                                 <View>
-                                  {((input.value && input.value.startsWith('data:image/')) || input.file_name) ? (
+                                  {formPhotoUri.length > 0 &&
+                                  (((input.value && input.value.startsWith('data:image/')) ||
+                                    input.file_name ||
+                                    input.localFileName)) ? (
                                     <View>
                                       <Image
-                                        source={{ uri: getImageUri(input) }}
+                                        source={{ uri: formPhotoUri }}
                                         style={[
                                           styles.questionImagePreview,
                                           input.imageOrientation === 'vertical'
@@ -3390,9 +3600,15 @@ export default function ChecklistSupervisionScreen() {
                                       <TouchableOpacity
                                         style={styles.cameraSmallButton}
                                         onPress={() => {
-                                          updateInputField(section.id, subsection.id, input.id, 'value', '');
-                                          updateInputField(section.id, subsection.id, input.id, 'imageOrientation', null);
-                                          updateInput(section.id, subsection.id, input.id, { file_name: undefined });
+                                          if (input.localFileName) {
+                                            void deleteFile(String(input.localFileName).trim());
+                                          }
+                                          updateInput(section.id, subsection.id, input.id, {
+                                            value: '',
+                                            localFileName: undefined,
+                                            file_name: undefined,
+                                            imageOrientation: undefined,
+                                          });
                                         }}
                                       >
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
@@ -3406,7 +3622,11 @@ export default function ChecklistSupervisionScreen() {
                                   >
                                     <Ionicons name="camera" size={16} color="#000000" />
                                     <ThemedText style={styles.cameraSmallButtonText}>
-                                      {(input.value && input.value.startsWith('data:image/')) || input.file_name ? 'Cambiar imagen' : 'Tomar foto'}
+                                      {(input.value && input.value.startsWith('data:image/')) ||
+                                      input.file_name ||
+                                      input.localFileName
+                                        ? 'Cambiar imagen'
+                                        : 'Tomar foto'}
                                     </ThemedText>
                                   </TouchableOpacity>
                                 </View>
@@ -3901,55 +4121,120 @@ export default function ChecklistSupervisionScreen() {
         </View>
       </Modal>
 
-      {/* Modal de firma dibujada */}
+      {/* Modal de firma dibujada (formulario o firma supervisor desde lista) */}
       <Modal
         visible={isSignatureModalVisible}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setIsSignatureModalVisible(false)}
+        transparent={!!signatureModalListTarget}
+        animationType={signatureModalListTarget ? 'fade' : 'slide'}
+        presentationStyle={signatureModalListTarget ? 'overFullScreen' : 'pageSheet'}
+        onRequestClose={() => {
+          if (!isSavingSupervisorFirma) closeSignatureModal();
+        }}
       >
-        <ThemedView style={styles.modalContainer}>
-          <ThemedView style={styles.modalHeader}>
-            <ThemedText style={styles.modalTitle}>Dibujar firma</ThemedText>
-            <TouchableOpacity onPress={() => setIsSignatureModalVisible(false)}>
-              <Ionicons name="close" size={24} color="#333" />
-            </TouchableOpacity>
+        {signatureModalListTarget ? (
+          <ThemedView style={styles.overlay}>
+            <ThemedView style={styles.floatListSignatureCard}>
+              <ThemedView style={styles.modalHeader}>
+                <ThemedText style={styles.modalTitle}>Firma del supervisor</ThemedText>
+                <TouchableOpacity onPress={closeSignatureModal} disabled={isSavingSupervisorFirma} style={isSavingSupervisorFirma ? { opacity: 0.4 } : undefined}>
+                  <Ionicons name="close" size={24} color="#333" />
+                </TouchableOpacity>
+              </ThemedView>
+              <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+              <View style={[styles.signaturePadBoxListFloat, isSavingSupervisorFirma && { opacity: 0.55 }]}>
+                <SignatureScreen
+                  ref={signatureRef}
+                  onOK={handleSignatureRead}
+                  onEmpty={() => {
+                    setIsSavingSupervisorFirma(false);
+                    savingSupervisorFirmaRef.current = false;
+                    Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                  }}
+                  descriptionText=""
+                  clearText=""
+                  confirmText=""
+                  webStyle={signatureWebStyle}
+                  key={signatureKey}
+                />
+              </View>
+              <ThemedView style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalClearButton, isSavingSupervisorFirma && styles.buttonDisabled]}
+                  onPress={clearSignature}
+                  disabled={isSavingSupervisorFirma}
+                >
+                  <Ionicons name="refresh" size={18} color="#000" />
+                  <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalAcceptButton, isSavingSupervisorFirma && styles.buttonDisabled]}
+                  onPress={() => {
+                    if (isSavingSupervisorFirma) return;
+                    if (signatureRef.current) {
+                      setIsSavingSupervisorFirma(true);
+                      signatureRef.current.readSignature();
+                    } else {
+                      Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+                    }
+                  }}
+                  disabled={isSavingSupervisorFirma}
+                >
+                  {isSavingSupervisorFirma ? (
+                    <ActivityIndicator size="small" color="#000" />
+                  ) : (
+                    <Ionicons name="checkmark" size={18} color="#000" />
+                  )}
+                  <ThemedText style={styles.modalAcceptButtonText}>
+                    {isSavingSupervisorFirma ? 'Guardando…' : 'Aceptar'}
+                  </ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
           </ThemedView>
-          <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
-          <View style={styles.signaturePadBox}>
-            <SignatureScreen
-              ref={signatureRef}
-              onOK={handleSignatureRead}
-              onEmpty={() => {
-                Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
-              }}
-              descriptionText=""
-              clearText=""
-              confirmText=""
-              webStyle={signatureWebStyle}
-              key={signatureKey}
-            />
-          </View>
-          <ThemedView style={styles.modalActions}>
-            <TouchableOpacity style={styles.modalClearButton} onPress={clearSignature}>
-              <Ionicons name="refresh" size={18} color="#000" />
-              <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.modalAcceptButton}
-              onPress={() => {
-                if (signatureRef.current) {
-                  signatureRef.current.readSignature();
-                } else {
-                  Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
-                }
-              }}
-            >
-              <Ionicons name="checkmark" size={18} color="#000" />
-              <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
-            </TouchableOpacity>
+        ) : (
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Dibujar firma</ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={styles.signatureModalHint}>Firma dentro del recuadro blanco.</ThemedText>
+            <View style={styles.signaturePadBox}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                onEmpty={() => {
+                  Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                }}
+                descriptionText=""
+                clearText=""
+                confirmText=""
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+              />
+            </View>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignature}>
+                <Ionicons name="refresh" size={18} color="#000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.modalAcceptButton}
+                onPress={() => {
+                  if (signatureRef.current) {
+                    signatureRef.current.readSignature();
+                  } else {
+                    Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+                  }
+                }}
+              >
+                <Ionicons name="checkmark" size={18} color="#000" />
+                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
-        </ThemedView>
+        )}
       </Modal>
 
       {/* Modal de cámara (siguiendo patrón de VehiclesScreen) */}
@@ -4463,6 +4748,73 @@ const styles = StyleSheet.create({
   changesButton: { backgroundColor: '#5856D6' },
   deleteButton: { backgroundColor: '#FF3B30' },
   listItemButtonText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
+  listSignaturesStack: {
+    flexDirection: 'column',
+    gap: 16,
+    width: '100%',
+  },
+  listSignatureBlock: {
+    width: '100%',
+  },
+  listSignatureImage: {
+    height: 72,
+    width: '100%',
+    maxWidth: '100%',
+    backgroundColor: '#f5f5f5',
+    borderRadius: 6,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  listSignatureLink: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  listAddSupervisorSigButton: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#F0F8FF',
+  },
+  listAddSupervisorSigButtonText: { fontSize: 13, color: '#007AFF', fontWeight: '600' },
+  listFirmaResponsableBox: {
+    marginTop: 6,
+    padding: 8,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  listFirmaMeta: { fontSize: 12, color: '#333', marginBottom: 2 },
+  listFirmaPending: { marginTop: 6, fontSize: 14, color: '#999' },
+  floatListSignatureCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 480,
+    maxHeight: '88%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  signaturePadBoxListFloat: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 220,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
   floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },

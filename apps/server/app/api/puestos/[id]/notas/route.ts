@@ -40,7 +40,7 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
                 action: "GET",
                 table: "c_puesto_notas",
                 operation: "findMany",
-                where: { puesto_id: puesto.id },
+                where: { puesto_id: puesto.id, isActive: true },
                 orderBy: { updated_at: "desc" }
             }
         });
@@ -58,6 +58,11 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
             firma_responsable: string,
             firma_manual_responsable: string | null,
             images: Array<{ id: number; name: string; url: string }>,
+            empresa_id?: number | null,
+            cliente_id?: number | null,
+            division_id?: number | null,
+            contrato_id?: number | null,
+            corpo_id?: number | null,
             created_at: Date,
             updated_at: Date,
             id_local: string
@@ -147,6 +152,11 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
                     url: baseUrl ? `${baseUrl}/api/puestos/${nota.puesto_id}/notas/${nota.id}/get-image/${encodeURIComponent(String(img.name || ""))}` : "",
                 })),
                 puesto_id: nota.puesto_id,
+                empresa_id: nota.empresa_id ?? null,
+                cliente_id: nota.cliente_id ?? null,
+                division_id: nota.division_id ?? null,
+                contrato_id: nota.contrato_id ?? null,
+                corpo_id: nota.corpo_id ?? null,
                 created_at: nota.created_at,
                 updated_at: nota.updated_at,
                 id_local: "",
@@ -173,6 +183,11 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
             categoria_id,
             relevancia,
             puestos,
+            empresa_id,
+            cliente_id,
+            division_id,
+            contrato_id,
+            corpo_id,
             firma_responsable,
             firma_manual_responsable,
             imagenes
@@ -201,6 +216,7 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
         // Si relevancia no viene o es null, usar "Baja" por defecto
         const relevanciaValue = relevancia || 'Baja';
 
+        const createdNotes: any[] = [];
         for (const puesto_id of puestos_parse) {
             const puesto = await callDynamicPrisma({
                 req,
@@ -234,10 +250,16 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
                         description,
                         categoria_id: categoria_id,
                         relevancia: relevanciaValue,
+                        empresa_id: empresa_id ?? null,
+                        cliente_id: cliente_id ?? null,
+                        division_id: division_id ?? null,
+                        contrato_id: contrato_id ?? null,
+                        corpo_id: corpo_id ?? null,
                         puesto_id,
                         firma_responsable: String(firma_responsable),
                         firma_manual_responsable: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null,
                         is_modified: false,
+                        isActive: true,
                         created_at: created_at.toISOString(),
                         updated_at: updated_at.toISOString()
                     }
@@ -320,9 +342,15 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
                 }
             });
             await sendNotificationByPlaza(req, marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map((plaza: { id: number }) => plaza.id));
-
+            createdNotes.push(newNote);
         }
-        return NextResponse.json({ status: true, message: "Nota creada con éxito" }, { status: 200 });
+        const first = createdNotes[0] ?? null;
+        return NextResponse.json({
+            status: true,
+            message: "Nota creada con éxito",
+            id: first?.id ?? 0,
+            data: first
+        }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);

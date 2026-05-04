@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { readCorporateVehiclesForSucursalFromMainStructure } from './corporateVehiclesMainStructure';
 
 export const CORPORATE_VEHICLES_CORPO_CACHE_KEY = 'corporate_vehicles_corpo_cache';
 
@@ -36,21 +37,15 @@ async function writeCache(list: any[]) {
   await AsyncStorage.setItem(CORPORATE_VEHICLES_CORPO_CACHE_KEY, JSON.stringify(list));
 }
 
-function sameSucursalAsMarca(vehicleCorpoId: number, marcaCorpoId: number): boolean {
-  return Number.isFinite(vehicleCorpoId) && Number.isFinite(marcaCorpoId) && vehicleCorpoId === marcaCorpoId;
-}
-
 /**
- * Inserta o actualiza un vehículo en `corporate_vehicles_corpo_cache` solo si su sucursal
- * coincide con `current_marca.corpo`.
+ * Inserta o actualiza un vehículo en `corporate_vehicles_corpo_cache` (cualquier sucursal).
  */
 export async function upsertVehicleInCorpoCache(
   vehicle: Record<string, any>,
   opts?: { synced?: boolean }
 ): Promise<void> {
   const sid = vehicleSucursalId(vehicle);
-  const marcaCorpo = await getCurrentMarcaCorpoId();
-  if (marcaCorpo == null || !sameSucursalAsMarca(sid, marcaCorpo)) return;
+  if (!Number.isFinite(sid) || sid <= 0) return;
 
   const synced = opts?.synced !== undefined ? opts.synced : vehicle.synced !== false;
 
@@ -79,16 +74,10 @@ export async function upsertVehicleInCorpoCache(
   await writeCache(list);
 }
 
-/** Quita el vehículo del caché por sucursal (solo si coincide con current_marca). */
+/** Quita el vehículo del caché plano (cualquier sucursal). */
 export async function removeVehicleFromCorpoCache(params: { id?: number | string; id_local?: string }): Promise<void> {
-  const marcaCorpo = await getCurrentMarcaCorpoId();
-  if (marcaCorpo == null) return;
-
   const list = await readCache();
   const next = list.filter((x: any) => {
-    const xsid = vehicleSucursalId(x);
-    if (!sameSucursalAsMarca(xsid, marcaCorpo)) return true;
-
     if (params.id != null && params.id !== '') {
       const idStr = String(params.id);
       if (!idStr.startsWith('local-') && Number(x.id) === Number(params.id)) return false;
@@ -103,16 +92,11 @@ export async function removeVehicleFromCorpoCache(params: { id?: number | string
   if (next.length !== list.length) await writeCache(next);
 }
 
-/** Actualiza la lista de usos de un vehículo en el caché (misma sucursal que la marca). */
+/** Actualiza la lista de usos de un vehículo en el caché (coincidencia por id / id_local). */
 export async function setVehicleUsosInCorpoCache(vehicleKey: string, usos: any[]): Promise<void> {
-  const marcaCorpo = await getCurrentMarcaCorpoId();
-  if (marcaCorpo == null) return;
-
   const list = await readCache();
   let changed = false;
   const next = list.map((x: any) => {
-    const xsid = vehicleSucursalId(x);
-    if (!sameSucursalAsMarca(xsid, marcaCorpo)) return x;
     const key = String(x.id ?? x.id_local);
     if (key !== vehicleKey) return x;
     changed = true;
@@ -193,4 +177,74 @@ export async function mergeCorporateVehiclesCorpoCacheForSucursal(
   ];
 
   await writeCache([...others, ...merged]);
+}
+
+export async function getCorporateVehiclesForCorpo(corpoId: number): Promise<any[]> {
+  const sid = Number(corpoId);
+  if (!Number.isFinite(sid) || sid <= 0) return [];
+  const list = await readCache();
+  return list.filter((v: any) => vehicleSucursalId(v) === sid);
+}
+
+export async function findCorporateVehicleServerIdByLocalKey(localKey: string): Promise<number | null> {
+  const list = await readCache();
+  const row = list.find(
+    (x: any) =>
+      (String(x.id_local) === String(localKey) || String(x.id) === String(localKey)) &&
+      typeof x.id === 'number' &&
+      x.id > 0
+  );
+  return row ? Number(row.id) : null;
+}
+
+export async function findCorpoIdForVehicleServerIdInCorpoCache(vehiculoId: number): Promise<number | null> {
+  const list = await readCache();
+  const row = list.find((x: any) => Number(x.id) === Number(vehiculoId));
+  if (!row) return null;
+  const sid = vehicleSucursalId(row);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+export async function findServerUsoIdInCorpoCache(
+  vehiculoServerId: number,
+  useLocalKey: string
+): Promise<number | null> {
+  const list = await readCache();
+  const veh = list.find((x: any) => Number(x.id) === Number(vehiculoServerId));
+  if (!veh) return null;
+  const usos = veh.usos || veh.c_usos_vehiculos_corporativos || [];
+  const u = usos.find(
+    (y: any) =>
+      String(y.id_local) === String(useLocalKey) &&
+      typeof y.id === 'number' &&
+      Number(y.id) > 0
+  );
+  return u ? Number(u.id) : null;
+}
+
+export async function findServerMantenimientoIdInCorpoCache(
+  vehiculoServerId: number,
+  mantLocalKey: string
+): Promise<number | null> {
+  const list = await readCache();
+  const veh = list.find((x: any) => Number(x.id) === Number(vehiculoServerId));
+  if (!veh) return null;
+  const mants = veh.mantenimientos || veh.c_mantenimiento_vehiculos_corporativos || [];
+  const m = mants.find(
+    (y: any) =>
+      String(y.id_local) === String(mantLocalKey) &&
+      typeof y.id === 'number' &&
+      Number(y.id) > 0
+  );
+  return m ? Number(m.id) : null;
+}
+
+/** Tras mutar el árbol principal, alinea una fila del caché plano con ese vehículo. */
+export async function refreshCorpoCacheVehicleRowFromMainStructure(
+  sucursalId: number,
+  vehiculoId: number
+): Promise<void> {
+  const rows = await readCorporateVehiclesForSucursalFromMainStructure(sucursalId);
+  const v = rows.find((x: any) => Number(x.id) === Number(vehiculoId));
+  if (v) await upsertVehicleInCorpoCache(v, { synced: true });
 }

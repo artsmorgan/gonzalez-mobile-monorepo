@@ -8,6 +8,10 @@ export type BitacoraVehiculoDetenidoItem = {
   empresa_id: number;
   cliente_id: number;
   sucursal_id: number;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
+  isActive?: boolean;
   vehiculo_id?: number | null;
   uso_id?: number | null;
   tipo: string;
@@ -19,6 +23,8 @@ export type BitacoraVehiculoDetenidoItem = {
   created_by: number;
   created_at: string;
   id_local?: string;
+  vehiculo_id_local?: string;
+  uso_id_local?: string;
 };
 
 export type ListBitacoraResponse = { status: boolean; data?: BitacoraVehiculoDetenidoItem[]; message?: string };
@@ -103,6 +109,9 @@ export async function listBitacoraVehiculoDetenido({
     if (!response) return { status: false, message: 'Sesión expirada' };
 
     const data = await response.json();
+    if (data?.status && Array.isArray(data.data)) {
+      data.data = data.data.filter((row: any) => row?.isActive !== false);
+    }
     return data;
   } catch (error: any) {
     console.error('Error listing bitacora vehiculo detenido:', error);
@@ -110,7 +119,17 @@ export async function listBitacoraVehiculoDetenido({
   }
 }
 
-export async function createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout }: CreateParams): Promise<BasicResponse> {
+export type CreateBitacoraResponse = BasicResponse & {
+  /** Id del registro en servidor (también en `data.id`). */
+  id?: number;
+  data?: { id?: number };
+};
+
+export async function createBitacoraVehiculoDetenido({
+  requestData,
+  refreshAccessToken,
+  logout,
+}: CreateParams): Promise<CreateBitacoraResponse> {
   try {
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
@@ -132,7 +151,11 @@ export async function createBitacoraVehiculoDetenido({ requestData, refreshAcces
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
-    return data;
+    const serverId = Number(data?.id ?? data?.data?.id ?? 0);
+    return {
+      ...data,
+      ...(Number.isFinite(serverId) && serverId > 0 ? { id: serverId, data: { ...(data.data || {}), id: serverId } } : {}),
+    };
   } catch (error: any) {
     console.error('Error creating bitacora vehiculo detenido:', error);
     return { status: false, message: error.message || 'Error al crear bitácora' };

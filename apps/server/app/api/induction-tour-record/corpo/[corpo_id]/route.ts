@@ -25,7 +25,8 @@ export async function GET(
                 table: "c_registro_induccion_recorrido",
                 operation: "findMany",
                 where: {
-                    corpo_id: corpoIdNum
+                    corpo_id: corpoIdNum,
+                    isActive: true,
                 },
                 orderBy: {
                     created_at: 'desc'

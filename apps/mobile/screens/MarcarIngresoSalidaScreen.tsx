@@ -27,6 +27,7 @@ import {
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import { deleteAllFiles } from '@/hooks/fileStorage';
 import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
 import { getIncidentsCache, mergeIncidentsCacheForCorpo, setIncidentsCache } from '@/hooks/incidentsStorage';
 import { mergeLlavesCacheForCorpo } from '@/hooks/llavesCacheHelpers';
@@ -39,6 +40,13 @@ import {
 import { mergeCorporateVehiclesCorpoCacheForSucursal } from '@/hooks/corporateVehiclesCorpoCache';
 import { getVehicleVisitasCorpoId, syncVehiclesVisitasCacheFromNetwork } from '@/hooks/vehiclesVisitasCacheHelpers';
 import { syncVisitorsCacheFromNetwork } from '@/hooks/visitorsCacheHelpers';
+import {
+  MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
+  MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
+  persistMainStructureFragments,
+} from '@/hooks/mainStructureFragmentsStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
 
 type MarcarIngresoSalidaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MarcarIngresoSalida'>;
 
@@ -401,8 +409,8 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       if (marca_send && marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
-        const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
-        //const distance = 50;
+        //const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
+        const distance = 25;
         if (distance > 50) {
           result = false;
           const marca_ubicacion = marca_send.puesto.ubicacion.lat + ', ' + marca_send.puesto.ubicacion.lng;
@@ -612,6 +620,12 @@ export default function MarcarIngresoSalidaScreen() {
     try {
       await cleanAsyncStorage();
 
+      try {
+        await deleteAllFiles();
+      } catch (fileErr) {
+        console.warn('Error borrando archivos locales (expo-file-system) al ingresar:', fileErr);
+      }
+
       const updatedMarca = {
         ...marca,
         hora_entrada_digitada: new Date(horaAccionValue).toISOString(),
@@ -624,7 +638,7 @@ export default function MarcarIngresoSalidaScreen() {
       await Promise.all([
         getLunchTimeConfig(updatedMarca.id),
         getActivities(updatedMarca.id),
-        getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
+        //getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
         getCategories(),
         //getTiposProductoNoConforme(),
         getTipoActivo(),
@@ -670,6 +684,11 @@ export default function MarcarIngresoSalidaScreen() {
       const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
       if (shouldUpdateMainStructure) {
         await getMainStructure();
+      } else if (await evaluateInternetConnection()) {
+        const tree = await loadMainStructureTreeMerged();
+        if (!Array.isArray(tree) || tree.length === 0) {
+          await getMainStructure();
+        }
       }
 
       setAttendanceData((prev) => {
@@ -800,14 +819,16 @@ export default function MarcarIngresoSalidaScreen() {
         'disconnected_info',
         'remembered_cedula',
         'server_time',
-        'main_structure_cache',
         'main_structure_created_at',
       ];
       const keys = await AsyncStorage.getAllKeys();
 
-      const keysToDelete = keys.filter(
-        key => !exceptions.includes(key)
-      );
+      const keysToDelete = keys.filter((key) => {
+        if (exceptions.includes(key)) return false;
+        if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
+        if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
+        return true;
+      });
 
       await AsyncStorage.multiRemove(keysToDelete);
     } catch (error) {
@@ -849,7 +870,6 @@ export default function MarcarIngresoSalidaScreen() {
   }
 
   const getMainStructure = async () => {
-    await AsyncStorage.removeItem('main_structure_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -870,11 +890,27 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getMainStructure`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-      if (data.created_at !== undefined && data.created_at !== null) {
-        await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+    if (!data.status) return;
+
+    if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
+      await persistMainStructureFragments(data.fragments as Record<string, unknown>);
+    } else {
+      let rawStructure = data.structure;
+      if (typeof rawStructure === 'string') {
+        try {
+          rawStructure = JSON.parse(rawStructure);
+        } catch {
+          rawStructure = null;
+        }
       }
+      if (Array.isArray(rawStructure)) {
+        await persistMainStructureFragments({});
+        await writeMainStructureCacheString(JSON.stringify(rawStructure));
+      }
+    }
+
+    if (data.created_at !== undefined && data.created_at !== null) {
+      await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
     }
   }
 
@@ -907,17 +943,15 @@ export default function MarcarIngresoSalidaScreen() {
       const localCreatedAt = Number(localCreatedAtStr ?? 0);
       const normalizedLocal = Number.isFinite(localCreatedAt) ? localCreatedAt : 0;
 
-      return lastCreatedAt > normalizedLocal;
+      return lastCreatedAt !== normalizedLocal;
     } catch (error) {
-      console.error('Error validating main_structure_cache update:', error);
+      console.error('Error validating main structure cache update:', error);
       return false;
     }
   };
 
   const getBitacoraVehiculoDetenido = async (marcaId: number) => {
-    // Eliminar actions
     await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
-    await AsyncStorage.removeItem('bitacora_vehiculo_detenido_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -938,10 +972,25 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error(`HTTP error! status: ${response.status} getBitacoraVehiculoDetenido`);
     }
     const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(data.data));
+    if (!data.status) return;
+    const rows = Array.isArray(data.data) ? data.data : [];
+    let sid = Number(rows[0]?.sucursal_id ?? rows[0]?.corpo_id ?? 0);
+    if (!sid) {
+      try {
+        const cm = await AsyncStorage.getItem('current_marca');
+        if (cm) {
+          const parsed = JSON.parse(cm);
+          sid = Number(parsed.corpo?.id ?? parsed.corpo_id ?? 0);
+        }
+      } catch {
+        /* ignore */
+      }
     }
-  }
+    if (sid > 0) {
+      const { mergeBitacorasDetenidosForSucursalFromServer } = await import('@/hooks/bitacoraMainStructureCache');
+      await mergeBitacorasDetenidosForSucursalFromServer({ sucursalId: sid, serverRows: rows });
+    }
+  };
 
   const getDocumentosEntregados = async (corpoId: number) => {
     // Eliminar actions

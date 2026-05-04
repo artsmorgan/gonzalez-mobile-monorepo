@@ -2,6 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 
+function timeToHHmm(val: any): string | null {
+  if (val == null) return null;
+  const d = val instanceof Date ? val : (typeof val === "string" ? new Date(val) : null);
+  if (!d || Number.isNaN(d.getTime())) return null;
+  const hh = d.getUTCHours();
+  const mm = d.getUTCMinutes();
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
     const { valid, expired, message } = await verifyAccessTokenByApi(req);
@@ -19,7 +28,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
         action: "GET",
         table: "c_agenda_minuta",
         operation: "findMany",
-        where: { corpo_id: corpoIdNum },
+        where: { corpo_id: corpoIdNum, isActive: true },
         orderBy: { created_at: "desc" },
         include: {
           e_estructura_cliente: { select: { nombre: true } },
@@ -33,6 +42,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
     const recordsWithNames = recordsArray.map((r: any) => ({
       ...r,
       id_local: "",
+      hora_inicio: timeToHHmm(r.hora_inicio) ?? r.hora_inicio,
+      hora_fin: timeToHHmm(r.hora_fin) ?? r.hora_fin,
       cliente_nombre: r.e_estructura_cliente?.nombre || null,
       corpo_nombre: r.e_estructura_sucursal ? `${r.e_estructura_sucursal.nro_sucursal} - ${r.e_estructura_sucursal.nombre}` : null,
       puesto_nombre: r.e_estructura_puesto

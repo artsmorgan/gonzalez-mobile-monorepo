@@ -146,6 +146,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         });
                     }
 
+                    // Persistir el estado más reciente de artículos en la marca de actividad.
+                    await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "UPDATE",
+                            table: "e_actividades_puesto_plaza",
+                            where: { id: actividad_marcada.id },
+                            data: { articles: JSON.stringify(articlesForEvaluation), updated_at: now },
+                            returning: false,
+                        },
+                    });
+
                     await evaluateAndNotifyArticles(
                         req,
                         articlesForEvaluation,
@@ -199,6 +211,14 @@ async function evaluateAndNotifyArticles(
         const id = Number(art?.id || 0);
         if (!id || (tipo !== "Plan" && tipo !== "Asignado")) continue;
 
+        const incomingTs = (() => {
+            if (art?.created_at != null && String(art.created_at).trim()) {
+                const d = new Date(art.created_at);
+                if (!isNaN(d.getTime())) return d;
+            }
+            return new Date(accionAtMs);
+        })();
+
         const last_mantenimiento = await callDynamicPrisma({
             req,
             data: {
@@ -206,66 +226,95 @@ async function evaluateAndNotifyArticles(
                 table: "c_articulo_mantenimiento",
                 operation: "findFirst",
                 where: tipo === "Plan" ? { articulo_plan_id: id } : { articulo_asignado_id: id },
-                orderBy: { fecha_solucion: "desc" },
+                orderBy: { updated_at: "desc" },
             },
         });
 
-        let last_estado: string | null = null;
-        if (last_mantenimiento && last_mantenimiento.id) {
-            last_estado = String(last_mantenimiento.estado || "");
-            // Si el mantenimiento se actualizó después del instante de la acción del cliente, no crear ni reevaluar
-            if (last_mantenimiento.updated_at) {
-                const lastUpdated = new Date(last_mantenimiento.updated_at);
-                if (!isNaN(lastUpdated.getTime()) && lastUpdated.getTime() > accionAtMs) {
-                    continue;
-                }
+        if (last_mantenimiento?.updated_at) {
+            const lastUpMs = new Date(last_mantenimiento.updated_at).getTime();
+            if (!isNaN(lastUpMs) && incomingTs.getTime() < lastUpMs) {
+                continue;
             }
-        } else {
-            // Si no hay registros previos asumimos que el estado base era Bueno
-            last_estado = "Bueno";
         }
 
         const estado_actual = String(art?.estado || "Bueno");
         const cantidad_requerida = Number(art?.cantidad_requerida || 0);
         const cantidad_real = Number(art?.cantidad_real || 0);
+        const serverNow = toZonedTime(new Date(), "America/Costa_Rica");
+        const observaciones = String(art?.observaciones || "");
+        const marca = art?.marca || "";
+        const serie = art?.serie || "";
 
-        switch (estado_actual) {
-            case "Bueno":
-                // Si antes no era Bueno y ahora sí, se actualiza el último reporte a Bueno
-                if (last_estado !== "Bueno" && last_mantenimiento && last_mantenimiento.id) {
-                    articulosReporteUpdate.push({
-                        id: last_mantenimiento.id,
-                        estado: "Bueno",
-                        cantidad_real: cantidad_requerida,
-                        fecha_solucion: toZonedTime(new Date(), "America/Costa_Rica"),
-                    });
-                }
-                break;
-            default:
-                if (last_estado === "Bueno") {
-                    // Transición Bueno -> no Bueno: notificar y crear nuevo reporte
-                    sendNotification = true;
-                    articulosReporte.push({
-                        id,
-                        nombre: art?.nombre || "Artículo",
-                        tipo,
-                        marca: art?.marca || "",
-                        serie: art?.serie || "",
-                        cantidad_requerida,
-                        cantidad_real,
-                        estado: estado_actual,
-                        observaciones: String(art?.observaciones || ""),
-                    });
-                } else if (last_estado !== estado_actual && last_mantenimiento && last_mantenimiento.id) {
-                    // Cambio entre estados no Buenos: actualizar reporte existente
-                    articulosReporteUpdate.push({
-                        id: last_mantenimiento.id,
-                        estado: estado_actual,
-                        cantidad_real,
-                        fecha_solucion: null,
-                    });
-                }
-                break;
+        const pushCreate = () => {
+            articulosReporte.push({
+                id,
+                nombre: art?.nombre || "Artículo",
+                tipo,
+                marca,
+                serie,
+                cantidad_requerida,
+                cantidad_real,
+                estado: estado_actual,
+                observaciones,
+                created_at: incomingTs,
+                updated_at: incomingTs,
+            });
+        };
+
+        if (!last_mantenimiento?.id) {
+            // Sin mantenimiento previo: crear nuevo registro.
+            pushCreate();
+            if (estado_actual !== "Bueno") sendNotification = true;
+            continue;
+        }
+
+        const last_estado = String(last_mantenimiento.estado || "").trim();
+
+        if (last_estado !== "Bueno" && estado_actual === "Bueno") {
+            // No Bueno -> Bueno: editar el último registro (no crear) y cerrar con fecha_solucion.
+            articulosReporteUpdate.push({
+                id: last_mantenimiento.id,
+                estado: estado_actual,
+                cantidad_real: cantidad_requerida,
+                cantidad_necesaria: cantidad_requerida,
+                fecha_solucion: serverNow,
+                observaciones,
+                marca,
+                serie_placa: serie,
+                updated_at: serverNow,
+            });
+        } else if (last_estado !== "Bueno" && estado_actual !== "Bueno") {
+            // No Bueno -> No Bueno: editar último registro.
+            const upd: Record<string, unknown> = {
+                id: last_mantenimiento.id,
+                estado: estado_actual,
+                cantidad_real,
+                cantidad_necesaria: cantidad_requerida,
+                observaciones,
+                marca,
+                serie_placa: serie,
+                updated_at: serverNow,
+            };
+            if (last_estado !== estado_actual) {
+                upd.fecha_solucion = null;
+            }
+            articulosReporteUpdate.push(upd);
+        } else if (last_estado === "Bueno" && estado_actual !== "Bueno") {
+            // Bueno -> No Bueno: crear nuevo registro.
+            sendNotification = true;
+            pushCreate();
+        } else {
+            // Estado no cambia: editar último registro igualmente con nueva data.
+            articulosReporteUpdate.push({
+                id: last_mantenimiento.id,
+                estado: estado_actual,
+                cantidad_real,
+                cantidad_necesaria: cantidad_requerida,
+                observaciones,
+                marca,
+                serie_placa: serie,
+                updated_at: serverNow,
+            });
         }
     }
 

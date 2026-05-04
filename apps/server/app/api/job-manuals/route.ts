@@ -79,7 +79,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_manual_puesto",
                 operation: "findMany",
-                where: { puesto_id: puestoObj.id },
+                where: { puesto_id: puestoObj.id, isActive: true },
             },
         });
         const directManualsArray = Array.isArray(directManuals) ? directManuals : [];
@@ -104,11 +104,13 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "e_manual_puesto",
                 operation: "findMany",
-                where: { id: { in: manualIds } },
+                where: { id: { in: manualIds }, isActive: true },
                 orderBy: { created_at: "desc" },
             },
         });
-        const manualsArray = Array.isArray(manuals) ? manuals : [];
+        const manualsArray = (Array.isArray(manuals) ? manuals : []).filter(
+            (m: any) => m?.isActive !== false
+        );
 
         // Usar el origin de la petición para construir URLs absolutas accesibles desde el móvil
         const baseUrl = req.nextUrl.origin;
@@ -135,7 +137,9 @@ export async function GET(req: NextRequest) {
                         include: { e_empleado_visualizacion_archivos: true },
                     },
                 });
-                const visualizacionesArray = Array.isArray(visualizaciones) ? visualizaciones : [];
+                const visualizacionesArray = (Array.isArray(visualizaciones) ? visualizaciones : []).filter(
+                    (v: any) => v?.isActive !== false
+                );
                 const filesArray = Array.isArray(files) ? files : [];
 
                 const currentEmployeeSigned = visualizacionesArray.some(
@@ -205,7 +209,13 @@ export async function GET(req: NextRequest) {
                     description: manual.description,
                     quiz: manual.quiz ?? null,
                     firma: manual.firma,
-                    // Para el cliente móvil, mostramos el puesto actual del colaborador
+                    isActive: manual.isActive !== false,
+                    empresa_id: manual.empresa_id ?? null,
+                    cliente_id: manual.cliente_id ?? null,
+                    corpo_id: manual.corpo_id ?? null,
+                    division_id: manual.division_id ?? null,
+                    contrato_id: manual.contrato_id ?? null,
+                    // Para el cliente móvil, mostramos el puesto de la consulta
                     puesto: {
                         id: puesto.id,
                         nombre: puesto.nombre
@@ -223,6 +233,7 @@ export async function GET(req: NextRequest) {
                         approved: v.approved ?? null,
                         created_at: v.created_at,
                         updated_at: v.updated_at,
+                        isActive: v.isActive !== false,
                         files: visFilesMappedByVisId.get(v.id) ?? [],
                     })),
                     currentEmployeeSigned
@@ -257,8 +268,25 @@ export async function POST(req: NextRequest) {
             firma_responsable,
             puestos,
             files,
-            quiz
+            quiz,
+            empresa_id: empresa_id_raw,
+            cliente_id: cliente_id_raw,
+            corpo_id: corpo_id_raw,
+            division_id: division_id_raw,
+            contrato_id: contrato_id_raw,
         } = await req.json();
+
+        const parseOptInt = (v: unknown): number | null => {
+            if (v === null || v === undefined || v === "") return null;
+            const n = parseInt(String(v), 10);
+            return Number.isFinite(n) && n > 0 ? n : null;
+        };
+
+        const empresa_id = parseOptInt(empresa_id_raw);
+        const cliente_id = parseOptInt(cliente_id_raw);
+        const corpo_id = parseOptInt(corpo_id_raw);
+        const division_id = parseOptInt(division_id_raw);
+        const contrato_id = parseOptInt(contrato_id_raw);
 
         if (!marca_id || !title || !description || !firma_responsable) {
             return NextResponse.json(
@@ -393,6 +421,12 @@ export async function POST(req: NextRequest) {
                     puesto_id: primaryPuestoId,
                     created_by: String(payload?.id),
                     created_at: created_at.toISOString(),
+                    empresa_id,
+                    cliente_id,
+                    corpo_id,
+                    division_id,
+                    contrato_id,
+                    isActive: true,
                 }
             }
         });
@@ -475,6 +509,7 @@ export async function POST(req: NextRequest) {
             {
                 status: true,
                 message: "Manual creado con éxito",
+                id: manualObj.id,
                 manualIds: [manualObj.id]
             },
             { status: 200 }

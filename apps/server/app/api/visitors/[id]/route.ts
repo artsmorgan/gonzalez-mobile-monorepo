@@ -5,6 +5,54 @@ import { toZonedTime } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { visitorsResolveHierarchyFromPuestoId } from "../../../../utils/visitorsResolveHierarchyFromPuesto";
+
+async function getClienteIdForSucursalPut(req: NextRequest, sucursalId: number): Promise<number | null> {
+    const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
+    });
+    if (!sucursal?.contrato_id) {
+        return null;
+    }
+    const contrato = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
+    });
+    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
+    return Number.isFinite(cliente_id) && cliente_id > 0 ? cliente_id : null;
+}
+
+async function clienteAndPuestoForCorpoPut(
+    req: NextRequest,
+    corpoId: number
+): Promise<{ cliente_id: number; puesto_id: number } | null> {
+    const sucursal = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoId } }
+    });
+    if (!sucursal?.contrato_id) {
+        return null;
+    }
+    const contrato = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
+    });
+    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
+    if (!Number.isFinite(cliente_id) || cliente_id <= 0) {
+        return null;
+    }
+    const puestos = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpoId } }
+    });
+    const list = Array.isArray(puestos) ? puestos : [];
+    const puesto_id = list[0]?.id != null ? Number(list[0].id) : NaN;
+    if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+        return null;
+    }
+    return { cliente_id, puesto_id };
+}
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -20,6 +68,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         const {
+            corpo_id: bodyCorpoId,
+            puesto_id: bodyPuestoId,
             nombre,
             cedula,
             hora_entrada,
@@ -56,6 +106,93 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             pers_autoriza_salida,
             updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
         };
+
+        const bodyCorpoParsed =
+            bodyCorpoId != null && bodyCorpoId !== ""
+                ? parseInt(String(bodyCorpoId), 10)
+                : NaN;
+        const bodyPuestoParsed =
+            bodyPuestoId != null && bodyPuestoId !== ""
+                ? parseInt(String(bodyPuestoId), 10)
+                : NaN;
+
+        const corpoChanging =
+            Number.isFinite(bodyCorpoParsed) &&
+            bodyCorpoParsed > 0 &&
+            bodyCorpoParsed !== Number(visitor.corpo_id);
+
+        if (corpoChanging) {
+            const cp = await clienteAndPuestoForCorpoPut(req, bodyCorpoParsed);
+            if (!cp) {
+                return NextResponse.json(
+                    { status: false, message: "No se pudo resolver cliente/puesto para la sucursal indicada" },
+                    { status: 200 }
+                );
+            }
+            if (Number(cp.cliente_id) !== Number(visitor.cliente_id)) {
+                return NextResponse.json(
+                    { status: false, message: "La sucursal indicada no pertenece al mismo cliente del registro" },
+                    { status: 200 }
+                );
+            }
+            updateData.corpo_id = bodyCorpoParsed;
+            if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0) {
+                const puestoRow = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: bodyPuestoParsed } }
+                });
+                if (!puestoRow) {
+                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                }
+                if (Number(puestoRow.sucursal_id) !== bodyCorpoParsed) {
+                    return NextResponse.json(
+                        { status: false, message: "El puesto no pertenece a la sucursal indicada" },
+                        { status: 200 }
+                    );
+                }
+                updateData.puesto_id = bodyPuestoParsed;
+            } else {
+                updateData.puesto_id = cp.puesto_id;
+            }
+        } else if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0 && bodyPuestoParsed !== Number(visitor.puesto_id)) {
+            const puestoRow = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: bodyPuestoParsed } }
+            });
+            if (!puestoRow) {
+                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            }
+            if (Number(puestoRow.sucursal_id) !== Number(visitor.corpo_id)) {
+                return NextResponse.json(
+                    { status: false, message: "El puesto no pertenece a la sucursal del registro" },
+                    { status: 200 }
+                );
+            }
+            const clienteDelPuesto = await getClienteIdForSucursalPut(req, Number(visitor.corpo_id));
+            if (clienteDelPuesto == null || Number(clienteDelPuesto) !== Number(visitor.cliente_id)) {
+                return NextResponse.json(
+                    { status: false, message: "No se pudo validar el cliente del puesto" },
+                    { status: 200 }
+                );
+            }
+            updateData.puesto_id = bodyPuestoParsed;
+        }
+
+        const hierarchyChanged = updateData.corpo_id != null || updateData.puesto_id != null;
+        if (hierarchyChanged) {
+            const finalCorpo = updateData.corpo_id != null ? Number(updateData.corpo_id) : Number(visitor.corpo_id);
+            const finalPuesto = updateData.puesto_id != null ? Number(updateData.puesto_id) : Number(visitor.puesto_id);
+            if (Number.isFinite(finalCorpo) && finalCorpo > 0 && Number.isFinite(finalPuesto) && finalPuesto > 0) {
+                const h = await visitorsResolveHierarchyFromPuestoId(req, finalPuesto, finalCorpo);
+                if (!h.ok) {
+                    return NextResponse.json({ status: false, message: h.message }, { status: 200 });
+                }
+                updateData.cliente_id = h.cliente_id;
+                updateData.empresa_id = h.empresa_id;
+                updateData.division_id = h.division_id;
+                updateData.contrato_id = h.contrato_id;
+            }
+        }
 
         // Registrar cambios (solo campos actualizados)
         const eq = (a: any, b: any) => {

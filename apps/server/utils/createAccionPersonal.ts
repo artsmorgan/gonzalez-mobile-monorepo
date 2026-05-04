@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 
-export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number) {
+export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number, usuario_insercion: string) {
 
     console.log("Procedemos a crear la acción personal");
     try {
@@ -163,7 +163,7 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     fecha_fin: marcaDia.fecha,
                     fecha_insercion: toZonedTime(new Date(), "America/Costa_Rica"),
                     salario: salario,
-                    comentarios: comentarios ? comentarios : '[Acción personal creada por el sistema MonitoreApp]',
+                    comentarios: comentarios ? comentarios : '[Acción personal creada en el sistema MonitoreApp]',
                     fecha_actualizacion: toZonedTime(new Date(), "America/Costa_Rica"),
                     tipoAccion_id: tipo_accion_id,
                     reemplazo_id: marcaDia.empleadoReemplaza_id,
@@ -182,7 +182,7 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     fecha_vence_subir_adjunto: futureDateString,
                     tipoContratacion_id: tipoContratacionId,
                     coordinadoPor_id: coordinadoPor_id,
-                    usuario_insercion: 'monitoreApp',
+                    usuario_insercion: usuario_insercion,
                     mobile_upload: true,
                 }
             }

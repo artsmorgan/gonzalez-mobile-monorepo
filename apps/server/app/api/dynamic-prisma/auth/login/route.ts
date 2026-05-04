@@ -16,7 +16,9 @@ function hashToken(token: string): string {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { cedula, password } = body;
+    const { cedula, password, deviceName } = body;
+
+    console.log('deviceName', deviceName);
 
     if (!cedula || !password) {
       return NextResponse.json(
@@ -106,6 +108,7 @@ export async function POST(request: NextRequest) {
         sessionId,
         createdAt: now,
         expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+        device: deviceName,
         revoked: false,
       },
     });

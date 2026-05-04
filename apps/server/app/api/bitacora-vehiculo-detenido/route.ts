@@ -115,7 +115,7 @@ export async function GET(req: NextRequest) {
         action: "GET",
         table: "c_bitacora_vehiculo_detenido",
         operation: "findMany",
-        where: { sucursal_id: Number(sucursalId) },
+        where: { sucursal_id: Number(sucursalId), isActive: true },
         orderBy: { id: "desc" }
       }
     });
@@ -125,6 +125,10 @@ export async function GET(req: NextRequest) {
       empresa_id: r.empresa_id,
       cliente_id: r.cliente_id,
       sucursal_id: r.sucursal_id,
+      division_id: r.division_id,
+      contrato_id: r.contrato_id,
+      puesto_id: r.puesto_id,
+      isActive: r.isActive !== false,
       vehiculo_id: r.vehiculo_id ?? null,
       uso_id: r.uso_id ?? null,
       tipo: r.tipo,
@@ -159,6 +163,10 @@ export async function POST(req: NextRequest) {
       empresa_id,
       cliente_id,
       sucursal_id,
+      division_id,
+      contrato_id,
+      puesto_id,
+      isActive,
       vehiculo_id,
       uso_id,
       tipo,
@@ -171,7 +179,14 @@ export async function POST(req: NextRequest) {
     } = body ?? {};
 
     // marca_id era requerido previamente. Ahora permitimos crear por estructura directa.
-    if ((!marca_id && (!empresa_id || !cliente_id || !sucursal_id)) || !tipo || !firma_responsable) {
+    const divId = division_id != null ? Number(division_id) : 0;
+    const ctId = contrato_id != null ? Number(contrato_id) : 0;
+    const puestoId = puesto_id != null ? Number(puesto_id) : 0;
+    if (
+      (!marca_id && (!empresa_id || !cliente_id || !sucursal_id || !divId || !ctId || !puestoId)) ||
+      !tipo ||
+      !firma_responsable
+    ) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
@@ -196,6 +211,58 @@ export async function POST(req: NextRequest) {
     if (!empresaId || !clienteId || !sucursalId) {
       return NextResponse.json({ status: false, message: "Estructura incompleta" }, { status: 200 });
     }
+
+    let divisionIdFinal = divId;
+    let contratoIdFinal = ctId;
+    let puestoIdFinal = puestoId;
+    if (marca_id && (!puestoIdFinal || !contratoIdFinal)) {
+      const marcaDia = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
+      });
+      if (marcaDia) {
+        if (!puestoIdFinal) puestoIdFinal = Number((marcaDia as any).puesto_id ?? 0);
+        if (!contratoIdFinal) contratoIdFinal = Number((marcaDia as any).contrato_id ?? 0);
+      }
+    }
+    if (puestoIdFinal) {
+      const puestoRow = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoIdFinal } }
+      });
+      const sidP = puestoRow ? Number((puestoRow as any).sucursal_id ?? 0) : 0;
+      if (sidP > 0 && sidP !== Number(sucursalId)) {
+        return NextResponse.json(
+          { status: false, message: "El puesto no pertenece a la sucursal indicada" },
+          { status: 200 }
+        );
+      }
+    }
+    const sucRow = await callDynamicPrisma({
+      req,
+      data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: Number(sucursalId) } }
+    });
+    const contratoFromSucursal = sucRow ? Number((sucRow as any).contrato_id ?? 0) : 0;
+    if (!contratoIdFinal && contratoFromSucursal) {
+      contratoIdFinal = contratoFromSucursal;
+    }
+    if (contratoIdFinal && !divisionIdFinal) {
+      const ctRow = await callDynamicPrisma({
+        req,
+        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoIdFinal } }
+      });
+      if (ctRow && (ctRow as any).division_id != null) {
+        divisionIdFinal = Number((ctRow as any).division_id);
+      }
+    }
+    if (!divisionIdFinal || !contratoIdFinal || !puestoIdFinal) {
+      return NextResponse.json(
+        { status: false, message: "División, contrato y puesto son requeridos" },
+        { status: 200 }
+      );
+    }
+
+    const activeFlag = isActive === false ? false : true;
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
@@ -298,6 +365,10 @@ export async function POST(req: NextRequest) {
           empresa_id: empresaId,
           cliente_id: clienteId,
           sucursal_id: sucursalId,
+          division_id: divisionIdFinal,
+          contrato_id: contratoIdFinal,
+          puesto_id: puestoIdFinal,
+          isActive: activeFlag,
           vehiculo_id: finalVehiculoId,
           uso_id: uso_id ? Number(uso_id) : null,
           tipo: String(tipo),
@@ -394,7 +465,10 @@ export async function POST(req: NextRequest) {
       }
     });
 
-    return NextResponse.json({ status: true, message: "Bitácora creada correctamente", id: created.id }, { status: 200 });
+    return NextResponse.json(
+      { status: true, message: "Bitácora creada correctamente", id: created.id, data: { id: created.id } },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/bitacora-vehiculo-detenido:", errorMessage);

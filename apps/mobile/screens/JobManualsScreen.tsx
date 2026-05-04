@@ -18,8 +18,17 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
 import { appendJobManualPuestos, createJobManual, listJobManualsByPuesto, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
-import { getManualPuestoId, mergeJobManualsCacheForPuesto } from '../hooks/jobManualsCacheHelpers';
+import {
+  getManualCorpoId,
+  getManualPuestoId,
+  manualIsVisibleForPuesto,
+  mergeJobManualsCacheForPuesto,
+  patchJobManualPuestosVinculadosInCache,
+} from '../hooks/jobManualsCacheHelpers';
+import { readMainStructureCacheString, writeMainStructureCacheString } from '../hooks/mainStructureCacheStorage';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '../hooks/fileStorage';
 import getHoraAccion from '../hooks/getHoraAccion';
+import { syncUnsyncedJobManualByLocalId } from '../hooks/jobManualsQueueUtils';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
@@ -103,6 +112,8 @@ interface ManualFileLocal {
   base64: string;
   uri?: string;
   mimeType?: string;
+  /** Archivo en documentos (evita base64 en memoria / cola de sync) */
+  localFileName?: string;
 }
 
 interface ManualFileRemote {
@@ -116,6 +127,7 @@ interface ManualFileRemote {
   mimeType?: string;
   id_local?: string;
   synced?: boolean;
+  localFileName?: string;
 }
 
 interface JobManualRemote {
@@ -149,6 +161,32 @@ interface JobManualRemote {
   synced?: boolean;
   /** Opcional en caché / normalización; preferir `puesto.id`. */
   puesto_id?: number;
+  isActive?: boolean;
+  corpo_id?: number | null;
+  empresa_id?: number | null;
+  cliente_id?: number | null;
+  division_id?: number | null;
+  contrato_id?: number | null;
+  /** Puestos vinculados (misma lógica que e_puestos_manual_puesto); offline y merge en caché. */
+  puestos_vinculados_ids?: number[];
+}
+
+/**
+ * Quiz ya calificado (GET o caché): `approved` distinto de null; `updated_at` acompaña al resultado
+ * al calificar. Firma recién creada: `approved` null aunque tenga `updated_at` de alta.
+ */
+function isVisualizationQuizGraded(vis: {
+  approved?: boolean | null;
+  updated_at?: string;
+  approved_pending?: boolean;
+}): boolean {
+  if (vis.approved_pending) return false;
+  const hasApproved = vis.approved === true || vis.approved === false;
+  if (!hasApproved) return false;
+  // Tras calificar, API y caché guardan el par; sin `updated_at` en datos viejos, confiar en `approved`.
+  return vis.updated_at != null && String(vis.updated_at).trim() !== ''
+    ? true
+    : hasApproved;
 }
 
 export default function JobManualsScreen() {
@@ -214,6 +252,8 @@ export default function JobManualsScreen() {
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   /** puesto_id de la marca activa (lista OPERATIVO). */
   const [marcaPuestoIdFromMarca, setMarcaPuestoIdFromMarca] = useState<number | null>(null);
+  /** corpo_id (sucursal) de la marca — listado offline OPERATIVO. */
+  const [marcaCorpoIdFromMarca, setMarcaCorpoIdFromMarca] = useState<number | null>(null);
   const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
 
   /** Modal "Actualizar puestos" (misma jerarquía que en creación) */
@@ -314,6 +354,10 @@ export default function JobManualsScreen() {
   };
 
   const buildFileUrl = (manualId: number | undefined, file: ManualFileRemote) => {
+    if (file.localFileName) {
+      const uri = getLocalFileDisplayUri(String(file.localFileName));
+      if (uri) return uri;
+    }
     // Si es registro offline (tiene id_local no vacío), usamos base64
     const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
     if (hasLocalId && file.base64) {
@@ -330,8 +374,12 @@ export default function JobManualsScreen() {
       if (apiUrl) return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/get-file/${encodeURIComponent(file.name)}`);
     }
 
-    // Último recurso: URL ya provista
-    if (file.url) return appendTokenToUrl(file.url);
+    // Último recurso: URL ya provista (no añadir token a file/content/data)
+    if (file.url) {
+      const u = file.url;
+      if (/^(file|content|data):/i.test(String(u).trim())) return u;
+      return appendTokenToUrl(file.url);
+    }
 
     return '';
   };
@@ -356,26 +404,23 @@ export default function JobManualsScreen() {
     try {
       setIsStructureLoading(true);
 
-      // 1) Cache primero (para modo offline inmediato)
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      // 1) Cache primero (archivo o AsyncStorage, ver mainStructureCacheStorage)
+      const cacheStr = await readMainStructureCacheString();
       if (cacheStr) {
         try {
           const cached = JSON.parse(cacheStr);
           if (Array.isArray(cached)) setStructure(cached);
           else setStructure([]);
         } catch {
-          // ignore cache parse errors
           setStructure([]);
         }
       }
 
-      // 2) Si hay internet, refrescar desde API y actualizar cache
-      /*
-      const isConnected = await getConnectionStatus();
+      const isConnected = false; // No debemos actualizar el árbol aquí
       if (!isConnected) return;
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
+      if (!apiUrl) return;
 
       const response = await authedFetch({
         url: `${apiUrl}/api/main-structure`,
@@ -388,19 +433,14 @@ export default function JobManualsScreen() {
         refreshAccessToken,
         logout,
       });
-      if (!response) return;
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response?.ok) return;
 
       const data = await response.json();
       const incoming = data?.structure;
       if (data?.status && Array.isArray(incoming)) {
         setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
+        await writeMainStructureCacheString(JSON.stringify(incoming));
       }
-      */
     } catch (error) {
       console.error('Error fetching main structure for job manuals:', error);
     } finally {
@@ -425,6 +465,8 @@ export default function JobManualsScreen() {
       setRoleName(typeof role === 'string' ? role : null);
       const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
       setMarcaPuestoIdFromMarca(Number.isFinite(pid as number) && (pid as number) > 0 ? pid : null);
+      const corpoM = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+      setMarcaCorpoIdFromMarca(Number.isFinite(corpoM as number) && (corpoM as number) > 0 ? corpoM : null);
 
       const divId = getDivisionIdFromMarcaJson(currentMarca);
       setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
@@ -461,35 +503,42 @@ export default function JobManualsScreen() {
   }, []);
 
   const fetchManuals = useCallback(
-    async (marcaIdToUse: number, listPuestoId: number | null) => {
-      try {
-        setIsLoadingManuals(true);
-        // Solo listar con puesto válido: OPERATIVO usa `current_marca.puesto`; resto usa filtro jerárquico hasta "Puesto *" (o puesto en marca precargado).
+    async (marcaIdToUse: number, listPuestoId: number | null, listCorpoId: number | null) => {
+    try {
+      setIsLoadingManuals(true);
         if (listPuestoId == null || !Number.isFinite(Number(listPuestoId)) || Number(listPuestoId) <= 0) {
           setManuals([]);
           return;
         }
         const puestoIdNum = Number(listPuestoId);
-        const isConnected = await getConnectionStatus();
+      const isConnected = await getConnectionStatus();
 
-        const manualsForListScope = (cacheArr: JobManualRemote[]) =>
-          cacheArr.filter((m) => getManualPuestoId(m) === puestoIdNum);
+        const manualsForListScope = (cacheArr: JobManualRemote[]) => {
+          const byPuesto = (m: JobManualRemote) => manualIsVisibleForPuesto(m, puestoIdNum);
+          const corpoOk = (m: JobManualRemote) => {
+            if (listCorpoId == null || !Number.isFinite(listCorpoId) || listCorpoId <= 0) return true;
+            const c = getManualCorpoId(m);
+            if (c == null) return true;
+            return c === listCorpoId;
+          };
+          return cacheArr.filter((m) => corpoOk(m) && byPuesto(m));
+        };
 
-        if (isConnected) {
+      if (isConnected) {
           const result = await listJobManualsByPuesto({
             puestoId: puestoIdNum,
-            refreshAccessToken,
-            logout,
-          });
+          refreshAccessToken,
+          logout,
+        });
 
-          if (result.status && result.manuals) {
-            const list = result.manuals as JobManualRemote[];
+        if (result.status && result.manuals) {
+            const list = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
             const merged = mergeJobManualsCacheForPuesto(existing, list, puestoIdNum);
             await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
             setManuals(manualsForListScope(merged));
-          } else {
+        } else {
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             if (cacheStr) {
               try {
@@ -497,42 +546,49 @@ export default function JobManualsScreen() {
                 const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
                 setManuals(filtered);
               } catch {
-                setManuals([]);
+          setManuals([]);
               }
             } else {
               setManuals([]);
             }
-          }
-        } else {
-          const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-          if (cacheStr) {
-            const cache = JSON.parse(cacheStr);
+        }
+      } else {
+        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
             const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
             setManuals(filtered);
-          } else {
-            setManuals([]);
-          }
+        } else {
+          setManuals([]);
         }
-      } catch (error) {
-        console.error('Error fetching job manuals:', error);
-        try {
+      }
+    } catch (error) {
+      console.error('Error fetching job manuals:', error);
+      try {
           if (listPuestoId != null && Number.isFinite(Number(listPuestoId))) {
-            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
+        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
               const puestoIdNum = Number(listPuestoId);
+              const listCor = listCorpoId != null && Number.isFinite(listCorpoId) && listCorpoId > 0 ? listCorpoId : null;
               const filtered = Array.isArray(cache)
-                ? (cache as JobManualRemote[]).filter((m) => getManualPuestoId(m) === puestoIdNum)
+                ? (cache as JobManualRemote[]).filter((m) => {
+                    if (!manualIsVisibleForPuesto(m, puestoIdNum)) return false;
+                    if (listCor == null) return true;
+                    const c = getManualCorpoId(m);
+                    if (c == null) return true;
+                    return c === listCor;
+                  })
                 : [];
               setManuals(filtered);
             }
-          }
-        } catch (cacheErr) {
-          console.error('Error loading job manuals from cache:', cacheErr);
         }
-      } finally {
-        setIsLoadingManuals(false);
+      } catch (cacheErr) {
+        console.error('Error loading job manuals from cache:', cacheErr);
       }
+    } finally {
+      setIsLoadingManuals(false);
+    }
     },
     [refreshAccessToken, logout]
   );
@@ -540,8 +596,9 @@ export default function JobManualsScreen() {
   useEffect(() => {
     if (!hasMarca || marcaId == null) return;
     const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-    void fetchManuals(marcaId, listPuestoId);
-  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, filterPuestoId, fetchManuals]);
+    const listCorpoId = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+    void fetchManuals(marcaId, listPuestoId, listCorpoId);
+  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, marcaCorpoIdFromMarca, filterPuestoId, filterSucursalId, fetchManuals]);
 
   useFocusEffect(
     useCallback(() => {
@@ -813,6 +870,14 @@ export default function JobManualsScreen() {
     if (!confirmed) return;
 
     try {
+      const graderEmpId = typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0);
+      if (Number.isFinite(graderEmpId) && graderEmpId > 0 && graderEmpId === Number(empleadoId)) {
+        Alert.alert(
+          'No permitido',
+          'No puedes calificar tu propio intento de quiz. Debe hacerlo otro usuario con permisos de supervisión.'
+        );
+        return;
+      }
 
       const marca = await AsyncStorage.getItem('current_marca');
       if (!marca) {
@@ -825,12 +890,18 @@ export default function JobManualsScreen() {
         return;
       }
 
-      if (!manualId || !empleadoId) return;
+      if (!empleadoId) return;
+      if (!selectedManual) return;
 
       // Evitar cambios si ya hay una acción pending offline (para no "cambiar la respuesta" mientras se sincroniza)
       const currentVis = (selectedManual?.visualizaciones || []).find(v => v.empleado_id === empleadoId);
       if ((currentVis as any)?.approved_pending) {
         Alert.alert('Pendiente', 'Ya hay un cambio pendiente de sincronización para este quiz.');
+        return;
+      }
+
+      if (currentVis && isVisualizationQuizGraded(currentVis)) {
+        Alert.alert('Información', 'Este quiz ya fue calificado. No se puede modificar el resultado.');
         return;
       }
 
@@ -853,11 +924,19 @@ export default function JobManualsScreen() {
         // Guardar acción offline (misma firma que consume checkJobManualsActionsCache: marcaId obligatorio)
         const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
-        actions = actions.filter(
-          (a: any) => !(a.type === 'quiz_result' && a.id === manualId && a.empleadoId === empleadoId)
-        );
+        const sel = selectedManual;
+        const isLocalUnsynced =
+          sel && (!sel.id || sel.id === 0) && sel.id_local != null && String(sel.id_local).length > 0;
+        actions = actions.filter((a: any) => {
+          if (a.type !== 'quiz_result' || a.empleadoId !== empleadoId) return true;
+          if (isLocalUnsynced && (a as any).manualLocalId) {
+            return String((a as any).manualLocalId) !== String(sel!.id_local);
+          }
+          return a.id !== manualId;
+        });
         actions.push({
           id: manualId,
+          ...(isLocalUnsynced && sel?.id_local ? { manualLocalId: String(sel.id_local) } : {}),
           type: 'quiz_result',
           marcaId,
           empleadoId,
@@ -868,11 +947,17 @@ export default function JobManualsScreen() {
 
       const horaAccionUse = await getHoraAccion();
       const updatedIso = new Date(horaAccionUse).toISOString();
+      const refManual = selectedManual;
+      const isSameManualRow = (m: { id: number; id_local?: string }) => {
+        if (manualId > 0) return m.id === manualId;
+        if (refManual?.id_local) return String(m.id_local) === String(refManual.id_local);
+        return m.id === manualId;
+      };
 
       // Reflejar cambio en UI (selectedManual + manuals + cache)
       setSelectedManual(prev => {
         if (!prev) return prev;
-        if (prev.id !== manualId) return prev;
+        if (!isSameManualRow(prev)) return prev;
         const visualizaciones = (prev.visualizaciones || []).map(v => {
           if (v.empleado_id === empleadoId) {
             return {
@@ -888,7 +973,7 @@ export default function JobManualsScreen() {
       });
 
       setManuals(prev => prev.map(m => {
-        if (m.id !== manualId) return m;
+        if (!isSameManualRow(m)) return m;
         const visualizaciones = (m.visualizaciones || []).map(v => {
           if (v.empleado_id === empleadoId) {
             return {
@@ -907,7 +992,7 @@ export default function JobManualsScreen() {
       if (cacheStr) {
         const cache = JSON.parse(cacheStr);
         const updatedCache = cache.map((m: any) => {
-          if (m.id !== manualId) return m;
+          if (!isSameManualRow(m)) return m;
           const visualizaciones = (m.visualizaciones || []).map((v: any) => {
             if (v.empleado_id === empleadoId) {
               return {
@@ -1363,6 +1448,7 @@ export default function JobManualsScreen() {
     }
     const manual = updManualForPuestos;
     const listPuestoReload = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+    const listCorpoReload = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
 
     const serverManualId = Number(manual.id);
     const isLocalOnly = !Number.isFinite(serverManualId) || serverManualId <= 0;
@@ -1401,9 +1487,17 @@ export default function JobManualsScreen() {
         };
         actions[idx] = createAction;
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        await patchJobManualPuestosVinculadosInCache(
+          {
+            idLocal: String(lid),
+            replaceAll: true,
+            getPuestoNombre: (id) => puestoNameById.get(id) || `Puesto #${id}`,
+          },
+          merged
+        );
         Alert.alert('Listo', 'Se actualizaron los puestos en el borrador pendiente de sincronización.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload);
+        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
       } catch (e) {
         console.error('submitUpdManualPuestosModal local merge', e);
         Alert.alert('Error', 'No se pudo guardar.');
@@ -1428,8 +1522,17 @@ export default function JobManualsScreen() {
           puestos_ids: ids,
         });
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        await patchJobManualPuestosVinculadosInCache(
+          {
+            manualServerId: serverManualId,
+            replaceAll: false,
+            getPuestoNombre: (id) => puestoNameById.get(id) || `Puesto #${id}`,
+          },
+          ids
+        );
         Alert.alert('Modo offline', 'Se sincronizarán los nuevos puestos cuando haya conexión.');
         closeUpdManualPuestosModal();
+        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
       } catch (e) {
         console.error('submitUpdManualPuestosModal offline queue', e);
         Alert.alert('Error', 'No se pudo guardar la acción offline.');
@@ -1447,9 +1550,17 @@ export default function JobManualsScreen() {
         logout,
       });
       if (res.status) {
+        await patchJobManualPuestosVinculadosInCache(
+          {
+            manualServerId: serverManualId,
+            replaceAll: false,
+            getPuestoNombre: (id) => puestoNameById.get(id) || `Puesto #${id}`,
+          },
+          ids
+        );
         Alert.alert('Éxito', res.message || 'Puestos actualizados.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload);
+        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
       } else {
         Alert.alert('Error', res.message || 'No se pudo actualizar.');
       }
@@ -1465,12 +1576,15 @@ export default function JobManualsScreen() {
     marcaId,
     roleName,
     marcaPuestoIdFromMarca,
+    marcaCorpoIdFromMarca,
     filterPuestoId,
+    filterSucursalId,
     closeUpdManualPuestosModal,
     fetchManuals,
     refreshAccessToken,
     logout,
     getConnectionStatus,
+    puestoNameById,
   ]);
 
   const handleAddFile = async (type: ManualFileLocal['type']) => {
@@ -1519,27 +1633,6 @@ export default function JobManualsScreen() {
       }
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      // Convertir blob a base64 de forma segura
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result;
-          if (typeof result === 'string') {
-            const parts = result.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else {
-            reject(new Error('No se pudo leer el archivo seleccionado'));
-          }
-        };
-        reader.onerror = () => {
-          reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-        };
-        reader.readAsDataURL(blob);
-      });
-
 
       let extension = '';
       if (asset.name && asset.name.includes('.')) {
@@ -1547,15 +1640,25 @@ export default function JobManualsScreen() {
       } else if (asset.mimeType && asset.mimeType.includes('/')) {
         extension = asset.mimeType.split('/').pop() || '';
       }
+      const extUse = (extension || 'dat').replace(/^\./, '') || 'dat';
+      const storedType: StoredFileType = type === 'document' ? 'text' : type;
 
       const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const fileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || 'archivo',
+        extension: extUse,
+        type: storedType,
+        prefix: 'job_manuals_m',
+      });
 
       const newFile: ManualFileLocal = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
+        name: asset.name || `archivo.${extUse || 'dat'}`,
+        extension: extUse,
+        base64: '',
+        localFileName: fileName,
         uri: asset.uri,
         mimeType: asset.mimeType,
       };
@@ -1619,35 +1722,27 @@ export default function JobManualsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result;
-          if (typeof res === 'string') {
-            const parts = res.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else {
-            reject(new Error('No se pudo leer el archivo seleccionado'));
-          }
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-        reader.readAsDataURL(blob);
-      });
-
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const extUse = (extension || 'dat').replace(/^\./, '') || 'dat';
+      const storedType: StoredFileType = type === 'document' ? 'text' : type;
 
       const localId = `local_vis_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const fileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || 'archivo',
+        extension: extUse,
+        type: storedType,
+        prefix: 'job_manuals_v',
+      });
       const newFile: ManualFileLocal = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
+        name: asset.name || `archivo.${extUse || 'dat'}`,
+        extension: extUse,
+        base64: '',
+        localFileName: fileName,
         uri: asset.uri,
         mimeType: asset.mimeType,
       };
@@ -1663,26 +1758,62 @@ export default function JobManualsScreen() {
   };
 
   const removeViewLocalFile = (type: ManualFileLocal['type'], id: string) => {
-    if (type === 'image') setViewImageFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'audio') setViewAudioFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'video') setViewVideoFiles(prev => prev.filter(f => f.id !== id));
-    else setViewTextFiles(prev => prev.filter(f => f.id !== id));
+    const rm = (list: ManualFileLocal[]) => {
+      const t = list.find((f) => f.id === id);
+      if (t?.localFileName) void deleteFile(t.localFileName).catch(() => {});
+      return list.filter((f) => f.id !== id);
+    };
+    if (type === 'image') setViewImageFiles((prev) => rm(prev));
+    else if (type === 'audio') setViewAudioFiles((prev) => rm(prev));
+    else if (type === 'video') setViewVideoFiles((prev) => rm(prev));
+    else setViewTextFiles((prev) => rm(prev));
   };
 
-  const buildVisualizationFilesPayload = () => {
+  const buildVisualizationFilesPayload = async () => {
     const files = [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles];
-    return JSON.stringify(
-      files.map(f => ({
+    const rows: { type: string; extension: string; original_name: string; file_base64: string; mimeType?: string }[] = [];
+    for (const f of files) {
+      let b64 = f.base64;
+      if (f.localFileName) {
+        try {
+          const g = await getFile(f.localFileName);
+          b64 = g.base64;
+        } catch {
+          b64 = '';
+        }
+      }
+      if (!b64) continue;
+      rows.push({
         type: f.type,
         extension: f.extension,
         original_name: f.name,
-        file_base64: f.base64,
+        file_base64: b64,
         mimeType: f.mimeType,
+      });
+    }
+    return JSON.stringify(rows);
+  };
+
+  /** Cola offline: referencias a disco en lugar de base64 */
+  const buildVisualizationSignQueuePayload = () => {
+    const files = [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles];
+    return JSON.stringify(
+      files.map((f) => ({
+        type: f.type,
+        extension: f.extension,
+        original_name: f.name,
+        mimeType: f.mimeType,
+        localFileName: f.localFileName,
+        file_base64: f.localFileName ? undefined : f.base64,
       }))
     );
   };
 
   const buildVisualizationFileUrl = (manualId: number | undefined, visId: number | undefined, file: ManualFileRemote) => {
+    if (file.localFileName) {
+      const uri = getLocalFileDisplayUri(String(file.localFileName));
+      if (uri) return uri;
+    }
     const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
     if (hasLocalId && file.base64) {
       const mime = file.mimeType || (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
@@ -1697,19 +1828,22 @@ export default function JobManualsScreen() {
       return appendTokenToUrl(`${apiUrl}/api/job-manuals/${manualId}/visualizations/${visId}/get-file/${encodeURIComponent(file.name)}`);
     }
 
-    return file.url ? appendTokenToUrl(file.url) : '';
+    if (!file.url) return '';
+    const u = file.url;
+    if (/^(file|content|data):/i.test(String(u).trim())) return u;
+    return appendTokenToUrl(file.url);
   };
 
   const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
-    if (type === 'image') {
-      setImageFiles(prev => prev.filter(f => f.id !== id));
-    } else if (type === 'audio') {
-      setAudioFiles(prev => prev.filter(f => f.id !== id));
-    } else if (type === 'video') {
-      setVideoFiles(prev => prev.filter(f => f.id !== id));
-    } else {
-      setTextFiles(prev => prev.filter(f => f.id !== id));
-    }
+    const rm = (list: ManualFileLocal[]) => {
+      const t = list.find((f) => f.id === id);
+      if (t?.localFileName) void deleteFile(t.localFileName).catch(() => {});
+      return list.filter((f) => f.id !== id);
+    };
+    if (type === 'image') setImageFiles((prev) => rm(prev));
+    else if (type === 'audio') setAudioFiles((prev) => rm(prev));
+    else if (type === 'video') setVideoFiles((prev) => rm(prev));
+    else setTextFiles((prev) => rm(prev));
   };
 
   const generateSignature = async () => {
@@ -1887,30 +2021,85 @@ export default function JobManualsScreen() {
       const signatureString = `${firmaResponsable?.sessionId}:${firmaResponsable?.empleadoId}:${firmaResponsable?.latitud}:${firmaResponsable?.longitud}:${firmaResponsable?.timestamp}`;
       const signatureHash = btoa(signatureString);
 
-      const requestBody = {
-        title: tituloRef.current,
-        description: descripcionRef.current,
-        firma_responsable: signatureHash,
-        puestos: JSON.stringify(puestosArray),
-        quiz: quizQuestions.length > 0 ? JSON.stringify({
-          questions: quizQuestions,
-          minApprovalPercentage: quizMinApprovalPercentage,
-        }) : null,
-        files: JSON.stringify(
-          filesPayload.map(f => ({
-            type: f.type,
-            original_name: f.name, // nombre real para mostrar en app (en el server se sigue usando name generado para serving)
-            extension: f.extension,
-            file_base64: f.base64,
-          }))
-        ),
+      const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+      const listCorpoId = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+
+      const currentMarcaStrForCreate = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStrForCreate) {
+        Alert.alert('Error', 'No se encontró current_marca. No se puede vincular el manual a la jerarquía de la sesión.');
+        return;
+      }
+      let currentMarcaForCreate: any;
+      try {
+        currentMarcaForCreate = JSON.parse(currentMarcaStrForCreate);
+      } catch {
+        Alert.alert('Error', 'Datos de current_marca inválidos.');
+        return;
+      }
+      const divIdMarca = getDivisionIdFromMarcaJson(currentMarcaForCreate);
+      const hierarchyFields = {
+        empresa_id:
+          currentMarcaForCreate.empresa?.id != null ? Number(currentMarcaForCreate.empresa.id) : null,
+        cliente_id:
+          currentMarcaForCreate.cliente?.id != null ? Number(currentMarcaForCreate.cliente.id) : null,
+        corpo_id:
+          currentMarcaForCreate.corpo?.id != null ? Number(currentMarcaForCreate.corpo.id) : null,
+        division_id: divIdMarca,
+        contrato_id:
+          currentMarcaForCreate.contrato?.id != null
+            ? Number(currentMarcaForCreate.contrato.id)
+            : null,
       };
 
-      const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+      const buildFilesJsonForOnline = async () => {
+        const rows: { type: string; original_name: string; extension: string; file_base64: string }[] = [];
+        for (const f of filesPayload) {
+          let b64 = f.base64;
+          if (f.localFileName) {
+            try {
+              const g = await getFile(f.localFileName);
+              b64 = g.base64;
+            } catch {
+              b64 = '';
+            }
+          }
+          if (!b64) continue;
+          rows.push({
+            type: f.type,
+            original_name: f.name,
+            extension: f.extension,
+            file_base64: b64,
+          });
+        }
+        return JSON.stringify(rows);
+      };
+
+      const filesJsonForOfflineQueue = JSON.stringify(
+        filesPayload.map((f) => ({
+          type: f.type,
+          original_name: f.name,
+          extension: f.extension,
+          localFileName: f.localFileName,
+          file_base64: f.localFileName ? undefined : f.base64,
+        }))
+      );
 
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
+        const requestBody = {
+          title: tituloRef.current,
+          description: descripcionRef.current,
+          firma_responsable: signatureHash,
+          puestos: JSON.stringify(puestosArray),
+          quiz: quizQuestions.length > 0 ? JSON.stringify({
+            questions: quizQuestions,
+            minApprovalPercentage: quizMinApprovalPercentage,
+          }) : null,
+          files: await buildFilesJsonForOnline(),
+          ...hierarchyFields,
+        };
+
         const result = await createJobManual({
           requestData: requestBody,
           marcaId,
@@ -1919,7 +2108,16 @@ export default function JobManualsScreen() {
         });
 
         if (result.status) {
-          // Limpiar formulario
+          for (const f of filesPayload) {
+            if (f.localFileName) {
+              try {
+                await deleteFile(f.localFileName);
+              } catch {
+                /* idempotente */
+              }
+            }
+          }
+
           tituloRef.current = '';
           descripcionRef.current = '';
           setSelectedPuestos([]);
@@ -1931,11 +2129,10 @@ export default function JobManualsScreen() {
           setQuizQuestions([]);
           setQuizMinApprovalPercentage(70);
 
-          // Cerrar formulario
           setIsCreating(false);
 
           if (marcaId) {
-            await fetchManuals(marcaId, listPuestoId);
+            await fetchManuals(marcaId, listPuestoId, listCorpoId);
           }
 
           Alert.alert('Éxito', result.message || 'Manual creado correctamente');
@@ -1943,6 +2140,18 @@ export default function JobManualsScreen() {
           Alert.alert('Error', result.message || 'No se pudo crear el manual');
         }
       } else {
+        const requestBody = {
+          title: tituloRef.current,
+          description: descripcionRef.current,
+          firma_responsable: signatureHash,
+          puestos: JSON.stringify(puestosArray),
+          quiz: quizQuestions.length > 0 ? JSON.stringify({
+            questions: quizQuestions,
+            minApprovalPercentage: quizMinApprovalPercentage,
+          }) : null,
+          files: filesJsonForOfflineQueue,
+          ...hierarchyFields,
+        };
         const localId = `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
         const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1954,7 +2163,6 @@ export default function JobManualsScreen() {
         });
         await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
 
-        // Cache local de manuales con archivos en base64
         const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const horaAccionUse = await getHoraAccion();
@@ -1963,6 +2171,9 @@ export default function JobManualsScreen() {
           minApprovalPercentage: quizMinApprovalPercentage,
         }) : null;
         const primaryPuestoId = puestosArray[0];
+        const puestosVinculados = puestosArray
+          .map((x) => Number(x))
+          .filter((n) => Number.isFinite(n) && n > 0);
         const primaryPuestoNombre =
           (primaryPuestoId != null ? puestoNameById.get(primaryPuestoId) : null) ||
           puestoActualNombre ||
@@ -1974,6 +2185,16 @@ export default function JobManualsScreen() {
           description: descripcionRef.current,
           quiz: quizStrToStore,
           puesto: { id: primaryPuestoId ?? 0, nombre: primaryPuestoNombre },
+          puestos_vinculados_ids: puestosVinculados.length > 0 ? puestosVinculados : undefined,
+          puesto_id:
+            primaryPuestoId != null && Number.isFinite(Number(primaryPuestoId)) && Number(primaryPuestoId) > 0
+              ? Number(primaryPuestoId)
+              : undefined,
+          corpo_id: hierarchyFields.corpo_id ?? listCorpoId ?? undefined,
+          empresa_id: hierarchyFields.empresa_id ?? undefined,
+          cliente_id: hierarchyFields.cliente_id ?? undefined,
+          division_id: hierarchyFields.division_id ?? undefined,
+          contrato_id: hierarchyFields.contrato_id ?? undefined,
           created_by: employee?.id ? String(employee.id) : '-',
           created_at: new Date(horaAccionUse).toISOString(),
           files: filesPayload.map(f => ({
@@ -1984,8 +2205,9 @@ export default function JobManualsScreen() {
             name: f.name || `archivo.${f.extension || 'dat'}`,
             original_name: f.name,
             base64: f.base64,
+            localFileName: f.localFileName,
             mimeType: f.mimeType,
-            url: '',
+            url: f.localFileName ? getLocalFileDisplayUri(f.localFileName) : '',
           })),
           visualizaciones: [],
           currentEmployeeSigned: false,
@@ -1995,7 +2217,6 @@ export default function JobManualsScreen() {
 
         Alert.alert('Modo Offline', 'Manual registrado localmente. Se sincronizará cuando haya conexión.');
 
-        // Limpiar formulario
         tituloRef.current = '';
         descripcionRef.current = '';
         setSelectedPuestos([]);
@@ -2007,11 +2228,10 @@ export default function JobManualsScreen() {
         setQuizQuestions([]);
         setQuizMinApprovalPercentage(70);
 
-        // Cerrar formulario
         setIsCreating(false);
 
         if (marcaId) {
-          await fetchManuals(marcaId, listPuestoId);
+          await fetchManuals(marcaId, listPuestoId, listCorpoId);
         }
       }
     } catch (error) {
@@ -2047,6 +2267,12 @@ export default function JobManualsScreen() {
 
       if (selectedPuestos.length === 0) {
         Alert.alert('Error', 'Debe seleccionar al menos un puesto');
+        return;
+      }
+
+      const cmStr = await AsyncStorage.getItem('current_marca');
+      if (!cmStr || String(cmStr).trim() === '') {
+        Alert.alert('Error', 'No hay current_marca. No se puede vincular el manual a la jerarquía de la sesión.');
         return;
       }
 
@@ -2581,7 +2807,7 @@ export default function JobManualsScreen() {
                         {isSavingQuizQuestion ? (
                           <ActivityIndicator size="small" color="#FFFFFF" />
                         ) : (
-                          <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                        <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                         )}
                         <ThemedText style={styles.signatureActionText}>
                           {isSavingQuizQuestion ? 'Guardando…' : 'Confirmar'}
@@ -2811,7 +3037,11 @@ export default function JobManualsScreen() {
                                 setIsSelectedPuestosExpanded(false);
                               }}
                             >
-                              <Picker.Item label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'} value={0} color="#000000" />
+                              <Picker.Item
+                                label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'}
+                                value={0}
+                                color="#000000"
+                              />
                               {puestoOptions.map((p) => (
                                 <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                               ))}
@@ -3197,26 +3427,26 @@ export default function JobManualsScreen() {
                 >
                   <TouchableOpacity
                     activeOpacity={0.85}
-                    onPress={() => {
-                      setSelectedManual(manual);
-                      setViewSignature(null);
-                      setIsSigningManual(false);
-                      setIsViewerVisible(true);
-                    }}
-                  >
-                    <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
-                    <ThemedText numberOfLines={2} style={styles.manualDescription}>
-                      {manual.description}
+                  onPress={() => {
+                    setSelectedManual(manual);
+                    setViewSignature(null);
+                    setIsSigningManual(false);
+                    setIsViewerVisible(true);
+                  }}
+                >
+                  <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
+                  <ThemedText numberOfLines={2} style={styles.manualDescription}>
+                    {manual.description}
+                  </ThemedText>
+                  <ThemedView style={styles.manualMetaRow}>
+                    <ThemedText style={styles.manualMetaText}>
+                      {manual.puesto?.nombre || puestoActualNombre}
                     </ThemedText>
-                    <ThemedView style={styles.manualMetaRow}>
-                      <ThemedText style={styles.manualMetaText}>
-                        {manual.puesto?.nombre || puestoActualNombre}
-                      </ThemedText>
-                      <ThemedText style={styles.manualMetaText}>
-                        {manual.files?.length || 0} archivo (s)
-                      </ThemedText>
-                    </ThemedView>
-                  </TouchableOpacity>
+                    <ThemedText style={styles.manualMetaText}>
+                      {manual.files?.length || 0} archivo (s)
+                    </ThemedText>
+                  </ThemedView>
+                </TouchableOpacity>
                   {roleName !== 'OPERATIVO' && (
                     <ScalePressButton
                       style={styles.manualUpdatePuestosButton}
@@ -3615,6 +3845,8 @@ export default function JobManualsScreen() {
                                   setIsDeletingManual(true);
                                   const listPuestoReload =
                                     roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+                                  const listCorpoReload =
+                                    roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
                                   const isConnected = await getConnectionStatus();
 
                                   // Si es local sin sincronizar, solo limpiar cache y acciones
@@ -3645,7 +3877,7 @@ export default function JobManualsScreen() {
                                     setViewSignature(null);
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload);
+                                      await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
                                     }
                                     return;
                                   }
@@ -3684,7 +3916,7 @@ export default function JobManualsScreen() {
                                       setViewSignature(null);
                                       setIsSigningManual(false);
                                       if (marcaId) {
-                                        await fetchManuals(marcaId, listPuestoReload);
+                                        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
                                       }
                                     }
                                   } else {
@@ -3717,7 +3949,7 @@ export default function JobManualsScreen() {
                                     setViewSignature(null);
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload);
+                                      await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
                                     }
                                   }
                                 } catch (error) {
@@ -3756,6 +3988,26 @@ export default function JobManualsScreen() {
               nestedScrollEnabled={true}
               showsVerticalScrollIndicator={true}
             >
+              {selectedManual &&
+                (selectedManual.id_local != null && String(selectedManual.id_local).length > 0
+                  || selectedManual.synced === false
+                  || !selectedManual.id
+                  || selectedManual.id === 0) && (
+                <ThemedView
+                  style={{
+                    marginBottom: 12,
+                    padding: 10,
+                    borderRadius: 8,
+                    backgroundColor: 'rgba(255, 193, 7, 0.2)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(200, 150, 0, 0.45)',
+                  }}
+                >
+                  <ThemedText style={{ color: '#666', fontSize: 13, fontWeight: '600' }}>
+                    Manual solo en dispositivo (pendiente de sincronizar)
+                  </ThemedText>
+                </ThemedView>
+              )}
               {selectedManual?.description ? (
                 <ThemedText style={styles.viewerDescription}>
                   {selectedManual.description}
@@ -3764,7 +4016,7 @@ export default function JobManualsScreen() {
 
               {/* Firmas registradas (solo supervisores / administrativos) */}
               {(selectedManual?.visualizaciones?.length ?? 0) > 0 &&
-                (roleName !== 'SUPERVISOR' && roleName !== 'ADMINISTRATIVO') && (
+                (roleName === 'SUPERVISOR' || roleName === 'ADMINISTRATIVO') && (
                   <ThemedView style={styles.viewerSection}>
                     <ThemedText style={styles.viewerSectionTitle}>Firmas registradas</ThemedText>
                     {(() => {
@@ -3779,6 +4031,14 @@ export default function JobManualsScreen() {
 
                         const approved = firma.approved ?? null;
                         const approvedPending = !!(firma as any)?.approved_pending;
+                        const quizGraded = isVisualizationQuizGraded(firma);
+                        const currentUserEmpIdForQuiz =
+                          typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0);
+                        const isOwnQuizAttempt =
+                          Number.isFinite(currentUserEmpIdForQuiz) &&
+                          currentUserEmpIdForQuiz > 0 &&
+                          currentUserEmpIdForQuiz === Number(firma.empleado_id);
+                        const hideQuizGradingForm = isOwnQuizAttempt && !quizGraded;
                         const statusLabel =
                           approvedPending ? 'Pendiente de sincronización'
                             : approved === true ? 'Aprobado'
@@ -3880,7 +4140,20 @@ export default function JobManualsScreen() {
 
                             {hasQuizConfigured && (
                               <ThemedView style={{ marginTop: 8 }}>
-                                {!hasQuizAnswers ? (
+                                {hideQuizGradingForm ? (
+                                  <ThemedView
+                                    style={[
+                                      styles.quizReviewScoringWarningBox,
+                                      { borderColor: 'rgba(200, 150, 0, 0.5)', backgroundColor: 'rgba(255, 193, 7, 0.12)' },
+                                    ]}
+                                  >
+                                    <ThemedText style={styles.quizReviewScoringWarningText}>
+                                      No puedes calificar tu propio intento de quiz. El formulario de calificación no está
+                                      disponible: debe revisarlo y registrar el resultado otra persona con rol supervisor o
+                                      administrativo.
+                                    </ThemedText>
+                                  </ThemedView>
+                                ) : !hasQuizAnswers ? (
                                   <ThemedText style={styles.quizEmptyText}>
                                     {firma.quiz_answear ? 'Respuestas inválidas' : 'Sin respuestas de quiz'}
                                   </ThemedText>
@@ -3938,6 +4211,7 @@ export default function JobManualsScreen() {
                                               <TextInput
                                                 style={[styles.formInput, { width: 100, textAlign: 'right' }]}
                                                 value={displayScore !== null ? String(displayScore) : ''}
+                                                editable={!quizGraded && !approvedPending}
                                                 onChangeText={(text) => {
                                                   const value = text.trim() === '' ? null : parseFloat(text);
                                                   if (text.trim() === '' || (!isNaN(value as number) && value! >= 0 && value! <= questionPoints)) {
@@ -4033,15 +4307,29 @@ export default function JobManualsScreen() {
                                     return quizReviewScores[firma.empleado_id]?.[q.id] !== undefined;
                                   });
 
+                                  const cannotConfirmQuiz =
+                                    quizGraded || updatingQuizResultByEmployee[firma.empleado_id] || approvedPending || !allQuestionsScored;
+
                                   return (
-                                    <ThemedView style={styles.quizReviewActionsRow}>
+                                    <ThemedView style={styles.quizReviewActionsColumn}>
+                                      {quizGraded && (
+                                        <ThemedView style={styles.quizReviewScoringWarningBox}>
+                                          <ThemedText style={styles.quizReviewScoringWarningText}>
+                                            Este quiz ya fue calificado
+                                            {firma.updated_at
+                                              ? ` (${convertDateTimestampToLocalString(new Date(firma.updated_at).toISOString())})`
+                                              : ''}
+                                            .
+                                          </ThemedText>
+                                        </ThemedView>
+                                      )}
                                       <TouchableOpacity
                                         style={[
                                           styles.quizReviewActionBtn,
                                           isApproved ? styles.quizReviewApproveBtn : styles.quizReviewRejectBtn,
-                                          (updatingQuizResultByEmployee[firma.empleado_id] || approvedPending || !allQuestionsScored) && styles.formButtonDisabled,
+                                          cannotConfirmQuiz && styles.formButtonDisabled,
                                         ]}
-                                        disabled={updatingQuizResultByEmployee[firma.empleado_id] || approvedPending || !allQuestionsScored}
+                                        disabled={cannotConfirmQuiz}
                                         onPress={() => handleSetQuizResult(selectedManual?.id ?? 0, firma.empleado_id, isApproved)}
                                       >
                                         {updatingQuizResultByEmployee[firma.empleado_id] ? (
@@ -4055,10 +4343,12 @@ export default function JobManualsScreen() {
                                           </>
                                         )}
                                       </TouchableOpacity>
-                                      {!allQuestionsScored && (
-                                        <ThemedText style={[styles.quizEmptyText, { marginTop: 8, textAlign: 'center' }]}>
-                                          Debe calificar todas las preguntas con puntaje antes de confirmar
-                                        </ThemedText>
+                                      {!allQuestionsScored && !quizGraded && (
+                                        <ThemedView style={styles.quizReviewScoringWarningBox}>
+                                          <ThemedText style={styles.quizReviewScoringWarningText}>
+                                            Debe calificar todas las preguntas con puntaje antes de confirmar
+                                          </ThemedText>
+                                        </ThemedView>
                                       )}
                                     </ThemedView>
                                   );
@@ -4160,7 +4450,7 @@ export default function JobManualsScreen() {
                     <ThemedView style={styles.viewerSection}>
                       <ThemedText style={styles.viewerSectionTitle}>Quiz</ThemedText>
                       <ThemedText style={styles.quizEmptyText}>
-                        Ya has respondido este quiz.
+                        Ya has firmado este manual.
                       </ThemedText>
                     </ThemedView>
                   );
@@ -4395,12 +4685,6 @@ export default function JobManualsScreen() {
                             return;
                           }
                           try {
-                            // Si el manual no tiene ID de servidor, no se puede firmar
-                            if (!selectedManual.id || selectedManual.id === 0) {
-                              Alert.alert('Offline', 'Primero sincroniza el manual para poder firmarlo.');
-                              return;
-                            }
-
                             if (!marcaId) {
                               Alert.alert('Error', 'No se encontró la marca actual');
                               return;
@@ -4442,27 +4726,64 @@ export default function JobManualsScreen() {
                               : null;
 
                             const isConnected = await getConnectionStatus();
-                            const visualizationFilesStr = buildVisualizationFilesPayload();
+                            const visualizationFilesStr = isConnected
+                              ? await buildVisualizationFilesPayload()
+                              : buildVisualizationSignQueuePayload();
 
                             const confirmedSign = await new Promise<boolean>((resolve) => {
-                              Alert.alert(
-                                'Confirmar',
+                                Alert.alert(
+                                  'Confirmar',
                                 isConnected
                                   ? 'Vas a firmar el manual y enviar tus respuestas del quiz (si aplica). ¿Deseas continuar?'
                                   : 'Se registrará tu firma y respuestas localmente para sincronizarse cuando haya conexión. ¿Deseas continuar?',
-                                [
-                                  { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
-                                  { text: 'Aceptar', onPress: () => resolve(true) },
-                                ]
-                              );
-                            });
+                                  [
+                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+                                    { text: 'Aceptar', onPress: () => resolve(true) },
+                                  ]
+                                );
+                              });
                             if (!confirmedSign) return;
 
                             setIsSigningManual(true);
 
-                            if (isConnected) {
-                              const result = await signJobManual({
-                                id: selectedManual.id,
+                            let manualRef: JobManualRemote = selectedManual;
+                            if (!manualRef.id || manualRef.id === 0) {
+                              if (!manualRef.id_local) {
+                                throw new Error('No se puede firmar: manual sin id de servidor ni referencia local.');
+                              }
+                              const canSync = await getConnectionStatus();
+                              if (canSync) {
+                                const { serverId } = await syncUnsyncedJobManualByLocalId({
+                                  idLocal: String(manualRef.id_local),
+                                  refreshAccessToken,
+                                  logout,
+                                });
+                                manualRef = {
+                                  ...manualRef,
+                                  id: serverId,
+                                  id_local: undefined,
+                                  synced: true,
+                                };
+                                setSelectedManual(manualRef);
+                                if (marcaId) {
+                                  const listPuestoR = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+                                  const listCorpoR = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+                                  await fetchManuals(marcaId, listPuestoR, listCorpoR);
+                                }
+                              }
+                            }
+
+                            const isConnectedSign = await getConnectionStatus();
+                            let signResult: { status?: boolean; message?: string; visualizacion_id?: number; id?: number } | null =
+                              null;
+                            if (isConnectedSign) {
+                              if (!manualRef.id || manualRef.id === 0) {
+                                throw new Error(
+                                  'Conéctate a internet y espera a que el manual se sincronice, o reintenta en unos segundos.'
+                                );
+                              }
+                              signResult = await signJobManual({
+                                id: manualRef.id,
                                 firma: viewSignature,
                                 quizAnswear: quizAnswearStr,
                                 files: visualizationFilesStr,
@@ -4471,31 +4792,78 @@ export default function JobManualsScreen() {
                                 marcaId,
                               });
 
-                              if (!result.status) {
-                                throw new Error(result.message || 'No se pudo firmar el manual');
+                              if (!signResult?.status) {
+                                throw new Error(signResult?.message || 'No se pudo firmar el manual');
+                              }
+                              for (const f of [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles]) {
+                                if (f.localFileName) {
+                                  try {
+                                    await deleteFile(f.localFileName);
+                                  } catch {
+                                    /* idempotente */
+                                  }
+                                }
                               }
                             } else {
                               const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
                               let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
-                              actions = actions.filter((a: any) => !(a.type === 'sign' && a.id === selectedManual.id));
-                              actions.push({
-                                id: selectedManual.id,
-                                type: 'sign',
-                                firma: viewSignature,
-                                quizAnswear: quizAnswearStr,
-                                files: visualizationFilesStr,
-                                marcaId,
-                              });
+                              const sameSign = (a: any) => {
+                                if (a.type !== 'sign') return false;
+                                if (manualRef.id > 0) return a.id === manualRef.id;
+                                if (manualRef.id_local) {
+                                  return (
+                                    (a as any).manualLocalId != null &&
+                                    String((a as any).manualLocalId) === String(manualRef.id_local)
+                                  );
+                                }
+                                return a.id === manualRef.id;
+                              };
+                              actions = actions.filter((a: any) => !sameSign(a));
+                              actions.push(
+                                !manualRef.id || manualRef.id === 0
+                                  ? {
+                                      id: 0,
+                                      manualLocalId: String(manualRef.id_local),
+                                      type: 'sign',
+                                      firma: viewSignature,
+                                      quizAnswear: quizAnswearStr,
+                                      files: visualizationFilesStr,
+                                      marcaId,
+                                    }
+                                  : {
+                                      id: manualRef.id,
+                                      type: 'sign',
+                                      firma: viewSignature,
+                                      quizAnswear: quizAnswearStr,
+                                      files: visualizationFilesStr,
+                                      marcaId,
+                                    }
+                              );
                               await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
                             }
 
                             const horaAccionUse = await getHoraAccion();
 
+                            const visServerId =
+                              isConnectedSign && signResult
+                                ? Number(signResult.visualizacion_id ?? signResult.id) || 0
+                                : 0;
+                            const newVisId =
+                              visServerId > 0 ? visServerId : Date.now() + Math.floor(Math.random() * 1000);
+
+                            const matchManualInCache = (item: { id: number; id_local?: string }) => {
+                              if (manualRef.id > 0) return item.id === manualRef.id;
+                              if (manualRef.id_local) {
+                                return String(item.id_local) === String(manualRef.id_local);
+                              }
+                              return item.id === manualRef.id;
+                            };
+
                             // Actualizar estado local y cache
                             const newVisualizacion = {
-                              id: Date.now(),
+                              id: newVisId,
                               empleado_id: typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0),
-                              manual_puesto_id: selectedManual.id,
+                              manual_puesto_id: manualRef.id,
                               nombre_empleado: employee?.name || 'Empleado',
                               firma_empleado: viewSignature,
                               quiz_answear: quizAnswearStr,
@@ -4509,14 +4877,16 @@ export default function JobManualsScreen() {
                                 extension: f.extension,
                                 name: f.name,
                                 original_name: f.name,
-                                base64: f.base64,
+                                base64: f.localFileName ? undefined : f.base64,
+                                localFileName: f.localFileName,
                                 mimeType: f.mimeType,
-                                url: '',
+                                url: f.localFileName ? getLocalFileDisplayUri(f.localFileName) : '',
                               })),
                             };
 
                             setSelectedManual(prev => {
                               if (!prev) return prev;
+                              if (!matchManualInCache(prev)) return prev;
                               const filtered = (prev.visualizaciones || []).filter(v => v.empleado_id !== newVisualizacion.empleado_id);
                               return {
                                 ...prev,
@@ -4529,23 +4899,48 @@ export default function JobManualsScreen() {
                             if (cacheStr) {
                               const cache = JSON.parse(cacheStr);
                               const updatedCache = cache.map((item: any) => {
-                                if (item.id === selectedManual.id) {
-                                  const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
-                                  return {
-                                    ...item,
-                                    currentEmployeeSigned: true,
-                                    visualizaciones: [...visualizaciones, newVisualizacion],
-                                  };
-                                }
-                                return item;
+                                if (!matchManualInCache(item)) return item;
+                                const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
+                                return {
+                                  ...item,
+                                  currentEmployeeSigned: true,
+                                  visualizaciones: [...visualizaciones, newVisualizacion],
+                                };
                               });
                               await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
                             }
 
-                            Alert.alert('Éxito', isConnected ? 'Manual firmado correctamente' : 'Firma registrada en modo offline');
+                            const listPuestoReload = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+                            const listCorpoReload = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+                            if (marcaId) {
+                              await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+                              const cacheAfter = await AsyncStorage.getItem('job_manuals_cache');
+                              if (cacheAfter) {
+                                try {
+                                  const parsed = JSON.parse(cacheAfter);
+                                  const m = Array.isArray(parsed)
+                                    ? parsed.find(
+                                        (x: { id: number; id_local?: string }) =>
+                                          (manualRef.id > 0 && x.id === manualRef.id) ||
+                                          (manualRef.id_local != null &&
+                                            String(x.id_local) === String(manualRef.id_local))
+                                      )
+                                    : null;
+                                  if (m) setSelectedManual(m);
+                                } catch {
+                                  /* ignore */
+                                }
+                              }
+                            }
+
+                            Alert.alert(
+                              'Éxito',
+                              isConnectedSign ? 'Manual firmado correctamente' : 'Firma registrada en modo offline'
+                            );
                           } catch (error) {
                             console.error('Error signing manual:', error);
-                            Alert.alert('Error', 'No se pudo firmar el manual');
+                            const msg = error instanceof Error ? error.message : 'No se pudo firmar el manual';
+                            Alert.alert('Error', msg);
                           } finally {
                             setIsSigningManual(false);
                             setViewSignature(null);
@@ -5416,13 +5811,31 @@ const styles = StyleSheet.create({
     flex: 1,
     textAlign: 'right',
   },
-  quizReviewActionsRow: {
-    flexDirection: 'row',
-    gap: 10,
+  /** Contenedor en columna: botón a ancho completo y aviso debajo (evita estirar el botón en fila con el texto) */
+  quizReviewActionsColumn: {
     marginTop: 12,
+    width: '100%',
+    alignSelf: 'stretch',
+  },
+  quizReviewScoringWarningBox: {
+    marginTop: 10,
+    width: '100%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#FFF5F5',
+    borderWidth: 1,
+    borderColor: '#FFCCC7',
+  },
+  quizReviewScoringWarningText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#B91C1C',
+    textAlign: 'center',
   },
   quizReviewActionBtn: {
-    flex: 1,
+    width: '100%',
+    minHeight: 44,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 10,

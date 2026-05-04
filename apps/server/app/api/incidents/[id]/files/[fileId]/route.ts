@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import fs from "fs";
 import path from "path";
 
@@ -32,12 +33,17 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             data: { action: "DELETE", table: "c_archivos_incidente", where: { id: fileId } }
         });
 
-        const filePath = path.join(process.cwd(), "public", "uploads", "incidents", `${incidentId}`, file.name);
-        if (fs.existsSync(filePath)) {
-            try {
-                fs.unlinkSync(filePath);
-            } catch {
-                // ignore
+        const dynamicUrl = `incidents/${incidentId}/${file.name}`;
+        try {
+            await deleteDynamicFile({ req, url: dynamicUrl, shouldVerifyAccessToken: true });
+        } catch {
+            const filePath = path.join(process.cwd(), "public", "uploads", "incidents", `${incidentId}`, file.name);
+            if (fs.existsSync(filePath)) {
+                try {
+                    fs.unlinkSync(filePath);
+                } catch {
+                    // ignore
+                }
             }
         }
 

@@ -63,6 +63,9 @@ export async function GET(
         { status: 404 }
       );
     }
+    if ((record as any).isActive === false) {
+      return NextResponse.json({ status: false, message: 'Solicitud no disponible' }, { status: 404 });
+    }
     const decodedFileName = decodeURIComponent(String(fileNameParam).trim());
     const fileRecord = await callDynamicPrisma({
       req,

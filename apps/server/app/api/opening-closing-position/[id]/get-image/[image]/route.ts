@@ -23,11 +23,12 @@ export async function GET(
 
     const record = await callDynamicPrisma({
       req,
+      token: req.nextUrl.searchParams.get('token') || undefined,
       data: {
         action: "GET",
         table: "c_apertura_cierre_puesto",
         operation: "findUnique",
-        where: { id },
+        where: { id, isActive: true },
       },
     });
     if (!record) {
@@ -40,6 +41,7 @@ export async function GET(
 
     const fileRecord = await callDynamicPrisma({
       req,
+      token: req.nextUrl.searchParams.get('token') || undefined,
       data: {
         action: "GET",
         table: "c_imagenes_apertura_cierre_puesto",

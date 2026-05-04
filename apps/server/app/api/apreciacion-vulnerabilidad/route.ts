@@ -4,6 +4,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -23,6 +24,7 @@ export async function GET(req: NextRequest) {
         action: "GET",
         table: "c_boleta_apreciacion_vulnerabilidad",
         operation: "findMany",
+        where: { isActive: true },
         include: {
           e_estructura_cliente: { select: { nombre: true } },
           e_estructura_sucursal: { select: { nombre: true } },
@@ -33,24 +35,50 @@ export async function GET(req: NextRequest) {
     });
 
     const rowsArray = Array.isArray(rows) ? rows : [];
-    const mapped = rowsArray.map((r: any) => ({
-      id: r.id,
-      cliente_id: r.cliente_id,
-      cliente_nombre: (r as any).e_estructura_cliente?.nombre ?? "",
-      corpo_id: r.corpo_id,
-      corpo_nombre: (r as any).e_estructura_sucursal?.nombre ?? "",
-      puesto_id: r.puesto_id,
-      puesto_nombre: (r as any).e_estructura_puesto?.nombre ?? "",
-      fecha: r.fecha,
-      enlace: r.enlace,
-      nombre_solicitante: r.nombre_solicitante,
-      boleta: r.boleta,
-      metricas_vulnerablidad: r.metricas_vulnerablidad,
-      observaciones: r.observaciones ?? "",
-      firma_solicitante: r.firma_solicitante,
-      firma_responsable: r.firma_responsable,
-      id_local: "",
-    }));
+    const mapped = [];
+    for (const r of rowsArray) {
+      const images = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_imagenes_boleta_apreciacion_vulnerabilidad",
+          operation: "findMany",
+          where: { boleta_id: r.id },
+          orderBy: { id: "asc" },
+        },
+      });
+      const baseUrl = req.nextUrl.origin;
+      mapped.push({
+        id: r.id,
+        empresa_id: (r as any).empresa_id ?? 0,
+        cliente_id: r.cliente_id,
+        cliente_nombre: (r as any).e_estructura_cliente?.nombre ?? "",
+        division_id: (r as any).division_id ?? 0,
+        contrato_id: (r as any).contrato_id ?? 0,
+        corpo_id: r.corpo_id,
+        corpo_nombre: (r as any).e_estructura_sucursal?.nombre ?? "",
+        puesto_id: r.puesto_id,
+        puesto_nombre: (r as any).e_estructura_puesto?.nombre ?? "",
+        fecha: r.fecha,
+        enlace: r.enlace,
+        nombre_solicitante: r.nombre_solicitante,
+        boleta: r.boleta,
+        metricas_vulnerablidad: r.metricas_vulnerablidad,
+        observaciones: r.observaciones ?? "",
+        firma_solicitante: r.firma_solicitante,
+        firma_responsable: r.firma_responsable,
+        isActive: r.isActive !== false,
+        images: (Array.isArray(images) ? images : []).map((img: any) => ({
+          id: Number(img.id),
+          name: String(img.name || ""),
+          original_name: String(img.original_name || ""),
+          url: baseUrl
+            ? `${baseUrl}/api/apreciacion-vulnerabilidad/${r.id}/get-image/${encodeURIComponent(String(img.name || ""))}`
+            : "",
+        })),
+        id_local: "",
+      });
+    }
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
@@ -68,6 +96,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       cliente_id,
+      empresa_id,
+      division_id,
+      contrato_id,
       corpo_id,
       puesto_id,
       fecha,
@@ -78,6 +109,7 @@ export async function POST(req: NextRequest) {
       observaciones,
       firma_solicitante,
       firma_responsable,
+      imagenes,
     } = body ?? {};
 
     if (
@@ -141,6 +173,9 @@ export async function POST(req: NextRequest) {
         operation: "create",
         data: {
           cliente_id: parseInt(String(cliente_id)),
+          empresa_id: Number(empresa_id) > 0 ? parseInt(String(empresa_id)) : 0,
+          division_id: Number(division_id) > 0 ? parseInt(String(division_id)) : 0,
+          contrato_id: Number(contrato_id) > 0 ? parseInt(String(contrato_id)) : 0,
           corpo_id: parseInt(String(corpo_id)),
           puesto_id: parseInt(String(puesto_id)),
           fecha: fechaDate.toISOString(),
@@ -151,9 +186,49 @@ export async function POST(req: NextRequest) {
           observaciones: typeof observaciones === "string" ? observaciones : "",
           firma_solicitante: String(firma_solicitante ?? ""),
           firma_responsable: String(firma_responsable),
+          isActive: true,
         },
       },
     });
+
+    let imagesParsed: Array<{ file_base64: string; extension?: string; original_name?: string }> = [];
+    if (imagenes) {
+      try {
+        imagesParsed = typeof imagenes === "string" ? JSON.parse(imagenes) : imagenes;
+      } catch {
+        imagesParsed = [];
+      }
+    }
+    if (Array.isArray(imagesParsed) && imagesParsed.length > 0 && created?.id) {
+      const uploadResp = await uploadDynamicFiles({
+        req,
+        folderPath: `apreciacion-vulnerabilidad/${created.id}`,
+        files: imagesParsed
+          .filter((img) => img?.file_base64)
+          .map((img) => ({
+            type: "image",
+            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+            original_name: img.original_name,
+            file_base64: img.file_base64,
+          })),
+      });
+      const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+      for (const uploaded of uploadedFiles) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "c_imagenes_boleta_apreciacion_vulnerabilidad",
+            operation: "create",
+            data: {
+              name: uploaded.name,
+              original_name: uploaded.original_name || uploaded.name,
+              boleta_id: created.id,
+            },
+          },
+        });
+      }
+    }
 
     if (created) {
 
@@ -225,6 +300,9 @@ export async function POST(req: NextRequest) {
             after: {
               id: (created as any).id,
               cliente_id: (created as any).cliente_id,
+              empresa_id: (created as any).empresa_id,
+              division_id: (created as any).division_id,
+              contrato_id: (created as any).contrato_id,
               corpo_id: (created as any).corpo_id,
               puesto_id: (created as any).puesto_id,
               fecha: fechaDate.toISOString(),

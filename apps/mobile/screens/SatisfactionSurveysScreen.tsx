@@ -19,7 +19,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
@@ -36,8 +36,12 @@ import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import {
   filterSurveysCacheByPuesto,
+  filterSurveysCacheByCorpo,
   mergeSurveysCacheForPuesto,
+  mergeSurveysCacheForCorpo,
+  upsertSurveyCacheRowForPuesto,
 } from '@/hooks/satisfactionSurveysCacheHelpers';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
@@ -88,13 +92,20 @@ interface Survey {
   fecha: string;
   evaluaciones: string; // JSON string array
   observations: string;
+  contrato_id?: number;
 }
 
 /** Quita updates pendientes del mismo id de servidor (un solo update encolado). */
 function stripQueuedSurveyUpdatesForServerId(actions: any[], surveyId: number): any[] {
   const sid = Number(surveyId);
   if (!Number.isFinite(sid)) return actions;
-  return actions.filter((a: any) => !(a?.type === 'update' && Number(a?.surveyId) === sid));
+  return actions.filter(
+    (a: any) =>
+      !(
+        (a?.type === 'update' && Number(a?.surveyId) === sid) ||
+        (a?.type === 'patchFirmaPersona' && Number(a?.surveyId) === sid)
+      )
+  );
 }
 
 /** Limpia update/delete pendientes del mismo id antes de encolar delete offline. */
@@ -105,7 +116,8 @@ function stripQueuedSurveyUpdatesAndDeletesForServerId(actions: any[], surveyId:
     (a: any) =>
       !(
         (a?.type === 'update' && Number(a?.surveyId) === sid) ||
-        (a?.type === 'delete' && Number(a?.surveyId) === sid)
+        (a?.type === 'delete' && Number(a?.surveyId) === sid) ||
+        (a?.type === 'patchFirmaPersona' && Number(a?.surveyId) === sid)
       )
   );
 }
@@ -130,6 +142,72 @@ function stripQueuedSurveyDraftActions(actions: any[], idLocal: string): any[] {
         (a?.type === 'update' && a.surveyId != null && String(a.surveyId) === k)
       )
   );
+}
+
+/** Actualiza `firma_persona_evaluada` en `surveys_cache` (id servidor o borrador `id_local`). */
+async function persistFirmaPersonaInSurveyCache(survey: Survey, sig: string): Promise<void> {
+  const cacheStr = await AsyncStorage.getItem('surveys_cache');
+  if (!cacheStr) return;
+  const cache = JSON.parse(cacheStr);
+  if (!Array.isArray(cache)) return;
+  const next = cache.map((s: Survey) => {
+    if (Number(survey.id) > 0 && s.id === survey.id) {
+      return { ...s, firma_persona_evaluada: sig };
+    }
+    if (Number(survey.id) <= 0 && survey.id_local && s.id_local === survey.id_local) {
+      return { ...s, firma_persona_evaluada: sig };
+    }
+    return s;
+  });
+  await AsyncStorage.setItem('surveys_cache', JSON.stringify(next));
+}
+
+/**
+ * Encola firma: borrador → merge en `create.requestData`;
+ * con id servidor y sin `update` → `patchFirmaPersona`; con `update` → merge en `requestData`.
+ */
+async function persistFirmaPersonaInSurveyActionsQueue(survey: Survey, sig: string): Promise<void> {
+  const actionsStr = await AsyncStorage.getItem('surveys_actions');
+  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+  if (!Array.isArray(actions)) actions = [];
+
+  if (!Number(survey.id) || Number(survey.id) <= 0) {
+    if (!survey.id_local) return;
+    const idx = actions.findIndex(
+      (a: any) => a.type === 'create' && String(a.id) === String(survey.id_local)
+    );
+    if (idx < 0) return;
+    actions[idx] = {
+      ...actions[idx],
+      requestData: {
+        ...actions[idx].requestData,
+        firma_persona_evaluada: sig,
+      },
+    };
+    await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
+    return;
+  }
+
+  const sid = Number(survey.id);
+  const updIdx = actions.findIndex(
+    (a: any) => a.type === 'update' && Number(a.surveyId) === sid
+  );
+  if (updIdx >= 0) {
+    actions[updIdx] = {
+      ...actions[updIdx],
+      requestData: {
+        ...actions[updIdx].requestData,
+        firma_persona_evaluada: sig,
+      },
+    };
+  } else {
+    const withoutOldPatch = actions.filter(
+      (a: any) => !(a.type === 'patchFirmaPersona' && Number(a.surveyId) === sid)
+    );
+    withoutOldPatch.push({ type: 'patchFirmaPersona', surveyId: sid, value: sig });
+    actions = withoutOldPatch;
+  }
+  await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
 }
 
 interface Question {
@@ -366,10 +444,91 @@ type FormHierarchyIds = {
   puestoId: number;
 };
 
+type MainStructureTree = any[];
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function getClienteDivisionArray(cliente: any): any[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray(cliente.divisiones)) return cliente.divisiones;
+  return [];
+}
+
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  for (const div of divisions) {
+    const contratos: any[] = Array.isArray(div?.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+function resolveDivisionIdInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureTree): number | null {
+  const empresaId =
+    current?.empresa?.id != null
+      ? Number(current.empresa.id)
+      : current?.empresa_id != null
+        ? Number(current.empresa_id)
+        : null;
+  const clienteId =
+    current?.cliente?.id != null
+      ? Number(current.cliente.id)
+      : current?.cliente_id != null
+        ? Number(current.cliente_id)
+        : null;
+  const contratoId =
+    current?.contrato?.id != null
+      ? Number(current.contrato.id)
+      : current?.contrato_id != null
+        ? Number(current.contrato_id)
+        : null;
+  let divId = getDivisionIdFromMarcaJson(current);
+  if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+    divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+  }
+  if (divId == null) return null;
+  return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
+}
+
 function findHierarchyByPuestoIn(structureArr: any[], puestoId: number): FormHierarchyIds | null {
   for (const empresa of structureArr || []) {
     for (const cliente of empresa.clientes || []) {
-      for (const division of cliente.division || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
         for (const contrato of division.contratos || []) {
           for (const sucursal of contrato.sucursales || []) {
             for (const puesto of sucursal.puestos || []) {
@@ -395,10 +554,10 @@ function findHierarchyByPuestoIn(structureArr: any[], puestoId: number): FormHie
 function findContratoForSucursalIn(structureArr: any[], sucursalId: number): number | null {
   for (const empresa of structureArr || []) {
     for (const cliente of empresa.clientes || []) {
-      for (const division of cliente.division || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
         for (const contrato of division.contratos || []) {
           for (const sucursal of contrato.sucursales || []) {
-            if (sucursal.id === sucursalId) {
+            if (Number(sucursal.id) === Number(sucursalId)) {
               return contrato.id;
             }
           }
@@ -420,14 +579,14 @@ function findHierarchyFromSurveySnapshot(structureArr: any[], survey: Survey): F
     return null;
   }
   for (const empresa of structureArr) {
-    if (wantEmp != null && empresa.id !== wantEmp) continue;
+    if (wantEmp != null && Number(empresa.id) !== Number(wantEmp)) continue;
     for (const cliente of empresa.clientes || []) {
-      if (wantCliente != null && cliente.id !== wantCliente) continue;
-      for (const division of cliente.division || []) {
-        if (wantDiv != null && division.id !== wantDiv) continue;
+      if (wantCliente != null && Number(cliente.id) !== Number(wantCliente)) continue;
+      for (const division of getClienteDivisionArray(cliente)) {
+        if (wantDiv != null && Number(division.id) !== Number(wantDiv)) continue;
         for (const contrato of division.contratos || []) {
           for (const sucursal of contrato.sucursales || []) {
-            if (wantCorpo != null && sucursal.id !== wantCorpo) continue;
+            if (wantCorpo != null && Number(sucursal.id) !== Number(wantCorpo)) continue;
             for (const puesto of sucursal.puestos || []) {
               if (Number(puesto?.id) === Number(wantPuesto)) {
                 return {
@@ -448,6 +607,57 @@ function findHierarchyFromSurveySnapshot(structureArr: any[], survey: Survey): F
   return null;
 }
 
+function mapTreePuestosToPicker(raw: any[]): Puesto[] {
+  return (raw || []).map((p: any) => ({
+    id: Number(p.id),
+    nombre:
+      p.nombre != null && String(p.nombre).trim() !== ''
+        ? String(p.nombre)
+        : p.codigo != null
+          ? String(p.codigo)
+          : `Puesto ${p.id}`,
+  }));
+}
+
+function resolveHierarchyNamesFromStructure(
+  structureArr: any[],
+  ids: {
+    empresaId: number;
+    clienteId: number;
+    divisionId: number;
+    contratoId: number | null;
+    corpoId: number;
+    puestoId: number;
+  },
+  puestosList: Puesto[]
+): {
+  empresa: { id: number; nombre: string };
+  cliente: { id: number; nombre: string };
+  division: { id: number; nombre: string };
+  sucursal: { id: number; nombre: string };
+  puesto: { id: number; nombre: string };
+} {
+  const e = structureArr.find((x: any) => Number(x.id) === Number(ids.empresaId));
+  const c = e?.clientes?.find((x: any) => Number(x.id) === Number(ids.clienteId));
+  const d = getClienteDivisionArray(c).find((x: any) => Number(x.id) === Number(ids.divisionId));
+  const ct = ids.contratoId != null ? d?.contratos?.find((x: any) => Number(x.id) === Number(ids.contratoId)) : null;
+  const s = ct?.sucursales?.find((x: any) => Number(x.id) === Number(ids.corpoId)) ?? null;
+  let puestoNombre = '';
+  const fromList = puestosList.find((x) => x.id === ids.puestoId);
+  if (fromList) puestoNombre = fromList.nombre;
+  else if (s?.puestos) {
+    const po = s.puestos.find((x: any) => Number(x.id) === Number(ids.puestoId));
+    if (po) puestoNombre = String(po.nombre ?? '');
+  }
+  return {
+    empresa: { id: ids.empresaId, nombre: e?.nombre != null ? String(e.nombre) : '' },
+    cliente: { id: ids.clienteId, nombre: c?.nombre != null ? String(c.nombre) : '' },
+    division: { id: ids.divisionId, nombre: d?.nombre != null ? String(d.nombre) : '' },
+    sucursal: { id: ids.corpoId, nombre: s?.nombre != null ? String(s.nombre) : '' },
+    puesto: { id: ids.puestoId, nombre: puestoNombre },
+  };
+}
+
 export default function SatisfactionSurveysScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -455,7 +665,9 @@ export default function SatisfactionSurveysScreen() {
 
   // Data state
   const [surveys, setSurveys] = useState<Survey[]>([]);
-  const [puestos, setPuestos] = useState<Puesto[]>([]);
+  /** Puestos por `corpo_id` (API/caché), para filtro y formulario sin pisarse. */
+  const [puestosByCorpo, setPuestosByCorpo] = useState<Record<string, Puesto[]>>({});
+  const puestosByCorpoRef = useRef<Record<string, Puesto[]>>({});
   const [isListLoading, setIsListLoading] = useState(false);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
   const [isCheckingMarca, setIsCheckingMarca] = useState<boolean>(true);
@@ -470,8 +682,7 @@ export default function SatisfactionSurveysScreen() {
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   const filterPuestoIdRef = useRef<number | null>(null);
-  /** Corpo del filtro para el cual `puestos` en estado proviene ya de API/caché encuestas */
-  const [puestosLoadedForFilterCorpoId, setPuestosLoadedForFilterCorpoId] = useState<number | null>(null);
+  const filterCorpoIdRef = useRef<number | null>(null);
 
   const surveyExpandKey = (s: Survey) => (s.id > 0 ? `i:${s.id}` : `l:${s.id_local || '0'}`);
 
@@ -687,146 +898,101 @@ export default function SatisfactionSurveysScreen() {
     }
   };
 
-  // Refs para evitar recrear funciones y controlar carga
-  const hasLoadedMainStructureRef = useRef(false);
-
-  const fetchMainStructure = useCallback(async () => {
-    // Solo cargar una vez
-    if (hasLoadedMainStructureRef.current) return;
-
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-          else setStructure([]);
-        } catch {
-          // ignore
-          setStructure([]);
-        }
-      }
-      else {
-        setStructure([]);
-      }
-      /*
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        hasLoadedMainStructureRef.current = true;
-        return;
-      }
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response) {
-        hasLoadedMainStructureRef.current = true;
-        return;
-      }
-
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const data = await response.json();
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-        */
-      hasLoadedMainStructureRef.current = true;
+      const tree = await loadMainStructureTreeMerged();
+      const arr = Array.isArray(tree) ? tree : [];
+      setStructure(arr);
+      return arr;
     } catch (e) {
       console.error('Error fetching main structure for satisfaction surveys:', e);
-      hasLoadedMainStructureRef.current = true;
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   // Nodos computados para estructura jerárquica de filtros
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
   const filterClientes = useMemo(() => {
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
     return empresa?.clientes || [];
   }, [filterEmpresas, filterEmpresaId]);
 
   const filterDivisiones = useMemo(() => {
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-    return cliente?.division || [];
+    const cliente = filterClientes.find((c: any) => Number(c.id) === Number(filterClienteId));
+    return getClienteDivisionArray(cliente);
   }, [filterClientes, filterClienteId]);
 
   const filterContratos = useMemo(() => {
-    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
+    const division = filterDivisiones.find((d: any) => Number(d.id) === Number(filterDivisionId));
     return division?.contratos || [];
   }, [filterDivisiones, filterDivisionId]);
 
   const filterSucursales = useMemo(() => {
-    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
+    const contrato = filterContratos.find((c: any) => Number(c.id) === Number(filterContratoId));
     return contrato?.sucursales || [];
   }, [filterContratos, filterContratoId]);
 
   const filterPuestos = useMemo(() => {
-    const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
+    const sucursal = filterSucursales.find((s: any) => Number(s.id) === Number(filterCorpoId));
     return sucursal?.puestos || [];
   }, [filterSucursales, filterCorpoId]);
 
-  /** El filtro jerárquico debe usar los puestos del endpoint si el árbol no los trae (caso habitual). */
+  /** Filtro: API/caché por sucursal si existen; si no, puestos embebidos en el árbol. */
   const filterPuestoOptions = useMemo((): Puesto[] => {
-    if (
-      filterCorpoId != null &&
-      puestosLoadedForFilterCorpoId === filterCorpoId &&
-      puestos.length > 0
-    ) {
-      return puestos;
+    if (filterCorpoId == null) return [];
+    const key = String(filterCorpoId);
+    if (Object.prototype.hasOwnProperty.call(puestosByCorpo, key)) {
+      return puestosByCorpo[key]!;
     }
-    return (filterPuestos || []).map((p: any) => ({
-      id: Number(p.id),
-      nombre:
-        p.nombre != null && String(p.nombre).trim() !== ''
-          ? String(p.nombre)
-          : p.codigo != null
-            ? String(p.codigo)
-            : `Puesto ${p.id}`,
-    }));
-  }, [filterCorpoId, puestosLoadedForFilterCorpoId, puestos, filterPuestos]);
+    return mapTreePuestosToPicker(filterPuestos);
+  }, [filterCorpoId, puestosByCorpo, filterPuestos]);
 
   // Nodos computados para estructura jerárquica del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
   const formClientes = useMemo(() => {
-    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
     return empresa?.clientes || [];
   }, [formEmpresas, formEmpresaId]);
 
   const formDivisiones = useMemo(() => {
-    const cliente = formClientes.find((c: any) => c.id === formClienteId);
-    return cliente?.division || [];
+    const cliente = formClientes.find((c: any) => Number(c.id) === Number(formClienteId));
+    return getClienteDivisionArray(cliente);
   }, [formClientes, formClienteId]);
 
   const formContratos = useMemo(() => {
-    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
+    const division = formDivisiones.find((d: any) => Number(d.id) === Number(formDivisionId));
     return division?.contratos || [];
   }, [formDivisiones, formDivisionId]);
 
   const formSucursales = useMemo(() => {
-    const contrato = formContratos.find((c: any) => c.id === formContratoId);
+    const contrato = formContratos.find((c: any) => Number(c.id) === Number(formContratoId));
     return contrato?.sucursales || [];
   }, [formContratos, formContratoId]);
 
   const formPuestosList = useMemo(() => {
-    const sucursal = formSucursales.find((s: any) => s.id === formCorpoId);
+    const sucursal = formSucursales.find((s: any) => Number(s.id) === Number(formCorpoId));
     return sucursal?.puestos || [];
   }, [formSucursales, formCorpoId]);
+
+  /** Formulario: API/caché por sucursal o puestos del árbol. */
+  const formPuestoOptions = useMemo((): Puesto[] => {
+    if (formCorpoId == null) return [];
+    const key = String(formCorpoId);
+    if (Object.prototype.hasOwnProperty.call(puestosByCorpo, key)) {
+      return puestosByCorpo[key]!;
+    }
+    return mapTreePuestosToPicker(formPuestosList);
+  }, [formCorpoId, puestosByCorpo, formPuestosList]);
+
+  useEffect(() => {
+    puestosByCorpoRef.current = puestosByCorpo;
+  }, [puestosByCorpo]);
 
   const generateRandomId = (): string => {
     return `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -835,74 +1001,87 @@ export default function SatisfactionSurveysScreen() {
   // Ref para evitar cargar puestos múltiples veces para el mismo corpo
   const lastLoadedCorpoIdRef = useRef<number | null>(null);
 
-  // Función separada para cargar puestos
-  const fetchPuestosForCorpo = useCallback(async (corpoId: number, forceReload: boolean = false) => {
-    // Solo cargar si es un corpo diferente o si se fuerza la recarga
-    if (!forceReload && lastLoadedCorpoIdRef.current === corpoId) {
-      setPuestosLoadedForFilterCorpoId(corpoId);
-      return;
-    }
+  const cacheKeyPuestos = (corpoId: number) => `surveys_puestos_cache_${corpoId}`;
 
-    try {
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        // Cargar desde cache
-        const puestosCache = await AsyncStorage.getItem('surveys_puestos_cache');
-        if (puestosCache) {
-          try {
-            const cachedPuestos = JSON.parse(puestosCache);
-            if (Array.isArray(cachedPuestos)) {
-              setPuestos(cachedPuestos);
-              setPuestosLoadedForFilterCorpoId(corpoId);
+  const fetchPuestosForCorpo = useCallback(
+    async (corpoId: number, forceReload: boolean = false): Promise<Puesto[] | null> => {
+      if (!Number.isFinite(corpoId) || corpoId <= 0) return null;
+      const key = String(corpoId);
+      if (
+        !forceReload &&
+        lastLoadedCorpoIdRef.current === corpoId &&
+        Object.prototype.hasOwnProperty.call(puestosByCorpoRef.current, key)
+      ) {
+        return puestosByCorpoRef.current[key]!;
+      }
+
+      const applyPuestos = (list: Puesto[]) => {
+        setPuestosByCorpo((prev) => ({ ...prev, [key]: list }));
+        lastLoadedCorpoIdRef.current = corpoId;
+        return list;
+      };
+
+      try {
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) {
+          const puestosCache = await AsyncStorage.getItem(cacheKeyPuestos(corpoId));
+          if (puestosCache) {
+            try {
+              const parsed = JSON.parse(puestosCache);
+              if (Array.isArray(parsed)) {
+                return applyPuestos(mapTreePuestosToPicker(parsed));
+              }
+            } catch {
+              /* ignore */
             }
-          } catch {
-            /* ignore */
+          }
+          return null;
+        }
+
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return null;
+        const puestosResponse = await authedFetch({
+          url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+          init: { method: 'GET' },
+          refreshAccessToken,
+          logout,
+        });
+        if (!puestosResponse) return null;
+
+        if (puestosResponse.ok) {
+          const puestosData = await puestosResponse.json();
+          if (puestosData?.status && Array.isArray(puestosData.puestos)) {
+            const list = mapTreePuestosToPicker(puestosData.puestos);
+            await AsyncStorage.setItem(cacheKeyPuestos(corpoId), JSON.stringify(puestosData.puestos));
+            return applyPuestos(list);
           }
         }
-        lastLoadedCorpoIdRef.current = corpoId;
-        return;
+      } catch (err) {
+        console.error('Error fetching puestos for corpo:', err);
       }
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-      const puestosResponse = await authedFetch({
-        url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
-        init: {
-          method: 'GET',
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!puestosResponse) return;
-
-      if (puestosResponse.ok) {
-        const puestosData = await puestosResponse.json();
-        if (puestosData.status && puestosData.puestos) {
-          setPuestos(puestosData.puestos);
-          setPuestosLoadedForFilterCorpoId(corpoId);
-          await AsyncStorage.setItem('surveys_puestos_cache', JSON.stringify(puestosData.puestos));
-          lastLoadedCorpoIdRef.current = corpoId;
-        }
-      }
-    } catch (err) {
-      console.error('Error fetching puestos for corpo:', err);
-    }
-  }, [refreshAccessToken, logout]);
+      return null;
+    },
+    [refreshAccessToken, logout]
+  );
 
   // Ref para controlar si ya se mostró el alert de modo offline
   const hasShownOfflineAlertRef = useRef(false);
+  const surveysListInitialFocusRef = useRef(true);
 
-  // Carga encuestas solo por puesto_id (la jerarquía sirve para llegar al puesto sin disparar recargas en cada nivel)
+  /** `puestoId` afinado, o toda la sucursal con `corpoId` (p. ej. filtro por sucursal / current_marca). */
   const fetchSurveysList = useCallback(
-    async (puestoId: number | null, showOfflineAlert: boolean = true) => {
-      if (!puestoId) {
-        setSurveys([]);
-        setIsListLoading(false);
-        return;
-      }
+    async (
+      scope: { puestoId: number | null; corpoId: number | null },
+      showOfflineAlert: boolean = true
+    ) => {
+      const rawP = scope.puestoId;
+      const rawC = scope.corpoId;
+      const pid =
+        rawP != null && Number.isFinite(Number(rawP)) && Number(rawP) > 0 ? Number(rawP) : null;
+      const cid =
+        rawC != null && Number.isFinite(Number(rawC)) && Number(rawC) > 0 ? Number(rawC) : null;
 
-      const pid = Number(puestoId);
-      if (!Number.isFinite(pid) || pid <= 0) {
+      if (pid == null && cid == null) {
         setSurveys([]);
         setIsListLoading(false);
         return;
@@ -919,6 +1098,8 @@ export default function SatisfactionSurveysScreen() {
         }
       };
 
+      const mapRow = (s: Survey) => ({ ...s, id_local: s.id_local || '' });
+
       try {
         setIsListLoading(true);
 
@@ -931,7 +1112,11 @@ export default function SatisfactionSurveysScreen() {
           }
 
           const params = new URLSearchParams();
-          params.append('puesto_id', String(pid));
+          if (pid != null) {
+            params.append('puesto_id', String(pid));
+          } else if (cid != null) {
+            params.append('corpo_id', String(cid));
+          }
 
           const surveysResponse = await authedFetch({
             url: `${apiUrl}/api/encuesta-nps?${params.toString()}`,
@@ -941,33 +1126,49 @@ export default function SatisfactionSurveysScreen() {
             refreshAccessToken,
             logout,
           });
-          if (!surveysResponse) return;
+          const fullCache = await parseSurveysCache();
+          if (!surveysResponse) {
+            const forList = (
+              pid != null
+                ? filterSurveysCacheByPuesto(fullCache, pid)
+                : filterSurveysCacheByCorpo(fullCache, cid)
+            ).map(mapRow);
+            setSurveys(forList);
+            return;
+          }
 
           const surveysData = await surveysResponse.json();
-          const fullCache = await parseSurveysCache();
 
           if (surveysData.status && Array.isArray(surveysData.encuestas)) {
-            const merged = mergeSurveysCacheForPuesto(fullCache, surveysData.encuestas, pid);
+            let merged: any[];
+            if (pid != null) {
+              merged = mergeSurveysCacheForPuesto(fullCache, surveysData.encuestas, pid);
+            } else {
+              merged = mergeSurveysCacheForCorpo(fullCache, surveysData.encuestas, cid!);
+            }
             await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
-            const forList = filterSurveysCacheByPuesto(merged, pid).map((s: Survey) => ({
-              ...s,
-              id_local: s.id_local || '',
-            }));
+            const forList = (
+              pid != null
+                ? filterSurveysCacheByPuesto(merged, pid)
+                : filterSurveysCacheByCorpo(merged, cid)
+            ).map(mapRow);
             setSurveys(forList);
           } else {
-            const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
-              ...s,
-              id_local: s.id_local || '',
-            }));
+            const forList = (
+              pid != null
+                ? filterSurveysCacheByPuesto(fullCache, pid)
+                : filterSurveysCacheByCorpo(fullCache, cid)
+            ).map(mapRow);
             setSurveys(forList);
           }
           hasShownOfflineAlertRef.current = false;
         } else {
           const fullCache = await parseSurveysCache();
-          const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
-            ...s,
-            id_local: s.id_local || '',
-          }));
+          const forList = (
+            pid != null
+              ? filterSurveysCacheByPuesto(fullCache, pid)
+              : filterSurveysCacheByCorpo(fullCache, cid)
+          ).map(mapRow);
           setSurveys(forList);
 
           if (showOfflineAlert && !hasShownOfflineAlertRef.current) {
@@ -979,10 +1180,11 @@ export default function SatisfactionSurveysScreen() {
         console.error('Error fetching surveys:', err);
         try {
           const fullCache = await parseSurveysCache();
-          const forList = filterSurveysCacheByPuesto(fullCache, pid).map((s: Survey) => ({
-            ...s,
-            id_local: s.id_local || '',
-          }));
+          const forList = (
+            pid != null
+              ? filterSurveysCacheByPuesto(fullCache, pid)
+              : filterSurveysCacheByCorpo(fullCache, cid)
+          ).map(mapRow);
           setSurveys(forList);
           if (forList.length > 0 && showOfflineAlert && !hasShownOfflineAlertRef.current) {
             Alert.alert('Modo Offline', 'Error de conexión. Mostrando datos guardados.');
@@ -1002,43 +1204,67 @@ export default function SatisfactionSurveysScreen() {
     [refreshAccessToken, logout]
   );
 
+  const getListScopeForRefresh = useCallback((): { puestoId: number | null; corpoId: number | null } => {
+    const puesto =
+      filterPuestoIdRef.current ?? filterPuestoId ?? formPuestoId ?? puestoIdRef.current;
+    if (puesto != null && Number(puesto) > 0) return { puestoId: Number(puesto), corpoId: null };
+    const corpo = filterCorpoIdRef.current ?? filterCorpoId ?? formCorpoId ?? marcaCorpoId;
+    if (corpo != null && Number(corpo) > 0) return { puestoId: null, corpoId: Number(corpo) };
+    return { puestoId: null, corpoId: null };
+  }, [filterPuestoId, filterCorpoId, formPuestoId, formCorpoId, marcaCorpoId]);
+
   useEffect(() => {
     filterPuestoIdRef.current = filterPuestoId;
   }, [filterPuestoId]);
 
   useEffect(() => {
-    if (filterCorpoId == null) {
-      setPuestosLoadedForFilterCorpoId(null);
-    }
+    filterCorpoIdRef.current = filterCorpoId;
   }, [filterCorpoId]);
 
+  /** Cargar puestos de API/caché al elegir sucursal en filtro o en el formulario (cualquiera de los dos). */
   useEffect(() => {
-    if (filterPuestoId == null) return;
-    const pid = Number(filterPuestoId);
-    if (!Number.isFinite(pid) || pid <= 0) return;
-    void fetchSurveysList(pid, false);
-  }, [filterPuestoId, fetchSurveysList]);
+    const ids = new Set<number>();
+    if (filterCorpoId != null && Number.isFinite(Number(filterCorpoId)) && Number(filterCorpoId) > 0) {
+      ids.add(Number(filterCorpoId));
+    }
+    if (formCorpoId != null && Number.isFinite(Number(formCorpoId)) && Number(formCorpoId) > 0) {
+      ids.add(Number(formCorpoId));
+    }
+    ids.forEach((id) => {
+      void fetchPuestosForCorpo(id, true);
+    });
+  }, [filterCorpoId, formCorpoId, fetchPuestosForCorpo]);
+
+  useEffect(() => {
+    if (filterPuestoId != null) {
+      const pid = Number(filterPuestoId);
+      if (Number.isFinite(pid) && pid > 0) {
+        void fetchSurveysList({ puestoId: pid, corpoId: null }, false);
+        return;
+      }
+    }
+    const cid = filterCorpoId ?? marcaCorpoId;
+    if (cid != null) {
+      const c = Number(cid);
+      if (Number.isFinite(c) && c > 0) {
+        void fetchSurveysList({ puestoId: null, corpoId: c }, false);
+        return;
+      }
+    }
+    setSurveys([]);
+  }, [filterPuestoId, filterCorpoId, marcaCorpoId, fetchSurveysList]);
 
   // Cargar estructura, alinear filtros jerárquicos al puesto de current_marca cuando exista en el árbol, y lista solo con puesto_id
   useEffect(() => {
     let isMounted = true;
     (async () => {
       const current = await loadMarcaContext();
-      await fetchMainStructure();
+      const tree = await loadMainStructureCache();
       if (!isMounted) return;
 
       if (current?.id) {
         const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
-        let tree: any[] = [];
-        try {
-          const treeStr = await AsyncStorage.getItem('main_structure_cache');
-          if (treeStr) {
-            const parsed = JSON.parse(treeStr);
-            if (Array.isArray(parsed)) tree = parsed;
-          }
-        } catch {
-          tree = [];
-        }
+        const effDiv = tree.length > 0 ? resolveMarcaDivisionForTree(current, tree) : null;
 
         const applyHierarchyPath = (path: FormHierarchyIds) => {
           setFilterEmpresaId(path.empresaId);
@@ -1048,6 +1274,13 @@ export default function SatisfactionSurveysScreen() {
           setFilterCorpoId(path.corpoId);
           setFilterPuestoId(path.puestoId);
           filterPuestoIdRef.current = path.puestoId;
+          filterCorpoIdRef.current = path.corpoId;
+          setFormEmpresaId(path.empresaId);
+          setFormClienteId(path.clienteId);
+          setFormDivisionId(path.divisionId);
+          setFormContratoId(path.contratoId);
+          setFormCorpoId(path.corpoId);
+          setFormPuestoId(path.puestoId);
         };
 
         if (puestoIdRaw !== undefined && puestoIdRaw !== null) {
@@ -1056,7 +1289,6 @@ export default function SatisfactionSurveysScreen() {
             const pathByPuesto = findHierarchyByPuestoIn(tree, pidNum);
             if (pathByPuesto) {
               applyHierarchyPath(pathByPuesto);
-              if (isMounted) await fetchPuestosForCorpo(pathByPuesto.corpoId, true);
             } else {
               const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
               const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
@@ -1065,23 +1297,38 @@ export default function SatisfactionSurveysScreen() {
               const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
               const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
               if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
-                setFilterEmpresaId(Number(empresaIdRaw));
+                const n = Number(empresaIdRaw);
+                setFilterEmpresaId(n);
+                setFormEmpresaId(n);
               }
               if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-                setFilterClienteId(Number(clienteIdRaw));
+                const n = Number(clienteIdRaw);
+                setFilterClienteId(n);
+                setFormClienteId(n);
               }
-              if (divisionIdRaw !== undefined && divisionIdRaw !== null) {
-                setFilterDivisionId(Number(divisionIdRaw));
+              const divSet =
+                divisionIdRaw !== undefined && divisionIdRaw !== null
+                  ? effDiv ?? Number(divisionIdRaw)
+                  : effDiv;
+              if (divSet != null) {
+                setFilterDivisionId(divSet);
+                setFormDivisionId(divSet);
+                setMarcaDivisionId(divSet);
               }
               if (contratoIdRaw !== undefined && contratoIdRaw !== null) {
-                setFilterContratoId(Number(contratoIdRaw));
+                const n = Number(contratoIdRaw);
+                setFilterContratoId(n);
+                setFormContratoId(n);
               }
               if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-                setFilterCorpoId(Number(corpoIdRaw));
-                if (isMounted) await fetchPuestosForCorpo(Number(corpoIdRaw), true);
+                const n = Number(corpoIdRaw);
+                setFilterCorpoId(n);
+                filterCorpoIdRef.current = n;
+                setFormCorpoId(n);
               }
               setFilterPuestoId(pidNum);
               filterPuestoIdRef.current = pidNum;
+              setFormPuestoId(pidNum);
             }
           }
         } else {
@@ -1092,23 +1339,36 @@ export default function SatisfactionSurveysScreen() {
           const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
           const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
           if (empresaIdRaw !== undefined && empresaIdRaw !== null) {
-            setFilterEmpresaId(Number(empresaIdRaw));
+            const n = Number(empresaIdRaw);
+            setFilterEmpresaId(n);
+            setFormEmpresaId(n);
           }
           if (clienteIdRaw !== undefined && clienteIdRaw !== null) {
-            setFilterClienteId(Number(clienteIdRaw));
+            const n = Number(clienteIdRaw);
+            setFilterClienteId(n);
+            setFormClienteId(n);
           }
-          if (divisionIdRaw !== undefined && divisionIdRaw !== null) {
-            setFilterDivisionId(Number(divisionIdRaw));
+          const divSet =
+            divisionIdRaw !== undefined && divisionIdRaw !== null
+              ? effDiv ?? Number(divisionIdRaw)
+              : effDiv;
+          if (divSet != null) {
+            setFilterDivisionId(divSet);
+            setFormDivisionId(divSet);
+            setMarcaDivisionId(divSet);
           }
           if (contratoIdRaw !== undefined && contratoIdRaw !== null) {
-            setFilterContratoId(Number(contratoIdRaw));
+            const n = Number(contratoIdRaw);
+            setFilterContratoId(n);
+            setFormContratoId(n);
           }
           if (corpoIdRaw !== undefined && corpoIdRaw !== null) {
-            setFilterCorpoId(Number(corpoIdRaw));
-            if (isMounted) await fetchPuestosForCorpo(Number(corpoIdRaw), true);
+            const n = Number(corpoIdRaw);
+            setFilterCorpoId(n);
+            filterCorpoIdRef.current = n;
+            setFormCorpoId(n);
           }
         }
-
       }
     })();
     return () => {
@@ -1120,24 +1380,51 @@ export default function SatisfactionSurveysScreen() {
   useEffect(() => {
     const handler = () => {
       hasShownOfflineAlertRef.current = false;
-      const pid = filterPuestoIdRef.current;
-      if (pid) fetchSurveysList(pid, true);
+      void loadMainStructureCache();
+      void fetchSurveysList(getListScopeForRefresh(), true);
     };
 
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [fetchSurveysList]);
+  }, [fetchSurveysList, getListScopeForRefresh, loadMainStructureCache]);
+
+  useEffect(() => {
+    const onSurveysCacheUpdated = () => {
+      hasShownOfflineAlertRef.current = false;
+      const scope = getListScopeForRefresh();
+      if (scope.puestoId == null && scope.corpoId == null) return;
+      void fetchSurveysList(scope, false);
+    };
+    eventBus.on('surveysCacheUpdated', onSurveysCacheUpdated);
+    return () => {
+      eventBus.off('surveysCacheUpdated', onSurveysCacheUpdated);
+    };
+  }, [fetchSurveysList, getListScopeForRefresh]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (surveysListInitialFocusRef.current) {
+        surveysListInitialFocusRef.current = false;
+        return;
+      }
+      void loadMainStructureCache();
+      const scope = getListScopeForRefresh();
+      if (scope.puestoId == null && scope.corpoId == null) return;
+      hasShownOfflineAlertRef.current = false;
+      void fetchSurveysList(scope, false);
+    }, [fetchSurveysList, getListScopeForRefresh, loadMainStructureCache])
+  );
 
   // Función para rastrear el contrato de una sucursal
   const findContratoForSucursal = useCallback((sucursalId: number): number | null => {
     for (const empresa of structure) {
       for (const cliente of empresa.clientes || []) {
-        for (const division of cliente.division || []) {
+        for (const division of getClienteDivisionArray(cliente)) {
           for (const contrato of division.contratos || []) {
             for (const sucursal of contrato.sucursales || []) {
-              if (sucursal.id === sucursalId) {
+              if (Number(sucursal.id) === Number(sucursalId)) {
                 return contrato.id;
               }
             }
@@ -1325,8 +1612,8 @@ export default function SatisfactionSurveysScreen() {
     setFilterCorpoId(null);
     setFilterPuestoId(null);
     filterPuestoIdRef.current = null;
-    setPuestos([]);
-    setPuestosLoadedForFilterCorpoId(null);
+    setPuestosByCorpo({});
+    lastLoadedCorpoIdRef.current = null;
     setSurveys([]);
   };
 
@@ -1402,6 +1689,8 @@ export default function SatisfactionSurveysScreen() {
       return;
     }
 
+    const tree = await loadMainStructureCache();
+
     const clienteIdMarca =
       current?.cliente?.id ?? current?.cliente_id;
     const divisionIdMarca =
@@ -1417,6 +1706,9 @@ export default function SatisfactionSurveysScreen() {
       divisionIdMarca !== undefined && divisionIdMarca !== null && divisionIdMarca !== ''
         ? Number(divisionIdMarca)
         : null;
+    const effDivCreate = tree.length > 0 ? resolveMarcaDivisionForTree(current, tree) : null;
+    const divisionIdForLookup =
+      effDivCreate != null ? effDivCreate : divisionIdNum;
 
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
@@ -1425,8 +1717,8 @@ export default function SatisfactionSurveysScreen() {
     }
 
     if (clienteIdNum != null && Number.isFinite(clienteIdNum) && clienteIdNum > 0) {
-      for (const empresa of structure) {
-        const cliente = empresa.clientes?.find((c: any) => c.id === clienteIdNum);
+      for (const empresa of tree) {
+        const cliente = empresa.clientes?.find((c: any) => Number(c.id) === Number(clienteIdNum));
         if (cliente) {
           empresaEvaluadaRef.current = cliente.nombre;
           break;
@@ -1434,10 +1726,12 @@ export default function SatisfactionSurveysScreen() {
       }
     }
 
-    if (divisionIdNum != null && Number.isFinite(divisionIdNum) && divisionIdNum > 0) {
-      for (const empresa of structure) {
+    if (divisionIdForLookup != null && Number.isFinite(divisionIdForLookup) && divisionIdForLookup > 0) {
+      for (const empresa of tree) {
         for (const cliente of empresa.clientes || []) {
-          const division = cliente.division?.find((d: any) => d.id === divisionIdNum);
+          const division = getClienteDivisionArray(cliente).find(
+            (d: any) => Number(d.id) === Number(divisionIdForLookup)
+          );
           if (division) {
             const divisionName = division.nombre;
             // Establecer selectedDivision basado en el nombre
@@ -1461,6 +1755,16 @@ export default function SatisfactionSurveysScreen() {
       divisionRef.current = 'Seguridad';
     }
 
+    const corpoToFetch =
+      corpoIdMarca !== undefined && corpoIdMarca !== null && corpoIdMarca !== ''
+        ? Number(corpoIdMarca)
+        : null;
+    let puestosListForMarca: Puesto[] = [];
+    if (corpoToFetch != null && Number.isFinite(corpoToFetch) && corpoToFetch > 0) {
+      const loaded = await fetchPuestosForCorpo(corpoToFetch, true);
+      puestosListForMarca = loaded ?? puestosByCorpoRef.current[String(corpoToFetch)] ?? [];
+    }
+
     const resolvedPuestoNum =
       puestoIdMarca !== undefined && puestoIdMarca !== null && puestoIdMarca !== ''
         ? Number(puestoIdMarca)
@@ -1468,8 +1772,8 @@ export default function SatisfactionSurveysScreen() {
     if (resolvedPuestoNum != null && Number.isFinite(resolvedPuestoNum) && resolvedPuestoNum > 0) {
       puestoIdRef.current = resolvedPuestoNum;
       setSelectedPuesto(resolvedPuestoNum);
-    } else if (puestos.length > 0) {
-      const firstId = puestos[0].id;
+    } else if (puestosListForMarca.length > 0) {
+      const firstId = puestosListForMarca[0].id;
       puestoIdRef.current = firstId;
       setSelectedPuesto(firstId);
       setFormPuestoId(firstId);
@@ -1485,14 +1789,6 @@ export default function SatisfactionSurveysScreen() {
     }
 
     generateResponsableSignature();
-
-    const corpoToFetch =
-      corpoIdMarca !== undefined && corpoIdMarca !== null && corpoIdMarca !== ''
-        ? Number(corpoIdMarca)
-        : null;
-    if (corpoToFetch != null && Number.isFinite(corpoToFetch) && corpoToFetch > 0) {
-      fetchPuestosForCorpo(corpoToFetch, true);
-    }
   };
 
   const cancelCreating = () => {
@@ -1576,11 +1872,7 @@ export default function SatisfactionSurveysScreen() {
     let structureArr: any[] = Array.isArray(structure) && structure.length > 0 ? structure : [];
     if (!structureArr.length) {
       try {
-        const raw = await AsyncStorage.getItem('main_structure_cache');
-        if (raw) {
-          const p = JSON.parse(raw);
-          if (Array.isArray(p)) structureArr = p;
-        }
+        structureArr = await loadMainStructureCache();
       } catch {
         /* ignore */
       }
@@ -1610,11 +1902,6 @@ export default function SatisfactionSurveysScreen() {
       const contratoId =
         corpoId != null ? findContratoForSucursalIn(structureArr, corpoId) : null;
       setFormContratoId(contratoId);
-    }
-
-    const corpoForPuestos = survey.sucursal?.id;
-    if (corpoForPuestos) {
-      await fetchPuestosForCorpo(corpoForPuestos, true);
     }
 
     if (frNorm.length > 0) {
@@ -1811,8 +2098,8 @@ export default function SatisfactionSurveysScreen() {
                   // Buscar el ID de la división en la estructura
                   for (const empresa of structure) {
                     for (const cliente of empresa.clientes || []) {
-                      if (cliente.id === formClienteId) {
-                        const division = cliente.division?.find((d: any) => {
+                      if (Number(cliente.id) === Number(formClienteId)) {
+                        const division = getClienteDivisionArray(cliente).find((d: any) => {
                           const dName = d.nombre;
                           if (divisionName === 'Seguridad') {
                             return dName === 'Seguridad' || dName.toLowerCase().includes('seguridad');
@@ -1851,6 +2138,8 @@ export default function SatisfactionSurveysScreen() {
                 division_id: divisionId,
                 corpo_id: corpoId,
                 puesto_id: puestoId,
+                contrato_id:
+                  contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
                 fecha: fechaEncuestaRef.current,
                 evaluaciones: JSON.stringify(evaluaciones),
                 persona_evaluada: personaNombreRef.current,
@@ -1879,12 +2168,58 @@ export default function SatisfactionSurveysScreen() {
                 });
 
                 if (data.status) {
+                  const createdServerId = data.data?.id != null ? Number(data.data.id) : null;
+                  if (createdServerId != null && Number.isFinite(createdServerId) && createdServerId > 0) {
+                    const cacheStr0 = await AsyncStorage.getItem('surveys_cache');
+                    const fullCache0 = cacheStr0 ? JSON.parse(cacheStr0) : [];
+                    const list0 = Array.isArray(fullCache0) ? fullCache0 : [];
+                    const labels0 = resolveHierarchyNamesFromStructure(
+                      structure,
+                      {
+                        empresaId: empresaId!,
+                        clienteId: clienteId!,
+                        divisionId: divisionId!,
+                        contratoId: contratoId ?? null,
+                        corpoId: corpoId!,
+                        puestoId: puestoId!,
+                      },
+                      puestosByCorpo[String(corpoId!)] ?? []
+                    );
+                    const row0: Survey = {
+                      id: createdServerId,
+                      id_local: '',
+                      persona_evaluada: personaNombreRef.current,
+                      empresa_evaluada: empresaEvaluadaRef.current,
+                      cedula_persona_evaluada: personaCedulaRef.current,
+                      telefono_persona_evaluada: personaTelefonoRef.current,
+                      email_persona_evaluada: personaEmailRef.current,
+                      firma_persona_evaluada: personSignatureBase64,
+                      empresa: labels0.empresa,
+                      cliente: labels0.cliente,
+                      sucursal: labels0.sucursal,
+                      puesto: labels0.puesto,
+                      division: labels0.division,
+                      contrato_id:
+                        contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
+                      responsable_id: parseInt(employee?.id || '0', 10) || 0,
+                      responsable: {
+                        nombre: responsableNombreRef.current,
+                        cedula: responsableCedulaRef.current,
+                      },
+                      firma_responsable: firmaResponsableBase64,
+                      nombre_firma: '',
+                      fecha: fechaEncuestaRef.current,
+                      evaluaciones: JSON.stringify(evaluaciones),
+                      observations: observacionesRef.current.trim() || '-',
+                    };
+                    const merged0 = upsertSurveyCacheRowForPuesto(list0, row0, puestoId!);
+                    await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged0));
+                  }
                   Alert.alert('Éxito', data.message || 'Encuesta creada correctamente');
                   setIsCreating(false);
+                  const listScopeAfterCreate = getListScopeForRefresh();
                   resetForm();
-                  const pid =
-                    filterPuestoIdRef.current ?? formPuestoId ?? puestoIdRef.current ?? null;
-                  if (pid) await fetchSurveysList(pid, true);
+                  await fetchSurveysList(listScopeAfterCreate, true);
                 } else {
                   Alert.alert('Error', data.message || 'Error al crear la encuesta');
                 }
@@ -1907,8 +2242,18 @@ export default function SatisfactionSurveysScreen() {
                 });
                 await AsyncStorage.setItem('surveys_actions', JSON.stringify(nextActions));
 
-                // Obtener puesto seleccionado para el cache
-                const selectedPuesto = puestos.find(p => p.id === puestoIdRef.current);
+                const labels = resolveHierarchyNamesFromStructure(
+                  structure,
+                  {
+                    empresaId: empresaId!,
+                    clienteId: clienteId!,
+                    divisionId: divisionId!,
+                    contratoId: contratoId ?? null,
+                    corpoId: corpoId!,
+                    puestoId: puestoId!,
+                  },
+                  puestosByCorpo[String(corpoId!)] ?? []
+                );
 
                 // Crear encuesta en cache
                 const cacheStr = await AsyncStorage.getItem('surveys_cache');
@@ -1923,23 +2268,14 @@ export default function SatisfactionSurveysScreen() {
                   telefono_persona_evaluada: personaTelefonoRef.current,
                   email_persona_evaluada: personaEmailRef.current,
                   firma_persona_evaluada: personSignatureBase64,
-                  empresa: {
-                    id: currentMarcaData.empresa?.id || 0,
-                    nombre: currentMarcaData.empresa?.nombre || '',
-                  },
-                  sucursal: {
-                    id: currentMarcaData.sucursal?.id || 0,
-                    nombre: currentMarcaData.sucursal?.nombre || '',
-                  },
-                  puesto: {
-                    id: puestoIdRef.current,
-                    nombre: selectedPuesto?.nombre || '',
-                  },
-                  division: {
-                    id: divisionRef.current === 'Seguridad' ? 1 : 2,
-                    nombre: divisionRef.current,
-                  },
-                  responsable_id: parseInt(employee?.id || '0'),
+                  empresa: labels.empresa,
+                  cliente: labels.cliente,
+                  sucursal: labels.sucursal,
+                  puesto: labels.puesto,
+                  division: labels.division,
+                  contrato_id:
+                    contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
+                  responsable_id: parseInt(employee?.id || '0', 10) || 0,
                   responsable: {
                     nombre: responsableNombreRef.current,
                     cedula: responsableCedulaRef.current,
@@ -1956,10 +2292,9 @@ export default function SatisfactionSurveysScreen() {
 
                 Alert.alert('Modo Offline', 'Encuesta registrada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
+                const listScopeAfterOfflineCreate = getListScopeForRefresh();
                 resetForm();
-                const pid =
-                  filterPuestoIdRef.current ?? formPuestoId ?? puestoIdRef.current ?? null;
-                if (pid) await fetchSurveysList(pid, false);
+                await fetchSurveysList(listScopeAfterOfflineCreate, false);
               }
             } catch (err) {
               console.error('Error creating survey:', err);
@@ -2088,8 +2423,8 @@ export default function SatisfactionSurveysScreen() {
               if (divisionName === 'Seguridad' || divisionName === 'Aseo & Limpieza') {
                 for (const empresa of structure) {
                   for (const cliente of empresa.clientes || []) {
-                    if (cliente.id === formClienteId) {
-                      const division = cliente.division?.find((d: any) => {
+                    if (Number(cliente.id) === Number(formClienteId)) {
+                      const division = getClienteDivisionArray(cliente).find((d: any) => {
                         const dName = d.nombre;
                         if (divisionName === 'Seguridad') {
                           return dName === 'Seguridad' || dName.toLowerCase().includes('seguridad');
@@ -2134,6 +2469,8 @@ export default function SatisfactionSurveysScreen() {
               division_id: divisionId,
               corpo_id: corpoId,
               puesto_id: puestoId,
+              contrato_id:
+                contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
               fecha: fechaEncuestaRef.current,
               evaluaciones: JSON.stringify(evaluaciones),
               persona_evaluada: personaNombreRef.current,
@@ -2149,6 +2486,19 @@ export default function SatisfactionSurveysScreen() {
               division: divisionRef.current,
             };
 
+            const editLabels = resolveHierarchyNamesFromStructure(
+              structure,
+              {
+                empresaId: empresaId!,
+                clienteId: clienteId!,
+                divisionId: divisionId!,
+                contratoId: contratoId ?? null,
+                corpoId: corpoId!,
+                puestoId: puestoId!,
+              },
+              puestosByCorpo[String(corpoId!)] ?? []
+            );
+
             const survey = editingSurvey;
 
             if (survey.id > 0) {
@@ -2163,9 +2513,9 @@ export default function SatisfactionSurveysScreen() {
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Encuesta actualizada correctamente');
                   setEditingSurvey(null);
+                  const listScopeAfterEdit = getListScopeForRefresh();
                   resetForm();
-                  const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
-                  if (pid) await fetchSurveysList(pid, true);
+                  await fetchSurveysList(listScopeAfterEdit, true);
                 } else {
                   Alert.alert('Error', data.message || 'Error al actualizar la encuesta');
                 }
@@ -2199,6 +2549,13 @@ export default function SatisfactionSurveysScreen() {
                         fecha: fechaEncuestaRef.current,
                         evaluaciones: JSON.stringify(evaluaciones),
                         observations: observacionesRef.current.trim() || '-',
+                        empresa: editLabels.empresa,
+                        cliente: editLabels.cliente,
+                        division: editLabels.division,
+                        sucursal: editLabels.sucursal,
+                        puesto: editLabels.puesto,
+                        contrato_id:
+                          contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
                         responsable: {
                           nombre: responsableNombreRef.current,
                           cedula: responsableCedulaRef.current,
@@ -2210,9 +2567,9 @@ export default function SatisfactionSurveysScreen() {
                 }
                 Alert.alert('Modo Offline', 'Cambios guardados localmente. Se sincronizarán al recuperar conexión.');
                 setEditingSurvey(null);
+                const listScopeAfterOfflineEdit = getListScopeForRefresh();
                 resetForm();
-                const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
-                if (pid) await fetchSurveysList(pid, false);
+                await fetchSurveysList(listScopeAfterOfflineEdit, false);
               }
             } else {
               const actionsStr = await AsyncStorage.getItem('surveys_actions');
@@ -2249,6 +2606,13 @@ export default function SatisfactionSurveysScreen() {
                     fecha: fechaEncuestaRef.current,
                     evaluaciones: JSON.stringify(evaluaciones),
                     observations: observacionesRef.current.trim() || '-',
+                    empresa: editLabels.empresa,
+                    cliente: editLabels.cliente,
+                    division: editLabels.division,
+                    sucursal: editLabels.sucursal,
+                    puesto: editLabels.puesto,
+                    contrato_id:
+                      contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
                     responsable: {
                       nombre: responsableNombreRef.current,
                       cedula: responsableCedulaRef.current,
@@ -2259,9 +2623,9 @@ export default function SatisfactionSurveysScreen() {
               }
               Alert.alert('Éxito', 'Borrador actualizado.');
               setEditingSurvey(null);
+              const listScopeAfterDraft = getListScopeForRefresh();
               resetForm();
-              const pid = filterPuestoIdRef.current ?? formPuestoId ?? null;
-              if (pid) await fetchSurveysList(pid, false);
+              await fetchSurveysList(listScopeAfterDraft, false);
             }
           } catch (err) {
             console.error('Error updating survey:', err);
@@ -2294,8 +2658,7 @@ export default function SatisfactionSurveysScreen() {
                 });
                 if (res.status) {
                   Alert.alert('Éxito', res.message || 'Encuesta eliminada');
-                  const pid = filterPuestoIdRef.current;
-                  if (pid) await fetchSurveysList(pid, false);
+                  await fetchSurveysList(getListScopeForRefresh(), false);
                 } else {
                   Alert.alert('Error', res.message || 'No se pudo eliminar');
                 }
@@ -2315,8 +2678,7 @@ export default function SatisfactionSurveysScreen() {
                   );
                 }
                 Alert.alert('Modo Offline', 'Eliminación pendiente de sincronización.');
-                const pid = filterPuestoIdRef.current;
-                if (pid) await fetchSurveysList(pid, false);
+                await fetchSurveysList(getListScopeForRefresh(), false);
               }
             } else {
               const actionsStr = await AsyncStorage.getItem('surveys_actions');
@@ -2336,8 +2698,7 @@ export default function SatisfactionSurveysScreen() {
                 );
               }
               Alert.alert('Éxito', 'Registro local eliminado.');
-              const pid = filterPuestoIdRef.current;
-              if (pid) await fetchSurveysList(pid, false);
+              await fetchSurveysList(getListScopeForRefresh(), false);
             }
           } catch (e) {
             console.error(e);
@@ -2458,7 +2819,9 @@ export default function SatisfactionSurveysScreen() {
       return;
     }
     const survey = addSignatureSurvey;
-    if (!survey || survey.id === 0) return;
+    if (!survey) return;
+    if (Number(survey.id) <= 0 && String(survey.id_local || '').trim() === '') return;
+
     Alert.alert(
       'Confirmar',
       '¿Guardar esta firma de la persona evaluada en el registro?',
@@ -2469,31 +2832,54 @@ export default function SatisfactionSurveysScreen() {
           onPress: async () => {
             setIsAddSignatureSubmitting(true);
             try {
-              const result = await updateSurveySignature({
-                surveyId: survey.id,
-                field: 'firma_persona_evaluada',
-                value: sig,
-                refreshAccessToken,
-                logout,
-              });
-              if (result.status) {
-                const personaUri = sig.startsWith('data:') ? sig : `data:image/png;base64,${sig}`;
-                setDecodedFirmas((prev) => {
-                  const next = new Map(prev);
-                  const ek = surveyExpandKey(survey);
-                  const existing = next.get(ek) || { responsable: null, persona: null };
-                  next.set(ek, { ...existing, persona: personaUri });
-                  return next;
+              const isConnected = await getConnectionStatus();
+              const isServerRow = Number(survey.id) > 0;
+              const personaUri = sig.startsWith('data:') ? sig : `data:image/png;base64,${sig}`;
+
+              if (isConnected && isServerRow) {
+                const result = await updateSurveySignature({
+                  surveyId: survey.id,
+                  field: 'firma_persona_evaluada',
+                  value: sig,
+                  refreshAccessToken,
+                  logout,
                 });
-                closeAddSignatureModal();
-                const pid = filterPuestoIdRef.current;
-                if (pid) await fetchSurveysList(pid, true);
-                Alert.alert('Éxito', result.message || 'Firma actualizada correctamente');
-              } else {
-                Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+                if (result.status) {
+                  setDecodedFirmas((prev) => {
+                    const next = new Map(prev);
+                    const ek = surveyExpandKey(survey);
+                    const existing = next.get(ek) || { responsable: null, persona: null };
+                    next.set(ek, { ...existing, persona: personaUri });
+                    return next;
+                  });
+                  closeAddSignatureModal();
+                  await fetchSurveysList(getListScopeForRefresh(), true);
+                  Alert.alert('Éxito', result.message || 'Firma actualizada correctamente');
+                } else {
+                  Alert.alert('Error', result.message || 'No se pudo actualizar la firma.');
+                }
+                return;
               }
+
+              // Sin conexión o borrador no sincronizado (id local): caché + cola
+              await persistFirmaPersonaInSurveyCache(survey, sig);
+              await persistFirmaPersonaInSurveyActionsQueue(survey, sig);
+              setDecodedFirmas((prev) => {
+                const next = new Map(prev);
+                const ek = surveyExpandKey(survey);
+                const existing = next.get(ek) || { responsable: null, persona: null };
+                next.set(ek, { ...existing, persona: personaUri });
+                return next;
+              });
+              closeAddSignatureModal();
+              await fetchSurveysList(getListScopeForRefresh(), false);
+              const msg =
+                isServerRow && !isConnected
+                  ? 'Firma guardada localmente. Se enviará al recuperar conexión.'
+                  : 'Firma guardada en el borrador. Se sincronizará con el registro al enviar la encuesta.';
+              Alert.alert('Éxito', msg);
             } catch (e) {
-              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo actualizar la firma.'));
+              Alert.alert('Error', (e instanceof Error ? e.message : 'No se pudo guardar la firma.'));
             } finally {
               setIsAddSignatureSubmitting(false);
             }
@@ -2636,7 +3022,7 @@ export default function SatisfactionSurveysScreen() {
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
-      case 'files': return <Ionicons name="document-text" size={24} color='#000000' />;
+      case 'files': return <Ionicons name="mail" size={24} color='#000000' />;
       case 'add': return <Ionicons name="add" size={24} color='#000000' />;
       case 'cancel': return <Ionicons name="close" size={24} color='#FFFFFF' />;
       case 'confirm': return <Ionicons name="checkmark" size={24} color='#FFFFFF' />;
@@ -2897,9 +3283,6 @@ export default function SatisfactionSurveysScreen() {
                                   setFilterPuestoId(null);
                                   filterPuestoIdRef.current = null;
                                   setSurveys([]);
-                                  if (v) {
-                                    fetchPuestosForCorpo(v, true);
-                                  }
                                 }}
                                 style={styles.picker}
                               >
@@ -3082,16 +3465,8 @@ export default function SatisfactionSurveysScreen() {
                             {survey.empresa_evaluada}
                           </ThemedText>
                           <ThemedText style={styles.surveyInfo}>
-                            <ThemedText style={styles.surveyLabel}>Sucursal: </ThemedText>
-                            {survey.sucursal?.nombre || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.surveyInfo}>
                             <ThemedText style={styles.surveyLabel}>Puesto: </ThemedText>
                             {survey.puesto?.nombre || 'N/A'}
-                          </ThemedText>
-                          <ThemedText style={styles.surveyInfo}>
-                            <ThemedText style={styles.surveyLabel}>División: </ThemedText>
-                            {survey.division?.nombre || 'N/A'}
                           </ThemedText>
 
                           {/* Collapsable Button */}
@@ -3180,7 +3555,7 @@ export default function SatisfactionSurveysScreen() {
                                     <ThemedView style={styles.firmaSection}>
                                       <ThemedText style={styles.firmaSectionTitle}>Firma de la Persona Evaluada:</ThemedText>
                                       <ThemedText style={styles.emptyText}>No hay firma de la persona evaluada registrada</ThemedText>
-                                      {survey.id > 0 && (
+                                      {(Number(survey.id) > 0 || String(survey.id_local || '').trim() !== '') && (
                                         <TouchableOpacity
                                           style={[styles.signatureButton, { marginTop: 8 }]}
                                           onPress={() => openAddSignatureModal(survey)}
@@ -3451,10 +3826,6 @@ export default function SatisfactionSurveysScreen() {
                             onValueChange={(value) => {
                               setFormCorpoId(value && value !== '' ? Number(value) : null);
                               setFormPuestoId(null);
-                              // Cargar puestos cuando se selecciona una sucursal
-                              if (value && value !== '') {
-                                fetchPuestosForCorpo(Number(value), true);
-                              }
                             }}
                             style={styles.picker}
                           >
@@ -3482,7 +3853,7 @@ export default function SatisfactionSurveysScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                            {formPuestosList.map((p: any) => (
+                            {formPuestoOptions.map((p: any) => (
                               <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                             ))}
                           </Picker>

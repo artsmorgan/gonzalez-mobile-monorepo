@@ -4,6 +4,7 @@ import { callDynamicPrisma } from '../../../utils/callDynamicPrisma';
 import { toZonedTime } from 'date-fns-tz';
 import { sendNotificationByRole } from '../../../utils/sendNotification';
 import { uploadDynamicFiles } from '../../../utils/callDynamicFilesApi';
+import { mapActaEntregaImagesForClient } from './mapActaEntregaImagesForClient';
 
 export const runtime = 'nodejs';
 
@@ -24,7 +25,7 @@ export async function GET(req: NextRequest) {
     const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
 
-    const where: any = {};
+    const where: any = { isActive: true };
 
     // Prioridad: corpo_id > contrato_id > division_id > cliente_id > empresa_id
     if (corpoIdStr) {
@@ -77,15 +78,14 @@ export async function GET(req: NextRequest) {
 
     const recordsArray = Array.isArray(records) ? records : [];
     const baseUrl = req.nextUrl.origin;
-    const recordsWithIdLocal = recordsArray.map((record: any) => ({
-      ...record,
-      id_local: "",
-      images: (record.c_imagenes_acta_entrega_producto || []).map((img: any) => ({
-        id: img.id,
-        name: img.name,
-        url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${record.id}/get-image/${img.name}` : "",
-      })),
-    }));
+    const recordsWithIdLocal = recordsArray.map((record: any) => {
+      const { c_imagenes_acta_entrega_producto: _img, ...rest } = record;
+      return {
+        ...rest,
+        id_local: '',
+        images: mapActaEntregaImagesForClient(Number(record.id), record.c_imagenes_acta_entrega_producto, baseUrl),
+      };
+    });
 
     return NextResponse.json({
       status: true,
@@ -127,6 +127,7 @@ export async function POST(req: NextRequest) {
       division_id,
       contrato_id,
       corpo_id,
+      puesto_id,
       mensual,
       detalle,
       observaciones,
@@ -163,6 +164,7 @@ export async function POST(req: NextRequest) {
       ['division_id', division_id],
       ['contrato_id', contrato_id],
       ['corpo_id', corpo_id],
+      ['puesto_id', puesto_id],
       ['mensual', mensual],
       ['detalle', detalle],
       ['observaciones', observaciones],
@@ -197,6 +199,7 @@ export async function POST(req: NextRequest) {
           division_id: Number(division_id),
           contrato_id: Number(contrato_id),
           corpo_id: Number(corpo_id),
+          puesto_id: Number(puesto_id),
           fecha: createdAt.toISOString(),
           tipo_entrega: String(tipo_entrega),
           mensual: String(mensual),
@@ -238,6 +241,7 @@ export async function POST(req: NextRequest) {
               division_id: newRecordObj.division_id,
               contrato_id: newRecordObj.contrato_id,
               corpo_id: newRecordObj.corpo_id,
+              puesto_id: newRecordObj.puesto_id,
               fecha: createdAt.toISOString(),
               tipo_entrega: newRecordObj.tipo_entrega,
               mensual: newRecordObj.mensual,
@@ -359,18 +363,16 @@ export async function POST(req: NextRequest) {
 
     const fullRecordObj = fullRecord as any;
     const baseUrl = req.nextUrl.origin;
+    const aid = Number(fullRecordObj?.id ?? newRecordObj?.id);
+    const { c_imagenes_acta_entrega_producto: _cimg, ...actaRest } = fullRecordObj ?? newRecordObj ?? {};
     return NextResponse.json(
       {
         status: true,
         message: 'Acta creada correctamente',
         data: {
-          ...(fullRecordObj ?? newRecordObj),
+          ...actaRest,
           id_local: '',
-          images: ((fullRecordObj?.c_imagenes_acta_entrega_producto || []) as any[]).map((f: any) => ({
-            id: f.id,
-            name: f.name,
-            url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${fullRecordObj?.id}/get-image/${f.name}` : '',
-          })),
+          images: mapActaEntregaImagesForClient(aid, fullRecordObj?.c_imagenes_acta_entrega_producto, baseUrl),
           created_by: payload?.id?.toString() || '',
         },
       },

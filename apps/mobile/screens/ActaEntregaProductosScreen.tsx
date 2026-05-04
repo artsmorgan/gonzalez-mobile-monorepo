@@ -36,30 +36,128 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
+import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  mergeActaEntregaServerIntoCache,
+  migrateActaEntregaFromEvaluationsCacheIfEmpty,
+  normalizeActaEntregaImagesForCache,
+  normalizeSyncedActaEntregaRecord,
+  readActaEntregaProductosCache,
+  upsertActaEntregaInCache,
+  writeActaEntregaProductosCache,
+  type ActaEntregaFetchScope,
+} from '@/hooks/actaEntregaProductosCache';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import {
   createActaEntregaProducto,
   deleteActaEntregaProducto,
+  deleteActaEntregaProductoImage,
   listActaEntregaProducto,
   listActaEntregaProductoByCorpo,
   updateActaEntregaProducto,
 } from '@/hooks/evaluationFunctions';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { stripActaEntregaImagesForActionPayload } from '@/hooks/actaEntregaProductosImagesSync';
 
 type NavProp = NativeStackNavigationProp<RootStackParamList, 'ActaEntregaProductos'>;
 
-type MainStructureSucursalNode = { id: number; nombre: string; nro_sucursal: string };
+type MainStructurePuestoNode = { id: number; nombre: string };
+type MainStructureSucursalNode = {
+  id: number;
+  nombre: string;
+  nro_sucursal: string;
+  puestos?: MainStructurePuestoNode[];
+};
 type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
 type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
 type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
-/** Solo `current_marca.roleDivision.division.id` (MarcaIngresoSalida). */
+type RoleName = 'OPERATIVO' | string | null;
+
+/** Busca empresa..sucursal en el árbol mergeado por corpo_id (sucursal). */
+function findHierarchyByCorpoId(
+  tree: MainStructureTree,
+  corpoId: number | string | null | undefined,
+): {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+} | null {
+  if (corpoId == null || corpoId === '') return null;
+  const target = Number(corpoId);
+  if (!Number.isFinite(target) || target <= 0) return null;
+  if (!Array.isArray(tree)) return null;
+  for (const emp of tree) {
+    const clientes = Array.isArray(emp.clientes) ? emp.clientes : [];
+    for (const cli of clientes) {
+      const divisions: any[] = Array.isArray(cli.division) ? cli.division : [];
+      for (const div of divisions) {
+        const contratos: any[] = Array.isArray(div.contratos) ? div.contratos : [];
+        for (const con of contratos) {
+          const sucursales: any[] = Array.isArray(con.sucursales) ? con.sucursales : [];
+          for (const suc of sucursales) {
+            if (Number(suc.id) === target) {
+              return {
+                empresaId: Number(emp.id),
+                clienteId: Number(cli.id),
+                divisionId: Number(div.id),
+                contratoId: Number(con.id),
+                corpoId: Number(suc.id),
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Si `roleDivision.division.id` no viene (p. ej. 0 en API), infiere división desde
+ * empresa + cliente + contrato en el árbol mergeado (padre del contrato).
+ */
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId) return null;
+  if (!Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions: any[] = Array.isArray(cliente?.division) ? cliente.division : [];
+  for (const div of divisions) {
+    const contratos: any[] = Array.isArray(div.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+/**
+ * División en `current_marca` (misma fuente que MarcarIngresoSalida `data.marca`):
+ * - `roleDivision.division.id` / `role_division.division.id` (ids > 0; el API puede enviar 0 si falta empleado_plaza.division_id)
+ * - `division_id` en raíz
+ */
 function getMarcaRoleDivisionId(current: any): number | null {
-  const idRaw = current?.roleDivision?.division?.id;
+  if (!current || typeof current !== 'object') return null;
+  const idRaw =
+    current.roleDivision?.division?.id ??
+    current.role_division?.division?.id ??
+    current.division_id;
   if (idRaw == null || idRaw === '') return null;
   const n = Number(idRaw);
-  return Number.isFinite(n) ? n : null;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 /** Confirma que el id exista bajo empresa/cliente en main_structure; si no hay árbol o ramas, devuelve el mismo id. */
@@ -93,63 +191,6 @@ function resolveMarcaDivisionIdForTree(currentMarca: any, structure: MainStructu
   );
 }
 
-/**
- * Alcance de listado: misma jerarquía que `fetchRecords` (filtro explícito o `current_marca`).
- * La lista principal se identifica sobre todo por `corpo_id` (sucursal), junto con empresa → cliente → división → contrato cuando aplica.
- */
-type ActaEntregaFetchScope = {
-  empresaId: number | null;
-  clienteId: number | null;
-  divisionId: number | null;
-  contratoId: number | null;
-  corpoId: number | null;
-};
-
-/** Igual que el filtrado de `localRecords` en `fetchRecords` (offline / vista). */
-function actaEntregaRecordMatchesFetchScope(r: any, scope: ActaEntregaFetchScope): boolean {
-  const { empresaId, clienteId, divisionId, contratoId, corpoId } = scope;
-  if (empresaId && Number(r.empresa_id) !== Number(empresaId)) return false;
-  if (clienteId && Number(r.cliente_id) !== Number(clienteId)) return false;
-  if (divisionId && Number(r.division_id) !== Number(divisionId)) return false;
-  if (contratoId && Number(r.contrato_id) !== Number(contratoId)) return false;
-  if (corpoId && Number(r.corpo_id) !== Number(corpoId)) return false;
-  return true;
-}
-
-/**
- * Con respuesta del servidor (online): en `evaluations_cache` solo se sustituyen actas del mismo
- * alcance jerárquico que la búsqueda; se conservan actas de otras sucursas/rutas y los borradores
- * pendientes (`synced === false`) del alcance actual.
- */
-async function mergeActaEntregaServerIntoEvaluationsCache(
-  serverRecords: ActaEntregaProducto[],
-  scope: ActaEntregaFetchScope
-): Promise<void> {
-  let raw: any[] = [];
-  try {
-    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
-    raw = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    raw = [];
-  }
-
-  const preserved = raw.filter((it: any) => {
-    if (it?.type !== 'acta_entrega_producto') return true;
-    if (!actaEntregaRecordMatchesFetchScope(it, scope)) return true;
-    if (it.synced === false) return true;
-    return false;
-  });
-
-  const fromServer = serverRecords.map((r) => ({
-    ...(r as Record<string, unknown>),
-    type: 'acta_entrega_producto',
-    synced: true,
-  }));
-
-  await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...preserved, ...fromServer]));
-}
-
 type DetalleItem = {
   id_local: string;
   descripcion: string;
@@ -161,9 +202,13 @@ type DetalleItem = {
 
 type ActaImage = {
   id?: number;
-  name?: string; // server filename
-  base64?: string; // dataURL (offline)
+  id_local?: string; // local-* = borrador capturado en el dispositivo
+  name?: string; // nombre en servidor (get-image)
+  url?: string; // URL absoluta (misma forma que el GET de lista)
+  base64?: string; // dataURL (legado / precarga)
   extension?: string;
+  /** Nombre de archivo en el directorio de documentos (expo-file-system / `fileStorage`) */
+  localFileName?: string;
 };
 
 type ActaEntregaProducto = {
@@ -176,6 +221,8 @@ type ActaEntregaProducto = {
   division_id?: number;
   contrato_id?: number;
   corpo_id?: number;
+  puesto_id?: number;
+  isActive?: boolean;
 
   fecha?: string;
   tipo_entrega: string;
@@ -197,6 +244,93 @@ type ActaEntregaProducto = {
 
   images?: ActaImage[];
 };
+
+/** Tiene id numérico de servidor (ya no es solo borrador offline). */
+function hasActaEntregaServerId(r: Pick<ActaEntregaProducto, 'id'>): boolean {
+  return actaEntregaNumericServerId(r) > 0;
+}
+
+/** Id entero del acta en servidor (0 si es solo borrador / inválido). */
+function actaEntregaNumericServerId(r: Pick<ActaEntregaProducto, 'id'>): number {
+  const id = r.id;
+  if (id == null || id === '') return 0;
+  const s = String(id).trim();
+  if (!s || s.startsWith('local-')) return 0;
+  const n = Number(s);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+/** Borrador solo en cola: local-* en id_local y sin id de servidor todavía. */
+function isActaEntregaLocalDraftOnly(r: ActaEntregaProducto): boolean {
+  if (!r.id_local || !String(r.id_local).startsWith('local-')) return false;
+  return !hasActaEntregaServerId(r);
+}
+
+/** Adjunto solo en dispositivo: archivo local o captura sin fila en servidor (sin id+name). */
+function actaImageIsOfflineDraftAttachment(img: ActaImage): boolean {
+  const id = img?.id;
+  const hasServerMeta =
+    id != null &&
+    Number.isFinite(Number(id)) &&
+    Number(id) > 0 &&
+    img.name != null &&
+    String(img.name).trim() !== '';
+  if (hasServerMeta) return false;
+  if (img.localFileName != null && String(img.localFileName).trim() !== '') return true;
+  const il = img.id_local != null ? String(img.id_local).trim() : '';
+  return il.startsWith('local-');
+}
+
+function hasActaImageBase64(img: ActaImage): boolean {
+  const b = img.base64;
+  return typeof b === 'string' && b.trim().length > 0;
+}
+
+/**
+ * URI para <Image />: base64 (borrador), o siempre get-image bajo API_SERVER (mismo host que el resto de la app).
+ * No depender primero de `img.url` del servidor: suele traer origin equivocado (localhost/ngrok) y la petición no llega al API configurado en el cliente.
+ */
+function mimeFromExtension(ext: string): string {
+  const e = String(ext || 'jpg').replace(/^\./, '').toLowerCase();
+  return e === 'png' ? 'png' : 'jpeg';
+}
+
+function resolveActaImageUri(
+  img: ActaImage,
+  actaId: number,
+  apiUrl: string | undefined,
+  appendToken: (u: string) => string,
+): string {
+  if (hasActaImageBase64(img)) return img.base64!;
+  if (img.localFileName != null && String(img.localFileName).trim() !== '') {
+    const u = getLocalFileDisplayUri(String(img.localFileName));
+    if (u) return u;
+  }
+  if (actaImageIsOfflineDraftAttachment(img) && !img.localFileName) return '';
+
+  const base = apiUrl != null ? String(apiUrl).replace(/\/$/, '') : '';
+  const name = img.name != null ? String(img.name).trim() : '';
+
+  if (base && actaId > 0 && name) {
+    return appendToken(
+      `${base}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(name)}?t=${Date.now()}`,
+    );
+  }
+
+  const rawUrl = img.url != null ? String(img.url).trim() : '';
+  if (rawUrl.startsWith('data:')) return rawUrl;
+  const lower = rawUrl.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    const sep = rawUrl.includes('?') ? '&' : '?';
+    return appendToken(`${rawUrl}${sep}t=${Date.now()}`);
+  }
+  if (rawUrl.startsWith('/') && base) {
+    const sep = rawUrl.includes('?') ? '&' : '?';
+    return appendToken(`${base}${rawUrl}${sep}t=${Date.now()}`);
+  }
+
+  return '';
+}
 
 const generateRandomId = (): string => `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -323,13 +457,36 @@ export default function ActaEntregaProductosScreen() {
   const navigation = useNavigation<NavProp>();
   const { employee, isAuthenticated, isLoading, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR } = useQRScanner();
-  const appendTokenToUrl = (url: string) => {
+
+  /**
+   * Mismo criterio que JobManualsScreen: URLs para <Image /> llevan ?token= porque no envían Authorization.
+   * Peticiones con fetch usan authedFetch (Bearer). Refresco de token vía getValidAccessTokenOrLogout al entrar en pantalla.
+   */
+  const [queryAccessToken, setQueryAccessToken] = useState<string>('');
+
+  const refreshQueryAccessToken = useCallback(async () => {
+    try {
+      const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
+    } catch {
+      setQueryAccessToken('');
+    }
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    refreshQueryAccessToken();
+  }, [accessToken, refreshQueryAccessToken]);
+
+  const appendTokenToUrl = useCallback((url: string) => {
     if (!url) return '';
-    if (!accessToken || accessToken.trim().length === 0) return url;
+    const fromContext = accessToken != null ? String(accessToken).trim() : '';
+    const fromRefresh = queryAccessToken.trim();
+    const token = fromContext || fromRefresh;
+    if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
-    const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
-  };
+    const separator = url.includes('?') ? '&' : '?';
+    return `${url}${separator}token=${encodeURIComponent(token)}`;
+  }, [accessToken, queryAccessToken]);
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -363,12 +520,15 @@ export default function ActaEntregaProductosScreen() {
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
   const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
+  /** Nombre del rol en marca (`roleDivision.role.nombre`), p. ej. OPERATIVO */
+  const [roleName, setRoleName] = useState<RoleName>(null);
   /** Precarga de filtros desde la marca una vez por visita (no se reaplica si cambia `structure`). */
   const filtersMarcaAppliedOnceRef = useRef(false);
   /** El usuario pulsó "Limpiar Filtros": no volver a precargar jerarquía hasta la próxima entrada a la pantalla. */
   const userClearedHierarchyFiltersRef = useRef(false);
 
-  // Estructura jerárquica
+  // Estructura jerárquica (árbol mergeado + fragmentos para selects como en PuestoUbicacion)
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
@@ -378,6 +538,7 @@ export default function ActaEntregaProductosScreen() {
   const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Form
   const [fecha, setFecha] = useState<Date>(new Date());
@@ -401,6 +562,7 @@ export default function ActaEntregaProductosScreen() {
   const [expandedDetalleIds, setExpandedDetalleIds] = useState<string[]>([]);
   const [expandedImagesIds, setExpandedImagesIds] = useState<string[]>([]);
   const [expandedSignaturesIds, setExpandedSignaturesIds] = useState<string[]>([]);
+  const [deletingImageKey, setDeletingImageKey] = useState<string | null>(null);
 
   // Photos
   const [images, setImages] = useState<ActaImage[]>([]);
@@ -420,6 +582,7 @@ export default function ActaEntregaProductosScreen() {
   const [showFechaRecibePicker, setShowFechaRecibePicker] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -545,6 +708,7 @@ export default function ActaEntregaProductosScreen() {
     setExpandedSignaturesIds([]);
     setImages([]);
     setPhotosDirty(false);
+    setFormPuestoId(null);
   };
 
   const decodeFirmaHash = (hash: string) => {
@@ -667,6 +831,9 @@ export default function ActaEntregaProductosScreen() {
         url: appendTokenToUrl(`${apiUrl}/api/acta-entrega-productos/${actaId}/get-image/${encodeURIComponent(imageName)}?t=${Date.now()}`),
         init: {
           method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
         refreshAccessToken,
         logout,
@@ -686,20 +853,31 @@ export default function ActaEntregaProductosScreen() {
       console.error('Error loading acta image from server:', e);
       return null;
     }
-  }, [refreshAccessToken, logout]);
+  }, [appendTokenToUrl, refreshAccessToken, logout]);
 
   const preloadServerImagesForEdit = useCallback(async (record: ActaEntregaProducto) => {
     try {
       const isConnected = await getConnectionStatus();
-      const actaId = typeof record.id === 'number' ? record.id : parseInt(String(record.id || ''), 10);
-      if (!isConnected || !actaId) return;
-
-      const imgs = Array.isArray(record.images) ? record.images : [];
+      const actaId = actaEntregaNumericServerId(record);
+      const imgs = (Array.isArray(record.images) ? record.images : []) as ActaImage[];
       if (imgs.length === 0) return;
+
+      if (!isConnected || !actaId || Number.isNaN(actaId)) {
+        setImages(imgs);
+        return;
+      }
 
       const next: ActaImage[] = [];
       for (const img of imgs) {
-        if (img.base64) {
+        if (hasActaImageBase64(img)) {
+          next.push(img);
+          continue;
+        }
+        if (img.localFileName && String(img.localFileName).trim() !== '') {
+          next.push(img);
+          continue;
+        }
+        if (actaImageIsOfflineDraftAttachment(img)) {
           next.push(img);
           continue;
         }
@@ -719,11 +897,6 @@ export default function ActaEntregaProductosScreen() {
 
   const openCamera = async () => {
     try {
-      // Evitar perder imágenes existentes si el registro ya está sincronizado y no hay conexión
-      if (editingRecord?.id && !(await getConnectionStatus())) {
-        Alert.alert('Sin conexión', 'Necesitas conexión para agregar fotos en un registro ya sincronizado.');
-        return;
-      }
       if (!permission?.granted) {
         const result = await requestPermission();
         if (!result.granted) {
@@ -745,20 +918,28 @@ export default function ActaEntregaProductosScreen() {
     }
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
         skipProcessing: false,
       });
-      if (!photo?.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto');
         setIsCameraVisible(false);
         return;
       }
-      const base64Image = `data:image/jpeg;base64,${photo.base64}`;
+      const fileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'photo',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'acta_entrega',
+      });
       setIsCameraVisible(false);
       setTimeout(() => {
         setPhotosDirty(true);
-        setImages((prev) => [...prev, { base64: base64Image, extension: 'jpg' }]);
+        setImages((prev) => [
+          ...prev,
+          { id_local: generateRandomId(), localFileName: fileName, extension: 'jpg' },
+        ]);
       }, 100);
     } catch (e) {
       console.error('Error capturing photo:', e);
@@ -773,7 +954,15 @@ export default function ActaEntregaProductosScreen() {
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: () => {
+        onPress: async () => {
+          const target = images[index];
+          if (target?.localFileName) {
+            try {
+              await deleteFile(target.localFileName);
+            } catch {
+              /* ya borrado o ausente */
+            }
+          }
           setPhotosDirty(true);
           setImages((prev) => prev.filter((_, i) => i !== index));
         },
@@ -818,84 +1007,135 @@ export default function ActaEntregaProductosScreen() {
     faltantes: d.faltantes,
   })));
 
-  const buildImagenesJson = () => JSON.stringify(images.map((img) => ({
-    file_base64: img.base64 || '',
-    extension: img.extension || 'jpg',
-  })));
+  const deleteLocalImageFiles = async (list: ActaImage[]) => {
+    for (const im of list) {
+      if (!im?.localFileName) continue;
+      try {
+        await deleteFile(String(im.localFileName));
+      } catch {
+        /* idempotente */
+      }
+    }
+  };
+
+  const buildImagenesJsonAsync = useCallback(async (opts?: { actaId?: number | null }) => {
+    const actaId =
+      opts?.actaId != null && Number.isFinite(Number(opts.actaId)) && Number(opts.actaId) > 0
+        ? Number(opts.actaId)
+        : null;
+    const out: { file_base64: string; extension: string; original_name?: string }[] = [];
+    for (const img of images) {
+      let file_base64 = '';
+      if (img.localFileName != null && String(img.localFileName).trim() !== '') {
+        try {
+          const g = await getFile(String(img.localFileName));
+          const ext = String(img.extension || 'jpg').replace(/^\./, '').trim() || 'jpg';
+          file_base64 = `data:image/${mimeFromExtension(ext)};base64,${g.base64}`;
+        } catch {
+          file_base64 = '';
+        }
+      }
+      if (!file_base64 && hasActaImageBase64(img)) {
+        file_base64 = String(img.base64).trim();
+      }
+      if (!file_base64 && actaId && img.name && !actaImageIsOfflineDraftAttachment(img)) {
+        const fetched = await loadImageFromServer(actaId, img.name);
+        if (fetched) file_base64 = fetched.trim();
+      }
+      if (!file_base64) continue;
+      const ext = String(img.extension || 'jpg').replace(/^\./, '').trim() || 'jpg';
+      const row: { file_base64: string; extension: string; original_name?: string } = {
+        file_base64,
+        extension: ext,
+      };
+      if (img.name) row.original_name = img.name;
+      out.push(row);
+    }
+    return JSON.stringify(out);
+  }, [images, loadImageFromServer]);
 
   const loadMarcaContext = useCallback(async () => {
     try {
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
+        setHasCurrentMarca(false);
         setMarcaEmpresaId(null);
         setMarcaClienteId(null);
         setMarcaDivisionId(null);
         setMarcaContratoId(null);
         setMarcaCorpoId(null);
+        setMarcaPuestoId(null);
+        setRoleName(null);
         return null;
       }
+      setHasCurrentMarca(true);
       const current = JSON.parse(currentMarca);
+      const roleRaw =
+        current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+      setRoleName(typeof roleRaw === 'string' ? roleRaw : null);
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
       const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
       const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
       const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const divId = getMarcaRoleDivisionId(current);
-      setMarcaEmpresaId(empresaIdRaw ? Number(empresaIdRaw) : null);
-      setMarcaClienteId(clienteIdRaw ? Number(clienteIdRaw) : null);
+      const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+      const empresaNum = empresaIdRaw != null && empresaIdRaw !== '' ? Number(empresaIdRaw) : null;
+      const clienteNum = clienteIdRaw != null && clienteIdRaw !== '' ? Number(clienteIdRaw) : null;
+      const contratoNum = contratoIdRaw != null && contratoIdRaw !== '' ? Number(contratoIdRaw) : null;
+
+      let divId: number | null = getMarcaRoleDivisionId(current);
+      if (divId == null && empresaNum && clienteNum && contratoNum) {
+        try {
+          const tree: MainStructureTree = (await loadMainStructureTreeMerged()) as MainStructureTree;
+          if (tree.length > 0) {
+            const derived = findDivisionIdForContratoInStructure(
+              tree,
+              Number.isFinite(Number(empresaNum)) ? empresaNum : null,
+              Number.isFinite(Number(clienteNum)) ? clienteNum : null,
+              Number.isFinite(Number(contratoNum)) ? contratoNum : null,
+            );
+            if (derived != null) divId = derived;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+
+      setMarcaEmpresaId(empresaNum);
+      setMarcaClienteId(clienteNum);
       setMarcaDivisionId(divId);
-      setMarcaContratoId(contratoIdRaw ? Number(contratoIdRaw) : null);
-      setMarcaCorpoId(corpoIdRaw ? Number(corpoIdRaw) : null);
+      setMarcaContratoId(contratoNum);
+      setMarcaCorpoId(corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : null);
+      setMarcaPuestoId(puestoIdRaw != null && puestoIdRaw !== '' ? Number(puestoIdRaw) : null);
       return current;
     } catch {
+      setHasCurrentMarca(false);
       setMarcaEmpresaId(null);
       setMarcaClienteId(null);
       setMarcaDivisionId(null);
       setMarcaContratoId(null);
       setMarcaCorpoId(null);
+      setMarcaPuestoId(null);
+      setRoleName(null);
       return null;
     }
   }, []);
 
+  /**
+   * Mismo origen que PhysicalMinuteAgendaScreen: `loadMainStructureTreeMerged` (fragmentos +
+   * fallback a caché legada si el merge queda vacío o es parcial).
+   */
   const fetchMainStructure = useCallback(async () => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-        } catch {
-          // ignore
-        }
-      }
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response?.ok) return;
-      const data = await response.json().catch(() => ({}));
-      if (data.status && Array.isArray(data.structure)) {
-        setStructure(data.structure);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-        if (data.created_at != null && data.created_at !== undefined) {
-          await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-        }
-      }
+      const mergedTree = await loadMainStructureTreeMerged();
+      setStructure(Array.isArray(mergedTree) ? (mergedTree as MainStructureTree) : []);
     } catch (e) {
       console.error('ActaEntrega fetchMainStructure:', e);
+      setStructure([]);
     } finally {
       setIsStructureLoading(false);
     }
-  }, [logout, refreshAccessToken]);
+  }, []);
 
   const fetchRecords = useCallback(async () => {
     setIsLoadingData(true);
@@ -920,9 +1160,8 @@ export default function ActaEntregaProductosScreen() {
 
       let structureForDivision: MainStructureTree = [];
       try {
-        const structStr = await AsyncStorage.getItem('main_structure_cache');
-        const parsed = structStr ? JSON.parse(structStr) : [];
-        if (Array.isArray(parsed)) structureForDivision = parsed;
+        const t = await loadMainStructureTreeMerged();
+        structureForDivision = Array.isArray(t) ? (t as MainStructureTree) : [];
       } catch {
         structureForDivision = [];
       }
@@ -933,49 +1172,47 @@ export default function ActaEntregaProductosScreen() {
       const contratoIdFromMarca = contratoIdRaw ? Number(contratoIdRaw) : null;
       const corpoIdFromMarca = corpoIdRaw ? Number(corpoIdRaw) : null;
 
-      // Determinar si hay filtros explícitamente seleccionados
-      const hasExplicitFilters = filterEmpresaId !== null || filterClienteId !== null || filterDivisionId !== null || filterContratoId !== null || filterCorpoId !== null;
+      const isOp = roleName === 'OPERATIVO';
+      /** Lista/API: OPERATIVO → sucursal de marca; no OPERATIVO → filtro o marca (si no se limpió). */
+      let corpoIdForList: number | null = null;
+      if (isOp) {
+        corpoIdForList = corpoIdFromMarca;
+      } else if (filterCorpoId != null) {
+        corpoIdForList = filterCorpoId;
+      } else if (!userClearedHierarchyFiltersRef.current) {
+        corpoIdForList = corpoIdFromMarca;
+      } else {
+        corpoIdForList = null;
+      }
 
-      // Si hay filtros explícitos, usar SOLO esos (sin fallback a current_marca)
-      // Si NO hay filtros explícitos, usar current_marca como valores iniciales
-      const empresaId = hasExplicitFilters ? filterEmpresaId : (filterEmpresaId ?? empresaIdFromMarca);
-      const clienteId = hasExplicitFilters ? filterClienteId : (filterClienteId ?? clienteIdFromMarca);
-      const divisionId = hasExplicitFilters ? filterDivisionId : (filterDivisionId ?? divisionIdFromMarca);
-      const contratoId = hasExplicitFilters ? filterContratoId : (filterContratoId ?? contratoIdFromMarca);
-      const corpoId = hasExplicitFilters ? filterCorpoId : (filterCorpoId ?? corpoIdFromMarca);
-
-      // Si no hay ningún filtro seleccionado, no hacer búsqueda
-      if (!empresaId && !clienteId && !divisionId && !contratoId && !corpoId) {
+      if (!corpoIdForList) {
         setRecords([]);
         setIsLoadingData(false);
         return;
       }
 
+      const empresaId = isOp ? empresaIdFromMarca : (filterEmpresaId ?? empresaIdFromMarca);
+      const clienteId = isOp ? clienteIdFromMarca : (filterClienteId ?? clienteIdFromMarca);
+      const divisionId = isOp ? divisionIdFromMarca : (filterDivisionId ?? divisionIdFromMarca);
+      const contratoId = isOp ? contratoIdFromMarca : (filterContratoId ?? contratoIdFromMarca);
+      const corpoId = corpoIdForList;
+
       const isConnected = await getConnectionStatus();
 
-      // cache local (siempre)
-      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      await migrateActaEntregaFromEvaluationsCacheIfEmpty();
+      const cache = await readActaEntregaProductosCache();
       const localRecordsAll: ActaEntregaProducto[] = (cache || [])
         .filter((x: any) => x.type === 'acta_entrega_producto')
         .map((x: any) => x as ActaEntregaProducto);
 
-      // Filtrar cache local aplicando TODOS los filtros seleccionados (no solo el más específico)
       let localRecords: ActaEntregaProducto[] = localRecordsAll;
-      if (empresaId) {
-        localRecords = localRecords.filter((r: any) => Number(r.empresa_id) === Number(empresaId));
-      }
-      if (clienteId) {
-        localRecords = localRecords.filter((r: any) => Number(r.cliente_id) === Number(clienteId));
-      }
-      if (divisionId) {
-        localRecords = localRecords.filter((r: any) => Number(r.division_id) === Number(divisionId));
-      }
-      if (contratoId) {
-        localRecords = localRecords.filter((r: any) => Number(r.contrato_id) === Number(contratoId));
-      }
-      if (corpoId) {
-        localRecords = localRecords.filter((r: any) => Number(r.corpo_id) === Number(corpoId));
+      localRecords = localRecords.filter((r: any) => Number(r.corpo_id) === Number(corpoIdForList));
+      localRecords = localRecords.filter((r: any) => r?.isActive !== false);
+      if (!isOp) {
+        if (empresaId) localRecords = localRecords.filter((r: any) => Number(r.empresa_id) === Number(empresaId));
+        if (clienteId) localRecords = localRecords.filter((r: any) => Number(r.cliente_id) === Number(clienteId));
+        if (divisionId) localRecords = localRecords.filter((r: any) => Number(r.division_id) === Number(divisionId));
+        if (contratoId) localRecords = localRecords.filter((r: any) => Number(r.contrato_id) === Number(contratoId));
       }
 
       const unsynced = localRecords.filter((r) => r.synced === false);
@@ -986,13 +1223,11 @@ export default function ActaEntregaProductosScreen() {
         return;
       }
 
-      // Usar nueva función con filtros jerárquicos (solo enviar los que no son null)
       const res = await listActaEntregaProducto({
+        corpo_id: corpoIdForList,
         empresa_id: empresaId ?? undefined,
         cliente_id: clienteId ?? undefined,
-        division_id: divisionId ?? undefined,
         contrato_id: contratoId ?? undefined,
-        corpo_id: corpoId ?? undefined,
         refreshAccessToken,
         logout,
       });
@@ -1003,7 +1238,7 @@ export default function ActaEntregaProductosScreen() {
         return;
       }
 
-      const serverRecords: ActaEntregaProducto[] = Array.isArray(res.data) ? res.data : [];
+      const serverRecords: ActaEntregaProducto[] = (Array.isArray(res.data) ? res.data : []).filter((r: any) => r?.isActive !== false);
       const scope: ActaEntregaFetchScope = {
         empresaId,
         clienteId,
@@ -1011,7 +1246,7 @@ export default function ActaEntregaProductosScreen() {
         contratoId,
         corpoId,
       };
-      await mergeActaEntregaServerIntoEvaluationsCache(serverRecords, scope);
+      await mergeActaEntregaServerIntoCache(serverRecords, scope);
 
       // merge en pantalla: servidor + locales no sincronizados del alcance
       const unsyncedIds = new Set(unsynced.map((r) => String(r.id || r.id_local || '')));
@@ -1023,71 +1258,171 @@ export default function ActaEntregaProductosScreen() {
       setError('Error al cargar actas');
       setIsLoadingData(false);
     }
-  }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
+  }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, roleName]);
 
   const fetchRecordsRef = useRef(fetchRecords);
   useEffect(() => {
     fetchRecordsRef.current = fetchRecords;
   }, [fetchRecords]);
 
-  // Nodos computados para filtros jerárquicos
-  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  useEffect(() => {
+    if (!hasCurrentMarca) return;
+    fetchRecordsRef.current();
+  }, [
+    hasCurrentMarca,
+    filterEmpresaId,
+    filterClienteId,
+    filterDivisionId,
+    filterContratoId,
+    filterCorpoId,
+    roleName,
+  ]);
+
+  /**
+   * Jerarquía desde el mismo árbol que `loadMainStructureTreeMerged` (pantalla Minuta física), encadenando nodos.
+   */
+  const filterEmpresas = useMemo(
+    () => (Array.isArray(structure) ? structure : []),
+    [structure],
+  );
 
   const filterClientes = useMemo(() => {
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
-    return empresa?.clientes || [];
-  }, [filterEmpresas, filterEmpresaId]);
+    if (filterEmpresaId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  }, [filterEmpresaId, filterEmpresas]);
 
   const filterDivisiones = useMemo(() => {
-    if (!filterClienteId) return [];
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-    return cliente?.division || [];
-  }, [filterClientes, filterClienteId]);
+    if (filterEmpresaId == null || filterClienteId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
+    return Array.isArray(cliente?.division) ? cliente.division : [];
+  }, [filterEmpresaId, filterClienteId, filterEmpresas]);
 
   const filterContratos = useMemo(() => {
-    if (!filterDivisionId) return [];
-    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-    return division?.contratos || [];
-  }, [filterDivisiones, filterDivisionId]);
+    if (filterDivisionId == null) return [];
+    const division = filterDivisiones.find((d: any) => Number(d.id) === Number(filterDivisionId));
+    return Array.isArray(division?.contratos) ? division.contratos : [];
+  }, [filterDivisionId, filterDivisiones]);
 
   const filterSucursales = useMemo(() => {
-    if (!filterContratoId) return [];
-    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-    if (!division) return [];
-    const contrato = division.contratos?.find((c: any) => c.id === filterContratoId);
-    return contrato?.sucursales || [];
-  }, [filterDivisiones, filterDivisionId, filterContratoId]);
+    if (filterContratoId == null) return [];
+    const contrato = filterContratos.find((c: any) => Number(c.id) === Number(filterContratoId));
+    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
+  }, [filterContratoId, filterContratos]);
 
-  // Nodos computados para jerarquía del formulario
-  const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+  const formEmpresas = useMemo(
+    () => (Array.isArray(structure) ? structure : []),
+    [structure],
+  );
 
   const formClientes = useMemo(() => {
-    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
-    return empresa?.clientes || [];
-  }, [formEmpresas, formEmpresaId]);
+    if (formEmpresaId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  }, [formEmpresaId, formEmpresas]);
 
   const formDivisiones = useMemo(() => {
-    if (!formClienteId) return [];
-    const cliente = formClientes.find((c: any) => c.id === formClienteId);
-    return cliente?.division || [];
-  }, [formClientes, formClienteId]);
+    if (formEmpresaId == null || formClienteId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
+    return Array.isArray(cliente?.division) ? cliente.division : [];
+  }, [formEmpresaId, formClienteId, formEmpresas]);
 
   const formContratos = useMemo(() => {
-    if (!formDivisionId) return [];
-    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
-    return division?.contratos || [];
-  }, [formDivisiones, formDivisionId]);
+    if (formDivisionId == null) return [];
+    const division = formDivisiones.find((d: any) => Number(d.id) === Number(formDivisionId));
+    return Array.isArray(division?.contratos) ? division.contratos : [];
+  }, [formDivisionId, formDivisiones]);
 
   const formSucursales = useMemo(() => {
-    if (!formContratoId) return [];
-    const division = formDivisiones.find((d: any) => d.id === formDivisionId);
-    if (!division) return [];
-    const contrato = division.contratos?.find((c: any) => c.id === formContratoId);
-    return contrato?.sucursales || [];
-  }, [formDivisiones, formDivisionId, formContratoId]);
+    if (formContratoId == null) return [];
+    const contrato = formContratos.find((c: any) => Number(c.id) === Number(formContratoId));
+    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
+  }, [formContratoId, formContratos]);
 
-  // Precarga de filtros desde current_marca al entrar (una vez); ignorar nuevas referencias de `structure` tras limpiar filtros
+  const formPuestos = useMemo(() => {
+    if (formCorpoId == null) return [];
+    const contrato = formContratos.find((c: any) => Number(c.id) === Number(formContratoId));
+    const sucursal = (Array.isArray(contrato?.sucursales) ? contrato.sucursales : []).find(
+      (s: any) => Number(s.id) === Number(formCorpoId),
+    );
+    return (Array.isArray(sucursal?.puestos) ? sucursal.puestos : []) as MainStructurePuestoNode[];
+  }, [formCorpoId, formContratoId, formContratos]);
+
+  /**
+   * Tras cargar `structure`, completar división desde contrato de la marca si el API dejó
+   * `roleDivision.division` en 0 o vacío (ver attendance/user: empleado_plaza.division_id).
+   */
   useEffect(() => {
+    if (!structure?.length) return;
+    if (marcaDivisionId != null) return;
+    if (marcaEmpresaId == null || marcaClienteId == null || marcaContratoId == null) return;
+    const d = findDivisionIdForContratoInStructure(
+      structure,
+      marcaEmpresaId,
+      marcaClienteId,
+      marcaContratoId,
+    );
+    if (d != null) setMarcaDivisionId(d);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaContratoId, marcaDivisionId]);
+
+  /**
+   * Si `marcaDivisionId` llegó tarde (p. ej. tras derivarla del árbol), aplicar al filtro cuando aún faltaba.
+   * Evita que el efecto de precarga inicial salga con `filtersMarcaAppliedOnceRef` antes de tener división.
+   */
+  useEffect(() => {
+    if (roleName === 'OPERATIVO') return;
+    if (userClearedHierarchyFiltersRef.current) return;
+    if (!structure?.length) return;
+    if (marcaDivisionId == null) return;
+    if (filterDivisionId != null) return;
+    const dr = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
+    if (dr != null) setFilterDivisionId(dr);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, filterDivisionId, roleName]);
+
+  /**
+   * Mismo caso que el filtro: al crear, `startCreating` puede ejecutarse antes de que exista
+   * `marcaDivisionId` derivado del árbol; completar división (y ids previos si faltan) al resolver.
+   */
+  useEffect(() => {
+    if (roleName === 'OPERATIVO') return;
+    if (!isCreating || editingRecord) return;
+    if (!structure?.length) return;
+    if (marcaDivisionId == null) return;
+    if (formDivisionId != null) return;
+    const dr = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
+    if (dr != null) setFormDivisionId(dr);
+    if (formEmpresaId == null && marcaEmpresaId != null) setFormEmpresaId(marcaEmpresaId);
+    if (formClienteId == null && marcaClienteId != null) setFormClienteId(marcaClienteId);
+    if (formContratoId == null && marcaContratoId != null) setFormContratoId(marcaContratoId);
+    if (formCorpoId == null && marcaCorpoId != null) setFormCorpoId(marcaCorpoId);
+    if (formPuestoId == null && marcaPuestoId != null) setFormPuestoId(marcaPuestoId);
+  }, [
+    isCreating,
+    editingRecord,
+    structure,
+    marcaEmpresaId,
+    marcaClienteId,
+    marcaDivisionId,
+    marcaContratoId,
+    marcaCorpoId,
+    formDivisionId,
+    formEmpresaId,
+    formClienteId,
+    formContratoId,
+    formCorpoId,
+    formPuestoId,
+    roleName,
+    marcaPuestoId,
+  ]);
+
+  // Precarga de filtros desde current_marca al entrar (una vez); OPERATIVO no usa filtros visibles
+  useEffect(() => {
+    if (roleName === 'OPERATIVO') {
+      filtersMarcaAppliedOnceRef.current = true;
+      return;
+    }
     if (!structure?.length) return;
     if (userClearedHierarchyFiltersRef.current || filtersMarcaAppliedOnceRef.current) return;
     if (marcaEmpresaId == null && marcaClienteId == null) {
@@ -1104,10 +1439,11 @@ export default function ActaEntregaProductosScreen() {
     if (marcaCorpoId != null) setFilterCorpoId(marcaCorpoId);
 
     filtersMarcaAppliedOnceRef.current = true;
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId]);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, roleName]);
 
-  // Inicializar jerarquía del formulario con current_marca (división por nombre/id en árbol)
+  // Inicializar jerarquía del formulario con current_marca (solo usuarios no OPERATIVO; formulario listo antes de crear)
   useEffect(() => {
+    if (roleName === 'OPERATIVO') return;
     if (!structure || structure.length === 0) return;
     if (!isCreating && !editingRecord) {
       const divisionResolved = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
@@ -1116,16 +1452,9 @@ export default function ActaEntregaProductosScreen() {
       if (divisionResolved != null && formDivisionId === null) setFormDivisionId(divisionResolved);
       if (marcaContratoId && formContratoId === null) setFormContratoId(marcaContratoId);
       if (marcaCorpoId && formCorpoId === null) setFormCorpoId(marcaCorpoId);
+      if (marcaPuestoId && formPuestoId === null) setFormPuestoId(marcaPuestoId);
     }
-  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, isCreating, editingRecord, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]);
-
-  // Recargar listado solo cuando cambia la sucursal (corpo_id) seleccionada en el filtro
-  useEffect(() => {
-    if (!structure || structure.length === 0) return;
-    if (filterCorpoId == null) return;
-    fetchRecords();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterCorpoId, structure.length]);
+  }, [structure, marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, marcaPuestoId, isCreating, editingRecord, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId, formPuestoId, roleName]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1135,11 +1464,12 @@ export default function ActaEntregaProductosScreen() {
       userClearedHierarchyFiltersRef.current = false;
       let cancelled = false;
       (async () => {
+        await refreshQueryAccessToken();
+        if (cancelled) return;
         await loadMarcaContext();
         if (cancelled) return;
         await fetchMainStructure();
         if (cancelled) return;
-        await fetchRecordsRef.current();
       })();
       const onConnectionRestored = () => {
         fetchRecordsRef.current();
@@ -1149,7 +1479,7 @@ export default function ActaEntregaProductosScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', onConnectionRestored);
       };
-    }, [fetchMainStructure, loadMarcaContext])
+    }, [fetchMainStructure, loadMarcaContext, refreshQueryAccessToken])
   );
 
   const startCreating = async () => {
@@ -1157,6 +1487,15 @@ export default function ActaEntregaProductosScreen() {
     resetForm(horaAccion);
     setIsCreating(true);
     setEditingRecord(null);
+    if (roleName !== 'OPERATIVO' && structure.length > 0) {
+      const divisionResolved = resolveDivisionIdInStructure(structure, marcaEmpresaId, marcaClienteId, marcaDivisionId);
+      if (marcaEmpresaId != null) setFormEmpresaId(marcaEmpresaId);
+      if (marcaClienteId != null) setFormClienteId(marcaClienteId);
+      if (divisionResolved != null) setFormDivisionId(divisionResolved);
+      if (marcaContratoId != null) setFormContratoId(marcaContratoId);
+      if (marcaCorpoId != null) setFormCorpoId(marcaCorpoId);
+      if (marcaPuestoId != null) setFormPuestoId(marcaPuestoId);
+    }
   };
 
   const cancelCreating = async () => {
@@ -1170,12 +1509,31 @@ export default function ActaEntregaProductosScreen() {
     setEditingRecord(record);
     const horaAccion = await getHoraAccionSafeMs();
 
-    // Cargar IDs jerárquicos del registro
-    setFormEmpresaId(record.empresa_id ? Number(record.empresa_id) : null);
-    setFormClienteId(record.cliente_id ? Number(record.cliente_id) : null);
-    setFormDivisionId(record.division_id ? Number(record.division_id) : null);
-    setFormContratoId(record.contrato_id ? Number(record.contrato_id) : null);
-    setFormCorpoId(record.corpo_id ? Number(record.corpo_id) : null);
+    if (roleName !== 'OPERATIVO') {
+      const resolved = findHierarchyByCorpoId(structure, record.corpo_id);
+      if (resolved) {
+        setFormEmpresaId(resolved.empresaId);
+        setFormClienteId(resolved.clienteId);
+        setFormDivisionId(resolved.divisionId);
+        setFormContratoId(resolved.contratoId);
+        setFormCorpoId(resolved.corpoId);
+        setFormPuestoId(record.puesto_id ? Number(record.puesto_id) : null);
+      } else {
+        setFormEmpresaId(record.empresa_id ? Number(record.empresa_id) : null);
+        setFormClienteId(record.cliente_id ? Number(record.cliente_id) : null);
+        setFormDivisionId(record.division_id ? Number(record.division_id) : null);
+        setFormContratoId(record.contrato_id ? Number(record.contrato_id) : null);
+        setFormCorpoId(record.corpo_id ? Number(record.corpo_id) : null);
+        setFormPuestoId(record.puesto_id ? Number(record.puesto_id) : null);
+      }
+    } else {
+      setFormEmpresaId(null);
+      setFormClienteId(null);
+      setFormDivisionId(null);
+      setFormContratoId(null);
+      setFormCorpoId(null);
+      setFormPuestoId(null);
+    }
 
     setFecha(parseDateInputToLocalDate(record.fecha, new Date(horaAccion)));
     setMensual(record.mensual || '');
@@ -1213,10 +1571,9 @@ export default function ActaEntregaProductosScreen() {
       setExpandedDetalleIds([]);
     }
 
-    // imágenes (si es offline: base64; si es server: name)
-    setImages(record.images || []);
+    // En edición solo se muestran fotos nuevas tomadas/subidas en esta sesión.
+    setImages([]);
     setPhotosDirty(false);
-    preloadServerImagesForEdit(record);
   };
 
   const cancelEditing = async () => {
@@ -1226,11 +1583,22 @@ export default function ActaEntregaProductosScreen() {
   };
 
   const validateForm = () => {
-    if (!formEmpresaId) return 'Empresa es obligatoria';
-    if (!formClienteId) return 'Cliente es obligatorio';
-    if (!formDivisionId) return 'División es obligatoria';
-    if (!formContratoId) return 'Contrato es obligatorio';
-    if (!formCorpoId) return 'Sucursal es obligatoria';
+    const op = roleName === 'OPERATIVO';
+    if (op) {
+      if (!marcaEmpresaId) return 'Empresa es obligatoria (marca actual)';
+      if (!marcaClienteId) return 'Cliente es obligatorio (marca actual)';
+      if (!marcaDivisionId) return 'División es obligatoria (marca actual)';
+      if (!marcaContratoId) return 'Contrato es obligatorio (marca actual)';
+      if (!marcaCorpoId) return 'Sucursal es obligatoria (marca actual)';
+      if (!marcaPuestoId) return 'Puesto es obligatorio (marca actual)';
+    } else {
+      if (!formEmpresaId) return 'Empresa es obligatoria';
+      if (!formClienteId) return 'Cliente es obligatorio';
+      if (!formDivisionId) return 'División es obligatoria';
+      if (!formContratoId) return 'Contrato es obligatorio';
+      if (!formCorpoId) return 'Sucursal es obligatoria';
+      if (!formPuestoId) return 'Puesto es obligatorio';
+    }
     if (!mensual.trim()) return 'Mensual es obligatorio';
     if (!observaciones.trim()) return 'Observaciones es obligatorio';
     if (!nombreEntrega.trim()) return 'Nombre (entrega) es obligatorio';
@@ -1258,13 +1626,27 @@ export default function ActaEntregaProductosScreen() {
           setIsSubmitting(true);
           setSubmitResponse(null);
           try {
-            const requestData = {
+            const hierarchyRow =
+              roleName === 'OPERATIVO'
+                ? {
+                    empresa_id: marcaEmpresaId ?? undefined,
+                    cliente_id: marcaClienteId ?? undefined,
+                    division_id: marcaDivisionId ?? undefined,
+                    contrato_id: marcaContratoId ?? undefined,
+                    corpo_id: marcaCorpoId ?? undefined,
+                    puesto_id: marcaPuestoId ?? undefined,
+                  }
+                : {
+                    empresa_id: formEmpresaId ?? undefined,
+                    cliente_id: formClienteId ?? undefined,
+                    division_id: formDivisionId ?? undefined,
+                    contrato_id: formContratoId ?? undefined,
+                    corpo_id: formCorpoId ?? undefined,
+                    puesto_id: formPuestoId ?? undefined,
+                  };
+            const basePayload = {
               marca_id: currentMarca.id,
-              empresa_id: formEmpresaId ?? undefined,
-              cliente_id: formClienteId ?? undefined,
-              division_id: formDivisionId ?? undefined,
-              contrato_id: formContratoId ?? undefined,
-              corpo_id: formCorpoId ?? undefined,
+              ...hierarchyRow,
               tipo_entrega: TIPO_ENTREGA_DEFAULT,
               mensual: mensual.trim(),
               detalle: buildDetalleJson(),
@@ -1278,13 +1660,21 @@ export default function ActaEntregaProductosScreen() {
               fecha_recibe: dateOnlyToIsoString(fechaRecibe),
               firma_recibe: firmaRecibe,
               firma_responsable: firmaResponsableHash.trim(),
-              imagenes: buildImagenesJson(),
             };
 
             const isConnected = await getConnectionStatus();
             if (isConnected) {
+              const imagenes = await buildImagenesJsonAsync({});
+              const requestData = { ...basePayload, imagenes };
               const res = await createActaEntregaProducto({ requestData, refreshAccessToken, logout });
               if (res.status) {
+                const d = res.data as any;
+                if (d && typeof d === 'object' && d.id != null) {
+                  await upsertActaEntregaInCache(
+                    normalizeSyncedActaEntregaRecord({ ...d, type: 'acta_entrega_producto', synced: true }),
+                  );
+                }
+                await deleteLocalImageFiles(images);
                 Alert.alert('Éxito', res.message || 'Acta creada correctamente');
                 setTimeout(() => {
                   cancelCreating();
@@ -1296,7 +1686,9 @@ export default function ActaEntregaProductosScreen() {
               return;
             }
 
-            // Offline
+            // Offline — cola con rutas locales (sin base64 en AsyncStorage)
+            const acta_entrega_images_meta = stripActaEntregaImagesForActionPayload(images);
+            const offlinePayload = { ...basePayload, acta_entrega_images_meta };
             const localId = generateRandomId();
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1304,13 +1696,12 @@ export default function ActaEntregaProductosScreen() {
               id: localId,
               action: 'create',
               type: 'acta_entrega_producto',
-              payload: requestData,
+              payload: offlinePayload,
               synced: false,
             });
             await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const cache = await readActaEntregaProductosCache();
             const horaAccion = await getHoraAccionSafeMs();
 
             const newCacheRecord: ActaEntregaProducto = {
@@ -1318,29 +1709,30 @@ export default function ActaEntregaProductosScreen() {
               id_local: localId,
               synced: false,
               fecha: epochMsToIsoSafe(horaAccion),
-              empresa_id: requestData.empresa_id,
-              cliente_id: requestData.cliente_id,
-              division_id: requestData.division_id,
-              contrato_id: requestData.contrato_id,
-              corpo_id: requestData.corpo_id,
-              tipo_entrega: requestData.tipo_entrega,
-              mensual: requestData.mensual,
-              detalle: requestData.detalle,
-              observaciones: requestData.observaciones,
-              nombre_entrega: requestData.nombre_entrega,
-              cedula_entrega: requestData.cedula_entrega,
-              fecha_entrega: requestData.fecha_entrega,
-              firma_entrega: requestData.firma_entrega,
-              nombre_recibe: requestData.nombre_recibe,
-              cedula_recibe: requestData.cedula_recibe,
-              fecha_recibe: requestData.fecha_recibe,
-              firma_recibe: requestData.firma_recibe,
-              firma_responsable: requestData.firma_responsable,
+              empresa_id: basePayload.empresa_id,
+              cliente_id: basePayload.cliente_id,
+              division_id: basePayload.division_id,
+              contrato_id: basePayload.contrato_id,
+              corpo_id: basePayload.corpo_id,
+              puesto_id: basePayload.puesto_id,
+              tipo_entrega: basePayload.tipo_entrega,
+              mensual: basePayload.mensual,
+              detalle: basePayload.detalle,
+              observaciones: basePayload.observaciones,
+              nombre_entrega: basePayload.nombre_entrega,
+              cedula_entrega: basePayload.cedula_entrega,
+              fecha_entrega: basePayload.fecha_entrega,
+              firma_entrega: basePayload.firma_entrega,
+              nombre_recibe: basePayload.nombre_recibe,
+              cedula_recibe: basePayload.cedula_recibe,
+              fecha_recibe: basePayload.fecha_recibe,
+              firma_recibe: basePayload.firma_recibe,
+              firma_responsable: basePayload.firma_responsable,
               images: images,
             };
 
             cache.push({ ...newCacheRecord, type: 'acta_entrega_producto' });
-            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+            await writeActaEntregaProductosCache(cache);
 
             Alert.alert('Éxito', 'Acta registrada localmente. Se sincronizará cuando haya conexión.');
             setTimeout(() => {
@@ -1374,12 +1766,28 @@ export default function ActaEntregaProductosScreen() {
           setIsSubmitting(true);
           setSubmitResponse(null);
           try {
-            const requestData = {
-              empresa_id: formEmpresaId,
-              cliente_id: formClienteId,
-              division_id: formDivisionId,
-              contrato_id: formContratoId,
-              corpo_id: formCorpoId,
+            const imagenesPayload = photosDirty ? await buildImagenesJsonAsync({}) : undefined;
+
+            const hierarchyRowUpdate =
+              roleName === 'OPERATIVO'
+                ? {
+                    empresa_id: marcaEmpresaId,
+                    cliente_id: marcaClienteId,
+                    division_id: marcaDivisionId,
+                    contrato_id: marcaContratoId,
+                    corpo_id: marcaCorpoId,
+                    puesto_id: marcaPuestoId,
+                  }
+                : {
+                    empresa_id: formEmpresaId,
+                    cliente_id: formClienteId,
+                    division_id: formDivisionId,
+                    contrato_id: formContratoId,
+                    corpo_id: formCorpoId,
+                    puesto_id: formPuestoId,
+                  };
+            const baseRequestData = {
+              ...hierarchyRowUpdate,
               tipo_entrega: TIPO_ENTREGA_DEFAULT,
               mensual: mensual.trim(),
               detalle: buildDetalleJson(),
@@ -1393,15 +1801,55 @@ export default function ActaEntregaProductosScreen() {
               fecha_recibe: dateOnlyToIsoString(fechaRecibe),
               firma_recibe: firmaRecibe,
               firma_responsable: firmaResponsableHash.trim(),
-              ...(photosDirty ? { imagenes: buildImagenesJson() } : {}),
+            };
+
+            const requestData = {
+              ...baseRequestData,
+              ...(photosDirty && imagenesPayload !== undefined ? { imagenes: imagenesPayload } : {}),
             };
 
             const isConnected = await getConnectionStatus();
-            const isLocal = editingRecord.id_local && String(editingRecord.id_local).startsWith('local-');
+            const isLocalDraft = isActaEntregaLocalDraftOnly(editingRecord);
+            const hasServerId = hasActaEntregaServerId(editingRecord);
 
-            if (isConnected && !isLocal && editingRecord.id) {
-              const res = await updateActaEntregaProducto({ id: editingRecord.id, requestData, refreshAccessToken, logout });
+            if (isConnected && hasServerId) {
+              const idForApi = editingRecord.id;
+              if (idForApi == null || idForApi === '') {
+                Alert.alert('Error', 'ID de registro no encontrado');
+                return;
+              }
+              const res = await updateActaEntregaProducto({ id: idForApi, requestData, refreshAccessToken, logout });
               if (res.status) {
+                const d = res.data as any;
+                if (d && typeof d === 'object') {
+                  await upsertActaEntregaInCache(
+                    normalizeSyncedActaEntregaRecord({
+                      ...editingRecord,
+                      ...d,
+                      type: 'acta_entrega_producto',
+                      synced: true,
+                      images: d.images ?? images,
+                    }),
+                  );
+                } else {
+                  const mergedImages = [
+                    ...((Array.isArray(editingRecord.images) ? editingRecord.images : []) as ActaImage[]),
+                    ...(Array.isArray(images) ? images : []),
+                  ];
+                  await upsertActaEntregaInCache(
+                    normalizeSyncedActaEntregaRecord({
+                      ...editingRecord,
+                      ...requestData,
+                      id: editingRecord.id,
+                      type: 'acta_entrega_producto',
+                      synced: true,
+                      images: mergedImages,
+                    }),
+                  );
+                }
+                if (photosDirty) {
+                  await deleteLocalImageFiles(images);
+                }
                 Alert.alert('Éxito', res.message || 'Acta actualizada correctamente');
                 setTimeout(() => {
                   cancelEditing();
@@ -1413,11 +1861,23 @@ export default function ActaEntregaProductosScreen() {
               return;
             }
 
+            // Borrador local: siempre incluir metadatos de archivos para sincronizar. Servidor: solo si hubo cambio de fotos.
+            const metaForOfflineResolved =
+              isLocalDraft
+                ? stripActaEntregaImagesForActionPayload(images)
+                : hasServerId && photosDirty
+                  ? stripActaEntregaImagesForActionPayload(images)
+                  : undefined;
+            const offlinePayload =
+              metaForOfflineResolved != null
+                ? { ...baseRequestData, acta_entrega_images_meta: metaForOfflineResolved }
+                : { ...baseRequestData };
+
             // Offline: actualizar cache + acción
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
 
-            if (isLocal) {
+            if (isLocalDraft) {
               // Borrador: fusionar en el "create" pendiente; no encolar "update" con id local.
               const lid = String(editingRecord.id_local);
               let next = actions.filter(
@@ -1432,37 +1892,65 @@ export default function ActaEntregaProductosScreen() {
                 (a: any) => a.id === editingRecord.id_local && a.action === 'create' && a.type === 'acta_entrega_producto'
               );
               if (idx !== -1) {
-                next[idx] = { ...next[idx], payload: { ...next[idx].payload, ...requestData } };
+                next[idx] = { ...next[idx], payload: { ...next[idx].payload, ...offlinePayload } };
               } else {
                 next.push({
                   id: editingRecord.id_local,
                   action: 'create',
                   type: 'acta_entrega_producto',
-                  payload: { ...requestData },
+                  payload: { ...offlinePayload },
                   synced: false,
                 });
               }
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
-            } else {
-              const filtered = actions.filter((a: any) => !(a.id === editingRecord.id && a.action === 'update' && a.type === 'acta_entrega_producto'));
-              filtered.push({ id: editingRecord.id, action: 'update', type: 'acta_entrega_producto', payload: requestData, synced: false });
+            } else if (hasServerId) {
+              const idForQueue = editingRecord.id;
+              if (idForQueue == null || idForQueue === '') {
+                Alert.alert('Error', 'ID de registro no encontrado');
+                return;
+              }
+              const filtered = actions.filter((a: any) => !(a.id === idForQueue && a.action === 'update' && a.type === 'acta_entrega_producto'));
+              filtered.push({ id: idForQueue, action: 'update', type: 'acta_entrega_producto', payload: offlinePayload, synced: false });
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+            } else {
+              Alert.alert('Error', 'No se pudo determinar el estado del registro para guardar offline.');
+              return;
             }
 
-            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const cache = await readActaEntregaProductosCache();
+            const editingServerId =
+              editingRecord?.id != null &&
+              Number.isFinite(Number(editingRecord.id)) &&
+              Number(editingRecord.id) > 0
+                ? Number(editingRecord.id)
+                : 0;
+            const editingLocalIdRaw = editingRecord?.id_local != null ? String(editingRecord.id_local).trim() : '';
+            const editingLocalId = editingLocalIdRaw && editingLocalIdRaw !== '' && editingLocalIdRaw !== '0' ? editingLocalIdRaw : '';
             const updatedCache = (cache || []).map((it: any) => {
-              if (it.type === 'acta_entrega_producto' && (it.id_local === editingRecord.id_local || it.id === editingRecord.id)) {
+              const same =
+                it.type === 'acta_entrega_producto' &&
+                (
+                  (editingServerId > 0 && Number(it?.id) === editingServerId) ||
+                  (editingServerId <= 0 && editingLocalId !== '' && String(it?.id_local ?? '').trim() === editingLocalId)
+                );
+              if (same) {
+                const mergedImagesForCache =
+                  editingServerId > 0
+                    ? [
+                        ...((Array.isArray(it?.images) ? it.images : []) as ActaImage[]),
+                        ...(Array.isArray(images) ? images : []),
+                      ]
+                    : images;
                 return {
                   ...it,
-                  ...requestData,
+                  ...baseRequestData,
                   synced: false,
-                  images,
+                  images: mergedImagesForCache,
                 };
               }
               return it;
             });
-            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            await writeActaEntregaProductosCache(updatedCache);
 
             Alert.alert('Éxito', 'Cambios guardados localmente. Se sincronizarán al reconectar.');
             setTimeout(() => {
@@ -1493,11 +1981,21 @@ export default function ActaEntregaProductosScreen() {
           setDeletingRecordKey(recordKey);
           try {
             const isConnected = await getConnectionStatus();
-            const isLocal = record.id_local && String(record.id_local).startsWith('local-');
+            const isLocalDraft = isActaEntregaLocalDraftOnly(record);
+            const hasServerId = hasActaEntregaServerId(record);
 
-            if (isConnected && !isLocal && record.id) {
-              const res = await deleteActaEntregaProducto({ id: record.id, refreshAccessToken, logout });
+            if (isConnected && hasServerId) {
+              const idForApi = record.id;
+              if (idForApi == null || idForApi === '') {
+                Alert.alert('Error', 'ID de registro no encontrado');
+                return;
+              }
+              const res = await deleteActaEntregaProducto({ id: idForApi, refreshAccessToken, logout });
               if (res.status) {
+                const c = await readActaEntregaProductosCache();
+                await writeActaEntregaProductosCache(
+                  c.filter((it: any) => !(it.type === 'acta_entrega_producto' && Number(it.id) === Number(idForApi))),
+                );
                 Alert.alert('Éxito', 'Acta eliminada');
                 fetchRecords();
               } else {
@@ -1509,7 +2007,7 @@ export default function ActaEntregaProductosScreen() {
             const actionsStr = await AsyncStorage.getItem('evaluations_actions');
             const actions = actionsStr ? JSON.parse(actionsStr) : [];
 
-            if (isLocal) {
+            if (isLocalDraft) {
               const lid = String(record.id_local);
               const updatedActions = actions.filter(
                 (a: any) =>
@@ -1520,22 +2018,31 @@ export default function ActaEntregaProductosScreen() {
                   )
               );
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
-            } else {
-              const filtered = actions.filter((a: any) => !(a.id === record.id && a.action === 'delete' && a.type === 'acta_entrega_producto'));
+            } else if (hasServerId) {
+              const filtered = actions.filter((a: any) => !(
+                (a.id === record.id && a.action === 'delete' && a.type === 'acta_entrega_producto') ||
+                (a.type === 'acta_entrega_producto' && a.action === 'delete_file' && String(a.id) === String(record.id))
+              ));
               filtered.push({ id: record.id, action: 'delete', type: 'acta_entrega_producto', payload: {}, synced: false });
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
             }
 
-            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            await deleteLocalImageFiles((record.images || []) as ActaImage[]);
+
+            const cache = await readActaEntregaProductosCache();
             const updatedCache = (cache || []).filter((it: any) => {
               if (it.type !== 'acta_entrega_producto') return true;
-              if (isLocal) return it.id_local !== record.id_local;
-              return it.id !== record.id;
+              if (isLocalDraft) return it.id_local !== record.id_local;
+              if (hasServerId) return Number(it.id) !== Number(record.id);
+              return true;
             });
-            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            await writeActaEntregaProductosCache(updatedCache);
 
-            setRecords((prev) => prev.filter((r) => (isLocal ? r.id_local !== record.id_local : r.id !== record.id)));
+            setRecords((prev) =>
+              prev.filter((r) =>
+                isLocalDraft ? r.id_local !== record.id_local : hasServerId ? Number(r.id) !== Number(record.id) : true,
+              ),
+            );
             Alert.alert('Modo Offline', 'Acta eliminada localmente. Se sincronizará al reconectar.');
             fetchRecords();
           } catch (e) {
@@ -1546,6 +2053,103 @@ export default function ActaEntregaProductosScreen() {
           }
         },
       },
+    ]);
+  };
+
+  const deleteImageHandler = async (record: ActaEntregaProducto, image: ActaImage) => {
+    const recordServerId = actaEntregaNumericServerId(record);
+    const imageServerId = image?.id != null && Number.isFinite(Number(image.id)) ? Number(image.id) : 0;
+    const imageKey = `${record.id || record.id_local}-${image.id || image.id_local || image.name || 'img'}`;
+    Alert.alert('Confirmar', '¿Deseas eliminar este adjunto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          setDeletingImageKey(imageKey);
+          try {
+            const isConnected = await getConnectionStatus();
+            const isLocalDraft = isActaEntregaLocalDraftOnly(record);
+            const nextImages = (record.images || []).filter((im: any) => {
+              const byId = image?.id != null && im?.id != null && Number(im.id) === Number(image.id);
+              const byLocal = image?.id_local && im?.id_local && String(im.id_local) === String(image.id_local);
+              const byName = image?.name && im?.name && String(im.name) === String(image.name);
+              return !(byId || byLocal || byName);
+            });
+
+            if (isLocalDraft) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const lid = String(record.id_local);
+              const idx = actions.findIndex((a: any) => a.type === 'acta_entrega_producto' && a.action === 'create' && String(a.id) === lid);
+              if (idx >= 0) {
+                const payload = actions[idx]?.payload || {};
+                const meta = Array.isArray(payload.acta_entrega_images_meta) ? payload.acta_entrega_images_meta : [];
+                const filteredMeta = meta.filter((m: any) => {
+                  const byId = image?.id != null && m?.id != null && Number(m.id) === Number(image.id);
+                  const byLocal = image?.id_local && m?.id_local && String(m.id_local) === String(image.id_local);
+                  const byName = image?.name && m?.name && String(m.name) === String(image.name);
+                  return !(byId || byLocal || byName);
+                });
+                actions[idx] = { ...actions[idx], payload: { ...payload, acta_entrega_images_meta: filteredMeta } };
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              }
+              if (image.localFileName) await deleteFile(String(image.localFileName));
+            } else if (recordServerId > 0 && imageServerId > 0 && isConnected) {
+              const res = await deleteActaEntregaProductoImage({
+                id: recordServerId,
+                imageId: imageServerId,
+                refreshAccessToken,
+                logout,
+              });
+              if (!res.status) {
+                Alert.alert('Error', res.message || 'No se pudo eliminar el adjunto');
+                return;
+              }
+            } else if (recordServerId > 0 && imageServerId > 0) {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const filtered = actions.filter((a: any) => !(
+                a.type === 'acta_entrega_producto' &&
+                a.action === 'delete_file' &&
+                String(a.id) === String(recordServerId) &&
+                Number(a.payload?.imageId) === imageServerId
+              ));
+              filtered.push({
+                id: recordServerId,
+                action: 'delete_file',
+                type: 'acta_entrega_producto',
+                payload: { imageId: imageServerId },
+                synced: false,
+              });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
+            } else if (image.localFileName) {
+              await deleteFile(String(image.localFileName));
+            }
+
+            const cache = await readActaEntregaProductosCache();
+            const updatedCache = (cache || []).map((it: any) => {
+              const same = it.type === 'acta_entrega_producto' && (
+                (recordServerId > 0 && Number(it.id) === recordServerId) ||
+                (record.id_local && String(it.id_local) === String(record.id_local))
+              );
+              if (!same) return it;
+              return { ...it, images: nextImages };
+            });
+            await writeActaEntregaProductosCache(updatedCache);
+            setRecords((prev) => prev.map((it) => {
+              const same = (recordServerId > 0 && Number(it.id) === recordServerId) || (record.id_local && String(it.id_local) === String(record.id_local));
+              if (!same) return it;
+              return { ...it, images: nextImages };
+            }));
+          } catch (e) {
+            console.error('Error deleting acta image:', e);
+            Alert.alert('Error', 'No se pudo eliminar el adjunto');
+          } finally {
+            setDeletingImageKey(null);
+          }
+        }
+      }
     ]);
   };
 
@@ -1596,13 +2200,13 @@ export default function ActaEntregaProductosScreen() {
   };
 
   const renderImagesPreview = (record: ActaEntregaProducto) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    const idNum = typeof record.id === 'number' ? record.id : parseInt(String(record.id || ''), 10);
-    const imgs = record.images || [];
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER as string | undefined;
+    const imgs = (record.images || []) as ActaImage[];
     if (imgs.length === 0) return null;
 
     const recordId = String(record.id || record.id_local || '');
     const expanded = expandedImagesIds.includes(recordId);
+    const actaIdSafe = actaEntregaNumericServerId(record);
 
     return (
       <ThemedView style={styles.imagesCollapsableCard}>
@@ -1616,14 +2220,20 @@ export default function ActaEntregaProductosScreen() {
         {expanded && (
           <ThemedView style={styles.imagesCollapsableBody}>
             {imgs.map((img, idx) => {
-              const uri = img.base64
-                ? img.base64
-                : (apiUrl && idNum && img.name)
-                  ? appendTokenToUrl(`${apiUrl}/api/acta-entrega-productos/${idNum}/get-image/${encodeURIComponent(img.name)}`)
-                  : '';
+              const uri = resolveActaImageUri(img, actaIdSafe, apiUrl, appendTokenToUrl);
               if (!uri) return null;
+              const imageKey = `${record.id || record.id_local}-${img.id || img.id_local || img.name || idx}`;
               return (
-                <Image key={`${img.name || 'local'}-${idx}`} source={{ uri }} style={styles.fullSizeImage} resizeMode="contain" />
+                <View key={`${img.name || img.id_local || 'local'}-${idx}`} style={styles.imagePreviewCard}>
+                  <TouchableOpacity
+                    style={styles.deleteImageIconButton}
+                    onPress={() => deleteImageHandler(record, img)}
+                    disabled={deletingImageKey === imageKey}
+                  >
+                    <Ionicons name="trash" size={14} color="#fff" />
+                  </TouchableOpacity>
+                  <Image source={{ uri }} style={styles.fullSizeImage} resizeMode="contain" />
+                </View>
               );
             })}
           </ThemedView>
@@ -1770,36 +2380,41 @@ export default function ActaEntregaProductosScreen() {
     </ThemedView>
   );
 
-  const renderPhotosSection = () => (
-    <ThemedView style={styles.formGroup}>
-      <ThemedText style={styles.formLabel}>Fotos (opcional):</ThemedText>
-      <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
-        <Ionicons name="camera" size={20} color="#007AFF" />
-        <ThemedText style={styles.captureImageButtonText}>
-          {images.length > 0 ? 'Agregar otra foto' : 'Capturar foto'}
-        </ThemedText>
-      </TouchableOpacity>
+  const renderPhotosSection = () => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER as string | undefined;
+    const actaIdSafe = editingRecord ? actaEntregaNumericServerId(editingRecord) : 0;
 
-      {images.length === 0 ? (
-        <ThemedText style={styles.helperText}>Agrega una o varias fotos.</ThemedText>
-      ) : (
-        <ThemedView style={styles.thumbRow}>
-          {images.map((img, idx) => {
-            const uri = img.base64 || '';
-            if (!uri) return null;
-            return (
-              <ThemedView key={`img-${idx}`} style={styles.thumbWrapper}>
-                <Image source={{ uri }} style={styles.thumb} />
-                <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
-                  <Ionicons name="close" size={16} color="#FFFFFF" />
-                </TouchableOpacity>
-              </ThemedView>
-            );
-          })}
-        </ThemedView>
-      )}
-    </ThemedView>
-  );
+    return (
+      <ThemedView style={styles.formGroup}>
+        <ThemedText style={styles.formLabel}>Fotos (opcional):</ThemedText>
+        <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+          <Ionicons name="camera" size={20} color="#007AFF" />
+          <ThemedText style={styles.captureImageButtonText}>
+            {images.length > 0 ? 'Agregar otra foto' : 'Capturar foto'}
+          </ThemedText>
+        </TouchableOpacity>
+
+        {images.length === 0 ? (
+          <ThemedText style={styles.helperText}>Agrega una o varias fotos.</ThemedText>
+        ) : (
+          <ThemedView style={styles.thumbRow}>
+            {images.map((img, idx) => {
+              const uri = resolveActaImageUri(img, actaIdSafe, apiUrl, appendTokenToUrl);
+              if (!uri) return null;
+              return (
+                <ThemedView key={`img-${img.id_local || img.name || idx}`} style={styles.thumbWrapper}>
+                  <Image source={{ uri }} style={styles.thumb} />
+                  <TouchableOpacity style={styles.thumbDelete} onPress={() => removeImage(idx)}>
+                    <Ionicons name="close" size={16} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+              );
+            })}
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
 
   return (
     <ThemedView style={styles.container}>
@@ -1823,7 +2438,7 @@ export default function ActaEntregaProductosScreen() {
             </ThemedView>
           )}
 
-          {hasCurrentMarca && !isCreating && !editingRecord && (
+          {hasCurrentMarca && roleName !== 'OPERATIVO' && !isCreating && !editingRecord && (
             <ThemedView style={styles.filtersContainer}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -1842,7 +2457,7 @@ export default function ActaEntregaProductosScreen() {
                     <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                     <View style={styles.pickerWrapper}>
                       <Picker
-                        selectedValue={filterEmpresaId || ''}
+                        selectedValue={filterEmpresaId != null ? Number(filterEmpresaId) : ''}
                         onValueChange={(value) => {
                           setFilterEmpresaId(value && value !== '' ? Number(value) : null);
                           setFilterClienteId(null);
@@ -1854,7 +2469,7 @@ export default function ActaEntregaProductosScreen() {
                       >
                         <Picker.Item label="Seleccionar..." value="" color="#000000" />
                         {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          <Picker.Item key={e.id} label={e.nombre} value={Number(e.id)} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -1865,7 +2480,7 @@ export default function ActaEntregaProductosScreen() {
                       <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterClienteId || ''}
+                          selectedValue={filterClienteId != null ? Number(filterClienteId) : ''}
                           onValueChange={(value) => {
                             setFilterClienteId(value && value !== '' ? Number(value) : null);
                             setFilterDivisionId(null);
@@ -1876,7 +2491,7 @@ export default function ActaEntregaProductosScreen() {
                         >
                           <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterClientes.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            <Picker.Item key={c.id} label={c.nombre} value={Number(c.id)} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -1888,7 +2503,7 @@ export default function ActaEntregaProductosScreen() {
                       <ThemedText style={styles.filterLabel}>División:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterDivisionId || ''}
+                          selectedValue={filterDivisionId != null ? Number(filterDivisionId) : ''}
                           onValueChange={(value) => {
                             setFilterDivisionId(value && value !== '' ? Number(value) : null);
                             setFilterContratoId(null);
@@ -1898,7 +2513,7 @@ export default function ActaEntregaProductosScreen() {
                         >
                           <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterDivisiones.map((d: any) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                            <Picker.Item key={d.id} label={d.nombre} value={Number(d.id)} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -1910,7 +2525,7 @@ export default function ActaEntregaProductosScreen() {
                       <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterContratoId || ''}
+                          selectedValue={filterContratoId != null ? Number(filterContratoId) : ''}
                           onValueChange={(value) => {
                             setFilterContratoId(value && value !== '' ? Number(value) : null);
                             setFilterCorpoId(null);
@@ -1919,7 +2534,7 @@ export default function ActaEntregaProductosScreen() {
                         >
                           <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterContratos.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                            <Picker.Item key={c.id} label={c.nombre} value={Number(c.id)} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -1931,7 +2546,7 @@ export default function ActaEntregaProductosScreen() {
                       <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterCorpoId || ''}
+                          selectedValue={filterCorpoId != null ? Number(filterCorpoId) : ''}
                           onValueChange={(value) => {
                             setFilterCorpoId(value && value !== '' ? Number(value) : null);
                           }}
@@ -1939,7 +2554,7 @@ export default function ActaEntregaProductosScreen() {
                         >
                           <Picker.Item label="Seleccionar..." value="" color="#000000" />
                           {filterSucursales.map((s: any) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                            <Picker.Item key={s.id} label={s.nombre} value={Number(s.id)} color="#000000" />
                           ))}
                         </Picker>
                       </View>
@@ -1969,119 +2584,148 @@ export default function ActaEntregaProductosScreen() {
 
           {isCreating || editingRecord ? (
             <ThemedView style={[styles.vehicleCard, styles.formCard]}>
-              {/* Jerarquía del formulario */}
-              <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
+              {roleName !== 'OPERATIVO' && (
+                <>
+                  <ThemedText style={styles.sectionTitle}>Jerarquía</ThemedText>
 
-              {/* Empresa */}
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={formEmpresaId || ''}
-                    onValueChange={(value) => {
-                      setFormEmpresaId(value && value !== '' ? Number(value) : null);
-                      setFormClienteId(null);
-                      setFormDivisionId(null);
-                      setFormContratoId(null);
-                      setFormCorpoId(null);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                    {formEmpresas.map((e: any) => (
-                      <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-              </ThemedView>
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formEmpresaId != null ? Number(formEmpresaId) : ''}
+                        onValueChange={(value) => {
+                          setFormEmpresaId(value && value !== '' ? Number(value) : null);
+                          setFormClienteId(null);
+                          setFormDivisionId(null);
+                          setFormContratoId(null);
+                          setFormCorpoId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formEmpresas.map((e: any) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={Number(e.id)} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
 
-              {/* Cliente */}
-              {formEmpresaId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={formClienteId || ''}
-                      onValueChange={(value) => {
-                        setFormClienteId(value && value !== '' ? Number(value) : null);
-                        setFormDivisionId(null);
-                        setFormContratoId(null);
-                        setFormCorpoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {formClientes.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
+                  {formEmpresaId && (
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formClienteId != null ? Number(formClienteId) : ''}
+                          onValueChange={(value) => {
+                            setFormClienteId(value && value !== '' ? Number(value) : null);
+                            setFormDivisionId(null);
+                            setFormContratoId(null);
+                            setFormCorpoId(null);
+                            setFormPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          {formClientes.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={Number(c.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {formClienteId && (
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>División *</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formDivisionId != null ? Number(formDivisionId) : ''}
+                          onValueChange={(value) => {
+                            setFormDivisionId(value && value !== '' ? Number(value) : null);
+                            setFormContratoId(null);
+                            setFormCorpoId(null);
+                            setFormPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          {formDivisiones.map((d: any) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={Number(d.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {formDivisionId && (
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formContratoId != null ? Number(formContratoId) : ''}
+                          onValueChange={(value) => {
+                            setFormContratoId(value && value !== '' ? Number(value) : null);
+                            setFormCorpoId(null);
+                            setFormPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          {formContratos.map((c: any) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={Number(c.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+
+                  {formContratoId && (
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formCorpoId != null ? Number(formCorpoId) : ''}
+                          onValueChange={(value) => {
+                            setFormCorpoId(value && value !== '' ? Number(value) : null);
+                            setFormPuestoId(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          {formSucursales.map((s: any) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={Number(s.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+                  {formCorpoId && (
+                    <ThemedView style={styles.formGroup}>
+                      <ThemedText style={styles.formLabel}>Puesto *</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={formPuestoId != null ? Number(formPuestoId) : ''}
+                          onValueChange={(value) => {
+                            setFormPuestoId(value && value !== '' ? Number(value) : null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          {formPuestos.map((p: any) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={Number(p.id)} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+                  )}
+                </>
               )}
 
-              {/* División */}
-              {formClienteId && (
+              {roleName === 'OPERATIVO' && (
                 <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>División *</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={formDivisionId || ''}
-                      onValueChange={(value) => {
-                        setFormDivisionId(value && value !== '' ? Number(value) : null);
-                        setFormContratoId(null);
-                        setFormCorpoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {formDivisiones.map((d: any) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
-
-              {/* Contrato */}
-              {formDivisionId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={formContratoId || ''}
-                      onValueChange={(value) => {
-                        setFormContratoId(value && value !== '' ? Number(value) : null);
-                        setFormCorpoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {formContratos.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              )}
-
-              {/* Sucursal */}
-              {formContratoId && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={formCorpoId || ''}
-                      onValueChange={(value) => {
-                        setFormCorpoId(value && value !== '' ? Number(value) : null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {formSucursales.map((s: any) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
+                  <ThemedText style={styles.helperText}>
+                    La jerarquía (empresa, cliente, sucursal, etc.) se toma de la marca actual de ingreso/salida.
+                  </ThemedText>
                 </ThemedView>
               )}
 
@@ -2609,6 +3253,19 @@ const styles = StyleSheet.create({
   },
   imagesCollapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1, paddingRight: 8 },
   imagesCollapsableBody: { padding: 12, backgroundColor: '#F9F9F9', gap: 12 },
+  imagePreviewCard: { position: 'relative' },
+  deleteImageIconButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 2,
+  },
   fullSizeImage: { width: '100%', height: 300, borderRadius: 8, backgroundColor: '#EEE' },
 
   signaturesCollapsableCard: {

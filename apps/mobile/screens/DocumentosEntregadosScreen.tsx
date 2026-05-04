@@ -42,6 +42,13 @@ import {
 import { listDocumentosEntregados } from '../hooks/documentosEntregadosFunctions';
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  mergeDocumentosEntregadosCacheForCorpo,
+  upsertDocumentoEntregadoInCache,
+  buildDocumentoEntregadoCacheRowFromRequest,
+  getDocEntregadoCorpoId,
+} from '@/hooks/documentosEntregadosCacheHelpers';
 
 type DocUI = DocumentoEntregadoItem & { id_local?: string };
 type DocumentTypeUI = { id: number; nombre: string };
@@ -71,6 +78,75 @@ function getDivisionIdFromMarcaJson(marca: any): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function getClienteDivisionArray(cliente: MainStructureClienteNode | any): MainStructureDivisionNode[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray((cliente as any).divisiones)) return (cliente as any).divisiones;
+  return [];
+}
+
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  for (const div of divisions) {
+    const contratos: MainStructureContratoNode[] = Array.isArray(div?.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+function resolveDivisionIdInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureTree): number | null {
+  const empresaId =
+    current?.empresa?.id != null
+      ? Number(current.empresa.id)
+      : current?.empresa_id != null
+        ? Number(current.empresa_id)
+        : null;
+  const clienteId =
+    current?.cliente?.id != null
+      ? Number(current.cliente.id)
+      : current?.cliente_id != null
+        ? Number(current.cliente_id)
+        : null;
+  const contratoId =
+    current?.contrato?.id != null
+      ? Number(current.contrato.id)
+      : current?.contrato_id != null
+        ? Number(current.contrato_id)
+        : null;
+  let divId = getDivisionIdFromMarcaJson(current);
+  if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+    divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+  }
+  if (divId == null) return null;
+  return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
+}
+
 type HierarchyCorpoIds = {
   empresaId: number;
   clienteId: number;
@@ -83,7 +159,7 @@ function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number
   const cid = Number(corpoId);
   for (const empresa of structureArr || []) {
     for (const cliente of empresa.clientes || []) {
-      for (const division of cliente.division || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
         for (const contrato of division.contratos || []) {
           for (const sucursal of contrato.sucursales || []) {
             if (Number(sucursal.id) === cid) {
@@ -103,9 +179,59 @@ function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number
   return null;
 }
 
-/** ID sucursal en caché o API (`corpo_id` o `sucursal_id`). */
+type FormHierarchyIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+  puestoId: number;
+};
+
+function findHierarchyByPuestoIn(structureArr: any[], puestoId: number): FormHierarchyIds | null {
+  const pid = Number(puestoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto?.id) === pid) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: puesto.id,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+type PuestoOpt = { id: number; nombre: string };
+
+function mapPuestosDoc(raw: any[]): PuestoOpt[] {
+  return (raw || []).map((p: any) => ({
+    id: Number(p.id),
+    nombre:
+      p.nombre != null && String(p.nombre).trim() !== ''
+        ? String(p.nombre)
+        : p.codigo != null
+          ? String(p.codigo)
+          : `Puesto ${p.id}`,
+  }));
+}
+
+/** @deprecated usar getDocEntregadoCorpoId */
 function docRecordSucursalId(d: any): number {
-  return Number(d?.corpo_id ?? d?.sucursal_id ?? 0);
+  return getDocEntregadoCorpoId(d);
 }
 
 type MarcaSnapshot = {
@@ -116,6 +242,7 @@ type MarcaSnapshot = {
   marcaCorpoId: number | null;
   marcaClienteId: number | null;
   marcaEmpresaId: number | null;
+  marcaPuestoId: number | null;
   filterEmpresaId: number | null;
   filterClienteId: number | null;
   filterDivisionId: number | null;
@@ -150,6 +277,11 @@ export default function DocumentosEntregadosScreen() {
   const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
   const filterSucursalIdRef = useRef<number | null>(null);
+
+  const [puestosByCorpo, setPuestosByCorpo] = useState<Record<string, PuestoOpt[]>>({});
+  const puestosByCorpoRef = useRef<Record<string, PuestoOpt[]>>({});
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+  const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
@@ -325,8 +457,12 @@ export default function DocumentosEntregadosScreen() {
   }, [refreshAccessToken, logout]);
 
   const syncMarcaFromStorage = useCallback(
-    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+    async (opts?: {
+      applyFiltersFromMarca?: boolean;
+      structureTree?: MainStructureTree | null;
+    }): Promise<MarcaSnapshot | null> => {
       const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const structureTree = opts?.structureTree;
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         setHasCurrentMarca(false);
@@ -334,6 +470,7 @@ export default function DocumentosEntregadosScreen() {
         setMarcaCorpoId(null);
         setMarcaClienteId(null);
         setMarcaEmpresaId(null);
+        setMarcaPuestoId(null);
         setRoleName(null);
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(null);
@@ -356,23 +493,31 @@ export default function DocumentosEntregadosScreen() {
         const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
         const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
         const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
-        const divId = numOrNull(divIdRaw);
         const corpoId = numOrNull(corpoIdRaw);
         const clienteId = numOrNull(clienteIdRaw);
         const empresaId = numOrNull(empresaIdRaw);
+        const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+        const puestoM = numOrNull(puestoIdRaw);
         const role =
           current?.roleDivision?.role?.nombre ??
           current?.role_division?.role?.nombre ??
           null;
         const rn = typeof role === 'string' ? (role as RoleName) : null;
 
-        setMarcaDivisionId(divId);
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const divResolved =
+          structureTree && structureTree.length > 0
+            ? resolveMarcaDivisionForTree(current, structureTree)
+            : null;
+        const effectiveDivisionId = divResolved ?? divFromMarca ?? numOrNull(divIdRaw);
+
+        setMarcaDivisionId(effectiveDivisionId);
         setMarcaCorpoId(corpoId);
         setMarcaClienteId(clienteId);
         setMarcaEmpresaId(empresaId);
+        setMarcaPuestoId(puestoM);
         setRoleName(rn);
 
-        const divFromMarca = getDivisionIdFromMarcaJson(current);
         const fe = numOrNull(current?.empresa?.id);
         const fc = numOrNull(current?.cliente?.id);
         const fco = numOrNull(current?.contrato?.id);
@@ -380,7 +525,7 @@ export default function DocumentosEntregadosScreen() {
         if (applyFiltersFromMarca) {
           setFilterEmpresaId(fe);
           setFilterClienteId(fc);
-          setFilterDivisionId(divFromMarca);
+          setFilterDivisionId(effectiveDivisionId);
           setFilterContratoId(fco);
           setFilterSucursalId(fs);
           filterSucursalIdRef.current = fs;
@@ -390,13 +535,14 @@ export default function DocumentosEntregadosScreen() {
           current,
           roleName: rn,
           isOperativo: rn === 'OPERATIVO',
-          marcaDivisionId: divId,
+          marcaDivisionId: effectiveDivisionId,
           marcaCorpoId: corpoId,
           marcaClienteId: clienteId,
           marcaEmpresaId: empresaId,
+          marcaPuestoId: puestoM,
           filterEmpresaId: fe,
           filterClienteId: fc,
-          filterDivisionId: divFromMarca,
+          filterDivisionId: effectiveDivisionId,
           filterContratoId: fco,
           filterSucursalId: fs,
         };
@@ -413,7 +559,12 @@ export default function DocumentosEntregadosScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
-      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      const loaded = await loadMainStructureTreeMerged().catch(() => []);
+      const tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      const divId =
+        tree.length > 0
+          ? resolveMarcaDivisionForTree(currentMarca, tree) ?? getDivisionIdFromMarcaJson(currentMarca)
+          : getDivisionIdFromMarcaJson(currentMarca);
       setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
       setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
       setFilterDivisionId(divId);
@@ -426,49 +577,124 @@ export default function DocumentosEntregadosScreen() {
     }
   }, []);
 
-  const applyCurrentMarcaToCreateHierarchy = useCallback(async () => {
+  const applyCurrentMarcaToCreateHierarchy = useCallback(async (treeFromCaller?: MainStructureTree) => {
     try {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const marca = JSON.parse(currentMarcaStr);
       const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
-      if (rn === 'OPERATIVO') return;
+      if (rn === 'OPERATIVO') {
+        const pId = marca.puesto?.id != null ? Number(marca.puesto.id) : marca.puesto_id != null ? Number(marca.puesto_id) : null;
+        if (pId && Number.isFinite(pId) && pId > 0) {
+          setSelectedPuestoId(pId);
+        }
+        return;
+      }
+
+      let tree = treeFromCaller;
+      if (!tree?.length) {
+        const loaded = await loadMainStructureTreeMerged().catch(() => []);
+        tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+        if (tree.length) setStructure(tree);
+      }
+      const divResolved =
+        tree && tree.length > 0 ? resolveMarcaDivisionForTree(marca, tree) : null;
 
       setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
       setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
-      setSelectedDivisionId(getDivisionIdFromMarcaJson(marca));
+      setSelectedDivisionId(divResolved ?? getDivisionIdFromMarcaJson(marca));
       setSelectedContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
       setSelectedSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      const pId = marca.puesto?.id != null ? Number(marca.puesto.id) : marca.puesto_id != null ? Number(marca.puesto_id) : null;
+      if (pId && Number.isFinite(pId) && pId > 0) {
+        setSelectedPuestoId(pId);
+      } else {
+        setSelectedPuestoId(null);
+      }
     } catch (e) {
       console.error('applyCurrentMarcaToCreateHierarchy (documentos entregados):', e);
     }
   }, []);
 
-  const fetchMainStructure = useCallback(async () => {
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-          else setStructure([]);
-        } catch {
-          setStructure([]);
-        }
-      }
+      const tree = await loadMainStructureTreeMerged();
+      const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+      setStructure(arr);
+      return arr;
     } catch (e) {
       console.error('Error loading main structure (documentos entregados):', e);
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
   }, []);
 
+  useEffect(() => {
+    puestosByCorpoRef.current = puestosByCorpo;
+  }, [puestosByCorpo]);
+
+  const cacheKeyPuestosDoc = (corpoId: number) => `documentos_puestos_cache_${corpoId}`;
+
+  const fetchPuestosForCorpoDoc = useCallback(
+    async (corpoId: number, force: boolean = false): Promise<void> => {
+      if (!Number.isFinite(corpoId) || corpoId <= 0) return;
+      const key = String(corpoId);
+      if (!force && Object.prototype.hasOwnProperty.call(puestosByCorpoRef.current, key)) return;
+      const getConn = await Network.getNetworkStateAsync();
+      const online = !!(getConn.isConnected && getConn.isInternetReachable);
+      if (!online) {
+        const raw = await AsyncStorage.getItem(cacheKeyPuestosDoc(corpoId));
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              setPuestosByCorpo((prev) => ({ ...prev, [key]: mapPuestosDoc(parsed) }));
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        return;
+      }
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return;
+        const res = await authedFetch({
+          url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
+          init: { method: 'GET' },
+          refreshAccessToken,
+          logout,
+        });
+        if (!res || !res.ok) return;
+        const data = await res.json();
+        if (data?.status && Array.isArray(data.puestos)) {
+          setPuestosByCorpo((prev) => ({ ...prev, [key]: mapPuestosDoc(data.puestos) }));
+          await AsyncStorage.setItem(cacheKeyPuestosDoc(corpoId), JSON.stringify(data.puestos));
+        }
+      } catch (e) {
+        console.error('fetchPuestosForCorpoDoc', e);
+      }
+    },
+    [refreshAccessToken, logout]
+  );
+
+  useEffect(() => {
+    const ids = new Set<number>();
+    if (selectedSucursalId != null && selectedSucursalId > 0) ids.add(selectedSucursalId);
+    if (marcaCorpoId != null && marcaCorpoId > 0) ids.add(marcaCorpoId);
+    ids.forEach((id) => {
+      void fetchPuestosForCorpoDoc(id, true);
+    });
+  }, [selectedSucursalId, marcaCorpoId, fetchPuestosForCorpoDoc]);
+
   const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
 
   const selectedEmpresaNode = useMemo(() => {
     if (selectedEmpresaId === null) return null;
-    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+    return structure.find((e) => Number(e.id) === Number(selectedEmpresaId)) ?? null;
   }, [structure, selectedEmpresaId]);
 
   const clienteOptions = useMemo(() => {
@@ -478,17 +704,19 @@ export default function DocumentosEntregadosScreen() {
 
   const selectedClienteNode = useMemo(() => {
     if (!selectedEmpresaNode || selectedClienteId === null) return null;
-    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+    return selectedEmpresaNode.clientes.find((c) => Number(c.id) === Number(selectedClienteId)) ?? null;
   }, [selectedEmpresaNode, selectedClienteId]);
 
   const divisionOptions = useMemo(() => {
     if (!selectedClienteNode) return [];
-    return (selectedClienteNode.division || []).map((d) => ({ id: d.id, nombre: d.nombre }));
+    return getClienteDivisionArray(selectedClienteNode).map((d) => ({ id: d.id, nombre: d.nombre }));
   }, [selectedClienteNode]);
 
   const selectedDivisionNode = useMemo(() => {
     if (!selectedClienteNode || selectedDivisionId === null) return null;
-    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
+    return (
+      getClienteDivisionArray(selectedClienteNode).find((d) => Number(d.id) === Number(selectedDivisionId)) ?? null
+    );
   }, [selectedClienteNode, selectedDivisionId]);
 
   const contratoOptions = useMemo(() => {
@@ -498,7 +726,7 @@ export default function DocumentosEntregadosScreen() {
 
   const selectedContratoNode = useMemo(() => {
     if (!selectedDivisionNode || selectedContratoId === null) return null;
-    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+    return (selectedDivisionNode.contratos || []).find((c) => Number(c.id) === Number(selectedContratoId)) ?? null;
   }, [selectedDivisionNode, selectedContratoId]);
 
   const sucursalOptions = useMemo(() => {
@@ -506,12 +734,49 @@ export default function DocumentosEntregadosScreen() {
     return (selectedContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
   }, [selectedContratoNode]);
 
+  const selectedSucursalNode = useMemo(() => {
+    if (!selectedContratoNode || selectedSucursalId == null) return null;
+    return (selectedContratoNode.sucursales || []).find((s: any) => Number(s.id) === Number(selectedSucursalId)) ?? null;
+  }, [selectedContratoNode, selectedSucursalId]);
+
+  const formPuestoOptions = useMemo((): PuestoOpt[] => {
+    if (selectedSucursalId == null) return [];
+    const k = String(selectedSucursalId);
+    if (Object.prototype.hasOwnProperty.call(puestosByCorpo, k)) {
+      return puestosByCorpo[k]!;
+    }
+    return mapPuestosDoc((selectedSucursalNode as any)?.puestos || []);
+  }, [selectedSucursalId, puestosByCorpo, selectedSucursalNode]);
+
+  const operativoPuestoOptions = useMemo((): PuestoOpt[] => {
+    if (marcaCorpoId == null) return [];
+    const k = String(marcaCorpoId);
+    if (Object.prototype.hasOwnProperty.call(puestosByCorpo, k)) {
+      return puestosByCorpo[k]!;
+    }
+    for (const e of structure || []) {
+      for (const c of e.clientes || []) {
+        for (const d of getClienteDivisionArray(c)) {
+          for (const co of d.contratos || []) {
+            for (const s of co.sucursales || []) {
+              if (Number(s.id) === Number(marcaCorpoId)) {
+                return mapPuestosDoc(s.puestos || []);
+              }
+            }
+          }
+        }
+      }
+    }
+    return [];
+  }, [marcaCorpoId, puestosByCorpo, structure]);
+
   const handleEmpresaChange = (empresaId: number | null) => {
     setSelectedEmpresaId(empresaId);
     setSelectedClienteId(null);
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
   };
 
   const handleClienteChange = (clienteId: number | null) => {
@@ -519,23 +784,24 @@ export default function DocumentosEntregadosScreen() {
     setSelectedDivisionId(null);
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
+    setSelectedPuestoId(null);
   };
 
   const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
   const filterClienteOptionsMemo = useMemo(() => {
-    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    const empresa = structure.find((e) => Number(e.id) === Number(filterEmpresaId));
     return empresa?.clientes ?? [];
   }, [structure, filterEmpresaId]);
   const filterDivisionOptionsMemo = useMemo(() => {
-    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
-    return cliente?.division ?? [];
+    const cliente = filterClienteOptionsMemo.find((c) => Number(c.id) === Number(filterClienteId));
+    return getClienteDivisionArray(cliente);
   }, [filterClienteOptionsMemo, filterClienteId]);
   const filterContratoOptionsMemo = useMemo(() => {
-    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    const division = filterDivisionOptionsMemo.find((d) => Number(d.id) === Number(filterDivisionId));
     return division?.contratos ?? [];
   }, [filterDivisionOptionsMemo, filterDivisionId]);
   const filterSucursalOptionsMemo = useMemo(() => {
-    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    const contrato = filterContratoOptionsMemo.find((c) => Number(c.id) === Number(filterContratoId));
     return contrato?.sucursales ?? [];
   }, [filterContratoOptionsMemo, filterContratoId]);
 
@@ -550,11 +816,9 @@ export default function DocumentosEntregadosScreen() {
 
   const runFetchDocs = useCallback(
     async (snap: MarcaSnapshot) => {
-      try {
-        setIsLoading(true);
-        setError(null);
-
-        await fetchMainStructure();
+    try {
+      setIsLoading(true);
+      setError(null);
 
         const corpoId = snap.isOperativo ? snap.marcaCorpoId : (snap.filterSucursalId ?? snap.marcaCorpoId);
 
@@ -565,19 +829,20 @@ export default function DocumentosEntregadosScreen() {
               : 'Seleccione sucursal en el filtro o defina la sucursal en la marca actual'
           );
           setDocs([]);
-          return;
-        }
+        return;
+      }
 
         const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
         const allCache: DocUI[] = cacheStr ? JSON.parse(cacheStr) : [];
+        const fullCache = Array.isArray(allCache) ? allCache : [];
         const sid = Number(corpoId);
-        const localByCorpo = Array.isArray(allCache)
-          ? allCache.filter((d: any) => docRecordSucursalId(d) === sid)
-          : [];
+        const localByCorpo = fullCache.filter((d: any) => getDocEntregadoCorpoId(d) === sid);
 
         const isConnected = await getConnectionStatus();
         if (!isConnected) {
-          setDocs(localByCorpo);
+          setDocs(
+            localByCorpo.filter((d: any) => d == null || (d as any).isActive !== false)
+          );
           return;
         }
 
@@ -589,7 +854,9 @@ export default function DocumentosEntregadosScreen() {
 
         if (!res.status) {
           setError(res.message || 'Error al cargar documentos entregados');
-          setDocs(localByCorpo);
+          setDocs(
+            localByCorpo.filter((d: any) => d == null || (d as any).isActive !== false)
+          );
           return;
         }
 
@@ -597,33 +864,29 @@ export default function DocumentosEntregadosScreen() {
           ...it,
           corpo_id: Number(it.corpo_id ?? it.sucursal_id ?? corpoId),
           id_local: it.id_local || '',
+          isActive: it.isActive !== false,
         }));
-        const localOnly = localByCorpo.filter((d: any) => d.id_local || d.id === 0);
-        const merged: DocUI[] = [...localOnly, ...serverList];
-
-        setDocs(merged);
-
-        const withoutThis = Array.isArray(allCache)
-          ? allCache.filter((d: any) => docRecordSucursalId(d) !== sid)
-          : [];
-        await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify([...withoutThis, ...merged]));
-      } catch (e: any) {
-        setError(e.message || 'Error al cargar documentos entregados');
-      } finally {
-        setIsLoading(false);
-      }
+        const merged = mergeDocumentosEntregadosCacheForCorpo(fullCache, serverList, sid);
+        await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(merged));
+        setDocs(merged.filter((d: any) => getDocEntregadoCorpoId(d) === sid));
+    } catch (e: any) {
+      setError(e.message || 'Error al cargar documentos entregados');
+    } finally {
+      setIsLoading(false);
+    }
     },
-    [fetchMainStructure, refreshAccessToken, logout]
+    [refreshAccessToken, logout]
   );
 
   const fetchRecords = useCallback(async () => {
-    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    const tree = await loadMainStructureCache();
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false, structureTree: tree });
     if (!snap) return;
     await runFetchDocs({
       ...snap,
       filterSucursalId: filterSucursalIdRef.current,
     });
-  }, [syncMarcaFromStorage, runFetchDocs]);
+  }, [syncMarcaFromStorage, runFetchDocs, loadMainStructureCache]);
 
   useEffect(() => {
     filterSucursalIdRef.current = filterSucursalId;
@@ -634,7 +897,12 @@ export default function DocumentosEntregadosScreen() {
       let cancelled = false;
       void (async () => {
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          const tree = await loadMainStructureCache();
+          if (cancelled) return;
+          const snap = await syncMarcaFromStorage({
+            applyFiltersFromMarca: true,
+            structureTree: tree,
+          });
           if (cancelled) return;
           listFiltersSyncedFromMarcaOnceRef.current = true;
           if (snap) await runFetchDocs(snap);
@@ -644,7 +912,6 @@ export default function DocumentosEntregadosScreen() {
         }
       })();
       void fetchDocumentTypes();
-      void fetchMainStructure();
       const handler = () => {
         void fetchRecords();
         void fetchDocumentTypes();
@@ -654,7 +921,13 @@ export default function DocumentosEntregadosScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [syncMarcaFromStorage, runFetchDocs, fetchRecords, fetchDocumentTypes, fetchMainStructure])
+    }, [
+      syncMarcaFromStorage,
+      runFetchDocs,
+      fetchRecords,
+      fetchDocumentTypes,
+      loadMainStructureCache,
+    ])
   );
 
   const resetForm = async () => {
@@ -676,8 +949,10 @@ export default function DocumentosEntregadosScreen() {
     resetForm();
     setEditing(null);
     setIsCreating(true);
-    void applyCurrentMarcaToCreateHierarchy();
-    void fetchMainStructure();
+    void (async () => {
+      const tree = await loadMainStructureCache();
+      await applyCurrentMarcaToCreateHierarchy(tree);
+    })();
   };
 
   const startEditing = async (it: DocUI) => {
@@ -687,28 +962,48 @@ export default function DocumentosEntregadosScreen() {
       return;
     }
     if (roleName != null && roleName !== 'OPERATIVO' && structure.length) {
-      const h = findHierarchyByCorpoIn(structure, Number(it.corpo_id));
-      if (h) {
-        setSelectedEmpresaId(h.empresaId);
-        setSelectedClienteId(h.clienteId);
-        setSelectedDivisionId(h.divisionId);
-        setSelectedContratoId(h.contratoId);
-        setSelectedSucursalId(h.corpoId);
+      const pId = Number((it as any).puesto_id ?? 0);
+      const hp = pId > 0 ? findHierarchyByPuestoIn(structure, pId) : null;
+      if (hp) {
+        setSelectedEmpresaId(hp.empresaId);
+        setSelectedClienteId(hp.clienteId);
+        setSelectedDivisionId(hp.divisionId);
+        setSelectedContratoId(hp.contratoId);
+        setSelectedSucursalId(hp.corpoId);
+        setSelectedPuestoId(hp.puestoId);
       } else {
-        const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === it.cliente_id)) ?? null;
-        if (empresaFound) setSelectedEmpresaId(empresaFound.id);
-        setSelectedClienteId(it.cliente_id);
-        setSelectedDivisionId(null);
-        setSelectedContratoId(null);
-        setSelectedSucursalId(null);
+        const h = findHierarchyByCorpoIn(structure, Number(it.corpo_id));
+        if (h) {
+          setSelectedEmpresaId(h.empresaId);
+          setSelectedClienteId(h.clienteId);
+          setSelectedDivisionId(h.divisionId);
+          setSelectedContratoId(h.contratoId);
+          setSelectedSucursalId(h.corpoId);
+        } else {
+          const empresaFound =
+            structure.find((e) => (e.clientes || []).some((c) => Number(c.id) === Number(it.cliente_id))) ?? null;
+          if (empresaFound) setSelectedEmpresaId(empresaFound.id);
+          setSelectedClienteId(it.cliente_id);
+          setSelectedDivisionId(null);
+          setSelectedContratoId(null);
+          setSelectedSucursalId(null);
+        }
+        setSelectedPuestoId(pId > 0 ? pId : null);
       }
     } else if (roleName != null && roleName !== 'OPERATIVO') {
-      const empresaFound = structure.find((e) => (e.clientes || []).some((c) => c.id === it.cliente_id)) ?? null;
+      const empresaFound =
+        structure.find((e) => (e.clientes || []).some((c) => Number(c.id) === Number(it.cliente_id))) ?? null;
       if (empresaFound) setSelectedEmpresaId(empresaFound.id);
       setSelectedClienteId(it.cliente_id);
       setSelectedDivisionId(null);
       setSelectedContratoId(null);
       setSelectedSucursalId(null);
+      setSelectedPuestoId(Number((it as any).puesto_id) > 0 ? Number((it as any).puesto_id) : null);
+    }
+
+    if (roleName === 'OPERATIVO') {
+      const p = Number((it as any).puesto_id ?? 0);
+      if (p > 0) setSelectedPuestoId(p);
     }
 
     setEditing(it);
@@ -781,26 +1076,32 @@ export default function DocumentosEntregadosScreen() {
       Alert.alert('Error', 'Cargando contexto de marca...');
       return false;
     }
-    if (!editing) {
-      if (roleName === 'OPERATIVO') {
-        if (!marcaClienteId || !marcaCorpoId) {
-          Alert.alert('Error', 'No se pudo determinar cliente o sucursal desde la marca actual');
-          return false;
-        }
-      } else {
-        if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
-          Alert.alert('Error', 'Empresa, Cliente y Sucursal son obligatorios');
-          return false;
-        }
-        if (!selectedDivisionId) {
-          Alert.alert('Error', 'División es obligatoria');
-          return false;
-        }
-        if (!selectedContratoId) {
-          Alert.alert('Error', 'Contrato es obligatorio');
-          return false;
-        }
+    if (roleName === 'OPERATIVO') {
+      if (!marcaClienteId || !marcaCorpoId) {
+        Alert.alert('Error', 'No se pudo determinar cliente o sucursal desde la marca actual');
+        return false;
       }
+    } else {
+      if (!selectedEmpresaId || !selectedClienteId || !selectedSucursalId) {
+        Alert.alert('Error', 'Empresa, Cliente y Sucursal son obligatorios');
+        return false;
+      }
+      if (!selectedDivisionId) {
+        Alert.alert('Error', 'División es obligatoria');
+        return false;
+      }
+      if (!selectedContratoId) {
+        Alert.alert('Error', 'Contrato es obligatorio');
+        return false;
+      }
+      if (!selectedPuestoId) {
+        Alert.alert('Error', 'Debe seleccionar un puesto');
+        return false;
+      }
+    }
+    if (roleName === 'OPERATIVO' && !selectedPuestoId && !marcaPuestoId) {
+      Alert.alert('Error', 'Debe seleccionar un puesto');
+      return false;
     }
     const required = [
       { label: 'Fecha', v: fecha },
@@ -821,28 +1122,56 @@ export default function DocumentosEntregadosScreen() {
     return true;
   };
 
-  const buildPayload = async () => {
-    let clienteId: number;
-    let corpoId: number;
-    if (editing) {
-      clienteId = Number(editing.cliente_id);
-      corpoId = Number(editing.corpo_id);
-      if (!Number.isFinite(clienteId) || clienteId <= 0 || !Number.isFinite(corpoId) || corpoId <= 0) {
-        throw new Error('El registro no tiene cliente o sucursal válidos');
+  const buildPayload = () => {
+    const puestoPick = () => {
+      if (roleName === 'OPERATIVO') {
+        return Number(selectedPuestoId ?? marcaPuestoId ?? 0);
       }
-    } else if (roleName === 'OPERATIVO') {
-      clienteId = Number(marcaClienteId ?? 0);
-      corpoId = Number(marcaCorpoId ?? 0);
-      if (!clienteId || !corpoId) throw new Error('Cliente o sucursal no definidos en la marca');
-    } else {
-      clienteId = Number(selectedClienteId ?? 0);
-      corpoId = Number(selectedSucursalId ?? 0);
-      if (!clienteId || !corpoId) throw new Error('Seleccione cliente y sucursal en la jerarquía');
+      return Number(selectedPuestoId ?? 0);
+    };
+    const pid = puestoPick();
+    if (!Number.isFinite(pid) || pid <= 0) {
+      throw new Error('Debe seleccionar un puesto');
+    }
+    if (roleName === 'OPERATIVO') {
+      const cid = Number(marcaClienteId ?? 0);
+      const coid = Number(marcaCorpoId ?? 0);
+      if (!cid || !coid) throw new Error('Cliente o sucursal no definidos en la marca');
+    }
+    const h = findHierarchyByPuestoIn(structure, pid);
+    if (!h) {
+      if (editing) {
+        const ex = editing as any;
+        if (ex && (ex.puesto_id || ex.corpo_id)) {
+          return {
+            cliente_id: Number(ex.cliente_id),
+            corpo_id: Number(ex.corpo_id),
+            empresa_id: Number(ex.empresa_id ?? 0),
+            division_id: Number(ex.division_id ?? 0),
+            contrato_id: Number(ex.contrato_id ?? 0),
+            puesto_id: Number(ex.puesto_id ?? pid),
+            fecha,
+            nombre_oficial_entrega: nombreEntrega,
+            nombre_oficial_recibe: nombreRecibe,
+            tipo_documento: tipoDocumento,
+            descripcion,
+            firma_representante_cliente: firmaCliente,
+            firma_responsable: firmaResponsable,
+          };
+        }
+      }
+      throw new Error(
+        'No se pudo resolver el puesto en la jerarquía. Sincronice la estructura o compruebe la conexión.'
+      );
     }
 
     return {
-      cliente_id: clienteId,
-      corpo_id: corpoId,
+      cliente_id: h.clienteId,
+      corpo_id: h.corpoId,
+      empresa_id: h.empresaId,
+      division_id: h.divisionId,
+      contrato_id: h.contratoId,
+      puesto_id: h.puestoId,
       fecha,
       nombre_oficial_entrega: nombreEntrega,
       nombre_oficial_recibe: nombreRecibe,
@@ -913,14 +1242,27 @@ export default function DocumentosEntregadosScreen() {
     setSubmitResponse(null);
 
     try {
-      const payload = await buildPayload();
+      const payload = buildPayload();
       const isConnected = await getConnectionStatus();
 
       // create
       if (!editing) {
         if (isConnected) {
           const res = await createDocumentoEntregado({ requestData: payload, refreshAccessToken, logout });
-          if (res.status && res.id != null) {
+          const newId = (res as any).id;
+          if (res.status && newId != null && Number(newId) > 0) {
+            try {
+              const str = await AsyncStorage.getItem('documentos_entregados_cache');
+              const list: any[] = str ? JSON.parse(str) : [];
+              const row = buildDocumentoEntregadoCacheRowFromRequest(payload, Number(newId), '');
+              const next = upsertDocumentoEntregadoInCache(list, row);
+              await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+              setDocs(
+                next.filter((d) => getDocEntregadoCorpoId(d) === Number(payload.corpo_id))
+              );
+            } catch (e) {
+              console.error('cache doc entregado create:', e);
+            }
             Alert.alert('Éxito', res.message || 'Documento entregado creado correctamente');
             setIsCreating(false);
             await fetchRecords();
@@ -932,16 +1274,9 @@ export default function DocumentosEntregadosScreen() {
           const localItem: DocUI = {
             id: 0,
             id_local: localId,
-            cliente_id: payload.cliente_id,
-            corpo_id: payload.corpo_id,
-            fecha: payload.fecha,
-            nombre_oficial_entrega: payload.nombre_oficial_entrega,
-            nombre_oficial_recibe: payload.nombre_oficial_recibe,
-            tipo_documento: payload.tipo_documento,
-            descripcion: payload.descripcion,
-            firma_representante_cliente: payload.firma_representante_cliente,
-            firma_responsable: payload.firma_responsable,
-          };
+            ...(payload as any),
+            isActive: true,
+          } as DocUI;
           const next = [localItem, ...docs];
           setDocs(next);
           await persistDocsBranchCache(payload.corpo_id, next);
@@ -957,6 +1292,18 @@ export default function DocumentosEntregadosScreen() {
       if (isConnected && !isLocal) {
         const res = await updateDocumentoEntregado({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          try {
+            const str = await AsyncStorage.getItem('documentos_entregados_cache');
+            const list: any[] = str ? JSON.parse(str) : [];
+            const row = buildDocumentoEntregadoCacheRowFromRequest(payload, editing.id, '');
+            const next = upsertDocumentoEntregadoInCache(list, row);
+            await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+            setDocs(
+              next.filter((d) => getDocEntregadoCorpoId(d) === Number(payload.corpo_id))
+            );
+          } catch (e) {
+            console.error('cache doc entregado update:', e);
+          }
           Alert.alert('Éxito', res.message || 'Documento entregado actualizado correctamente');
           setIsCreating(false);
           setEditing(null);
@@ -971,13 +1318,10 @@ export default function DocumentosEntregadosScreen() {
           if (!match) return it;
           return {
             ...it,
-            fecha: payload.fecha,
-            nombre_oficial_entrega: payload.nombre_oficial_entrega,
-            nombre_oficial_recibe: payload.nombre_oficial_recibe,
-            tipo_documento: payload.tipo_documento,
-            descripcion: payload.descripcion,
-            firma_representante_cliente: payload.firma_representante_cliente,
-            firma_responsable: payload.firma_responsable,
+            ...payload,
+            id: it.id,
+            id_local: it.id_local,
+            isActive: (it as any).isActive !== false,
           };
         });
         setDocs(next);
@@ -1049,16 +1393,16 @@ export default function DocumentosEntregadosScreen() {
           const isConnected = await getConnectionStatus();
 
           try {
-            // local-only
-            if (it.id_local || it.id === 0) {
-              const next = docs.filter((x) => x.id_local !== it.id_local);
-              setDocs(next);
+          // local-only
+          if (it.id_local || it.id === 0) {
+            const next = docs.filter((x) => x.id_local !== it.id_local);
+            setDocs(next);
               await persistDocsBranchCache(sid, next);
-              if (it.id_local) await removeActionsForLocalId(it.id_local);
-              return;
-            }
+            if (it.id_local) await removeActionsForLocalId(it.id_local);
+            return;
+          }
 
-            if (isConnected) {
+          if (isConnected) {
               const res = await deleteDocumentoEntregado({
                 id: it.id,
                 corpoId: sid,
@@ -1066,18 +1410,18 @@ export default function DocumentosEntregadosScreen() {
                 refreshAccessToken,
                 logout,
               });
-              if (res.status) {
-                Alert.alert('Éxito', 'Documento eliminado correctamente');
+            if (res.status) {
+              Alert.alert('Éxito', 'Documento eliminado correctamente');
                 await fetchRecords();
-              } else {
-                Alert.alert('Error', res.message || 'No se pudo eliminar el documento');
-              }
             } else {
-              const next = docs.filter((x) => x.id !== it.id);
-              setDocs(next);
+              Alert.alert('Error', res.message || 'No se pudo eliminar el documento');
+            }
+          } else {
+            const next = docs.filter((x) => x.id !== it.id);
+            setDocs(next);
               await persistDocsBranchCache(sid, next);
               await upsertAction({ type: 'delete', id: it.id, corpoId: sid, clienteId: cid });
-              Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
+            Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
             }
           } finally {
             setDeletingDocKey((prev) => (prev === rowKey ? null : prev));
@@ -1258,8 +1602,8 @@ export default function DocumentosEntregadosScreen() {
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <Ionicons name="trash" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
+            <Ionicons name="trash" size={18} color="#FFFFFF" />
+            <ThemedText style={styles.rowButtonText}>Eliminar</ThemedText>
               </>
             )}
           </TouchableOpacity>
@@ -1276,7 +1620,7 @@ export default function DocumentosEntregadosScreen() {
         <ThemedView style={styles.content}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="document-text" size={22} color="#000000" /> Documentos entregados
+              <Ionicons name="file-tray-full" size={22} color="#000000" /> Documentos entregados
             </ThemedText>
             <ThemedText style={styles.subtitle}>Control de documentos entregados al cliente</ThemedText>
           </ThemedView>
@@ -1542,6 +1886,7 @@ export default function DocumentosEntregadosScreen() {
                         setSelectedDivisionId(next);
                         setSelectedContratoId(null);
                         setSelectedSucursalId(null);
+                        setSelectedPuestoId(null);
                       }}
                       enabled={!editing && selectedClienteId !== null && divisionOptions.length > 0}
                       style={styles.picker}
@@ -1565,6 +1910,7 @@ export default function DocumentosEntregadosScreen() {
                         const next = Number(v) || null;
                         setSelectedContratoId(next);
                         setSelectedSucursalId(null);
+                        setSelectedPuestoId(null);
                       }}
                       enabled={!editing && selectedDivisionId !== null && contratoOptions.length > 0}
                       style={styles.picker}
@@ -1584,7 +1930,10 @@ export default function DocumentosEntregadosScreen() {
                   <View style={styles.pickerWrapper}>
                     <Picker
                       selectedValue={selectedSucursalId ?? 0}
-                      onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
+                      onValueChange={(v) => {
+                        setSelectedSucursalId(Number(v) || null);
+                        setSelectedPuestoId(null);
+                      }}
                       enabled={!editing && selectedContratoId !== null && sucursalOptions.length > 0}
                       style={styles.picker}
                     >
@@ -1598,7 +1947,50 @@ export default function DocumentosEntregadosScreen() {
                       ))}
                     </Picker>
                   </View>
+
+                  <ThemedText style={styles.label}>Puesto *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedPuestoId ?? 0}
+                      onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
+                      enabled={!editing && selectedSucursalId !== null && formPuestoOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formPuestoOptions.map((p) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
                 </>
+              ) : null}
+
+              {roleName === 'OPERATIVO' ? (
+                <ThemedView>
+                  <ThemedText style={styles.sectionTitle}>Puesto (sucursal de la marca) *</ThemedText>
+                  <ThemedText style={styles.label}>Puesto *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={selectedPuestoId ?? marcaPuestoId ?? 0}
+                      onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
+                      enabled={!editing && operativoPuestoOptions.length > 0}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={marcaCorpoId ? 'Seleccione puesto...' : 'Sin sucursal en la marca'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {operativoPuestoOptions.map((p) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
               ) : null}
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
@@ -1943,8 +2335,8 @@ export default function DocumentosEntregadosScreen() {
                                       <ThemedView style={styles.changeDescriptionContainer}>
                                         <ThemedText style={styles.changeDescription}>
                                           <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
+                                </ThemedText>
+                            </ThemedView>
                                       {Object.entries(created).map(([k, v]) => {
                                         if (k === 'firma_representante_cliente') {
                                           return (

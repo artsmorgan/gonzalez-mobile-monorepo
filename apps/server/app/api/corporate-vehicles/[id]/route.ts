@@ -47,6 +47,9 @@ export async function PUT(
       empresa_id,
       cliente_id,
       corpo_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       placa,
       tipo,
       tipo_autoria,
@@ -95,6 +98,9 @@ export async function PUT(
     if (rtv !== undefined) updateData.rtv = Boolean(rtv);
     if (marchamo !== undefined) updateData.marchamo = Boolean(marchamo);
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable ?? "");
+    if (division_id !== undefined) updateData.division_id = Number(division_id ?? 0);
+    if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id ?? 0);
+    if (puesto_id !== undefined) updateData.puesto_id = Number(puesto_id ?? 0);
 
     // Registrar cambios (solo campos actualizados)
     const eq = (a: any, b: any) => {
@@ -137,6 +143,48 @@ export async function PUT(
     });
     const updatedObj = updated as any;
 
+    const locChanged =
+      updateData.empresa_id !== undefined ||
+      updateData.cliente_id !== undefined ||
+      updateData.sucursal_id !== undefined;
+    if (locChanged) {
+      const nextEmp = updateData.empresa_id !== undefined ? updateData.empresa_id : existingObj.empresa_id;
+      const nextCli = updateData.cliente_id !== undefined ? updateData.cliente_id : existingObj.cliente_id;
+      const nextSuc = updateData.sucursal_id !== undefined ? updateData.sucursal_id : existingObj.sucursal_id;
+      try {
+        const bitacoras = await callDynamicPrisma({
+          req,
+          data: {
+            action: "GET",
+            table: "c_bitacora_vehiculo_detenido",
+            operation: "findMany",
+            where: { vehiculo_id: vehiculoId },
+          },
+        });
+        const rows = Array.isArray(bitacoras) ? bitacoras : [];
+        for (const row of rows) {
+          const rid = (row as any)?.id;
+          if (!rid) continue;
+          await callDynamicPrisma({
+            req,
+            data: {
+              action: "UPDATE",
+              table: "c_bitacora_vehiculo_detenido",
+              operation: "update",
+              where: { id: rid },
+              data: {
+                empresa_id: nextEmp,
+                cliente_id: nextCli,
+                sucursal_id: nextSuc,
+              },
+            },
+          });
+        }
+      } catch (e) {
+        console.error("Error actualizando bitácoras tras mover vehículo:", e);
+      }
+    }
+
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
       await callDynamicPrisma({
@@ -156,28 +204,10 @@ export async function PUT(
       });
     }
 
-    // Imágenes: si el cliente manda `imagenes`, hacemos reemplazo total
+    // Imágenes en PUT: solo se **añaden** archivos nuevos. No se borran existentes
+    // (el borrado es solo vía DELETE /api/corporate-vehicles/[id]/image/[imageId] o al eliminar el vehículo).
     if (imagenes !== undefined) {
       const imagesParsed = safeParseJson<VehicleImageInput[]>(imagenes, []);
-      const dir = path.join(process.cwd(), "public", "uploads", "corporate-vehicles", `${updatedObj.id}`);
-
-      await callDynamicPrisma({
-        req,
-        data: {
-          action: "DELETE",
-          table: "c_imagenes_vehiculos_corporativos",
-          operation: "deleteMany",
-          where: { vehiculo_id: updatedObj.id },
-        },
-      });
-      if (fs.existsSync(dir)) {
-        try {
-          fs.rmSync(dir, { recursive: true, force: true });
-        } catch {
-          // ignore
-        }
-      }
-
       if (imagesParsed.length > 0) {
         const uploadResp = await uploadDynamicFiles({
           req,

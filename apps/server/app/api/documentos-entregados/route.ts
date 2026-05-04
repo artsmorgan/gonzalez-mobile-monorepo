@@ -35,25 +35,33 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where: {
           corpo_id: corpoId,
+          isActive: true,
         },
         orderBy: { id: "desc" },
       },
     });
 
     const rowsArray = Array.isArray(rows) ? rows : [];
-    const mapped = rowsArray.map((r: any) => ({
-      id: r.id,
-      cliente_id: r.cliente_id,
-      corpo_id: r.corpo_id,
-      fecha: r.fecha instanceof Date ? r.fecha.toISOString() : r.fecha,
-      nombre_oficial_entrega: r.nombre_oficial_entrega,
-      nombre_oficial_recibe: r.nombre_oficial_recibe,
-      tipo_documento: r.tipo_documento,
-      descripcion: r.descripcion,
-      firma_representante_cliente: r.firma_representante_cliente,
-      firma_responsable: r.firma_responsable,
-      id_local: "",
-    }));
+    const mapped = rowsArray
+      .filter((r: any) => r && r.isActive !== false)
+      .map((r: any) => ({
+        id: r.id,
+        cliente_id: r.cliente_id,
+        corpo_id: r.corpo_id,
+        empresa_id: r.empresa_id != null ? r.empresa_id : 0,
+        division_id: r.division_id != null ? r.division_id : 0,
+        contrato_id: r.contrato_id != null ? r.contrato_id : 0,
+        puesto_id: r.puesto_id != null ? r.puesto_id : 0,
+        fecha: r.fecha instanceof Date ? r.fecha.toISOString() : r.fecha,
+        nombre_oficial_entrega: r.nombre_oficial_entrega,
+        nombre_oficial_recibe: r.nombre_oficial_recibe,
+        tipo_documento: r.tipo_documento,
+        descripcion: r.descripcion,
+        firma_representante_cliente: r.firma_representante_cliente,
+        firma_responsable: r.firma_responsable,
+        isActive: r.isActive !== false,
+        id_local: "",
+      }));
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
@@ -72,6 +80,10 @@ export async function POST(req: NextRequest) {
     const {
       cliente_id,
       corpo_id,
+      empresa_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       fecha,
       nombre_oficial_entrega,
       nombre_oficial_recibe,
@@ -96,8 +108,15 @@ export async function POST(req: NextRequest) {
 
     const clienteIdNum = parseInt(String(cliente_id), 10);
     const corpoIdNum = parseInt(String(corpo_id), 10);
+    const empresaIdNum = empresa_id != null && String(empresa_id).trim() !== "" ? parseInt(String(empresa_id), 10) : 0;
+    const divisionIdNum = division_id != null && String(division_id).trim() !== "" ? parseInt(String(division_id), 10) : 0;
+    const contratoIdNum = contrato_id != null && String(contrato_id).trim() !== "" ? parseInt(String(contrato_id), 10) : 0;
+    const puestoIdNum = puesto_id != null && String(puesto_id).trim() !== "" ? parseInt(String(puesto_id), 10) : 0;
     if (!Number.isFinite(clienteIdNum) || clienteIdNum <= 0 || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) {
       return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 200 });
+    }
+    if (!Number.isFinite(puestoIdNum) || puestoIdNum <= 0) {
+      return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 200 });
     }
 
     const fechaDate = parseDateOnly(fecha);
@@ -113,6 +132,10 @@ export async function POST(req: NextRequest) {
         data: {
           cliente_id: clienteIdNum,
           corpo_id: corpoIdNum,
+          empresa_id: Number.isFinite(empresaIdNum) && empresaIdNum > 0 ? empresaIdNum : 0,
+          division_id: Number.isFinite(divisionIdNum) && divisionIdNum > 0 ? divisionIdNum : 0,
+          contrato_id: Number.isFinite(contratoIdNum) && contratoIdNum > 0 ? contratoIdNum : 0,
+          puesto_id: puestoIdNum,
           fecha: fechaDate.toISOString(),
           nombre_oficial_entrega: String(nombre_oficial_entrega),
           nombre_oficial_recibe: String(nombre_oficial_recibe),
@@ -123,6 +146,7 @@ export async function POST(req: NextRequest) {
               ? String(firma_representante_cliente)
               : null,
           firma_responsable: String(firma_responsable),
+          isActive: true,
         },
       },
     });
@@ -193,6 +217,10 @@ export async function POST(req: NextRequest) {
               id: created.id,
               cliente_id: created.cliente_id,
               corpo_id: created.corpo_id,
+              empresa_id: created.empresa_id,
+              division_id: created.division_id,
+              contrato_id: created.contrato_id,
+              puesto_id: created.puesto_id,
               fecha: fechaDate.toISOString(),
               nombre_oficial_entrega: created.nombre_oficial_entrega,
               nombre_oficial_recibe: created.nombre_oficial_recibe,

@@ -8,6 +8,10 @@ export type LlaveroItem = {
   cliente_id: number;
   corpo_id: number;
   puesto_id: number;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  isActive?: boolean;
   nombre_llavero: string;
   observaciones: string;
   firma_responsable: string;

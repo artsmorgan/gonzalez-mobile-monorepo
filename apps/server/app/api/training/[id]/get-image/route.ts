@@ -28,14 +28,41 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const capacitacionObj = capacitacion as any;
-    if (!capacitacionObj.file) {
+    if (!capacitacionObj.file || capacitacionObj.file === '-') {
         return NextResponse.json({ status: false, message: 'Capacitación no encontrada' }, { status: 404 });
     }
 
+    const nameParam = req.nextUrl.searchParams.get('name')?.trim();
+    let fileName = String(capacitacionObj.file).trim();
+    if (fileName.startsWith('{')) {
+        try {
+            const o = JSON.parse(fileName) as { items?: { name: string }[] };
+            const items = Array.isArray(o?.items) ? o.items : [];
+            if (nameParam) {
+                const found = items.find((x) => x && x.name === nameParam);
+                fileName = found?.name || '';
+            } else {
+                fileName = items[0]?.name || '';
+            }
+        } catch {
+            fileName = '';
+        }
+    }
+    if (!fileName) {
+        return NextResponse.json({ status: false, message: 'Archivo no encontrado' }, { status: 404 });
+    }
+
+    const { inferUploadType } = await import('../../trainingFileField');
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'].includes(ext);
+    const dynType = isImage ? 'image' : inferUploadType(
+        ext === 'pdf' ? 'application/pdf' : 'application/octet-stream'
+    );
+
     const fetched = await fetchDynamicFile({
         req,
-        type: 'image',
-        url: `training/${capacitacionObj.id}/${capacitacionObj.file}`,
+        type: dynType === 'image' ? 'image' : 'file',
+        url: `training/${capacitacionObj.id}/${fileName}`,
         download: false,
     });
 

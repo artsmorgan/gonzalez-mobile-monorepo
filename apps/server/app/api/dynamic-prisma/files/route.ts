@@ -349,3 +349,55 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
+
+export async function DELETE(req: NextRequest) {
+    try {
+        const { searchParams } = new URL(req.url);
+        const fileUrl = String(searchParams.get("url") || "").trim();
+        const token = String(searchParams.get("token") || "").trim();
+        const mobileAccessToken = String(searchParams.get("mobileAccessToken") || "").trim();
+        const shouldVerifyAccessToken = parseBoolean(searchParams.get("shouldVerifyAccessToken"), true);
+
+        const accessError = validateAccess(
+            req,
+            mobileAccessToken,
+            token,
+            shouldVerifyAccessToken
+        );
+        if (accessError) return accessError;
+
+        if (!fileUrl) {
+            return NextResponse.json({ status: false, message: "url es obligatorio" }, { status: 400 });
+        }
+
+        const { absolutePath, relativePath } = resolveUploadsPath(fileUrl);
+        if (!fs.existsSync(absolutePath)) {
+            return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+        }
+
+        const stat = await fs.promises.stat(absolutePath);
+        if (stat.isDirectory()) {
+            return NextResponse.json(
+                { status: false, message: "Solo se permite eliminar archivos, no carpetas" },
+                { status: 400 }
+            );
+        }
+
+        await fs.promises.unlink(absolutePath);
+
+        const relativeNorm = relativePath.replace(/\\/g, "/");
+        return NextResponse.json(
+            {
+                status: true,
+                message: "Archivo eliminado correctamente",
+                relative_path: relativeNorm,
+                url: `/uploads/${relativeNorm}`,
+            },
+            { status: 200 }
+        );
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error in DELETE /api/dynamic-prisma/files:", errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    }
+}

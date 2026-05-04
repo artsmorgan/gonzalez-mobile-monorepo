@@ -1,13 +1,28 @@
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import authedFetch from './authedFetch';
+import { getFile } from './fileStorage';
+
+/** Convierte `file_local_file_name` en `file` (data URL) antes del PUT; idempotente si ya viene `file`. */
+async function hydrateMarkRequestFileField(requestData: any): Promise<any> {
+  const rd = { ...requestData };
+  const fn = rd?.file_local_file_name;
+  if (typeof fn === 'string' && fn.trim()) {
+    try {
+      const { base64 } = await getFile(fn.trim());
+      rd.file = `data:image/jpeg;base64,${base64}`;
+    } catch (e) {
+      console.warn('[activitiesFunctions] getFile failed for file_local_file_name:', fn, e);
+      if (rd.file === undefined) rd.file = null;
+    }
+    delete rd.file_local_file_name;
+  }
+  return rd;
+}
 
 interface UpdateActivityParams {
-  requestData: {
-    e: number;
-    estado: 'marcar' | 'desmarcar';
-    bitacora: string;
-  };
+  /** Incluye `file_local_file_name` (disco) o `file` (data URL) para marcado con imagen. */
+  requestData: any;
   activityId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -20,14 +35,8 @@ interface CreateActivityParams {
 }
 
 interface UpdateRevisionEquipoParams {
-  requestData: {
-    e: number;
-    articulo_id: number;
-    es_correcto: boolean;
-    motivo_incorrecto: string;
-    estado?: 'Bueno' | 'Malo' | 'No está';
-    cantidad_real?: number;
-  };
+  /** Incluye `file_local_file_name` o `file` para imagen de artículo. */
+  requestData: any;
   revisionEquipoId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -213,6 +222,8 @@ export const updateActivity = async ({
       throw new Error('Server URL not configured');
     }
 
+    const payload = await hydrateMarkRequestFileField(requestData);
+
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/${activityId}`,
       init: {
@@ -220,7 +231,7 @@ export const updateActivity = async ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify(payload),
       },
       refreshAccessToken,
       logout,
@@ -257,6 +268,8 @@ export const updateRevisionEquipo = async ({
       throw new Error('Server URL not configured');
     }
 
+    const payload = await hydrateMarkRequestFileField(requestData);
+
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/equipo/${revisionEquipoId}`,
       init: {
@@ -264,7 +277,7 @@ export const updateRevisionEquipo = async ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(requestData),
+        body: JSON.stringify(payload),
       },
       refreshAccessToken,
       logout,
