@@ -129,9 +129,9 @@ export async function fetchDynamicFile(params: {
     return {
         buffer: Buffer.from(response.data),
         headers: {
-            contentType: response.headers["content-type"] ?? "application/octet-stream",
-            contentDisposition: response.headers["content-disposition"] ?? "",
-            cacheControl: response.headers["cache-control"] ?? "public, max-age=31536000",
+            contentType: String(response.headers["content-type"] ?? "application/octet-stream"),
+            contentDisposition: String(response.headers["content-disposition"] ?? ""),
+            cacheControl: String(response.headers["cache-control"] ?? "public, max-age=31536000"),
         },
     };
 }
