@@ -8,6 +8,8 @@ import {
     Platform,
     View,
     TextInput,
+    Modal,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import * as Location from 'expo-location';
@@ -26,6 +28,14 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+    loadMainStructureFragmentsObjectAllowPartial,
+    patchSucursalPuestosUbicacionInFragments,
+    readPuestoUbicacionDispositivoMap,
+    writePuestoUbicacionDispositivo,
+} from '@/hooks/mainStructureFragmentsStorage';
 
 type PuestoUbicacionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PuestoUbicacion'>;
 
@@ -58,12 +68,81 @@ function numOrNull(v: unknown): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
-/** Recorre main_structure_cache para completar la cadena empresa → puesto (como en SatisfactionSurveysScreen). */
+/** Lee coords del puesto desde `ubicacion` o campos planos (API / fragmentos / monolito). */
+function readUbicacionFromPuesto(puesto: any): { lat: string | null; lng: string | null } {
+    if (!puesto || typeof puesto !== 'object') return { lat: null, lng: null };
+    const u = puesto.ubicacion;
+    const latRaw =
+        (u != null && typeof u === 'object'
+            ? (u as any).lat ?? (u as any).latitud ?? (u as any).latitude
+            : undefined) ?? puesto.coordenadas_gpslat;
+    const lngRaw =
+        (u != null && typeof u === 'object'
+            ? (u as any).lng ?? (u as any).longitud ?? (u as any).longitude
+            : undefined) ?? puesto.coordenadas_gpslng;
+    const toStr = (v: unknown): string | null => {
+        if (v === undefined || v === null) return null;
+        const s = String(v).trim();
+        return s.length > 0 ? s : null;
+    };
+    return { lat: toStr(latRaw), lng: toStr(lngRaw) };
+}
+
+function formatCoordForDisplay(v: string | null | undefined): string {
+    if (v === undefined || v === null) return 'No disponible';
+    const t = String(v).trim();
+    return t.length > 0 ? t : 'No disponible';
+}
+
+/** Acepta coma o punto decimal; devuelve null si no es un número finito. */
+function parseCoordText(s: string): number | null {
+    const t = String(s).trim().replace(',', '.');
+    if (t === '') return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Nombre y datos base del puesto desde fragmentos / árbol.
+ * Las coords mostradas como "ubicación guardada" priorizan `dispositivoUbicacionMap` (GPS al confirmar).
+ */
+function getPuestoRecordForUbicacionDisplay(
+    structure: MainStructureTree,
+    fragments: Record<string, any> | null,
+    corpoId: number | null,
+    puestoId: number | null,
+): any | null {
+    if (corpoId == null || puestoId == null) return null;
+    const pid = Number(puestoId);
+    const cid = Number(corpoId);
+    const k = `sucursal_${cid}_puestos`;
+    if (fragments && Array.isArray(fragments[k])) {
+        const hit = fragments[k].find((p: any) => Number(p?.id) === pid);
+        if (hit) return hit;
+    }
+    for (const empresa of structure || []) {
+        for (const cliente of empresa.clientes || []) {
+            for (const division of getClienteDivisionArray(cliente)) {
+                for (const contrato of division.contratos || []) {
+                    for (const sucursal of contrato.sucursales || []) {
+                        if (Number(sucursal.id) !== cid) continue;
+                        for (const puesto of sucursal.puestos || []) {
+                            if (Number(puesto.id) === pid) return puesto;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+/** Recorre la estructura mergeada desde fragmentos para completar empresa → puesto. */
 function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyIds | null {
     const pid = Number(puestoId);
     for (const empresa of structureArr || []) {
         for (const cliente of empresa.clientes || []) {
-            for (const division of cliente.division || []) {
+            for (const division of getClienteDivisionArray(cliente)) {
                 for (const contrato of division.contratos || []) {
                     for (const sucursal of contrato.sucursales || []) {
                         for (const puesto of sucursal.puestos || []) {
@@ -84,6 +163,85 @@ function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: numb
         }
     }
     return null;
+}
+
+function getClienteDivisionArray(cliente: MainStructureClienteNode | any): MainStructureDivisionNode[] {
+    if (!cliente) return [];
+    if (Array.isArray(cliente.division)) return cliente.division;
+    if (Array.isArray((cliente as any).divisiones)) return (cliente as any).divisiones;
+    return [];
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+    const raw =
+        marca?.roleDivision?.division?.id ??
+        marca?.role_division?.division?.id ??
+        marca?.division?.id ??
+        marca?.division_id;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function findDivisionIdForContratoInStructure(
+    tree: MainStructureTree,
+    empresaId: number | null,
+    clienteId: number | null,
+    contratoId: number | null
+): number | null {
+    if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+    if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+    const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+    const divisions = getClienteDivisionArray(cliente);
+    for (const div of divisions) {
+        const contratos: MainStructureContratoNode[] = Array.isArray(div?.contratos) ? div.contratos : [];
+        if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+            return Number(div.id);
+        }
+    }
+    return null;
+}
+
+function resolveDivisionIdInStructure(
+    tree: MainStructureTree,
+    empresaId: number | null,
+    clienteId: number | null,
+    divisionId: number | null
+): number | null {
+    if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+    if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+    const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+    const divisions = getClienteDivisionArray(cliente);
+    const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+    return found ? Number(found.id) : Number(divisionId);
+}
+
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureTree): number | null {
+    const empresaId =
+        current?.empresa?.id != null
+            ? Number(current.empresa.id)
+            : current?.empresa_id != null
+              ? Number(current.empresa_id)
+              : null;
+    const clienteId =
+        current?.cliente?.id != null
+            ? Number(current.cliente.id)
+            : current?.cliente_id != null
+              ? Number(current.cliente_id)
+              : null;
+    const contratoId =
+        current?.contrato?.id != null
+            ? Number(current.contrato.id)
+            : current?.contrato_id != null
+              ? Number(current.contrato_id)
+              : null;
+    let divId = getDivisionIdFromMarcaJson(current);
+    if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+        divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+    }
+    if (divId == null) return null;
+    return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
 }
 
 /** IDs desde current_marca (anidado o plano, como MarcarIngresoSalida / NotesScreen) y refuerzo con el árbol en caché. */
@@ -111,17 +269,24 @@ function resolveMarcaIdsFromCurrentMarca(
     const c = current as Record<string, any>;
     let empresaId = numOrNull(c?.empresa?.id ?? c?.empresa_id);
     let clienteId = numOrNull(c?.cliente?.id ?? c?.cliente_id);
-    let divisionId = numOrNull(c?.roleDivision?.division?.id ?? c?.division_id);
+    let divisionId = resolveMarcaDivisionForTree(c, structure);
     let contratoId = numOrNull(c?.contrato?.id ?? c?.contrato_id);
     let corpoId = numOrNull(c?.corpo?.id ?? c?.corpo_id);
-    let puestoId = numOrNull(c?.puesto?.id ?? c?.puesto_id);
+    let puestoId = numOrNull(
+        c?.puesto?.id ??
+        c?.puesto_id ??
+        c?.plaza?.puesto?.id ??
+        c?.plaza?.puesto_id ??
+        c?.roleDivision?.puesto_id ??
+        c?.role_division?.puesto_id
+    );
 
     if (puestoId && Array.isArray(structure) && structure.length > 0) {
         const found = findHierarchyByPuestoIn(structure, puestoId);
         if (found) {
             empresaId = empresaId ?? found.empresaId;
             clienteId = clienteId ?? found.clienteId;
-            divisionId = divisionId ?? found.divisionId;
+            divisionId = divisionId ?? resolveDivisionIdInStructure(structure, empresaId, clienteId, found.divisionId);
             contratoId = contratoId ?? found.contratoId;
             corpoId = corpoId ?? found.corpoId;
         }
@@ -131,12 +296,14 @@ function resolveMarcaIdsFromCurrentMarca(
 }
 
 export default function PuestoUbicacionScreen() {
-    const { employee, refreshAccessToken, logout } = useAuth();
+    const { refreshAccessToken, logout } = useAuth();
     const [isMenuVisible, setIsMenuVisible] = useState(false);
     const navigation = useNavigation<PuestoUbicacionScreenNavigationProp>();
 
-    // Estructura principal
+    // Estructura principal (árbol mergeado para current_marca / búsqueda por puesto)
     const [structure, setStructure] = useState<MainStructureTree>([]);
+    /** Fragmentos por clave servidor (`divisiones`, `empresa_X_clientes`, …); null = modo legado monolítico */
+    const [mainFragments, setMainFragments] = useState<Record<string, any> | null>(null);
     const [isStructureLoading, setIsStructureLoading] = useState(false);
 
     // Filtros jerárquicos
@@ -155,135 +322,90 @@ export default function PuestoUbicacionScreen() {
     const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(null);
     const [isGettingLocation, setIsGettingLocation] = useState(false);
 
+    const [manualUbicacionModalVisible, setManualUbicacionModalVisible] = useState(false);
+    const [manualLatText, setManualLatText] = useState('');
+    const [manualLngText, setManualLngText] = useState('');
+
     // Estados de carga
     const [isUpdating, setIsUpdating] = useState(false);
-    const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
-    /** Snapshot de AsyncStorage current_marca; se combina con main_structure_cache al aplicar filtros. */
+    /** Snapshot de AsyncStorage current_marca; se combina con la estructura mergeada al aplicar filtros. */
     const currentMarcaRef = useRef<Record<string, unknown> | null>(null);
     /** Se incrementa en cada foco para volver a aplicar la jerarquía desde current_marca. */
     const [marcaHierarchyRevision, setMarcaHierarchyRevision] = useState(0);
 
+    /** Coordenadas GPS guardadas al confirmar en el dispositivo (clave = id de puesto en string). */
+    const [dispositivoUbicacionMap, setDispositivoUbicacionMap] = useState<
+        Record<string, { lat: string; lng: string }>
+    >({});
+
     const getConnectionStatus = async (): Promise<boolean> => {
+        //return false;
         const networkState = await Network.getNetworkStateAsync();
         return networkState.isConnected && networkState.isInternetReachable ? true : false;
     };
 
-    const buildStructureWithUpdatedPuestoCoords = useCallback(
-        (source: MainStructureTree, puestoId: number, lat: string, lng: string): MainStructureTree => {
-            return (Array.isArray(source) ? source : []).map((empresa) => ({
-                ...empresa,
-                clientes: (empresa.clientes || []).map((cliente) => ({
-                    ...cliente,
-                    division: (cliente.division || []).map((division) => ({
-                        ...division,
-                        contratos: (division.contratos || []).map((contrato) => ({
-                            ...contrato,
-                            sucursales: (contrato.sucursales || []).map((sucursal) => ({
-                                ...sucursal,
-                                puestos: (sucursal.puestos || []).map((puesto) =>
-                                    Number(puesto.id) === Number(puestoId)
-                                        ? {
-                                            ...puesto,
-                                            ubicacion: {
-                                                lat,
-                                                lng,
-                                            },
-                                        }
-                                        : puesto
-                                ),
-                            })),
-                        })),
-                    })),
-                })),
-            }));
+    const updatePuestoCoordsInMainStructureCache = useCallback(
+        async (puestoId: number, lat: string | null, lng: string | null, sucursalIdHint?: number | null) => {
+            await patchSucursalPuestosUbicacionInFragments(puestoId, lat, lng, sucursalIdHint);
+
+            const fragments = await loadMainStructureFragmentsObjectAllowPartial();
+            if (fragments && Object.keys(fragments).length > 0) {
+                setMainFragments(fragments);
+                const merged = mergeMainStructureFragments(fragments);
+                if (Array.isArray(merged) && merged.length > 0) {
+                    setStructure(merged);
+                    return;
+                }
+            }
+
+            const tree = await loadMainStructureTreeMerged();
+            const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+            if (arr.length > 0) {
+                setStructure(arr);
+            }
+
+            const fr = await loadMainStructureFragmentsObjectAllowPartial();
+            if (fr && Object.keys(fr).length > 0) {
+                setMainFragments(fr);
+            }
         },
         []
     );
 
-    const updatePuestoCoordsInMainStructureCache = useCallback(
-        async (puestoId: number, lat: string, lng: string) => {
-            const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-            if (!cacheStr) return;
-            const parsed = JSON.parse(cacheStr);
-            const updated = buildStructureWithUpdatedPuestoCoords(parsed, puestoId, lat, lng);
-            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
-            setStructure(updated);
-        },
-        [buildStructureWithUpdatedPuestoCoords]
-    );
-
-    // Cargar estructura principal desde main-structure
-    const fetchMainStructure = useCallback(async () => {
+    // Misma base que los pickers: fragmentos mergeados; fallback solo si no hay árbol mergeable.
+    const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
         try {
             setIsStructureLoading(true);
-            /*
-            const isConnected = await getConnectionStatus();
+            setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
 
-            if (isConnected) {
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (!apiUrl) throw new Error('Server URL not configured');
-
-                const token = await AsyncStorage.getItem('access_token');
-                if (!token) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) throw new Error('No valid authentication token');
+            const fragments = await loadMainStructureFragmentsObjectAllowPartial();
+            if (fragments && Object.keys(fragments).length > 0) {
+                setMainFragments(fragments);
+                const merged = mergeMainStructureFragments(fragments);
+                if (Array.isArray(merged) && merged.length > 0) {
+                    setStructure(merged);
+                    return merged as MainStructureTree;
                 }
-
-                const response = await authedFetch({
-                    url: `${apiUrl}/api/main-structure`,
-                    init: {
-                        method: 'GET',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'ngrok-skip-browser-warning': '69420',
-                        },
-                    },
-                    refreshAccessToken,
-                    logout,
-                });
-
-                if (!response) throw new Error('No response from server');
-
-                const data = await response.json();
-                if (data.status && data.structure) {
-                    setStructure(data.structure);
-                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-                } else {
-                    throw new Error(data.message || 'Error al cargar estructura');
-                }
-            } else {
-                
+                const tree = await loadMainStructureTreeMerged();
+                const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+                setStructure(arr);
+                return arr;
             }
-            */
-            // Cargar desde cache
-            const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-            if (cacheStr) {
-                const cached = JSON.parse(cacheStr);
-                setStructure(cached);
-            } else {
-                setStructure([]);
-            }
+            setMainFragments(null);
+            const tree = await loadMainStructureTreeMerged();
+            const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+            setStructure(arr);
+            return arr;
         } catch (error) {
             console.error('Error fetching main structure:', error);
             setStructure([]);
-            // Intentar cargar desde cache en caso de error
-            try {
-                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-                if (cacheStr) {
-                    const cached = JSON.parse(cacheStr);
-                    setStructure(cached);
-                } else {
-                    setStructure([]);
-                }
-            } catch (cacheError) {
-                console.error('Error loading from cache:', cacheError);
-                setStructure([]);
-            }
+            setMainFragments(null);
+            return [];
         } finally {
             setIsStructureLoading(false);
         }
-    }, [refreshAccessToken, logout]);
+    }, []);
 
     // Cargar current_marca (misma forma que InductionTourRecordScreen / objeto marca de MarcarIngresoSalida)
     const loadMarcaContext = useCallback(async () => {
@@ -300,40 +422,77 @@ export default function PuestoUbicacionScreen() {
         }
     }, []);
 
-    // Nodos computados para filtros jerárquicos
-    const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
+    // Nodos computados: con fragmentos, listas desde claves `divisiones`, `cliente_X_division_Y_contratos`, etc.
+    const filterEmpresas = useMemo(() => {
+        if (mainFragments && Array.isArray(mainFragments.empresas)) {
+            return mainFragments.empresas;
+        }
+        return Array.isArray(structure) ? structure : [];
+    }, [mainFragments, structure]);
 
     const filterClientes = useMemo(() => {
-        const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
-        return empresa?.clientes || [];
-    }, [filterEmpresas, filterEmpresaId]);
+        const empresaFromTree = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+        const fallback = empresaFromTree?.clientes || [];
+        if (mainFragments && filterEmpresaId != null) {
+            const k = `empresa_${filterEmpresaId}_clientes`;
+            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
+        }
+        return fallback;
+    }, [mainFragments, filterEmpresaId, filterEmpresas]);
 
     const filterDivisiones = useMemo(() => {
-        const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-        return cliente?.division || [];
-    }, [filterClientes, filterClienteId]);
+        if (!filterClienteId) return [];
+        const clienteFromTree = filterClientes.find((c: any) => Number(c.id) === Number(filterClienteId));
+        const fallback = getClienteDivisionArray(clienteFromTree);
+        if (mainFragments && Array.isArray(mainFragments.divisiones)) {
+            return mainFragments.divisiones.length > 0 ? mainFragments.divisiones : fallback;
+        }
+        return fallback;
+    }, [mainFragments, filterClienteId, filterClientes]);
 
     const filterContratos = useMemo(() => {
-        const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-        return division?.contratos || [];
-    }, [filterDivisiones, filterDivisionId]);
+        const divisionFromTree = filterDivisiones.find((d: any) => Number(d.id) === Number(filterDivisionId));
+        const fallback = divisionFromTree?.contratos || [];
+        if (
+            mainFragments &&
+            filterClienteId != null &&
+            filterDivisionId != null
+        ) {
+            const k = `cliente_${filterClienteId}_division_${filterDivisionId}_contratos`;
+            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
+        }
+        return fallback;
+    }, [mainFragments, filterClienteId, filterDivisionId, filterDivisiones]);
 
     const filterSucursales = useMemo(() => {
-        const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
-        return contrato?.sucursales || [];
-    }, [filterContratos, filterContratoId]);
+        const contratoFromTree = filterContratos.find((c: any) => Number(c.id) === Number(filterContratoId));
+        const fallback = contratoFromTree?.sucursales || [];
+        if (mainFragments && filterContratoId != null) {
+            const k = `contrato_${filterContratoId}_sucursales`;
+            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
+        }
+        return fallback;
+    }, [mainFragments, filterContratoId, filterContratos]);
 
     const filterPuestos = useMemo(() => {
-        const sucursal = filterSucursales.find((s: any) => s.id === filterCorpoId);
-        return sucursal?.puestos || [];
-    }, [filterSucursales, filterCorpoId]);
+        const sucursalFromTree = filterSucursales.find((s: any) => Number(s.id) === Number(filterCorpoId));
+        const fallback = sucursalFromTree?.puestos || [];
+        if (mainFragments && filterCorpoId != null) {
+            const k = `sucursal_${filterCorpoId}_puestos`;
+            const puestos = Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
+            return puestos;
+        }
+        return fallback;
+    }, [mainFragments, filterCorpoId, filterSucursales]);
 
-    // Al entrar a la pantalla: aplicar jerarquía del puesto de asistencia (current_marca) sobre el árbol en caché
+    // Al entrar a la pantalla: aplicar jerarquía desde current_marca (refuerzo con árbol mergeado si existe)
     useEffect(() => {
         if (!marcaHierarchyRevision) return;
-        if (!structure || structure.length === 0) return;
 
-        const ids = resolveMarcaIdsFromCurrentMarca(structure, currentMarcaRef.current);
+        const ids = resolveMarcaIdsFromCurrentMarca(
+            Array.isArray(structure) ? structure : [],
+            currentMarcaRef.current
+        );
         setFilterEmpresaId(ids.empresaId);
         setFilterClienteId(ids.clienteId);
         setFilterDivisionId(ids.divisionId);
@@ -342,22 +501,32 @@ export default function PuestoUbicacionScreen() {
         setFilterPuestoId(ids.puestoId);
     }, [structure, marcaHierarchyRevision]);
 
-    // Cargar datos del puesto cuando se selecciona
+    // Cargar datos del puesto cuando se selecciona (IDs numéricos: el Picker puede devolver string)
     useEffect(() => {
-        if (filterPuestoId && filterPuestos.length > 0) {
-            const puesto = filterPuestos.find((p: any) => p.id === filterPuestoId);
+        const pid = numOrNull(filterPuestoId);
+        const corpoNum = numOrNull(filterCorpoId);
+        if (pid != null && corpoNum != null) {
+            const fromDev = dispositivoUbicacionMap[String(pid)];
+            const puesto = getPuestoRecordForUbicacionDisplay(structure, mainFragments, corpoNum, pid);
             if (puesto) {
-                setPuestoNombre(puesto.nombre || '');
-                setPuestoData({
-                    lat: puesto.ubicacion?.lat || null,
-                    lng: puesto.ubicacion?.lng || null,
-                });
+                setPuestoNombre(String(puesto.nombre || ''));
+                if (fromDev?.lat && fromDev?.lng) {
+                    setPuestoData({ lat: fromDev.lat, lng: fromDev.lng });
+                } else {
+                    setPuestoData(readUbicacionFromPuesto(puesto));
+                }
+            } else if (fromDev?.lat && fromDev?.lng) {
+                setPuestoNombre('');
+                setPuestoData({ lat: fromDev.lat, lng: fromDev.lng });
+            } else {
+                setPuestoData(null);
+                setPuestoNombre('');
             }
         } else {
             setPuestoData(null);
             setPuestoNombre('');
         }
-    }, [filterPuestoId, filterPuestos]);
+    }, [filterPuestoId, filterCorpoId, structure, mainFragments, dispositivoUbicacionMap]);
 
     // Obtener ubicación del dispositivo
     const getDeviceLocation = useCallback(async (showError: boolean = true) => {
@@ -407,122 +576,150 @@ export default function PuestoUbicacionScreen() {
         return () => clearInterval(interval);
     }, [filterPuestoId, getDeviceLocation]);
 
+    /** PUT `/api/puestos/[id]/ubicacion`: coordenadas nuevas o `{ latitud: null, longitud: null }` para borrar en servidor y cachés locales. */
+    const putPuestoUbicacion = useCallback(
+        async (latitud: number | null, longitud: number | null): Promise<boolean> => {
+            if (!filterPuestoId) {
+                Alert.alert('Error', 'Por favor selecciona un puesto');
+                return false;
+            }
+
+            const clearing = latitud === null && longitud === null;
+
+            try {
+                setIsUpdating(true);
+                const isConnected = await getConnectionStatus();
+
+                if (isConnected) {
+                    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                    if (!apiUrl) throw new Error('Server URL not configured');
+
+                    const response = await authedFetch({
+                        url: `${apiUrl}/api/puestos/${filterPuestoId}/ubicacion`,
+                        init: {
+                            method: 'PUT',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'ngrok-skip-browser-warning': '69420',
+                            },
+                            body: JSON.stringify({ latitud, longitud }),
+                        },
+                        refreshAccessToken,
+                        logout,
+                    });
+
+                    if (!response) throw new Error('No response from server');
+
+                    const data = await response.json();
+                    if (data.status) {
+                        const latStr = clearing ? null : String(latitud);
+                        const lngStr = clearing ? null : String(longitud);
+                        await writePuestoUbicacionDispositivo(filterPuestoId, latStr, lngStr);
+                        setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
+                        await updatePuestoCoordsInMainStructureCache(filterPuestoId, latStr, lngStr, filterCorpoId);
+                        setPuestoData({ lat: latStr, lng: lngStr });
+                        Alert.alert('Éxito', data.message || (clearing ? 'Ubicación eliminada' : 'Ubicación actualizada'));
+                        return true;
+                    }
+                    Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
+                    return false;
+                } else {
+                    const id_local = `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+                    const puestoNum = Number(filterPuestoId);
+                    const isSamePuestoAction = (a: any) =>
+                        a?.type === 'puesto_ubicacion' && Number(a?.puesto_id) === puestoNum;
+
+                    const filteredActions = actions.filter((a: any) => !isSamePuestoAction(a));
+
+                    filteredActions.push({
+                        id: id_local,
+                        puesto_id: filterPuestoId,
+                        sucursal_id: filterCorpoId ?? null,
+                        action: 'update',
+                        type: 'puesto_ubicacion',
+                        payload: { latitud, longitud },
+                        synced: false,
+                    });
+
+                    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filteredActions));
+
+                    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                    const cache = cacheStr ? JSON.parse(cacheStr) : [];
+                    const updatedCache = cache.filter(
+                        (item: any) => !(item.type === 'puesto_ubicacion' && Number(item?.puesto_id) === puestoNum),
+                    );
+                    updatedCache.push({
+                        id_local,
+                        puesto_id: filterPuestoId,
+                        sucursal_id: filterCorpoId ?? null,
+                        type: 'puesto_ubicacion',
+                        latitud,
+                        longitud,
+                        synced: false,
+                    });
+                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+
+                    const latStr = clearing ? null : String(latitud);
+                    const lngStr = clearing ? null : String(longitud);
+                    await writePuestoUbicacionDispositivo(filterPuestoId, latStr, lngStr);
+                    setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
+                    await updatePuestoCoordsInMainStructureCache(filterPuestoId, latStr, lngStr, filterCorpoId);
+                    setPuestoData({ lat: latStr, lng: lngStr });
+
+                    Alert.alert(
+                        'Éxito',
+                        clearing
+                            ? 'Eliminación guardada localmente. Se sincronizará cuando haya conexión.'
+                            : 'Ubicación guardada localmente. Se sincronizará cuando haya conexión.',
+                    );
+                    return true;
+                }
+            } catch (error: any) {
+                console.error('Error updating puesto ubicacion:', error);
+                Alert.alert('Error', error.message || 'No se pudo actualizar la ubicación del puesto');
+                return false;
+            } finally {
+                setIsUpdating(false);
+            }
+        },
+        [filterPuestoId, filterCorpoId, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache],
+    );
+
     const updatePuestoUbicacion = useCallback(async () => {
         if (!filterPuestoId) {
             Alert.alert('Error', 'Por favor selecciona un puesto');
             return;
         }
-
         if (!deviceLocation) {
             Alert.alert('Error', 'Por favor obtén la ubicación del dispositivo primero');
             return;
         }
+        await putPuestoUbicacion(deviceLocation.latitude, deviceLocation.longitude);
+    }, [filterPuestoId, deviceLocation, putPuestoUbicacion]);
 
-        try {
-            setIsUpdating(true);
-            const isConnected = await getConnectionStatus();
-
-            if (isConnected) {
-                // Online: llamar directamente a la API
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (!apiUrl) throw new Error('Server URL not configured');
-
-                const response = await authedFetch({
-                    url: `${apiUrl}/api/puestos/${filterPuestoId}/ubicacion`,
-                    init: {
-                        method: 'PUT',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'ngrok-skip-browser-warning': '69420',
-                        },
-                        body: JSON.stringify({
-                            latitud: deviceLocation.latitude,
-                            longitud: deviceLocation.longitude,
-                        }),
-                    },
-                    refreshAccessToken,
-                    logout,
-                });
-
-                if (!response) throw new Error('No response from server');
-
-                const data = await response.json();
-                if (data.status) {
-                    const lat = String(deviceLocation.latitude);
-                    const lng = String(deviceLocation.longitude);
-
-                    await updatePuestoCoordsInMainStructureCache(filterPuestoId, lat, lng);
-
-                    Alert.alert('Éxito', data.message || 'Ubicación del puesto actualizada correctamente');
-                    // Actualizar datos locales
-                    setPuestoData({
-                        lat,
-                        lng,
-                    });
-                } else {
-                    Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
-                }
-            } else {
-                // Offline: guardar acción para sincronizar después
-                const id_local = `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                const puestoNum = Number(filterPuestoId);
-                const isSamePuestoAction = (a: any) =>
-                    a?.type === 'puesto_ubicacion' && Number(a?.puesto_id) === puestoNum;
-
-                // Un solo pending update por puesto (reemplaza el anterior, sin apilar)
-                const filteredActions = actions.filter((a: any) => !isSamePuestoAction(a));
-
-                filteredActions.push({
-                    id: id_local,
-                    puesto_id: filterPuestoId,
-                    action: 'update',
-                    type: 'puesto_ubicacion',
-                    payload: {
-                        latitud: deviceLocation.latitude,
-                        longitud: deviceLocation.longitude,
-                    },
-                    synced: false,
-                });
-
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filteredActions));
-
-                // Actualizar cache local
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : [];
-                const updatedCache = cache.filter(
-                    (item: any) => !(item.type === 'puesto_ubicacion' && Number(item?.puesto_id) === puestoNum)
-                );
-                updatedCache.push({
-                    id_local,
-                    puesto_id: filterPuestoId,
-                    type: 'puesto_ubicacion',
-                    latitud: deviceLocation.latitude,
-                    longitud: deviceLocation.longitude,
-                    synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-
-                const lat = String(deviceLocation.latitude);
-                const lng = String(deviceLocation.longitude);
-                await updatePuestoCoordsInMainStructureCache(filterPuestoId, lat, lng);
-
-                // Actualizar UI localmente
-                setPuestoData({
-                    lat,
-                    lng,
-                });
-
-                Alert.alert('Éxito', 'Ubicación guardada localmente. Se sincronizará cuando haya conexión.');
-            }
-        } catch (error: any) {
-            console.error('Error updating puesto ubicacion:', error);
-            Alert.alert('Error', error.message || 'No se pudo actualizar la ubicación del puesto');
-        } finally {
-            setIsUpdating(false);
+    const requestConfirmClearUbicacion = useCallback(() => {
+        if (!filterPuestoId) {
+            Alert.alert('Error', 'Por favor selecciona un puesto');
+            return;
         }
-    }, [filterPuestoId, deviceLocation, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache]);
+        Alert.alert(
+            'Eliminar ubicación',
+            '¿Quitar las coordenadas GPS de este puesto en el servidor? Esta acción se puede deshacer volviendo a guardar una ubicación.',
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                { text: 'Eliminar', style: 'destructive', onPress: () => void putPuestoUbicacion(null, null) },
+            ],
+        );
+    }, [filterPuestoId, putPuestoUbicacion]);
+
+    const tieneUbicacionGuardada = useMemo(() => {
+        if (!puestoData) return false;
+        const a = String(puestoData.lat ?? '').trim();
+        const b = String(puestoData.lng ?? '').trim();
+        return a.length > 0 && b.length > 0;
+    }, [puestoData]);
 
     const requestConfirmAndUpdateUbicacion = useCallback(() => {
         if (!filterPuestoId) {
@@ -548,6 +745,45 @@ export default function PuestoUbicacionScreen() {
             ]
         );
     }, [filterPuestoId, deviceLocation, updatePuestoUbicacion]);
+
+    const openManualUbicacionModal = useCallback(() => {
+        if (!filterPuestoId) {
+            Alert.alert('Error', 'Por favor selecciona un puesto');
+            return;
+        }
+        const latPref =
+            (puestoData?.lat && String(puestoData.lat).trim()) ||
+            (deviceLocation != null ? String(deviceLocation.latitude) : '');
+        const lngPref =
+            (puestoData?.lng && String(puestoData.lng).trim()) ||
+            (deviceLocation != null ? String(deviceLocation.longitude) : '');
+        setManualLatText(latPref);
+        setManualLngText(lngPref);
+        setManualUbicacionModalVisible(true);
+    }, [filterPuestoId, puestoData, deviceLocation]);
+
+    const closeManualUbicacionModal = useCallback(() => {
+        setManualUbicacionModalVisible(false);
+    }, []);
+
+    const confirmManualUbicacion = useCallback(async () => {
+        const lat = parseCoordText(manualLatText);
+        const lng = parseCoordText(manualLngText);
+        if (lat === null || lng === null) {
+            Alert.alert('Error', 'Introduce latitud y longitud válidas.');
+            return;
+        }
+        if (lat < -90 || lat > 90) {
+            Alert.alert('Error', 'La latitud debe estar entre -90 y 90.');
+            return;
+        }
+        if (lng < -180 || lng > 180) {
+            Alert.alert('Error', 'La longitud debe estar entre -180 y 180.');
+            return;
+        }
+        const ok = await putPuestoUbicacion(lat, lng);
+        if (ok) setManualUbicacionModalVisible(false);
+    }, [manualLatText, manualLngText, putPuestoUbicacion]);
 
     // Sincronizar acciones offline cuando se restaura la conexión
     useEffect(() => {
@@ -587,16 +823,23 @@ export default function PuestoUbicacionScreen() {
                     if (response) {
                         const data = await response.json();
                         if (data.status) {
-                            const lat = String(action?.payload?.latitud ?? '');
-                            const lng = String(action?.payload?.longitud ?? '');
-                            if (!lat || !lng) {
+                            const rawLat = action?.payload?.latitud;
+                            const rawLng = action?.payload?.longitud;
+                            const clearingUbicacion = rawLat === null && rawLng === null;
+                            const lat = clearingUbicacion ? null : String(rawLat ?? '');
+                            const lng = clearingUbicacion ? null : String(rawLng ?? '');
+                            if (!clearingUbicacion && (!lat || !lng)) {
                                 continue;
                             }
+
+                            await writePuestoUbicacionDispositivo(action.puesto_id, lat, lng);
+                            setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
 
                             await updatePuestoCoordsInMainStructureCache(
                                 action.puesto_id,
                                 lat,
-                                lng
+                                lng,
+                                action.sucursal_id ?? filterCorpoId ?? null,
                             );
 
                             if (Number(filterPuestoId) === Number(action.puesto_id)) {
@@ -629,14 +872,15 @@ export default function PuestoUbicacionScreen() {
             }
 
             // Recargar estructura después de sincronizar
-            await fetchMainStructure();
+            await loadMainStructureCache();
         };
 
         eventBus.on('connectionRestored', handler);
         return () => {
             eventBus.off('connectionRestored', handler);
         };
-    }, [fetchMainStructure, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache]);
+
+    }, [loadMainStructureCache, filterCorpoId, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache, filterPuestoId]);
 
     useFocusEffect(
         useCallback(() => {
@@ -644,14 +888,14 @@ export default function PuestoUbicacionScreen() {
             (async () => {
                 await loadMarcaContext();
                 if (cancelled) return;
-                await fetchMainStructure();
+                await loadMainStructureCache();
                 if (cancelled) return;
                 setMarcaHierarchyRevision((r) => r + 1);
             })();
             return () => {
                 cancelled = true;
             };
-        }, [loadMarcaContext, fetchMainStructure])
+        }, [loadMarcaContext, loadMainStructureCache])
     );
 
     return (
@@ -688,7 +932,7 @@ export default function PuestoUbicacionScreen() {
                                     <Picker
                                         selectedValue={filterEmpresaId}
                                         onValueChange={(value) => {
-                                            setFilterEmpresaId(value);
+                                            setFilterEmpresaId(numOrNull(value));
                                             setFilterClienteId(null);
                                             setFilterDivisionId(null);
                                             setFilterContratoId(null);
@@ -712,7 +956,7 @@ export default function PuestoUbicacionScreen() {
                                             <Picker
                                                 selectedValue={filterClienteId}
                                                 onValueChange={(value) => {
-                                                    setFilterClienteId(value);
+                                                    setFilterClienteId(numOrNull(value));
                                                     setFilterDivisionId(null);
                                                     setFilterContratoId(null);
                                                     setFilterCorpoId(null);
@@ -737,7 +981,7 @@ export default function PuestoUbicacionScreen() {
                                             <Picker
                                                 selectedValue={filterDivisionId}
                                                 onValueChange={(value) => {
-                                                    setFilterDivisionId(value);
+                                                    setFilterDivisionId(numOrNull(value));
                                                     setFilterContratoId(null);
                                                     setFilterCorpoId(null);
                                                     setFilterPuestoId(null);
@@ -761,7 +1005,7 @@ export default function PuestoUbicacionScreen() {
                                             <Picker
                                                 selectedValue={filterContratoId}
                                                 onValueChange={(value) => {
-                                                    setFilterContratoId(value);
+                                                    setFilterContratoId(numOrNull(value));
                                                     setFilterCorpoId(null);
                                                     setFilterPuestoId(null);
                                                 }}
@@ -784,7 +1028,7 @@ export default function PuestoUbicacionScreen() {
                                             <Picker
                                                 selectedValue={filterCorpoId}
                                                 onValueChange={(value) => {
-                                                    setFilterCorpoId(value);
+                                                    setFilterCorpoId(numOrNull(value));
                                                     setFilterPuestoId(null);
                                                 }}
                                                 style={styles.picker}
@@ -806,7 +1050,7 @@ export default function PuestoUbicacionScreen() {
                                             <Picker
                                                 selectedValue={filterPuestoId}
                                                 onValueChange={(value) => {
-                                                    setFilterPuestoId(value);
+                                                    setFilterPuestoId(numOrNull(value));
                                                 }}
                                                 style={styles.picker}
                                             >
@@ -828,11 +1072,11 @@ export default function PuestoUbicacionScreen() {
                                         <ThemedText style={styles.bitTitle}>{puestoNombre}</ThemedText>
                                         <ThemedText style={styles.bitLine}>
                                             <ThemedText style={styles.bitLabel}>Latitud: </ThemedText>
-                                            <ThemedText style={styles.bitValue}>{puestoData.lat || 'No disponible'}</ThemedText>
+                                            <ThemedText style={styles.bitValue}>{formatCoordForDisplay(puestoData.lat)}</ThemedText>
                                         </ThemedText>
                                         <ThemedText style={styles.bitLine}>
                                             <ThemedText style={styles.bitLabel}>Longitud: </ThemedText>
-                                            <ThemedText style={styles.bitValue}>{puestoData.lng || 'No disponible'}</ThemedText>
+                                            <ThemedText style={styles.bitValue}>{formatCoordForDisplay(puestoData.lng)}</ThemedText>
                                         </ThemedText>
                                     </ThemedView>
                                 </ThemedView>
@@ -870,30 +1114,56 @@ export default function PuestoUbicacionScreen() {
                                 </ThemedView>
                             )}
 
-                            {/* Mensaje de respuesta */}
-                            {submitResponse && (
-                                <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
-                                    <ThemedText style={styles.responseText}>
-                                        {submitResponse.type === 'success' ? '✓ ' : '✗ '}
-                                        {submitResponse.message}
-                                    </ThemedText>
-                                </ThemedView>
-                            )}
-
-                            {/* Botón para actualizar */}
-                            {filterPuestoId && deviceLocation && (
-                                <ThemedView style={styles.formActions}>
+                            {/* Botones: manual (GPS del teléfono) y actualizar con ubicación del dispositivo */}
+                            {filterPuestoId && (
+                                <ThemedView style={styles.formActionsRow}>
                                     <TouchableOpacity
-                                        style={[styles.formActionButton, styles.formActionSave, isUpdating && styles.buttonDisabled]}
-                                        onPress={requestConfirmAndUpdateUbicacion}
+                                        style={[
+                                            styles.formActionButtonHalf,
+                                            styles.formActionSecondary,
+                                            isUpdating && styles.buttonDisabled,
+                                        ]}
+                                        onPress={openManualUbicacionModal}
                                         disabled={isUpdating}
+                                        activeOpacity={0.85}
+                                    >
+                                        <Ionicons name="create-outline" size={18} color="#007AFF" />
+                                        <ThemedText style={styles.formActionSecondaryText}>Ubicación manual</ThemedText>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.formActionButtonHalf,
+                                            styles.formActionSave,
+                                            (isUpdating || !deviceLocation) && styles.buttonDisabled,
+                                        ]}
+                                        onPress={requestConfirmAndUpdateUbicacion}
+                                        disabled={isUpdating || !deviceLocation}
+                                        activeOpacity={0.85}
                                     >
                                         {isUpdating ? (
                                             <ActivityIndicator size="small" color="#fff" />
                                         ) : (
                                             <>
                                                 <Ionicons name="checkmark-circle" size={18} color="#fff" />
-                                                <ThemedText style={styles.formActionSaveText}>Aceptar</ThemedText>
+                                                <ThemedText style={styles.formActionSaveText}>Confirmar</ThemedText>
+                                            </>
+                                        )}
+                                    </TouchableOpacity>
+                                </ThemedView>
+                            )}
+                            {filterPuestoId && tieneUbicacionGuardada && (
+                                <ThemedView style={styles.formActions}>
+                                    <TouchableOpacity
+                                        style={[styles.formActionButton, styles.formActionDanger, isUpdating && styles.buttonDisabled]}
+                                        onPress={requestConfirmClearUbicacion}
+                                        disabled={isUpdating}
+                                    >
+                                        {isUpdating ? (
+                                            <ActivityIndicator size="small" color="#fff" />
+                                        ) : (
+                                            <>
+                                                <Ionicons name="trash-outline" size={18} color="#fff" />
+                                                <ThemedText style={styles.formActionSaveText}>Eliminar ubicación</ThemedText>
                                             </>
                                         )}
                                     </TouchableOpacity>
@@ -903,6 +1173,88 @@ export default function PuestoUbicacionScreen() {
                     )}
                 </ThemedView>
             </ScrollView>
+
+            <Modal
+                transparent
+                visible={manualUbicacionModalVisible}
+                animationType="fade"
+                onRequestClose={closeManualUbicacionModal}
+            >
+                <KeyboardAvoidingView
+                    style={styles.modalKeyboardRoot}
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                >
+                    <ThemedView style={styles.modalBackdrop}>
+                        <ThemedView style={styles.modalCard}>
+                            <ThemedView style={styles.modalHeader}>
+                                <ThemedText style={styles.modalTitle}>Ubicación manual</ThemedText>
+                                <TouchableOpacity
+                                    onPress={closeManualUbicacionModal}
+                                    style={styles.modalCloseBtn}
+                                    activeOpacity={0.85}
+                                >
+                                    <Ionicons name="close" size={22} color="#000" />
+                                </TouchableOpacity>
+                            </ThemedView>
+
+                            <ScrollView
+                                style={styles.modalBody}
+                                contentContainerStyle={styles.modalBodyContent}
+                                keyboardShouldPersistTaps="handled"
+                            >
+                                <ThemedText style={styles.modalHint}>
+                                    Introduce latitud y longitud en grados decimales (ej. 14.6349, -90.5069).
+                                </ThemedText>
+
+                                <ThemedText style={styles.label}>Latitud</ThemedText>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    value={manualLatText}
+                                    onChangeText={setManualLatText}
+                                    placeholder="-90 a 90"
+                                    placeholderTextColor="#999"
+                                    keyboardType={
+                                        Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'decimal-pad'
+                                    }
+                                    autoCorrect={false}
+                                    autoCapitalize="none"
+                                />
+
+                                <ThemedText style={styles.label}>Longitud</ThemedText>
+                                <TextInput
+                                    style={styles.modalInput}
+                                    value={manualLngText}
+                                    onChangeText={setManualLngText}
+                                    placeholder="-180 a 180"
+                                    placeholderTextColor="#999"
+                                    keyboardType={
+                                        Platform.OS === 'ios' ? 'numbers-and-punctuation' : 'decimal-pad'
+                                    }
+                                    autoCorrect={false}
+                                    autoCapitalize="none"
+                                />
+
+                                <TouchableOpacity
+                                    style={[styles.modalConfirmBtn, isUpdating && styles.buttonDisabled]}
+                                    onPress={() => void confirmManualUbicacion()}
+                                    disabled={isUpdating}
+                                    activeOpacity={0.85}
+                                >
+                                    {isUpdating ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="checkmark-done-outline" size={18} color="#fff" />
+                                            <ThemedText style={styles.formActionSaveText}>Confirmar ubicación</ThemedText>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
+                            </ScrollView>
+                        </ThemedView>
+                    </ThemedView>
+                </KeyboardAvoidingView>
+            </Modal>
+
             <AppFooter />
             <SlideMenu
                 isVisible={isMenuVisible}
@@ -994,30 +1346,90 @@ const styles = StyleSheet.create({
     bitValue: { color: '#000' },
 
     formActions: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'flex-end', width: '100%' },
+    formActionsRow: {
+        marginTop: 16,
+        flexDirection: 'row',
+        gap: 10,
+        alignItems: 'stretch',
+        width: '100%',
+        justifyContent: 'space-between',
+    },
     formActionButton: { flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, paddingHorizontal: 20, borderRadius: 12, flex: 1, width: '100%' },
+    formActionButtonHalf: {
+        flex: 1,
+        minWidth: 0,
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 14,
+        paddingHorizontal: 12,
+        borderRadius: 12,
+    },
+    formActionSecondary: {
+        backgroundColor: '#FFFFFF',
+        borderWidth: 2,
+        borderColor: '#007AFF',
+    },
+    formActionSecondaryText: { color: '#007AFF', fontWeight: '800', fontSize: 13 },
     formActionSave: { backgroundColor: '#34C759' },
+    formActionDanger: { backgroundColor: '#C62828' },
     formActionSaveText: { color: '#fff', fontWeight: '800' },
     buttonDisabled: {
         opacity: 0.6,
     },
-    responseContainer: {
-        padding: 12,
-        borderRadius: 6,
+
+    modalKeyboardRoot: { flex: 1 },
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        justifyContent: 'center',
+        padding: 16,
+    },
+    modalCard: {
+        width: '100%',
+        maxWidth: 520,
+        alignSelf: 'center',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        overflow: 'hidden',
+        maxHeight: '85%',
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: '#E0E0E0',
+    },
+    modalTitle: { fontSize: 16, fontWeight: '900', color: '#000' },
+    modalCloseBtn: { padding: 6, borderRadius: 18, backgroundColor: '#F2F2F2' },
+    modalBody: { maxHeight: 420 },
+    modalBodyContent: { padding: 14, paddingBottom: 20 },
+    modalHint: { fontSize: 13, color: '#666', marginBottom: 12, lineHeight: 18 },
+    modalInput: {
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: Platform.OS === 'ios' ? 12 : 10,
+        fontSize: 16,
+        color: '#000',
         marginBottom: 12,
+        backgroundColor: '#FAFAFA',
     },
-    responseSuccess: {
-        backgroundColor: '#D4EDDA',
-        borderWidth: 1,
-        borderColor: '#C3E6CB',
-    },
-    responseError: {
-        backgroundColor: '#F8D7DA',
-        borderWidth: 1,
-        borderColor: '#F5C6CB',
-    },
-    responseText: {
-        fontSize: 14,
-        fontWeight: '600',
+    modalConfirmBtn: {
+        marginTop: 8,
+        flexDirection: 'row',
+        gap: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#34C759',
+        borderRadius: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 16,
     },
 });
 

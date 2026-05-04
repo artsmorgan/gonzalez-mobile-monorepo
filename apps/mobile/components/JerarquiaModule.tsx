@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,8 +15,13 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import Constants from 'expo-constants';
 
 import authedFetch from '@/hooks/authedFetch';
+import { eventBus } from '@/hooks/eventBus';
 import { useAuth } from '@/contexts/AuthContext';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { persistMainStructureFragments } from '@/hooks/mainStructureFragmentsStorage';
+import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
 
 type AnyNode = Record<string, any>;
 
@@ -38,7 +43,10 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
 
   const [structure, setStructure] = useState<AnyNode[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
+  /** Evita intentar restaurar desde red antes de haber leído al menos una vez el árbol local. */
+  const [cacheHydrated, setCacheHydrated] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const autoRestoreAttemptedRef = useRef(false);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
@@ -113,23 +121,73 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const loadFromCache = useCallback(async () => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) {
-            setStructure(parsed);
-          } else {
-            setStructure([]);
-          }
-        } catch {
-          setStructure([]);
-        }
-      } else {
-        setStructure([]);
-      }
+      const tree = await loadMainStructureTreeMerged();
+      setStructure(Array.isArray(tree) ? tree : []);
+    } catch {
+      setStructure([]);
     } finally {
       setIsStructureLoading(false);
+      setCacheHydrated(true);
+    }
+  }, []);
+
+  /** Descarga completa desde `/api/main-structure` (misma lógica que el botón manual). */
+  const downloadHierarchyFromServer = useCallback(async (): Promise<void> => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    const response = await authedFetch({
+      url: `${apiUrl}/api/main-structure`,
+      init: {
+        method: 'GET',
+      },
+      refreshAccessToken,
+      logout,
+    });
+
+    if (!response) {
+      throw new Error('Sesión expirada');
+    }
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.status) {
+      throw new Error(data?.message || 'Error al actualizar la jerarquía');
+    }
+
+    let structureTree: AnyNode[] = [];
+
+    if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
+      await persistMainStructureFragments(data.fragments as Record<string, unknown>);
+      structureTree = mergeMainStructureFragments(data.fragments as Record<string, any>);
+    } else {
+      let rawStructure = data.structure;
+      if (typeof rawStructure === 'string') {
+        try {
+          rawStructure = JSON.parse(rawStructure);
+        } catch {
+          rawStructure = null;
+        }
+      }
+      if (!Array.isArray(rawStructure)) {
+        throw new Error(data?.message || 'Error al actualizar la jerarquía');
+      }
+      structureTree = rawStructure;
+      await persistMainStructureFragments({});
+      await writeMainStructureCacheString(JSON.stringify(structureTree));
+    }
+
+    setStructure(structureTree);
+    setCreatedAt(data.created_at);
+    await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
+  }, [refreshAccessToken, logout]);
+
+  const loadCreatedAt = useCallback(async () => {
+    const createdAtStr = await AsyncStorage.getItem('main_structure_created_at');
+    if (createdAtStr) {
+      setCreatedAt(Number(createdAtStr));
     }
   }, []);
 
@@ -172,7 +230,22 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     };
   }, [refreshAccessToken, logout]);
 
+  /** Jerarquía vacía en memoria tras leer caché (p. ej. datos borrados en AsyncStorage). */
+  const isLocalHierarchyEmpty = useMemo(
+    () =>
+      cacheHydrated &&
+      !isStructureLoading &&
+      (!Array.isArray(structure) || structure.length === 0),
+    [cacheHydrated, isStructureLoading, structure],
+  );
+
   const shouldEnableRefresh = useMemo(() => {
+    if (isRefreshing || isStructureLoading) return false;
+
+    if (isLocalHierarchyEmpty) {
+      return true;
+    }
+
     if (!isLastCreatedAtLoaded || lastCreatedAt == null || !Number.isFinite(lastCreatedAt) || lastCreatedAt <= 0) {
       return false;
     }
@@ -181,12 +254,41 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     if (!Number.isFinite(currentCreatedAt)) return false;
 
     return lastCreatedAt > currentCreatedAt;
-  }, [isLastCreatedAtLoaded, lastCreatedAt, createdAt]);
+  }, [
+    isRefreshing,
+    isStructureLoading,
+    isLocalHierarchyEmpty,
+    isLastCreatedAtLoaded,
+    lastCreatedAt,
+    createdAt,
+  ]);
 
   const refreshHierarchy = useCallback(async () => {
     const isConnected = await getConnectionStatus();
     if (!isConnected) {
       Alert.alert('Sin conexión', 'No hay conexión a internet. No es posible actualizar la jerarquía.');
+      return;
+    }
+
+    const runDownload = async () => {
+      try {
+        Alert.alert('Actualizando jerarquía', 'Actualizando jerarquía, por favor no cierre la ventana');
+        setIsRefreshing(true);
+        resetSelection();
+        await downloadHierarchyFromServer();
+        Alert.alert('Éxito', 'Se ha actualizado la jerarquía');
+      } catch (e) {
+        Alert.alert(
+          'Error',
+          e instanceof Error ? e.message : 'No se pudo actualizar la jerarquía. Intente nuevamente.',
+        );
+      } finally {
+        setIsRefreshing(false);
+      }
+    };
+
+    if (isLocalHierarchyEmpty) {
+      await runDownload();
       return;
     }
 
@@ -198,68 +300,47 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
         {
           text: 'Actualizar',
           style: 'destructive',
-          onPress: async () => {
-            try {
-              Alert.alert('Actualizando jerarquía', 'Actualizando jerarquía, por favor no cierre la ventana');
-              setIsRefreshing(true);
-              resetSelection();
-
-              const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-              if (!apiUrl) {
-                throw new Error('Server URL not configured');
-              }
-
-              const response = await authedFetch({
-                url: `${apiUrl}/api/main-structure`,
-                init: {
-                  method: 'GET',
-                },
-                refreshAccessToken,
-                logout,
-              });
-
-              if (!response) {
-                throw new Error('Sesión expirada');
-              }
-
-              const data = await response.json();
-
-              if (!response.ok || !data?.status || !Array.isArray(data.structure)) {
-                throw new Error(data?.message || 'Error al actualizar la jerarquía');
-              }
-
-              console.log("data.created_at", data.created_at);
-
-              setStructure(data.structure);
-              setCreatedAt(data.created_at);
-              await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-              await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-              Alert.alert('Éxito', 'Se ha actualizado la jerarquía');
-            } catch (e) {
-              Alert.alert(
-                'Error',
-                e instanceof Error ? e.message : 'No se pudo actualizar la jerarquía. Intente nuevamente.',
-              );
-            } finally {
-              setIsRefreshing(false);
-            }
-          },
+          onPress: () => void runDownload(),
         },
       ],
     );
-  }, [getConnectionStatus, refreshAccessToken, logout]);
+  }, [getConnectionStatus, downloadHierarchyFromServer, isLocalHierarchyEmpty]);
 
   useEffect(() => {
     loadFromCache();
     loadCreatedAt();
-  }, [loadFromCache]);
+  }, [loadFromCache, loadCreatedAt]);
 
-  const loadCreatedAt = useCallback(async () => {
-    const createdAtStr = await AsyncStorage.getItem('main_structure_created_at');
-    if (createdAtStr) {
-      setCreatedAt(Number(createdAtStr));
+  /** Si la jerarquía local fue borrada, restaurar desde red sin depender de last vs created_at. */
+  const attemptAutoRestoreIfNeeded = useCallback(async () => {
+    if (!cacheHydrated || isStructureLoading) return;
+    if (!Array.isArray(structure) || structure.length > 0) return;
+    if (autoRestoreAttemptedRef.current) return;
+    const online = await getConnectionStatus();
+    if (!online) return;
+    autoRestoreAttemptedRef.current = true;
+    try {
+      setIsRefreshing(true);
+      resetSelection();
+      await downloadHierarchyFromServer();
+    } catch {
+      autoRestoreAttemptedRef.current = false;
+    } finally {
+      setIsRefreshing(false);
     }
-  }, []);
+  }, [cacheHydrated, isStructureLoading, structure, downloadHierarchyFromServer]);
+
+  useEffect(() => {
+    void attemptAutoRestoreIfNeeded();
+  }, [attemptAutoRestoreIfNeeded]);
+
+  useEffect(() => {
+    const onConn = () => void attemptAutoRestoreIfNeeded();
+    eventBus.on('connectionRestored', onConn);
+    return () => {
+      eventBus.off('connectionRestored', onConn);
+    };
+  }, [attemptAutoRestoreIfNeeded]);
 
   const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 

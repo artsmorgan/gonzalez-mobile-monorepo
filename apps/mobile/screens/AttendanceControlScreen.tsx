@@ -38,10 +38,13 @@ import {
   createAttendanceControl,
   updateAttendanceControl,
   deleteAttendanceControl,
+  deleteAttendanceControlImage,
   listAttendanceControl,
 } from '@/hooks/evaluationFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { eventBus } from '@/hooks/eventBus';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 
 type AttendanceControlScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'AttendanceControl'>;
 
@@ -60,6 +63,7 @@ type HierarchyFilterPath = {
   divisionId: number | null;
   contratoId: number | null;
   corpoId: number | null;
+  puestoId?: number | null;
 };
 
 const toValidMarcaId = (value: unknown): number | null => {
@@ -67,10 +71,85 @@ const toValidMarcaId = (value: unknown): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
-const getMarcaRoleDivisionId = (current: unknown): number | null => {
-  const c = current as { roleDivision?: { division?: { id?: unknown } } } | null;
-  return toValidMarcaId(c?.roleDivision?.division?.id);
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw =
+    current?.roleDivision?.division?.id ??
+    current?.role_division?.division?.id ??
+    current?.division?.id ??
+    current?.division_id;
+  return toValidMarcaId(raw);
 };
+
+/** Rama `division` del merge (alias `divisiones`). */
+function getClienteDivisionArray(cliente: MainStructureClienteNode | any): MainStructureDivisionNode[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray((cliente as any).divisiones)) return (cliente as any).divisiones;
+  return [];
+}
+
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  for (const div of divisions) {
+    const contratos: MainStructureContratoNode[] = Array.isArray(div?.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+function resolveDivisionIdInStructure(
+  tree: MainStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+/** División coherente con el árbol (`loadMainStructureTreeMerged`). */
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureTree): number | null {
+  const empresaId =
+    current?.empresa?.id != null
+      ? Number(current.empresa.id)
+      : current?.empresa_id != null
+        ? Number(current.empresa_id)
+        : null;
+  const clienteId =
+    current?.cliente?.id != null
+      ? Number(current.cliente.id)
+      : current?.cliente_id != null
+        ? Number(current.cliente_id)
+        : null;
+  const contratoId =
+    current?.contrato?.id != null
+      ? Number(current.contrato.id)
+      : current?.contrato_id != null
+        ? Number(current.contrato_id)
+        : null;
+  let divId = getMarcaRoleDivisionId(current);
+  if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+    divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+  }
+  if (divId == null) return null;
+  return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
+}
 
 interface QRInfo {
   sessionId: string;
@@ -109,7 +188,8 @@ interface Colaborador {
 
 type AttendanceControlImageLocal = {
   id_local: string;
-  base64: string;
+  /** Archivo en documentos (saveFile); al enviar se lee con getFile → data URL en `file_base64`. */
+  localFileName: string;
   extension: string;
   original_name: string;
 };
@@ -129,6 +209,8 @@ interface AttendanceControl {
   division_id?: number | string | null;
   contrato_id?: number | string | null;
   corpo_id?: number | string | null;
+  puesto_id?: number | string | null;
+  isActive?: boolean;
   sucursal_nombre?: string | null;
   cliente: string | null;
   fecha: string | null;
@@ -152,6 +234,81 @@ interface EditingAttendanceControl {
   firma_responsable: string;
 }
 
+function attendanceControlRecordIsDraft(record: { id_local?: string; id?: string; synced?: boolean }): boolean {
+  if (record.synced === true) return false;
+  if (String(record.id_local || '').trim().length > 0) return true;
+  const idStr = String(record.id ?? '');
+  if (idStr.startsWith('local-')) return true;
+  return false;
+}
+
+const ATTENDANCE_CONTROL_PHOTO_PREFIX = 'attendance_control';
+
+function attendanceLocalImageUri(img: AttendanceControlImageLocal): string {
+  const fn = img?.localFileName != null ? String(img.localFileName).trim() : '';
+  if (fn) {
+    const u = getLocalFileDisplayUri(fn);
+    if (u) return u;
+  }
+  const legacy = (img as { base64?: string }).base64;
+  if (legacy && String(legacy).trim()) {
+    const extRaw = String(img?.extension || 'jpg').replace('.', '').toLowerCase();
+    const mime = extRaw === 'jpg' ? 'jpeg' : extRaw || 'jpeg';
+    return `data:image/${mime};base64,${String(legacy)}`;
+  }
+  return '';
+}
+
+async function buildAttendanceImagenesPayload(imgs: AttendanceControlImageLocal[]): Promise<string | undefined> {
+  if (!imgs.length) return undefined;
+  const out: { file_base64: string; extension: string; original_name: string }[] = [];
+  for (const img of imgs) {
+    const name = img.localFileName != null ? String(img.localFileName).trim() : '';
+    if (!name) continue;
+    try {
+      const { base64 } = await getFile(name);
+      out.push({
+        file_base64: `data:image/jpeg;base64,${base64}`,
+        extension: img.extension || 'jpg',
+        original_name: img.original_name || 'foto.jpg',
+      });
+    } catch (e) {
+      console.warn('[AttendanceControl] No se pudo leer imagen para subir:', name, e);
+    }
+  }
+  if (!out.length) return undefined;
+  return JSON.stringify(out);
+}
+
+function resolveAttendanceRemoteImageUri(
+  img: AttendanceControlImageRemote,
+  controlId: string | number | null | undefined,
+  apiUrl: string | undefined,
+  appendToken: (u: string) => string,
+): string {
+  const idNum = Number(controlId);
+  const base = apiUrl != null ? String(apiUrl).replace(/\/$/, '') : '';
+  const name = img?.name != null ? String(img.name).trim() : '';
+  if (base && Number.isFinite(idNum) && idNum > 0 && name) {
+    return appendToken(
+      `${base}/api/attendance-control/${encodeURIComponent(String(idNum))}/get-image/${encodeURIComponent(name)}?t=${Date.now()}`,
+    );
+  }
+  const rawUrl = img?.url != null ? String(img.url).trim() : '';
+  if (!rawUrl) return '';
+  if (rawUrl.startsWith('data:')) return rawUrl;
+  const lower = rawUrl.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+    const sep = rawUrl.includes('?') ? '&' : '?';
+    return appendToken(`${rawUrl}${sep}t=${Date.now()}`);
+  }
+  if (rawUrl.startsWith('/') && base) {
+    const sep = rawUrl.includes('?') ? '&' : '?';
+    return appendToken(`${base}${rawUrl}${sep}t=${Date.now()}`);
+  }
+  return '';
+}
+
 const TURNO_OPTIONS = [
   { label: 'Seleccionar turno', value: '' },
   { label: 'Diurno', value: 'DIURNO' },
@@ -170,8 +327,33 @@ const normalizeTurnoToApi = (turno: string): string => {
   return TURNOS_API_MAP[key] || key.charAt(0) || '';
 };
 
+/** BD / API suelen guardar D | M | N; el Picker usa DIURNO | MIXTO | NOCTURNO */
+const turnoFromRecordToPickerValue = (value?: string | null): string => {
+  const v = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (v === 'D' || v === 'DIURNO') return 'DIURNO';
+  if (v === 'M' || v === 'MIXTO') return 'MIXTO';
+  if (v === 'N' || v === 'NOCTURNO') return 'NOCTURNO';
+  return '';
+};
+
 export default function AttendanceControlScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const [queryAccessToken, setQueryAccessToken] = useState('');
+  const refreshQueryAccessToken = useCallback(async () => {
+    try {
+      const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
+    } catch {
+      setQueryAccessToken('');
+    }
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    void refreshQueryAccessToken();
+  }, [accessToken, refreshQueryAccessToken]);
+
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<AttendanceControlScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -214,6 +396,7 @@ export default function AttendanceControlScreen() {
   const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Firma responsable (similar a TrainingsScreen)
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
@@ -246,8 +429,6 @@ export default function AttendanceControlScreen() {
 
   // Image states
   const [imagenesLocal, setImagenesLocal] = useState<AttendanceControlImageLocal[]>([]);
-  const [imagenesRemote, setImagenesRemote] = useState<AttendanceControlImageRemote[]>([]);
-  const [deletedRemoteImageIds, setDeletedRemoteImageIds] = useState<number[]>([]);
   const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
 
   // Camera states
@@ -262,7 +443,7 @@ export default function AttendanceControlScreen() {
     if (!Number.isFinite(target) || target <= 0 || !Array.isArray(tree)) return null;
     for (const empresa of tree) {
       for (const cliente of empresa?.clientes || []) {
-        for (const division of cliente?.division || []) {
+        for (const division of getClienteDivisionArray(cliente)) {
           for (const contrato of division?.contratos || []) {
             for (const sucursal of contrato?.sucursales || []) {
               if (Number(sucursal?.id) === target) {
@@ -284,23 +465,29 @@ export default function AttendanceControlScreen() {
 
   const buildHierarchyFromCurrentMarca = useCallback((current: any | null, tree: MainStructureTree): HierarchyFilterPath | null => {
     if (!current) return null;
-    const roleDivId = getMarcaRoleDivisionId(current);
     const corpoId = toValidMarcaId(current?.corpo?.id ?? current?.corpo_id);
+    const puestoId = toValidMarcaId(current?.puesto?.id ?? current?.marca?.puesto?.id ?? current?.puesto_id);
+    const divisionResolved = resolveMarcaDivisionForTree(current, tree);
 
     if (corpoId) {
       const resolved = resolveHierarchyByCorpoId(tree, corpoId);
-      if (resolved && roleDivId) {
-        return { ...resolved, divisionId: roleDivId };
+      if (resolved) {
+        return {
+          ...resolved,
+          divisionId: divisionResolved ?? resolved.divisionId,
+          ...(puestoId ? { puestoId } : {}),
+        };
       }
-      if (resolved) return resolved;
     }
 
     return {
       empresaId: toValidMarcaId(current?.empresa?.id ?? current?.empresa_id),
       clienteId: toValidMarcaId(current?.cliente?.id ?? current?.cliente_id),
-      divisionId: roleDivId ?? toValidMarcaId(current?.division?.id ?? current?.division_id),
+      divisionId:
+        divisionResolved ?? toValidMarcaId(current?.division?.id ?? current?.division_id),
       contratoId: toValidMarcaId(current?.contrato?.id ?? current?.contrato_id),
       corpoId,
+      ...(puestoId ? { puestoId } : {}),
     };
   }, [resolveHierarchyByCorpoId]);
 
@@ -320,9 +507,15 @@ export default function AttendanceControlScreen() {
     setFormDivisionId(path.divisionId);
     setFormContratoId(path.contratoId);
     setFormCorpoId(path.corpoId);
+    if (path.puestoId != null && Number(path.puestoId) > 0) {
+      setFormPuestoId(Number(path.puestoId));
+    } else {
+      setFormPuestoId(null);
+    }
   }, []);
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };
@@ -451,6 +644,9 @@ export default function AttendanceControlScreen() {
     const clienteName = raw?.cliente ?? raw?.nombre_cliente ?? null;
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER || '';
     const recordId = raw?.id;
+    const idLocalRaw = raw?.id_local;
+    const idLocal =
+      idLocalRaw != null && String(idLocalRaw).trim() !== '' ? String(idLocalRaw) : '';
     const mappedImages: AttendanceControlImageRemote[] = (Array.isArray(raw?.images) ? raw.images : []).map((img: any) => {
       const name = String(img?.name || '');
       const safeUrl =
@@ -466,6 +662,8 @@ export default function AttendanceControlScreen() {
     });
     return {
       ...raw,
+      id: raw?.id != null && raw?.id !== '' ? String(raw.id) : '',
+      id_local: idLocal,
       cliente: clienteName,
       sucursal_nombre: raw?.sucursal_nombre ?? raw?.e_estructura_sucursal?.nombre ?? null,
       total_presentes: raw?.total_presentes !== null && raw?.total_presentes !== undefined ? String(raw.total_presentes) : null,
@@ -473,20 +671,26 @@ export default function AttendanceControlScreen() {
     } as AttendanceControl;
   };
 
-  const appendTokenToUrl = (url: string) => {
+  const appendTokenToUrl = useCallback((url: string) => {
     if (!url) return '';
-    if (!accessToken || accessToken.trim().length === 0) return url;
+    const fromContext = accessToken != null ? String(accessToken).trim() : '';
+    const fromRefresh = queryAccessToken.trim();
+    const token = fromContext || fromRefresh;
+    if (!token) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
-    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
-  };
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [accessToken, queryAccessToken]);
 
-  const appendTokenAndCacheToUrl = (url: string) => {
-    const withToken = appendTokenToUrl(url);
-    if (!withToken) return '';
-    const sep = withToken.includes('?') ? '&' : '?';
-    return `${withToken}${sep}t=${Date.now()}`;
-  };
+  const appendTokenAndCacheToUrl = useCallback(
+    (url: string) => {
+      const withToken = appendTokenToUrl(url);
+      if (!withToken) return '';
+      const sep = withToken.includes('?') ? '&' : '?';
+      return `${withToken}${sep}t=${Date.now()}`;
+    },
+    [appendTokenToUrl],
+  );
 
   const formatTurnoLabel = (value?: string | null) => {
     const val = String(value || '').trim().toUpperCase();
@@ -606,7 +810,9 @@ export default function AttendanceControlScreen() {
         throw new Error(listJson?.message || 'No se pudo recargar el registro');
       }
 
-      const updatedRecords: AttendanceControl[] = Array.isArray(listJson.data) ? listJson.data.map(normalizeControl) : [];
+      const updatedRecords: AttendanceControl[] = Array.isArray(listJson.data)
+        ? listJson.data.filter((r: any) => r && r.isActive !== false).map(normalizeControl)
+        : [];
       setControls(updatedRecords);
 
       console.log("updatedRecords", updatedRecords);
@@ -675,31 +881,21 @@ export default function AttendanceControlScreen() {
     }
   }, []);
 
-  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+  /** Misma fuente que Activities / PhysicalMinuteAgenda: `loadMainStructureTreeMerged`. */
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
-    let loaded: MainStructureTree = [];
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) {
-            setStructure(parsed);
-            loaded = parsed;
-          }
-        } catch {
-          // ignore
-        }
-      }
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        return loaded;
-      }
-      // La estructura ya se guarda desde otras pantallas, aquí solo usamos cache
+      const loaded = await loadMainStructureTreeMerged();
+      const tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      setStructure(tree);
+      return tree;
+    } catch (e) {
+      console.error('AttendanceControl loadMainStructureCache:', e);
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
-    return loaded;
   }, []);
 
   const fetchControls = useCallback(async () => {
@@ -763,7 +959,9 @@ export default function AttendanceControlScreen() {
       });
 
       if (result.status && result.data) {
-        const serverItems: AttendanceControl[] = Array.isArray(result.data) ? (result.data as any[]).map(normalizeControl) : [];
+        const serverItems: AttendanceControl[] = Array.isArray(result.data)
+          ? (result.data as any[]).filter((r) => r && (r as any).isActive !== false).map(normalizeControl)
+          : [];
         setControls(serverItems);
       } else {
         setControls([]);
@@ -786,43 +984,47 @@ export default function AttendanceControlScreen() {
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
   const filterClientes = useMemo(() => {
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
-    return empresa?.clientes || [];
+    if (filterEmpresaId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
   }, [filterEmpresas, filterEmpresaId]);
 
   const filterDivisiones = useMemo(() => {
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-    return cliente?.division || [];
-  }, [filterClientes, filterClienteId]);
+    if (filterEmpresaId == null || filterClienteId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
+    return getClienteDivisionArray(cliente);
+  }, [filterEmpresas, filterEmpresaId, filterClienteId]);
 
   const filterContratos = useMemo(() => {
-    if (!filterClienteId) return [];
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    if (filterEmpresaId == null || filterClienteId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
     if (!cliente) return [];
-    const divisiones = cliente?.division || [];
-    // Recopilar todos los contratos de todas las divisiones del cliente
+    const divisiones = getClienteDivisionArray(cliente);
     const contratos: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
-        if (!contratos.find(c => c.id === contrato.id)) {
+        if (!contratos.find((c: any) => Number(c.id) === Number(contrato.id))) {
           contratos.push(contrato);
         }
       });
     });
     return contratos;
-  }, [filterClientes, filterClienteId]);
+  }, [filterEmpresas, filterEmpresaId, filterClienteId]);
 
   const filterSucursales = useMemo(() => {
-    if (!filterContratoId) return [];
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
+    if (!filterContratoId || filterEmpresaId == null || filterClienteId == null) return [];
+    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
     if (!cliente) return [];
-    const divisiones = cliente?.division || [];
+    const divisiones = getClienteDivisionArray(cliente);
     const sucursales: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
-        if (contrato.id === filterContratoId) {
+        if (Number(contrato.id) === Number(filterContratoId)) {
           contrato.sucursales?.forEach((sucursal: any) => {
-            if (!sucursales.find(s => s.id === sucursal.id)) {
+            if (!sucursales.find((s: any) => Number(s.id) === Number(sucursal.id))) {
               sucursales.push(sucursal);
             }
           });
@@ -830,48 +1032,53 @@ export default function AttendanceControlScreen() {
       });
     });
     return sucursales;
-  }, [filterClientes, filterClienteId, filterContratoId]);
+  }, [filterEmpresas, filterEmpresaId, filterClienteId, filterContratoId]);
 
   // Nodos computados para jerarquía del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
   const formClientes = useMemo(() => {
-    const empresa = formEmpresas.find((e: any) => e.id === formEmpresaId);
-    return empresa?.clientes || [];
+    if (formEmpresaId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
   }, [formEmpresas, formEmpresaId]);
 
   const formDivisiones = useMemo(() => {
-    const cliente = formClientes.find((c: any) => c.id === formClienteId);
-    return cliente?.division || [];
-  }, [formClientes, formClienteId]);
+    if (formEmpresaId == null || formClienteId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
+    return getClienteDivisionArray(cliente);
+  }, [formEmpresas, formEmpresaId, formClienteId]);
 
   const formContratos = useMemo(() => {
-    if (!formClienteId) return [];
-    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    if (formEmpresaId == null || formClienteId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
     if (!cliente) return [];
-    const divisiones = cliente?.division || [];
+    const divisiones = getClienteDivisionArray(cliente);
     const contratos: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
-        if (!contratos.find(c => c.id === contrato.id)) {
+        if (!contratos.find((c: any) => Number(c.id) === Number(contrato.id))) {
           contratos.push(contrato);
         }
       });
     });
     return contratos;
-  }, [formClientes, formClienteId]);
+  }, [formEmpresas, formEmpresaId, formClienteId]);
 
   const formSucursales = useMemo(() => {
-    if (!formContratoId) return [];
-    const cliente = formClientes.find((c: any) => c.id === formClienteId);
+    if (!formContratoId || formEmpresaId == null || formClienteId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
     if (!cliente) return [];
-    const divisiones = cliente?.division || [];
+    const divisiones = getClienteDivisionArray(cliente);
     const sucursales: any[] = [];
     divisiones.forEach((division: any) => {
       division.contratos?.forEach((contrato: any) => {
-        if (contrato.id === formContratoId) {
+        if (Number(contrato.id) === Number(formContratoId)) {
           contrato.sucursales?.forEach((sucursal: any) => {
-            if (!sucursales.find(s => s.id === sucursal.id)) {
+            if (!sucursales.find((s: any) => Number(s.id) === Number(sucursal.id))) {
               sucursales.push(sucursal);
             }
           });
@@ -879,7 +1086,25 @@ export default function AttendanceControlScreen() {
       });
     });
     return sucursales;
-  }, [formClientes, formClienteId, formContratoId]);
+  }, [formEmpresas, formEmpresaId, formClienteId, formContratoId]);
+
+  const formPuestos = useMemo(() => {
+    if (!formCorpoId || formEmpresaId == null || formClienteId == null) return [];
+    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
+    if (!cliente) return [];
+    const divisiones = getClienteDivisionArray(cliente);
+    for (const division of divisiones) {
+      for (const contrato of division?.contratos || []) {
+        for (const sucursal of contrato?.sucursales || []) {
+          if (Number(sucursal?.id) === Number(formCorpoId)) {
+            return Array.isArray(sucursal?.puestos) ? sucursal.puestos : [];
+          }
+        }
+      }
+    }
+    return [];
+  }, [formEmpresas, formEmpresaId, formClienteId, formCorpoId]);
 
   // Recargar lista solo cuando cambia la sucursal (corpo_id) del filtro (o al reenfocar la pantalla vía listRefreshKey)
   useEffect(() => {
@@ -896,7 +1121,7 @@ export default function AttendanceControlScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        const tree = await fetchMainStructure();
+        const tree = await loadMainStructureCache();
         const marca = await loadMarcaContext();
         if (cancelled) return;
         const path = buildHierarchyFromCurrentMarca(marca, tree);
@@ -905,6 +1130,7 @@ export default function AttendanceControlScreen() {
       })();
 
       const onRestore = () => {
+        void loadMainStructureCache();
         setListRefreshKey((k) => k + 1);
       };
       eventBus.on('connectionRestored', onRestore);
@@ -912,7 +1138,7 @@ export default function AttendanceControlScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', onRestore);
       };
-    }, [fetchMainStructure, loadMarcaContext, buildHierarchyFromCurrentMarca, applyFilterHierarchyPath])
+    }, [loadMainStructureCache, loadMarcaContext, buildHierarchyFromCurrentMarca, applyFilterHierarchyPath])
   );
 
   const generateRandomId = (): string => {
@@ -937,10 +1163,18 @@ export default function AttendanceControlScreen() {
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
-    // Resetear imágenes
+    setFormPuestoId(null);
+    for (const img of imagenesLocal) {
+      const fn = img.localFileName != null ? String(img.localFileName).trim() : '';
+      if (fn) {
+        try {
+          await deleteFile(fn);
+        } catch {
+          /* idempotente */
+        }
+      }
+    }
     setImagenesLocal([]);
-    setImagenesRemote([]);
-    setDeletedRemoteImageIds([]);
   };
 
   const openCamera = async () => {
@@ -966,24 +1200,39 @@ export default function AttendanceControlScreen() {
 
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
+        base64: false,
         quality: 0.7,
-        skipProcessing: false
+        skipProcessing: false,
       });
 
-      if (!photo || !photo.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
       setIsCameraVisible(false);
 
+      let storedFileName: string;
+      try {
+        storedFileName = await saveFile({
+          uri: photo.uri,
+          originalName: 'foto',
+          extension: 'jpg',
+          type: 'image',
+          prefix: ATTENDANCE_CONTROL_PHOTO_PREFIX,
+        });
+      } catch (saveErr) {
+        console.error('[AttendanceControl] saveFile failed:', saveErr);
+        Alert.alert('Error', 'No se pudo guardar la foto en el dispositivo');
+        return;
+      }
+
       setTimeout(() => {
         setImagenesLocal((prev) => [
           ...prev,
           {
             id_local: generateRandomId(),
-            base64: String(photo.base64),
+            localFileName: storedFileName,
             extension: 'jpg',
             original_name: `foto_${Date.now()}.jpg`,
           },
@@ -996,26 +1245,86 @@ export default function AttendanceControlScreen() {
     }
   };
 
+  const appendAttendanceEvaluationsAction = async (entry: any) => {
+    try {
+      const s = await AsyncStorage.getItem('evaluations_actions');
+      const arr = s ? JSON.parse(s) : [];
+      if (!Array.isArray(arr)) return;
+      arr.push(entry);
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(arr));
+    } catch (e) {
+      console.error('[AttendanceControl] append action:', e);
+    }
+  };
+
+  const confirmDeleteListRemoteImage = (record: AttendanceControl, img: AttendanceControlImageRemote) => {
+    const cid = Number(record.id);
+    if (!Number.isFinite(cid) || cid <= 0 || !img?.id) {
+      Alert.alert('Error', 'No se puede eliminar esta imagen desde la lista.');
+      return;
+    }
+    Alert.alert(
+      'Confirmar',
+      '¿Eliminar esta imagen del servidor? Esta acción no se puede deshacer.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const online = await getConnectionStatus();
+            const patchList = () => {
+              setControls((prev) =>
+                prev.map((r) => {
+                  if (String(r.id) !== String(record.id)) return r;
+                  return { ...r, images: (r.images || []).filter((im) => Number(im.id) !== Number(img.id)) };
+                }),
+              );
+            };
+            if (online) {
+              const res = await deleteAttendanceControlImage({
+                controlId: cid,
+                imageId: Number(img.id),
+                refreshAccessToken,
+                logout,
+              });
+              if (res.status) {
+                patchList();
+              } else {
+                Alert.alert('Error', res.message || 'No se pudo eliminar la imagen');
+              }
+            } else {
+              await appendAttendanceEvaluationsAction({
+                id: `ac_del_img_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`,
+                type: 'attendance_control_delete_image',
+                action: 'delete',
+                payload: { controlId: cid, imageId: Number(img.id) },
+              });
+              patchList();
+              Alert.alert(
+                'Sin conexión',
+                'La eliminación de la imagen se sincronizará cuando vuelva la conexión.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
+
   const removeLocalImage = (idLocal: string) => {
     Alert.alert('Confirmar', '¿Eliminar esta foto?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: () => setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal)),
-      },
-    ]);
-  };
-
-  const removeRemoteImage = (id: number) => {
-    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar',
-        style: 'destructive',
         onPress: () => {
-          setImagenesRemote((prev) => prev.filter((x) => x.id !== id));
-          setDeletedRemoteImageIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+          setImagenesLocal((prev) => {
+            const target = prev.find((x) => x.id_local === idLocal);
+            const fn = target?.localFileName != null ? String(target.localFileName).trim() : '';
+            if (fn) void deleteFile(fn).catch(() => {});
+            return prev.filter((x) => x.id_local !== idLocal);
+          });
         },
       },
     ]);
@@ -1031,15 +1340,9 @@ export default function AttendanceControlScreen() {
       const current = raw ? JSON.parse(raw) : null;
       let formTree: MainStructureTree = structure;
       if (!formTree?.length) {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (cacheStr) {
-          try {
-            const parsed = JSON.parse(cacheStr);
-            if (Array.isArray(parsed)) formTree = parsed;
-          } catch {
-            /* ignore */
-          }
-        }
+        const loaded = await loadMainStructureTreeMerged().catch(() => []);
+        formTree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+        if (formTree.length) setStructure(formTree);
       }
       const path = buildHierarchyFromCurrentMarca(current, formTree);
       applyFormHierarchyPath(path);
@@ -1212,21 +1515,15 @@ export default function AttendanceControlScreen() {
     });
 
     setFecha(parseFechaToDate(record.fecha));
-    setTurno(record.turno || '');
+    setTurno(turnoFromRecordToPickerValue(record.turno));
     setTotalPresentes(record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '');
     setColaboradores(colaboradoresArray);
     // Cargar jerarquía desde corpo_id en el árbol (empresa → sucursal)
     let editTree: MainStructureTree = structure;
     if (!editTree?.length) {
-      try {
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (cacheStr) {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) editTree = parsed;
-        }
-      } catch {
-        /* ignore */
-      }
+      const loaded = await loadMainStructureTreeMerged().catch(() => []);
+      editTree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      if (editTree.length) setStructure(editTree);
     }
     const corpoNum =
       record.corpo_id != null && record.corpo_id !== ''
@@ -1242,10 +1539,18 @@ export default function AttendanceControlScreen() {
       if (record.contrato_id) setFormContratoId(Number(record.contrato_id));
       if (record.corpo_id) setFormCorpoId(Number(record.corpo_id));
     }
-    // Cargar imágenes
-    setImagenesRemote(record.images || []);
-    setImagenesLocal(record.images_local || []);
-    setDeletedRemoteImageIds([]);
+    const puestoNum =
+      record.puesto_id != null && String(record.puesto_id).trim() !== '' ? Number(record.puesto_id) : null;
+    if (puestoNum != null && Number.isFinite(puestoNum) && puestoNum > 0) {
+      setFormPuestoId(puestoNum);
+    }
+    // En edición: no mostrar fotos ya en servidor; solo nuevas capturas en esta sesión.
+    // Borrador offline: conservar adjuntos locales pendientes de sincronizar.
+    if (attendanceControlRecordIsDraft(record)) {
+      setImagenesLocal(record.images_local || []);
+    } else {
+      setImagenesLocal([]);
+    }
 
     // Cargar firma responsable si existe
     if (record.firma_responsable) {
@@ -1466,6 +1771,10 @@ export default function AttendanceControlScreen() {
       Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
       return;
     }
+    if (!formPuestoId) {
+      Alert.alert('Error', 'Debe seleccionar un puesto');
+      return;
+    }
 
     setIsSubmitting(true);
     setSubmitResponse(null);
@@ -1473,16 +1782,7 @@ export default function AttendanceControlScreen() {
     try {
       const currentMarcaData = JSON.parse(currentMarca);
 
-      const imagenesStr =
-        imagenesLocal.length > 0
-          ? JSON.stringify(
-            imagenesLocal.map((img) => ({
-              file_base64: img.base64,
-              extension: img.extension,
-              original_name: img.original_name,
-            }))
-          )
-          : undefined;
+      const imagenesStr = await buildAttendanceImagenesPayload(imagenesLocal);
 
       const requestData = {
         marca_id: currentMarcaData.id,
@@ -1491,6 +1791,7 @@ export default function AttendanceControlScreen() {
         division_id: formDivisionId,
         contrato_id: formContratoId,
         corpo_id: formCorpoId,
+        puesto_id: formPuestoId,
         fecha: formatDate(fecha) || null,
         turno: normalizeTurnoToApi(turno.trim() || ''),
         firma_responsable: firmaResponsableHash,
@@ -1537,7 +1838,10 @@ export default function AttendanceControlScreen() {
   const submitUpdateControl = async () => {
     if (!editingRecord) return;
 
-    const recordId = editingRecord.id || editingRecord.id_local;
+    const editId = editingRecord.id != null ? String(editingRecord.id).trim() : '';
+    const editLocal = String(editingRecord.id_local || '').trim();
+    const recordId =
+      editId && !editId.startsWith('local-') && Number(editId) > 0 ? editId : editLocal || editId;
     if (!recordId) {
       Alert.alert('Error', 'ID de registro no encontrado para actualizar');
       return;
@@ -1552,25 +1856,17 @@ export default function AttendanceControlScreen() {
       Alert.alert('Error', 'Debe seleccionar Empresa, Cliente, División, Contrato y Sucursal');
       return;
     }
+    if (!formPuestoId) {
+      Alert.alert('Error', 'Debe seleccionar un puesto');
+      return;
+    }
 
     setIsSubmitting(true);
     setSubmitResponse(null);
 
     try {
 
-      const imagenesStr =
-        imagenesLocal.length > 0
-          ? JSON.stringify(
-            imagenesLocal.map((img) => ({
-              file_base64: img.base64,
-              extension: img.extension,
-              original_name: img.original_name,
-            }))
-          )
-          : undefined;
-
-      const deleteImagenesStr =
-        deletedRemoteImageIds.length > 0 ? JSON.stringify(deletedRemoteImageIds) : undefined;
+      const imagenesStr = await buildAttendanceImagenesPayload(imagenesLocal);
 
       const requestData = {
         empresa_id: formEmpresaId,
@@ -1578,11 +1874,11 @@ export default function AttendanceControlScreen() {
         division_id: formDivisionId,
         contrato_id: formContratoId,
         corpo_id: formCorpoId,
+        puesto_id: formPuestoId,
         fecha: formatDate(fecha) || null,
         turno: normalizeTurnoToApi(turno.trim() || ''),
         firma_responsable: firmaResponsableHash,
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
-        ...(deleteImagenesStr ? { delete_imagenes: deleteImagenesStr } : {}),
       };
 
       const isConnected = await getConnectionStatus();
@@ -1731,6 +2027,10 @@ export default function AttendanceControlScreen() {
             }
           }
 
+          const listApiUrl = Constants.expoConfig?.extra?.API_SERVER;
+          const recordDraft = attendanceControlRecordIsDraft(record);
+          const listRemoteImages = recordDraft ? [] : (record.images || []);
+
           return (
             <ThemedView key={record.id || record.id_local} style={styles.listItem}>
               <ThemedView style={styles.listItemHeader}>
@@ -1747,7 +2047,8 @@ export default function AttendanceControlScreen() {
                   <ThemedText style={styles.listItemSubtitle}>
                     Total Presentes: {record.total_presentes || 'N/A'}
                   </ThemedText>
-                  {!!(record.id || record.id_local) && ((record.images && record.images.length > 0) || (record.images_local && record.images_local.length > 0)) && (
+                  {!!(record.id || record.id_local) &&
+                    (listRemoteImages.length > 0 || (record.images_local && record.images_local.length > 0)) && (
                     <>
                       <TouchableOpacity
                         style={styles.collapseButton}
@@ -1758,7 +2059,7 @@ export default function AttendanceControlScreen() {
                         activeOpacity={0.8}
                       >
                         <ThemedText style={styles.collapseButtonText}>
-                          Imágenes ({((record.images || []).length + (record.images_local || []).length)})
+                          Imágenes ({listRemoteImages.length + (record.images_local || []).length})
                         </ThemedText>
                         <Ionicons
                           name={expandedImagesById[record.id || record.id_local] ? 'chevron-up' : 'chevron-down'}
@@ -1768,10 +2069,37 @@ export default function AttendanceControlScreen() {
                       </TouchableOpacity>
                       {expandedImagesById[record.id || record.id_local] && (
                         <ThemedView style={styles.collapsableContent}>
-                          {(record.images || []).map((img: any) => (
-                            <ThemedView key={`${record.id || record.id_local}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
+                          {listRemoteImages.map((img: any) => {
+                            const uri = resolveAttendanceRemoteImageUri(
+                              img as AttendanceControlImageRemote,
+                              record.id,
+                              listApiUrl,
+                              appendTokenToUrl,
+                            );
+                            return (
+                              <ThemedView key={`${record.id || record.id_local}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
+                                {!!uri && (
+                                  <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                                )}
+                                {!!String(img?.original_name || '').trim() && (
+                                  <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                                )}
+                                {Number(img?.id) > 0 && (
+                                  <TouchableOpacity
+                                    style={styles.listImageTrashButton}
+                                    onPress={() => confirmDeleteListRemoteImage(record, img as AttendanceControlImageRemote)}
+                                    accessibilityLabel="Eliminar imagen"
+                                  >
+                                    <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+                                  </TouchableOpacity>
+                                )}
+                              </ThemedView>
+                            );
+                          })}
+                          {(record.images_local || []).map((img: any) => (
+                            <ThemedView key={`${record.id || record.id_local}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
                               <Image
-                                source={{ uri: appendTokenAndCacheToUrl(String(img?.url || '')) }}
+                                source={{ uri: attendanceLocalImageUri(img as AttendanceControlImageLocal) }}
                                 style={styles.photoPreviewMini}
                                 resizeMode="contain"
                               />
@@ -1780,19 +2108,6 @@ export default function AttendanceControlScreen() {
                               )}
                             </ThemedView>
                           ))}
-                          {(record.images_local || []).map((img: any) => {
-                            const extRaw = String(img?.extension || 'jpg').replace('.', '').toLowerCase();
-                            const mime = extRaw === 'jpg' ? 'jpeg' : extRaw;
-                            const uri = `data:image/${mime};base64,${String(img?.base64 || '')}`;
-                            return (
-                              <ThemedView key={`${record.id || record.id_local}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
-                                <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
-                                {!!String(img?.original_name || '').trim() && (
-                                  <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
-                                )}
-                              </ThemedView>
-                            );
-                          })}
                         </ThemedView>
                       )}
                     </>
@@ -2132,12 +2447,33 @@ export default function AttendanceControlScreen() {
                       selectedValue={formCorpoId || ''}
                       onValueChange={(value) => {
                         setFormCorpoId(value && value !== '' ? Number(value) : null);
+                        setFormPuestoId(null);
                       }}
                       style={styles.picker}
                     >
                       <Picker.Item label="Seleccionar..." value="" color="#000000" />
                       {formSucursales.map((s: any) => (
                         <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              )}
+
+              {formCorpoId && (
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.formLabel}>Puesto *</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={formPuestoId || ''}
+                      onValueChange={(value) => {
+                        setFormPuestoId(value && value !== '' ? Number(value) : null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                      {formPuestos.map((p: any) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
                       ))}
                     </Picker>
                   </View>
@@ -2245,19 +2581,16 @@ export default function AttendanceControlScreen() {
                   <Ionicons name="camera" size={24} color="#FFFFFF" />
                   <ThemedText style={styles.cameraButtonText}>Tomar Foto</ThemedText>
                 </TouchableOpacity>
-                {(imagenesRemote.length > 0 || imagenesLocal.length > 0) && (
+                {editingRecord ? (
+                  <ThemedText style={styles.formSubLabel}>
+                    Las fotografías guardadas se ven en la lista del registro. Aquí solo se añaden fotos nuevas (se subirán al guardar sin quitar las anteriores).
+                  </ThemedText>
+                ) : null}
+                {imagenesLocal.length > 0 && (
                   <ThemedView style={styles.photosContainer}>
-                    {imagenesRemote.map((img) => (
-                      <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
-                        <Image source={{ uri: appendTokenAndCacheToUrl(String(img.url || '')) }} style={styles.photoPreview} resizeMode="contain" />
-                        <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
-                          <Ionicons name="trash" size={20} color="#FF3B30" />
-                        </TouchableOpacity>
-                      </ThemedView>
-                    ))}
                     {imagenesLocal.map((img) => (
                       <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
-                        <Image source={{ uri: `data:image/jpeg;base64,${img.base64}` }} style={styles.photoPreview} resizeMode="contain" />
+                        <Image source={{ uri: attendanceLocalImageUri(img) }} style={styles.photoPreview} resizeMode="contain" />
                         <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
                           <Ionicons name="trash" size={20} color="#FF3B30" />
                         </TouchableOpacity>
@@ -3089,6 +3422,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 8,
     backgroundColor: '#FFFFFF',
+    position: 'relative',
+  },
+  listImageTrashButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 2,
+    backgroundColor: 'rgba(255,255,255,0.92)',
+    borderRadius: 16,
+    padding: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   photoPreviewMini: {
     width: '100%',

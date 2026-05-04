@@ -33,6 +33,20 @@ import getHoraAccion from '../hooks/getHoraAccion';
 import authedFetch from '../hooks/authedFetch';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import {
+    clearPuestoArticulosList,
+    readPuestoArticulosList,
+    writePuestoArticulosList,
+} from '@/hooks/mantenimientoEquipoPuestoArticulosCache';
+import {
+    applyMantenimientoPatchToPuestoReporteStores,
+    applyPatchToMantenimientosArray,
+    syncPuestoArticulosFragmentFromReportesList,
+} from '@/hooks/mantenimientoEquipoMainStructureSync';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import type { StoredFileType } from '@/hooks/fileStorage';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -98,11 +112,57 @@ type ArticuloPuestoMantenimientoItem = {
         observaciones: string;
         evaluacion_mantenimiento_origen?: 'entrega_puestos' | 'activities' | 'checklist_supervision';
     };
+    /** OPERATIVO: puesto dueño de la fila cuando el listado abarca toda la sucursal (corpo). */
+    puesto_id_context?: number;
+    puesto_nombre_context?: string;
 };
 
 function isMantenimientoSoloEvaluacionCache(m: { evaluacion_mantenimiento_origen?: string } | null | undefined): boolean {
     const o = m?.evaluacion_mantenimiento_origen;
     return o === 'entrega_puestos' || o === 'activities' || o === 'checklist_supervision';
+}
+
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+function numOrNull(v: unknown): number | null {
+    if (v === undefined || v === null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Puestos bajo una sucursal (corpo) en el árbol main_structure. */
+function findPuestosInCorpo(tree: any[], corpoId: number): { id: number; nombre?: string }[] {
+    if (!corpoId || !Array.isArray(tree)) return [];
+    for (const empresa of tree) {
+        for (const cliente of empresa?.clientes || []) {
+            for (const division of cliente?.division || []) {
+                for (const contrato of division?.contratos || []) {
+                    for (const sucursal of contrato?.sucursales || []) {
+                        if (Number(sucursal?.id) === Number(corpoId)) {
+                            const puestos = sucursal?.puestos || [];
+                            return puestos
+                                .filter((p: any) => p?.id != null)
+                                .map((p: any) => ({
+                                    id: Number(p.id),
+                                    nombre: p.nombre != null ? String(p.nombre) : undefined,
+                                }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return [];
+}
+
+function stripPuestoContextForStorage(
+    row: ArticuloPuestoMantenimientoItem
+): ArticuloPuestoMantenimientoItem {
+    const { puesto_id_context: _c, puesto_nombre_context: _n, ...rest } = row as ArticuloPuestoMantenimientoItem & {
+        puesto_id_context?: number;
+        puesto_nombre_context?: string;
+    };
+    return rest as ArticuloPuestoMantenimientoItem;
 }
 
 type CategoriaMantenimiento = {
@@ -161,8 +221,22 @@ const getActionIcon = (action: string) => {
     }
 };
 
+/** Cola: eliminar adjunto de mantenimiento (sincroniza en App.tsx). */
+export const ARTICULO_MANTENIMIENTO_DELETE_ARCHIVO_ACTIONS_KEY = 'articulo_mantenimiento_delete_archivo_actions';
+
 // Componente para visualizar archivos del activo
-function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number; files: ActivoFileRemote[]; accessToken?: string | null }) {
+function ActivoFilesViewer({
+    activoId,
+    files,
+    accessToken,
+    onRequestDeleteFile,
+}: {
+    activoId: number;
+    files: ActivoFileRemote[];
+    accessToken?: string | null;
+    /** Si se pasa, muestra icono de eliminar (confirmación en el handler). */
+    onRequestDeleteFile?: (file: ActivoFileRemote) => void;
+}) {
     const [isExpanded, setIsExpanded] = useState(false);
     const list = Array.isArray(files) ? files : [];
     if (list.length === 0) return null;
@@ -173,6 +247,16 @@ function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number;
     const documentFiles = list.filter(f => f.type === 'document' || (!f.type && f.extension));
 
     const buildFileUrl = (file: ActivoFileRemote) => {
+        const hasLocalId =
+            file.id_local !== undefined && file.id_local !== null && String(file.id_local).trim() !== '';
+        if (hasLocalId && file.base64) {
+            const raw = String(file.base64).replace(/^data:[^;]+;base64,/, '');
+            const mime =
+                file.mimeType ||
+                (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
+            return `data:${mime};base64,${raw}`;
+        }
+
         const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
         if (!apiUrl) return '';
         const appendTokenToUrl = (url: string) => {
@@ -219,11 +303,19 @@ function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number;
                     {imageFiles.length > 0 && (
                         <ThemedView style={styles.viewerSection}>
                             <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
-                            {imageFiles.map(file => (
-                                <ActivoImageViewer
-                                    key={file.id}
-                                    imageUrl={buildFileUrl(file)}
-                                />
+                            {imageFiles.map((file) => (
+                                <View key={String(file.id_local || file.id || file.name)} style={styles.activoRemoteFileWrap}>
+                                    {onRequestDeleteFile && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => onRequestDeleteFile(file)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ActivoImageViewer imageUrl={buildFileUrl(file)} />
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -231,12 +323,22 @@ function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number;
                     {audioFiles.length > 0 && (
                         <ThemedView style={styles.viewerSection}>
                             <ThemedText style={styles.viewerSectionTitle}>Audios</ThemedText>
-                            {audioFiles.map(file => (
-                                <ActivoAudioPlayer
-                                    key={file.id}
-                                    sourceUrl={buildFileUrl(file)}
-                                    label={file.original_name || file.name}
-                                />
+                            {audioFiles.map((file) => (
+                                <View key={String(file.id_local || file.id || file.name)} style={styles.activoRemoteFileWrap}>
+                                    {onRequestDeleteFile && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => onRequestDeleteFile(file)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ActivoAudioPlayer
+                                        sourceUrl={buildFileUrl(file)}
+                                        label={file.original_name || file.name}
+                                    />
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -244,11 +346,19 @@ function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number;
                     {videoFiles.length > 0 && (
                         <ThemedView style={styles.viewerSection}>
                             <ThemedText style={styles.viewerSectionTitle}>Videos</ThemedText>
-                            {videoFiles.map(file => (
-                                <ActivoVideoPlayer
-                                    key={file.id}
-                                    sourceUrl={buildFileUrl(file)}
-                                />
+                            {videoFiles.map((file) => (
+                                <View key={String(file.id_local || file.id || file.name)} style={styles.activoRemoteFileWrap}>
+                                    {onRequestDeleteFile && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => onRequestDeleteFile(file)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ActivoVideoPlayer sourceUrl={buildFileUrl(file)} />
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -256,25 +366,35 @@ function ActivoFilesViewer({ activoId, files, accessToken }: { activoId: number;
                     {documentFiles.length > 0 && (
                         <ThemedView style={styles.viewerSection}>
                             <ThemedText style={styles.viewerSectionTitle}>Documentos</ThemedText>
-                            {documentFiles.map(file => (
-                                <TouchableOpacity
-                                    key={file.id}
-                                    style={styles.documentRow}
-                                    onPress={() => {
-                                        const url = buildFileUrl(file);
-                                        if (url) {
-                                            Linking.openURL(url);
-                                        } else {
-                                            Alert.alert('Error', 'URL inválida para descargar el archivo');
-                                        }
-                                    }}
-                                >
-                                    <Ionicons name="document-text-outline" size={20} color="#007AFF" />
-                                    <ThemedText numberOfLines={1} style={styles.documentText}>
-                                        {getFileDisplayName(file)}
-                                    </ThemedText>
-                                    <Ionicons name="download-outline" size={20} color="#007AFF" />
-                                </TouchableOpacity>
+                            {documentFiles.map((file) => (
+                                <View key={String(file.id_local || file.id || file.name)} style={styles.activoRemoteFileWrap}>
+                                    {onRequestDeleteFile && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => onRequestDeleteFile(file)}
+                                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                        >
+                                            <Ionicons name="trash" size={18} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <TouchableOpacity
+                                        style={styles.documentRow}
+                                        onPress={() => {
+                                            const url = buildFileUrl(file);
+                                            if (url) {
+                                                Linking.openURL(url);
+                                            } else {
+                                                Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                            }
+                                        }}
+                                    >
+                                        <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                                        <ThemedText numberOfLines={1} style={styles.documentText}>
+                                            {getFileDisplayName(file)}
+                                        </ThemedText>
+                                        <Ionicons name="download-outline" size={20} color="#007AFF" />
+                                    </TouchableOpacity>
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -450,9 +570,59 @@ interface ActivoFileLocal {
     type: 'image' | 'audio' | 'video' | 'document';
     name: string;
     extension: string;
-    base64: string;
+    /** Base64 crudo o data URL (legado). Preferir `localFileName` para no cargar memoria. */
+    base64?: string;
+    /** Archivo bajo el directorio de documentos (ver `fileStorage.saveFile`) */
+    localFileName?: string;
     uri?: string;
     mimeType?: string;
+}
+
+function activoFileLocalToStorageType(t: ActivoFileLocal['type']): StoredFileType {
+    if (t === 'document') return 'text';
+    return t;
+}
+
+function localMantenimientoFileImageUri(f: ActivoFileLocal): string {
+    if (f.localFileName) {
+        const u = getLocalFileDisplayUri(f.localFileName);
+        if (u) return u;
+    }
+    if (f.base64) {
+        const ext = (f.extension || 'jpeg').replace(/^\./, '');
+        return `data:${f.mimeType || `image/${ext}`};base64,${f.base64}`;
+    }
+    return '';
+}
+
+async function buildMantenimientoFilesJsonForApi(files: ActivoFileLocal[]): Promise<string | null> {
+    if (files.length === 0) return null;
+    const out: { type: string; original_name: string; extension: string; file_base64: string }[] = [];
+    for (const f of files) {
+        let raw = '';
+        if (f.localFileName) {
+            try {
+                const g = await getFile(f.localFileName);
+                raw = g.base64;
+            } catch {
+                raw = '';
+            }
+        } else if (f.base64) {
+            raw = f.base64;
+        }
+        if (!raw) continue;
+        if (raw.startsWith('data:')) {
+            const i = raw.indexOf('base64,');
+            if (i !== -1) raw = raw.slice(i + 7);
+        }
+        out.push({
+            type: f.type,
+            original_name: f.name,
+            extension: f.extension,
+            file_base64: raw,
+        });
+    }
+    return out.length > 0 ? JSON.stringify(out) : null;
 }
 
 interface ActivoFileRemote {
@@ -466,6 +636,60 @@ interface ActivoFileRemote {
     mimeType?: string;
     id_local?: string;
     synced?: boolean;
+}
+
+/** Adjunta pendiente de subir: visibles con `id_local` + `base64` (misma regla que `buildFileUrl` de la ficha). */
+async function buildPendingRemotoArchivosForMantenimientoList(locals: ActivoFileLocal[]): Promise<ActivoFileRemote[]> {
+    const out: ActivoFileRemote[] = [];
+    for (const f of locals) {
+        let b64 = '';
+        if (f.localFileName) {
+            try {
+                const g = await getFile(f.localFileName);
+                b64 = g.base64;
+            } catch {
+                b64 = '';
+            }
+        } else if (f.base64) {
+            b64 = f.base64;
+        }
+        if (!b64) continue;
+        if (b64.startsWith('data:')) {
+            const i = b64.indexOf('base64,');
+            if (i !== -1) b64 = b64.slice(i + 7);
+        }
+        out.push({
+            id: 0,
+            id_local: f.id,
+            name: f.name,
+            original_name: f.name,
+            type: f.type,
+            extension: f.extension,
+            url: '',
+            base64: b64,
+            mimeType: f.mimeType,
+        });
+    }
+    return out;
+}
+
+/**
+ * Toda la UI del módulo Equipo (tarjetas de artículo + `activos` por artículo) debe basarse
+ * en la fila con `ultimo_mantenimiento` y `mantenimientos[0]` alineados (criterio API: id desc).
+ * Sin esto, el resumen y la sublista leen "desde" sitios distintos y el usuario debe salir y volver.
+ */
+function normalizeMantenimientoEquipoReporteItem(
+    r: ArticuloPuestoMantenimientoItem
+): ArticuloPuestoMantenimientoItem {
+    const mants = Array.isArray(r.mantenimientos) ? [...r.mantenimientos] : [];
+    mants.sort((a: any, b: any) => Number(b?.id) - Number(a?.id));
+    const ult = mants[0] ?? (r.ultimo_mantenimiento as any) ?? null;
+    return {
+        ...r,
+        mantenimientos: mants,
+        ultimo_mantenimiento: ult,
+        ultimo_registro_mantenimiento: ult,
+    } as ArticuloPuestoMantenimientoItem;
 }
 
 export default function MantenimientoEquipoScreen() {
@@ -496,6 +720,7 @@ export default function MantenimientoEquipoScreen() {
     const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
     const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
     const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+    const [roleName, setRoleName] = useState<RoleName>(null);
 
     // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
     const [structure, setStructure] = useState<any[]>([]);
@@ -509,9 +734,23 @@ export default function MantenimientoEquipoScreen() {
     const didInitFiltersFromMarca = useRef(false);
     const lastMarcaPuestoIdRef = useRef<number | null>(null);
     const isFetchingReportesRef = useRef(false);
+    const pendingReportesRefetchRef = useRef(false);
 
     const activePuestoId = filterPuestoId ?? marcaPuestoId;
 
+    const resolvePuestoIdForReporte = useCallback(
+        (reporte?: ArticuloPuestoMantenimientoItem | null): number | null => {
+            const fromRow = reporte?.puesto_id_context;
+            if (fromRow != null && Number.isFinite(Number(fromRow)) && Number(fromRow) > 0) {
+                return Number(fromRow);
+            }
+            const fromFilter = filterPuestoId ?? marcaPuestoId;
+            return fromFilter != null && Number.isFinite(Number(fromFilter)) && Number(fromFilter) > 0
+                ? Number(fromFilter)
+                : null;
+        },
+        [filterPuestoId, marcaPuestoId]
+    );
 
     // Nota: este módulo ahora lista artículos del puesto (Plan + Asignado) y sus mantenimientos
     const [reportes, setReportes] = useState<ArticuloPuestoMantenimientoItem[]>([]);
@@ -590,6 +829,8 @@ export default function MantenimientoEquipoScreen() {
     const [armaArmeroNombre, setArmaArmeroNombre] = useState<string>('');
     const [armaFirma, setArmaFirma] = useState<string>('');
     const [mantArmasForm, setMantArmasForm] = useState<string>('');
+    /** Al editar no mostramos fotos ya subidas; conservamos aquí los nombres del servidor para el JSON si no hay foto nueva. */
+    const originalMantArmasFotoNamesRef = useRef<{ antes: string | null; despues: string | null } | null>(null);
 
     // Modal firma (arma)
     const [isArmaSignatureModalVisible, setIsArmaSignatureModalVisible] = useState(false);
@@ -716,21 +957,6 @@ export default function MantenimientoEquipoScreen() {
         const response = await fetch(asset.uri);
         const blob = await response.blob();
 
-        const base64 = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const r = reader.result;
-                if (typeof r === 'string') {
-                    const parts = r.split(',');
-                    resolve(parts.length > 1 ? parts[1] : parts[0]);
-                } else {
-                    reject(new Error('No se pudo leer la imagen seleccionada'));
-                }
-            };
-            reader.onerror = () => reject(reader.error ?? new Error('Error al leer la imagen seleccionada'));
-            reader.readAsDataURL(blob);
-        });
-
         let extension = '';
         if (asset.name && asset.name.includes('.')) {
             extension = asset.name.split('.').pop() || '';
@@ -742,12 +968,20 @@ export default function MantenimientoEquipoScreen() {
         const localId = `arma_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
         const fileName = `${baseName}.${extension}`;
 
+        const localFileName = await saveFile({
+            uri: asset.uri,
+            originalName: baseName,
+            extension: extension.replace(/^\./, '') || 'jpg',
+            type: 'image',
+            prefix: 'mantenimiento_equipo',
+        });
+
         const newFile: ActivoFileLocal = {
             id: localId,
             type: 'image',
             name: fileName,
-            extension,
-            base64,
+            extension: extension.replace(/^\./, '') || 'jpg',
+            localFileName,
             uri: asset.uri,
             mimeType: blob.type || asset.mimeType,
         };
@@ -812,8 +1046,12 @@ export default function MantenimientoEquipoScreen() {
                 correctivo: armaCorrectivoChecks,
             },
             diagnostico: armaDiagnostico || null,
-            foto_antes_nombre: armaFotoAntesName || null,
-            foto_despues_nombre: armaFotoDespuesName || null,
+            foto_antes_nombre: armaFotoAntesLocal
+                ? armaFotoAntesName || null
+                : originalMantArmasFotoNamesRef.current?.antes ?? null,
+            foto_despues_nombre: armaFotoDespuesLocal
+                ? armaFotoDespuesName || null
+                : originalMantArmasFotoNamesRef.current?.despues ?? null,
             armero_nombre: armaArmeroNombre || null,
             firma: armaFirma || null,
         };
@@ -828,6 +1066,8 @@ export default function MantenimientoEquipoScreen() {
         armaFirma,
         armaFotoAntesName,
         armaFotoDespuesName,
+        armaFotoAntesLocal,
+        armaFotoDespuesLocal,
         armaMarca,
         armaMecanismo,
         armaModelo,
@@ -939,7 +1179,7 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const getConnectionStatus = useCallback(async (): Promise<boolean> => {
-       //return false;
+        //return false;
         const state = await Network.getNetworkStateAsync();
         // `isInternetReachable` puede venir null/undefined aunque haya internet.
         // Solo consideramos offline cuando explícitamente es false.
@@ -1015,6 +1255,7 @@ export default function MantenimientoEquipoScreen() {
             setMarcaDivisionId(null);
             setMarcaContratoId(null);
             setMarcaCorpoId(null);
+            setRoleName(null);
             return null;
         }
         const current = JSON.parse(currentMarcaStr);
@@ -1026,17 +1267,29 @@ export default function MantenimientoEquipoScreen() {
             setMarcaDivisionId(null);
             setMarcaContratoId(null);
             setMarcaCorpoId(null);
+            setRoleName(null);
             return null;
         }
         setHasCurrentMarca(true);
         setMarcaId(current.id);
+
+        const roleRaw =
+            current?.roleDivision?.role?.nombre ??
+            current?.role_division?.role?.nombre ??
+            null;
+        setRoleName(typeof roleRaw === 'string' ? (roleRaw as RoleName) : null);
 
         const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
         const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
         const divisionIdRaw = current?.roleDivision?.division?.id ?? current?.division?.id ?? current?.division_id;
         const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
         const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-        const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
+        const puestoIdRaw =
+            current?.puesto?.id ??
+            current?.puesto_id ??
+            current?.plaza?.puesto?.id ??
+            current?.roleDivision?.puesto_id ??
+            current?.role_division?.puesto_id;
 
         setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
         setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
@@ -1075,48 +1328,12 @@ export default function MantenimientoEquipoScreen() {
 
     const fetchMainStructure = useCallback(async () => {
         try {
-            const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-            if (cacheStr) {
-                const parsed = JSON.parse(cacheStr);
-                if (Array.isArray(parsed)) setStructure(parsed);
-                else setStructure([]);
-            }
-            else {
-                setStructure([]);
-            }
-
-            /*
-            const isConnected = await getConnectionStatus();
-            if (!isConnected) return;
-
-            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-            if (!apiUrl) return;
-
-            const response = await authedFetch({
-                url: `${apiUrl}/api/main-structure`,
-                init: {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                },
-                refreshAccessToken,
-                logout,
-            });
-            if (!response) return;
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.status && Array.isArray(data.structure)) {
-                    setStructure(data.structure);
-                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(data.structure));
-                }
-            }
-            */
+            const merged = await loadMainStructureTreeMerged();
+            setStructure(Array.isArray(merged) && merged.length > 0 ? merged : []);
         } catch (e) {
             console.error('Error fetching main structure:', e);
         }
-    }, [getConnectionStatus, refreshAccessToken, logout]);
+    }, []);
 
     const applyFiltersFromPuestoId = useCallback((puestoIdToApply: number | null) => {
         if (!puestoIdToApply) return;
@@ -1148,6 +1365,10 @@ export default function MantenimientoEquipoScreen() {
     }, [marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
+        if (roleName === 'OPERATIVO') {
+            void fetchReportes({ force: true });
+            return;
+        }
         // Reinicia el árbol al puesto de current_marca (si existe)
         setFilterEmpresaId(null);
         setFilterClienteId(null);
@@ -1159,7 +1380,7 @@ export default function MantenimientoEquipoScreen() {
             // Se aplica en el siguiente tick cuando los nodos estén listos
             setTimeout(() => applyFiltersFromPuestoId(marcaPuestoId), 0);
         }
-    }, [applyFiltersFromPuestoId, marcaPuestoId]);
+    }, [applyFiltersFromPuestoId, marcaPuestoId, roleName]);
 
     const didFetchMainStructureOnceRef = useRef(false);
 
@@ -1207,14 +1428,8 @@ export default function MantenimientoEquipoScreen() {
 
     const getMainStructureTree = useCallback(async (): Promise<any[] | null> => {
         if (Array.isArray(structure) && structure.length > 0) return structure;
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (!cacheStr) return null;
-        try {
-            const parsed = JSON.parse(cacheStr);
-            return Array.isArray(parsed) ? parsed : null;
-        } catch {
-            return null;
-        }
+        const merged = await loadMainStructureTreeMerged();
+        return Array.isArray(merged) && merged.length > 0 ? merged : null;
     }, [structure]);
 
     const findPuestoNodeInTree = useCallback((tree: any[], targetPuestoId: number) => {
@@ -1250,54 +1465,61 @@ export default function MantenimientoEquipoScreen() {
         }) ?? null;
     }, [findPuestoNodeInTree, getMainStructureTree, normalizeArticuloSource]);
 
-    const fetchReportes = async () => {
-        // Evitar llamadas múltiples simultáneas
+    const fetchReportes = async (opts?: { force?: boolean }): Promise<ArticuloPuestoMantenimientoItem[] | null> => {
         if (isFetchingReportesRef.current) {
-            return;
+            if (opts?.force) {
+                for (let i = 0; i < 400; i++) {
+                    if (!isFetchingReportesRef.current) break;
+                    await new Promise((r) => setTimeout(r, 25));
+                }
+            } else {
+                pendingReportesRefetchRef.current = true;
+                return null;
+            }
         }
 
-        try {
-            isFetchingReportesRef.current = true;
-            setIsLoading(true);
-            setError(null);
+        let returnList: ArticuloPuestoMantenimientoItem[] | null = null;
 
-            const current = await loadMarcaContext();
-            const currentMarcaId = current?.id ?? marcaId;
-            if (!currentMarcaId) {
-                setHasCurrentMarca(false);
-                console.log('Nos caímos 1');
-                setReportes([]);
-                setIsLoading(false);
-                isFetchingReportesRef.current = false;
-                return;
+        const normalizeMantenimiento = (m: any): ArticuloMantenimiento => ({
+            ...m,
+            id_local: m.id_local || '',
+            archivos: Array.isArray(m.c_archivos_adjuntos_articulo_mantenimiento)
+                ? m.c_archivos_adjuntos_articulo_mantenimiento.map(
+                      (a: any): ActivoFileRemote => ({
+                          id: Number(a.id) || 0,
+                          name: a.name,
+                          original_name: a.original_name,
+                          type: a.type,
+                          extension: a.extension,
+                          url: a.url != null && String(a.url) !== '' ? String(a.url) : '',
+                          base64: a.base64,
+                          id_local: a.id_local,
+                          mimeType: a.mimeType,
+                      })
+                  )
+                : Array.isArray(m.archivos)
+                  ? m.archivos
+                  : [],
+        });
+
+        const finishMantenimientoEquipoList = (raw: ArticuloPuestoMantenimientoItem[]) => {
+            const n = raw.map((x) => normalizeMantenimientoEquipoReporteItem(x));
+            setReportes(n);
+            return n;
+        };
+
+        const buildReportesListForSinglePuesto = async (
+            puestoIdForQuery: number
+        ): Promise<ArticuloPuestoMantenimientoItem[]> => {
+            if (!puestoIdForQuery) return [];
+
+            /** Sin red: `puesto_{id}_articulos` es la fuente (misma al guardar). */
+            if (!(await getConnectionStatus())) {
+                const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
+                if (fromPuesto && fromPuesto.length > 0) {
+                    return fromPuesto as ArticuloPuestoMantenimientoItem[];
+                }
             }
-
-            const puestoIdForQuery = activePuestoId ?? marcaPuestoId ?? null;
-            if (!puestoIdForQuery) {
-                setError('Puesto no especificado');
-                console.log('Nos caímos 2');
-                setReportes([]);
-                setIsLoading(false);
-                isFetchingReportesRef.current = false;
-                return;
-            }
-            const cacheKey = `mantenimiento_equipo_${String(puestoIdForQuery ?? 'current')}_cache`;
-
-            const normalizeMantenimiento = (m: any): ArticuloMantenimiento => ({
-                ...m,
-                id_local: m.id_local || '',
-                archivos: Array.isArray(m.c_archivos_adjuntos_articulo_mantenimiento)
-                    ? m.c_archivos_adjuntos_articulo_mantenimiento.map((a: any) => ({
-                        id: a.id,
-                        name: a.name,
-                        original_name: a.original_name,
-                        type: a.type,
-                        extension: a.extension,
-                    }))
-                    : Array.isArray(m.archivos)
-                        ? m.archivos
-                        : [],
-            });
 
             const isConnected = await getConnectionStatus();
             if (isConnected) {
@@ -1320,9 +1542,187 @@ export default function MantenimientoEquipoScreen() {
                     logout,
                 });
                 if (!response) {
-                    setIsLoading(false);
-                    isFetchingReportesRef.current = false;
-                    return;
+                    return [];
+                }
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                if (data.status && Array.isArray(data.data)) {
+                    const list: ArticuloPuestoMantenimientoItem[] = data.data.map((it: any) => ({
+                        ...it,
+                        tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
+                        mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos.map(normalizeMantenimiento) : [],
+                        movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
+                    }));
+                    await writePuestoArticulosList(puestoIdForQuery, list);
+                    void updateMainStructureCacheFromFetchedPuesto({
+                        puestoId: puestoIdForQuery,
+                        items: list,
+                    });
+                    return list;
+                }
+                const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
+                return fromPuesto?.length ? (fromPuesto as ArticuloPuestoMantenimientoItem[]) : [];
+            }
+
+            // Offline: mostrar artículos del puesto desde main_structure_cache
+            const tree = await getMainStructureTree();
+            if (tree && puestoIdForQuery) {
+                const puestoNode: any = findPuestoNodeInTree(tree, puestoIdForQuery);
+                const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
+                const listFromStructure: ArticuloPuestoMantenimientoItem[] = articulosRaw.map((a: any) => {
+                    const source = normalizeArticuloSource(a?.tipo);
+                    const estructuraId = Number(a.id);
+                    const ultimo = a.ultimo_mantenimiento ?? a.ultimo_registro_mantenimiento ?? null;
+                    const mantenimientosOffline = Array.isArray(a.mantenimientos)
+                        ? a.mantenimientos.map(normalizeMantenimiento)
+                        : ultimo
+                            ? [normalizeMantenimiento(ultimo)]
+                            : [];
+                    return {
+                        key: `${source}-${estructuraId}`,
+                        source,
+                        estructura_id: estructuraId,
+                        articulo_nomenclador_id: Number.isFinite(Number(a?.articulo_nomenclador_id))
+                            ? Number(a.articulo_nomenclador_id)
+                            : null,
+                        articulo_nombre: a.nombre ?? 'Desconocido',
+                        tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
+                        marca: a.marca ?? null,
+                        serie: a.serie ?? null,
+                        tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
+                        mantenimientos: mantenimientosOffline,
+                        movimientos: Array.isArray(a.movimientos) ? a.movimientos : [],
+                        ultimo_mantenimiento: ultimo,
+                    };
+                });
+
+                if (listFromStructure.length > 0) {
+                    await writePuestoArticulosList(puestoIdForQuery, listFromStructure);
+                    void syncPuestoArticulosFragmentFromReportesList(puestoIdForQuery, listFromStructure);
+                    return listFromStructure;
+                }
+                const puestoList = await readPuestoArticulosList(puestoIdForQuery);
+                return puestoList?.length ? (puestoList as ArticuloPuestoMantenimientoItem[]) : [];
+            }
+            const puestoList = await readPuestoArticulosList(puestoIdForQuery);
+            return puestoList?.length ? (puestoList as ArticuloPuestoMantenimientoItem[]) : [];
+        };
+
+        try {
+            isFetchingReportesRef.current = true;
+            setIsLoading(true);
+            setError(null);
+
+            const current = await loadMarcaContext();
+            const currentMarcaId = current?.id ?? marcaId;
+            if (!currentMarcaId) {
+                setHasCurrentMarca(false);
+                console.log('Nos caímos 1');
+                setReportes([]);
+                returnList = null;
+                return returnList;
+            }
+
+            const rn =
+                current?.roleDivision?.role?.nombre ??
+                current?.role_division?.role?.nombre ??
+                null;
+            const isOperativo = rn === 'OPERATIVO';
+            const marcaCorpoLive = numOrNull(current?.corpo?.id ?? current?.corpo_id);
+
+            if (isOperativo) {
+                if (!marcaCorpoLive) {
+                    setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
+                    setReportes([]);
+                    returnList = null;
+                    return returnList;
+                }
+                const treeMerged = (await getMainStructureTree()) || structure;
+                const puestoMetas = findPuestosInCorpo(Array.isArray(treeMerged) ? treeMerged : [], marcaCorpoLive);
+                if (!puestoMetas.length) {
+                    setError(
+                        'No se encontraron puestos para la sucursal en la estructura. Actualice la jerarquía o vuelva a intentar.'
+                    );
+                    setReportes([]);
+                    returnList = null;
+                    return returnList;
+                }
+                const merged: ArticuloPuestoMantenimientoItem[] = [];
+                let loadError: string | null = null;
+                for (const pm of puestoMetas) {
+                    try {
+                        const chunk = await buildReportesListForSinglePuesto(pm.id);
+                        for (const row of chunk) {
+                            merged.push({
+                                ...row,
+                                puesto_id_context: pm.id,
+                                puesto_nombre_context: pm.nombre,
+                            });
+                        }
+                    } catch (err: any) {
+                        loadError = err?.message || 'Error al cargar artículos de un puesto';
+                        console.error('MantenimientoEquipo fetch puesto', pm.id, err);
+                    }
+                }
+                if (merged.length > 0) {
+                    returnList = finishMantenimientoEquipoList(merged);
+                } else if (loadError) {
+                    setError(loadError);
+                    setReportes([]);
+                    returnList = null;
+                } else {
+                    setReportes([]);
+                    returnList = null;
+                }
+                return returnList;
+            }
+
+            const puestoIdForQuery = activePuestoId ?? marcaPuestoId ?? null;
+            if (!puestoIdForQuery) {
+                setError('Puesto no especificado');
+                console.log('Nos caímos 2');
+                setReportes([]);
+                returnList = null;
+                return returnList;
+            }
+
+            /** Sin red: `puesto_{id}_articulos` es la fuente (misma al guardar). */
+            if (!(await getConnectionStatus())) {
+                const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
+                if (fromPuesto && fromPuesto.length > 0) {
+                    console.log('Reportes offline desde puesto_*_articulos');
+                    returnList = finishMantenimientoEquipoList(fromPuesto as ArticuloPuestoMantenimientoItem[]);
+                    return returnList;
+                }
+            }
+
+            const isConnected = await getConnectionStatus();
+            if (isConnected) {
+                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                if (!apiUrl) {
+                    throw new Error('Server URL not configured');
+                }
+
+                const url = `${apiUrl}/api/articulo-mantenimiento/puesto/${puestoIdForQuery}`;
+
+                const response = await authedFetch({
+                    url,
+                    init: {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                    },
+                    refreshAccessToken,
+                    logout,
+                });
+                if (!response) {
+                    returnList = null;
+                    return returnList;
                 }
 
                 if (!response.ok) {
@@ -1338,21 +1738,21 @@ export default function MantenimientoEquipoScreen() {
                         movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
                     }));
                     console.log('Actualizamos reportes internet');
-                    setReportes(list);
-                    await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
-                    // Sincroniza también el árbol `main_structure_cache` para que offline use los datos más recientes.
+                    returnList = finishMantenimientoEquipoList(list);
+                    await writePuestoArticulosList(puestoIdForQuery, returnList);
                     void updateMainStructureCacheFromFetchedPuesto({
                         puestoId: puestoIdForQuery,
-                        items: list,
+                        items: returnList,
                     });
                 } else {
                     setError(data.message || 'Error al cargar artículos');
-                    const cacheStr = await AsyncStorage.getItem(cacheKey);
-                    if (cacheStr) {
-                        setReportes(JSON.parse(cacheStr));
+                    const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
+                    if (fromPuesto && fromPuesto.length > 0) {
+                        returnList = finishMantenimientoEquipoList(fromPuesto as ArticuloPuestoMantenimientoItem[]);
                     } else {
                         console.log('Nos caímos 3');
                         setReportes([]);
+                        returnList = null;
                     }
                 }
             } else {
@@ -1390,45 +1790,89 @@ export default function MantenimientoEquipoScreen() {
 
                     if (listFromStructure.length > 0) {
                         console.log('Actualizamos reportes offline');
-                        setReportes(listFromStructure);
-                        await AsyncStorage.setItem(cacheKey, JSON.stringify(listFromStructure));
+                        returnList = finishMantenimientoEquipoList(listFromStructure);
+                        await writePuestoArticulosList(puestoIdForQuery, returnList);
+                        void syncPuestoArticulosFragmentFromReportesList(puestoIdForQuery, returnList);
                     } else {
-                        // Fallback: cache propio del módulo si no hay estructura disponible
-                        const cacheStr = await AsyncStorage.getItem(cacheKey);
-                        if (cacheStr) {
-                            console.log('Actualizamos reportes offline desde cache');
-                            setReportes(JSON.parse(cacheStr));
+                        const puestoList = await readPuestoArticulosList(puestoIdForQuery);
+                        if (puestoList && puestoList.length > 0) {
+                            console.log('Actualizamos reportes offline desde puesto_*_articulos (fallback)');
+                            returnList = finishMantenimientoEquipoList(puestoList as ArticuloPuestoMantenimientoItem[]);
                         } else {
                             console.log('Nos caímos 4');
                             setReportes([]);
+                            returnList = null;
                         }
                     }
                 } else {
-                    // Fallback: cache propio del módulo si no hay estructura disponible
-                    const cacheStr = await AsyncStorage.getItem(cacheKey);
-                    if (cacheStr) {
-                        setReportes(JSON.parse(cacheStr));
+                    const puestoList = await readPuestoArticulosList(puestoIdForQuery);
+                    if (puestoList && puestoList.length > 0) {
+                        returnList = finishMantenimientoEquipoList(puestoList as ArticuloPuestoMantenimientoItem[]);
                     } else {
                         console.log('Nos caímos 5');
                         setReportes([]);
+                        returnList = null;
                     }
                 }
             }
+            return returnList;
         } catch (e: any) {
             setError(e.message || 'Error al cargar artículos');
             console.log(e.message);
-            const puestoIdForQuery = activePuestoId ?? null;
-            const cacheKey = `mantenimiento_equipo_${String(puestoIdForQuery ?? 'current')}_cache`;
-            const cacheStr = await AsyncStorage.getItem(cacheKey);
-            if (cacheStr) {
-                setReportes(JSON.parse(cacheStr));
-            } else {
-                console.log('Nos caímos 6');
-                setReportes([]);
+            const rn =
+                (await AsyncStorage.getItem('current_marca').then((s) => {
+                    try {
+                        return s ? JSON.parse(s) : null;
+                    } catch {
+                        return null;
+                    }
+                })) ?? null;
+            const isOperativoCatch =
+                rn?.roleDivision?.role?.nombre === 'OPERATIVO' || rn?.role_division?.role?.nombre === 'OPERATIVO';
+            if (isOperativoCatch && numOrNull(rn?.corpo?.id ?? rn?.corpo_id)) {
+                const corpoE = numOrNull(rn?.corpo?.id ?? rn?.corpo_id)!;
+                const treeE = await loadMainStructureTreeMerged().catch(() => []);
+                const metas = findPuestosInCorpo(Array.isArray(treeE) ? treeE : [], corpoE);
+                const fallbackMerged: ArticuloPuestoMantenimientoItem[] = [];
+                for (const pm of metas) {
+                    const fromPuesto = await readPuestoArticulosList(pm.id);
+                    if (fromPuesto?.length) {
+                        for (const row of fromPuesto as ArticuloPuestoMantenimientoItem[]) {
+                            fallbackMerged.push({
+                                ...row,
+                                puesto_id_context: pm.id,
+                                puesto_nombre_context: pm.nombre,
+                            });
+                        }
+                    }
+                }
+                if (fallbackMerged.length > 0) {
+                    returnList = finishMantenimientoEquipoList(fallbackMerged);
+                    return returnList;
+                }
             }
+            const puestoIdErr = activePuestoId ?? marcaPuestoId ?? null;
+            if (puestoIdErr != null && Number.isFinite(Number(puestoIdErr)) && Number(puestoIdErr) > 0) {
+                const fromPuesto = await readPuestoArticulosList(Number(puestoIdErr));
+                if (fromPuesto && fromPuesto.length > 0) {
+                    returnList = finishMantenimientoEquipoList(fromPuesto as ArticuloPuestoMantenimientoItem[]);
+                } else {
+                    console.log('Nos caímos 6');
+                    setReportes([]);
+                    returnList = null;
+                }
+            } else {
+                setReportes([]);
+                returnList = null;
+            }
+            return returnList;
         } finally {
             setIsLoading(false);
             isFetchingReportesRef.current = false;
+            if (pendingReportesRefetchRef.current) {
+                pendingReportesRefetchRef.current = false;
+                void fetchReportes();
+            }
         }
     };
 
@@ -1444,10 +1888,22 @@ export default function MantenimientoEquipoScreen() {
                 return;
             }
 
-            // Offline: preferir main_structure_cache
-            if (activePuestoId && item?.estructura_id) {
+            /** Sin red: la fuente correcta es `puesto_{id}_articulos` (no el árbol mergeado, suele ir atrasado). */
+            const pidOff = resolvePuestoIdForReporte(item);
+            if (pidOff != null && Number.isFinite(Number(pidOff)) && Number(pidOff) > 0 && item?.key) {
+                const fromPuesto = await readPuestoArticulosList(Number(pidOff));
+                const row = fromPuesto?.find((r) => r.key === item.key);
+                if (row && Array.isArray(row.mantenimientos) && row.mantenimientos.length > 0) {
+                    setActivos(row.mantenimientos);
+                    return;
+                }
+            }
+
+            // Offline: fallback main_structure_cache
+            const pidStruct = resolvePuestoIdForReporte(item);
+            if (pidStruct && item?.estructura_id) {
                 const artNode = await getArticuloFromMainStructure({
-                    puestoId: activePuestoId,
+                    puestoId: pidStruct,
                     source: item.source,
                     estructuraId: item.estructura_id,
                 });
@@ -1477,6 +1933,40 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
+    /**
+     * Tras actualizar el mantenimiento, `puesto_{id}_articulos` ya refleja los cambios pero React
+     * aún puede mostrar `reportes`/`activos` viejos. Sincroniza listado, artículo seleccionado
+     * y listado de movimientos del artículo sin salir de la pantalla.
+     */
+    const applyPuestoStorageToMantenimientosUI = async (
+        reporteKey: string | undefined,
+        listOrNull?: ArticuloPuestoMantenimientoItem[] | null
+    ) => {
+        if (!reporteKey) return;
+        const rowHint =
+            listOrNull?.find((r) => r.key === reporteKey) ??
+            reportes.find((r) => r.key === reporteKey) ??
+            null;
+        const pid = resolvePuestoIdForReporte(rowHint);
+        if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return;
+        const raw =
+            listOrNull && listOrNull.length > 0
+                ? listOrNull
+                : (await readPuestoArticulosList(Number(pid)));
+        if (!raw?.length) return;
+        const pl = raw.map((x) => normalizeMantenimientoEquipoReporteItem(x as ArticuloPuestoMantenimientoItem));
+        setReportes(pl);
+        const row = pl.find((r) => r.key === reporteKey);
+        if (!row) return;
+        setSelectedReporte(row);
+        const isConnected = await getConnectionStatus();
+        if (isConnected) {
+            setActivos(Array.isArray(row.mantenimientos) ? row.mantenimientos : []);
+        } else {
+            await fetchActivos(row);
+        }
+    };
+
     // Cargar contexto de marca al entrar (solo contexto). No debe disparar /api/main-structure en loop.
     useFocusEffect(
         useCallback(() => {
@@ -1495,6 +1985,7 @@ export default function MantenimientoEquipoScreen() {
 
     // Inicializar filtros (Empresa → ... → Puesto) a partir del puesto de `current_marca`
     useEffect(() => {
+        if (roleName === 'OPERATIVO') return;
         if (!marcaPuestoId) return;
         if (!filterEmpresas.length) return;
 
@@ -1521,14 +2012,14 @@ export default function MantenimientoEquipoScreen() {
 
         lastMarcaPuestoIdRef.current = marcaPuestoId;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [marcaPuestoId, filterEmpresas, applyFiltersFromPuestoId, applyFiltersFromMarcaHierarchy, findPathByPuestoId]);
+    }, [roleName, marcaPuestoId, filterEmpresas, applyFiltersFromPuestoId, applyFiltersFromMarcaHierarchy, findPathByPuestoId]);
 
     // Cargar artículos del puesto (plan + asignados) al entrar / cuando cambia la marca actual
     useEffect(() => {
         if (!hasCurrentMarca) return;
         fetchReportes();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [marcaId, activePuestoId, hasCurrentMarca]);
+    }, [marcaId, activePuestoId, hasCurrentMarca, roleName, marcaCorpoId]);
 
     useFocusEffect(
         useCallback(() => {
@@ -1546,14 +2037,15 @@ export default function MantenimientoEquipoScreen() {
             eventBus.off('connectionRestored', handler);
         };
         // Re-registrar para que use el puesto activo actual
-    }, [activePuestoId, marcaId, hasCurrentMarca]);
+    }, [activePuestoId, marcaId, hasCurrentMarca, roleName, marcaCorpoId]);
 
     const handleVerActivos = async (reporte: ArticuloPuestoMantenimientoItem) => {
         let reporteToUse = reporte;
         const isConnected = await getConnectionStatus();
-        if (!isConnected && activePuestoId && reporte?.estructura_id) {
+        const pidVer = resolvePuestoIdForReporte(reporte);
+        if (!isConnected && pidVer && reporte?.estructura_id) {
             const artNode = await getArticuloFromMainStructure({
-                puestoId: activePuestoId,
+                puestoId: pidVer,
                 source: reporte.source,
                 estructuraId: reporte.estructura_id,
             });
@@ -1649,8 +2141,12 @@ export default function MantenimientoEquipoScreen() {
                 setArmaPreventivoChecks(mantenimiento?.preventivo && typeof mantenimiento.preventivo === 'object' ? mantenimiento.preventivo : {});
                 setArmaCorrectivoChecks(mantenimiento?.correctivo && typeof mantenimiento.correctivo === 'object' ? mantenimiento.correctivo : {});
                 setArmaDiagnostico(typeof parsed?.diagnostico === 'string' ? parsed.diagnostico : '');
-                setArmaFotoAntesName(typeof parsed?.foto_antes_nombre === 'string' ? parsed.foto_antes_nombre : '');
-                setArmaFotoDespuesName(typeof parsed?.foto_despues_nombre === 'string' ? parsed.foto_despues_nombre : '');
+                originalMantArmasFotoNamesRef.current = {
+                    antes: typeof parsed?.foto_antes_nombre === 'string' && parsed.foto_antes_nombre ? parsed.foto_antes_nombre : null,
+                    despues: typeof parsed?.foto_despues_nombre === 'string' && parsed.foto_despues_nombre ? parsed.foto_despues_nombre : null,
+                };
+                setArmaFotoAntesName('');
+                setArmaFotoDespuesName('');
                 setArmaFotoAntesLocal(null);
                 setArmaFotoDespuesLocal(null);
                 setArmaArmeroNombre(typeof parsed?.armero_nombre === 'string' ? parsed.armero_nombre : '');
@@ -1658,6 +2154,7 @@ export default function MantenimientoEquipoScreen() {
                 setMantArmasForm(String(raw));
             } else {
                 setEsArma(false);
+                originalMantArmasFotoNamesRef.current = null;
                 setArmaTipoArma('');
                 setArmaMecanismo('');
                 setArmaMarca('');
@@ -1680,6 +2177,7 @@ export default function MantenimientoEquipoScreen() {
             }
         } catch {
             setEsArma(false);
+            originalMantArmasFotoNamesRef.current = null;
             setArmaTipoArma('');
             setArmaMecanismo('');
             setArmaMarca('');
@@ -1701,15 +2199,31 @@ export default function MantenimientoEquipoScreen() {
             setMantArmasForm('');
         }
 
-        // Cargar archivos existentes del activo
-        if (activo.archivos && activo.archivos.length > 0) {
-            setActivoFiles(activo.archivos);
-        } else {
-            setActivoFiles([]);
-        }
+        // Editar: no listar adjuntos ya subidos (solo los que el usuario añada ahora; borrar se hace en la lista de registros).
+        setActivoFiles([]);
     };
 
     const resetForm = () => {
+        void (async () => {
+            for (const f of [...textFiles, ...imageFiles, ...audioFiles, ...videoFiles]) {
+                if (f.localFileName) {
+                    try {
+                        await deleteFile(f.localFileName);
+                    } catch {
+                        /* idempotente */
+                    }
+                }
+            }
+            for (const f of [armaFotoAntesLocal, armaFotoDespuesLocal]) {
+                if (f?.localFileName) {
+                    try {
+                        await deleteFile(f.localFileName);
+                    } catch {
+                        /* idempotente */
+                    }
+                }
+            }
+        })();
         setFechaSolucion(null);
         setAccion('');
         setFechaInicio(null);
@@ -1759,6 +2273,8 @@ export default function MantenimientoEquipoScreen() {
         setArmaArmeroNombre('');
         setArmaFirma('');
         setMantArmasForm('');
+        setActivoFiles([]);
+        originalMantArmasFotoNamesRef.current = null;
         setTextFiles([]);
         setImageFiles([]);
         setAudioFiles([]);
@@ -1825,39 +2341,30 @@ export default function MantenimientoEquipoScreen() {
             const response = await fetch(asset.uri);
             const blob = await response.blob();
 
-            // Convertir blob a base64
-            const base64 = await new Promise<string>((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = () => {
-                    const result = reader.result;
-                    if (typeof result === 'string') {
-                        const parts = result.split(',');
-                        resolve(parts.length > 1 ? parts[1] : parts[0]);
-                    } else {
-                        reject(new Error('No se pudo leer el archivo seleccionado'));
-                    }
-                };
-                reader.onerror = () => {
-                    reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-                };
-                reader.readAsDataURL(blob);
-            });
-
             let extension = '';
             if (asset.name && asset.name.includes('.')) {
                 extension = asset.name.split('.').pop() || '';
             } else if (asset.mimeType && asset.mimeType.includes('/')) {
                 extension = asset.mimeType.split('/').pop() || '';
             }
+            const extNorm = (extension || 'dat').replace(/^\./, '');
 
             const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+            const localFileName = await saveFile({
+                uri: asset.uri,
+                originalName: asset.name || 'file',
+                extension: extNorm,
+                type: activoFileLocalToStorageType(type),
+                prefix: 'mantenimiento_equipo',
+            });
 
             const newFile: ActivoFileLocal = {
                 id: localId,
                 type,
-                name: asset.name || `archivo.${extension || 'dat'}`,
-                extension: extension || 'dat',
-                base64,
+                name: asset.name || `archivo.${extNorm}`,
+                extension: extNorm,
+                localFileName,
                 uri: asset.uri,
                 mimeType: asset.mimeType,
             };
@@ -1877,15 +2384,23 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
-    const removeLocalFile = (type: ActivoFileLocal['type'], id: string) => {
+    const removeLocalFile = async (file: ActivoFileLocal) => {
+        if (file.localFileName) {
+            try {
+                await deleteFile(file.localFileName);
+            } catch {
+                /* idempotente */
+            }
+        }
+        const type = file.type;
         if (type === 'image') {
-            setImageFiles(prev => prev.filter(f => f.id !== id));
+            setImageFiles((prev) => prev.filter((f) => f.id !== file.id));
         } else if (type === 'audio') {
-            setAudioFiles(prev => prev.filter(f => f.id !== id));
+            setAudioFiles((prev) => prev.filter((f) => f.id !== file.id));
         } else if (type === 'video') {
-            setVideoFiles(prev => prev.filter(f => f.id !== id));
+            setVideoFiles((prev) => prev.filter((f) => f.id !== file.id));
         } else {
-            setTextFiles(prev => prev.filter(f => f.id !== id));
+            setTextFiles((prev) => prev.filter((f) => f.id !== file.id));
         }
     };
 
@@ -1911,7 +2426,7 @@ export default function MantenimientoEquipoScreen() {
         const hasLocalId = file.id_local !== undefined && file.id_local !== null && file.id_local !== '';
         if (hasLocalId && file.base64) {
             const mime = file.mimeType || (file.type ? `${file.type}/${file.extension || 'octet-stream'}` : `application/${file.extension || 'octet-stream'}`);
-            return `data:${mime};base64,${file.base64}`;
+            return `data:${mime};base64,${String(file.base64).replace(/^data:[^;]+;base64,/, '')}`;
         }
 
         if (activoId) {
@@ -1926,6 +2441,7 @@ export default function MantenimientoEquipoScreen() {
         return '';
     };
 
+    /** Monolito `main_structure_cache`: mismo criterio que el API — parche en `mantenimientos` por id y `ultimo_*` = primer id desc. */
     const updateMainStructureCacheIfSameUltimoMantenimiento = useCallback(
         async (params: {
             puestoId: number | null;
@@ -1938,11 +2454,8 @@ export default function MantenimientoEquipoScreen() {
                 const { puestoId, source, estructuraId, mantenimientoId, patch } = params;
                 if (!puestoId || !source || !estructuraId || !mantenimientoId) return;
 
-                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-                if (!cacheStr) return;
-
-                const tree = JSON.parse(cacheStr);
-                if (!Array.isArray(tree)) return;
+                const tree = await loadMainStructureTreeMerged();
+                if (!Array.isArray(tree) || tree.length === 0) return;
 
                 const expectedTipo = source === 'plan' ? 'Plan' : 'Asignado';
                 let updated = false;
@@ -1964,10 +2477,15 @@ export default function MantenimientoEquipoScreen() {
                                             if (Number(art?.id) !== Number(estructuraId)) continue;
                                             if (String(art?.tipo) !== expectedTipo) continue;
 
-                                            const ultimo = art?.ultimo_mantenimiento;
-                                            if (!ultimo || Number(ultimo?.id) !== Number(mantenimientoId)) continue;
-
-                                            art.ultimo_mantenimiento = { ...ultimo, ...patch, id: mantenimientoId };
+                                            const { mants, first, changed } = applyPatchToMantenimientosArray(
+                                                art.mantenimientos,
+                                                mantenimientoId,
+                                                patch
+                                            );
+                                            if (!changed) continue;
+                                            art.mantenimientos = mants;
+                                            art.ultimo_mantenimiento = first;
+                                            art.ultimo_registro_mantenimiento = first;
                                             updated = true;
                                         }
                                     }
@@ -1978,7 +2496,7 @@ export default function MantenimientoEquipoScreen() {
                 }
 
                 if (updated) {
-                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+                    await writeMainStructureCacheString(JSON.stringify(tree));
                 }
             } catch (e) {
                 console.error('Error updating main_structure_cache (ultimo_mantenimiento):', e);
@@ -1995,11 +2513,11 @@ export default function MantenimientoEquipoScreen() {
             try {
                 if (!puestoId || !Array.isArray(items) || items.length === 0) return;
 
-                const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-                if (!cacheStr) return;
-
-                const tree = JSON.parse(cacheStr);
-                if (!Array.isArray(tree)) return;
+                const tree = await loadMainStructureTreeMerged();
+                if (!Array.isArray(tree) || tree.length === 0) {
+                    await syncPuestoArticulosFragmentFromReportesList(puestoId, items);
+                    return;
+                }
 
                 let updated = false;
 
@@ -2062,8 +2580,9 @@ export default function MantenimientoEquipoScreen() {
 
                 if (updated) {
                     console.log('Actualizamos main_structure_cache');
-                    await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
+                    await writeMainStructureCacheString(JSON.stringify(tree));
                 }
+                await syncPuestoArticulosFragmentFromReportesList(puestoId, items);
             } catch (e) {
                 console.error('Error updating main_structure_cache (fetched puesto):', e);
             }
@@ -2098,6 +2617,9 @@ export default function MantenimientoEquipoScreen() {
             filesPayload.push(armaFotoDespuesLocal);
         }
 
+        // Solo se envían adjuntos nuevos (locales en esta sesión). No se reenvían los ya en servidor; tampoco se eliminan al guardar el formulario.
+        const filesJson = await buildMantenimientoFilesJsonForApi(filesPayload);
+
         const requestData: any = {
             estado: selectedActivo.estado ?? 'Bueno',
             cantidad_necesaria: selectedActivo.cantidad_necesaria ?? 0,
@@ -2130,14 +2652,7 @@ export default function MantenimientoEquipoScreen() {
             reincidencia_treinta_dias: reincidenciaTreintaDias,
             tipo_mant_art_reincid: reincidenciaTreintaDias ? (tipoMantenimientoReincidencia || null) : null,
             mant_armas_form: esArma ? (mantArmasForm || null) : null,
-            files: filesPayload.length > 0 ? JSON.stringify(
-                filesPayload.map(f => ({
-                    type: f.type,
-                    original_name: f.name,
-                    extension: f.extension,
-                    file_base64: f.base64,
-                }))
-            ) : null,
+            files: filesJson,
         };
 
         // Regla "Marcar como resuelto":
@@ -2229,24 +2744,57 @@ export default function MantenimientoEquipoScreen() {
                 if (response.ok) {
                     const data = await response.json();
                     if (data.status) {
+                        const reporteKeyForRefresh = selectedReporte?.key;
+                        const listPuestoId = resolvePuestoIdForReporte(selectedReporte);
+                        if (
+                            listPuestoId != null &&
+                            Number.isFinite(Number(listPuestoId)) &&
+                            Number(listPuestoId) > 0 &&
+                            selectedReporte?.source
+                        ) {
+                            const nextList = await applyMantenimientoPatchToPuestoReporteStores({
+                                puestoId: Number(listPuestoId),
+                                source: selectedReporte.source,
+                                estructuraId: selectedReporte.estructura_id,
+                                mantenimientoId: selectedActivo.id,
+                                patch: mainStructurePatch,
+                            });
+                            if (nextList && selectedReporte) {
+                                const mergedRowMode = selectedReporte.puesto_id_context != null;
+                                if (!mergedRowMode) {
+                                    setReportes(nextList as ArticuloPuestoMantenimientoItem[]);
+                                    const nr = nextList.find((r) => r.key === selectedReporte.key);
+                                    if (nr) setSelectedReporte(nr as ArticuloPuestoMantenimientoItem);
+                                } else {
+                                    const updatedRow = nextList.find((x) => x.key === selectedReporte.key);
+                                    if (updatedRow) {
+                                        const normalized = normalizeMantenimientoEquipoReporteItem({
+                                            ...updatedRow,
+                                            puesto_id_context: selectedReporte.puesto_id_context,
+                                            puesto_nombre_context: selectedReporte.puesto_nombre_context,
+                                        } as ArticuloPuestoMantenimientoItem);
+                                        setReportes((prev) =>
+                                            prev.map((r) => (r.key === selectedReporte.key ? normalized : r))
+                                        );
+                                        setSelectedReporte(normalized);
+                                    }
+                                }
+                            }
+                        }
                         await updateMainStructureCacheIfSameUltimoMantenimiento({
-                            puestoId: activePuestoId,
+                            puestoId: resolvePuestoIdForReporte(selectedReporte),
                             source: selectedReporte?.source ?? null,
                             estructuraId: selectedReporte?.estructura_id ?? null,
                             mantenimientoId: selectedActivo.id,
                             patch: mainStructurePatch,
                         });
+                        const refreshedList = await fetchReportes({ force: true });
+                        await applyPuestoStorageToMantenimientosUI(reporteKeyForRefresh, refreshedList);
+                        setIsUpdating(false);
+                        setSelectedActivo(null);
+                        setShowActivos(true);
+                        resetForm();
                         Alert.alert('Éxito', data.message || 'Mantenimiento actualizado correctamente');
-                        setTimeout(async () => {
-                            setIsUpdating(false);
-                            setSelectedActivo(null);
-                            setShowActivos(true);
-                            resetForm();
-                            if (selectedReporte) {
-                                await fetchActivos(selectedReporte);
-                            }
-                            await fetchReportes();
-                        }, 2000);
                     } else {
                         Alert.alert('Error', data.message || 'No se pudo actualizar el mantenimiento');
                     }
@@ -2276,7 +2824,7 @@ export default function MantenimientoEquipoScreen() {
                     id_local: localId,
                     parentKey: selectedReporte?.key,
                     meta: {
-                        puestoId: activePuestoId,
+                        puestoId: resolvePuestoIdForReporte(selectedReporte),
                         source: selectedReporte?.source ?? null,
                         estructuraId: selectedReporte?.estructura_id ?? null,
                     },
@@ -2291,64 +2839,75 @@ export default function MantenimientoEquipoScreen() {
             }
 
             // Actualizar cache (siempre, para reflejar el formulario)
-            const updatedActivos = activos.map((a) =>
+            let updatedActivos = activos.map((a) =>
                 a.id === selectedActivo.id ? { ...a, ...requestData, id_local: localId } : a
             );
+            if (filesPayload.length > 0) {
+                const pendArch = await buildPendingRemotoArchivosForMantenimientoList(filesPayload);
+                updatedActivos = updatedActivos.map((a) => {
+                    if (a.id !== selectedActivo.id) return a;
+                    const prev = Array.isArray(a.archivos) ? a.archivos : [];
+                    return { ...a, archivos: [...prev, ...pendArch] };
+                });
+            }
             setActivos(updatedActivos);
             // Actualizar el listado/caché para que el cambio sea visible sin conexión
             if (selectedReporte) {
-                const nextMantenimientos = updatedActivos;
-                const first = nextMantenimientos[0] ?? null;
-
-                const nextReporte: ArticuloPuestoMantenimientoItem = {
+                const nextReporte: ArticuloPuestoMantenimientoItem = normalizeMantenimientoEquipoReporteItem({
                     ...selectedReporte,
-                    mantenimientos: nextMantenimientos,
-                    ultimo_mantenimiento: first
-                        ? {
-                            id: first.id,
-                            estado: first.estado,
-                            cantidad_necesaria: first.cantidad_necesaria,
-                            cantidad_real: first.cantidad_real,
-                            observaciones: first.observaciones,
-                        }
-                        : null,
-                };
+                    mantenimientos: updatedActivos,
+                } as ArticuloPuestoMantenimientoItem);
 
                 setSelectedReporte(nextReporte);
                 setReportes((prev) => prev.map((r) => (r.key === nextReporte.key ? nextReporte : r)));
 
-                const cacheKey = `mantenimiento_equipo_${String(activePuestoId ?? 'current')}_cache`;
-                const cacheStr = await AsyncStorage.getItem(cacheKey);
-                const base = cacheStr ? JSON.parse(cacheStr) : reportes;
-                const baseArr: any[] = Array.isArray(base) ? base : [];
-                const nextCache = baseArr.map((r) => (r.key === nextReporte.key ? nextReporte : r));
-                await AsyncStorage.setItem(cacheKey, JSON.stringify(nextCache));
+                const listPuestoId = resolvePuestoIdForReporte(selectedReporte);
+                if (listPuestoId != null && Number.isFinite(Number(listPuestoId)) && Number(listPuestoId) > 0) {
+                    const pidN = Number(listPuestoId);
+                    const fromPuesto = await readPuestoArticulosList(pidN);
+                    const baseArr: any[] =
+                        Array.isArray(fromPuesto) && fromPuesto.length > 0
+                            ? fromPuesto
+                            : Array.isArray(reportes)
+                              ? reportes
+                                    .filter((r) =>
+                                        r.puesto_id_context != null
+                                            ? Number(r.puesto_id_context) === pidN
+                                            : Number(pidN) === Number(activePuestoId ?? marcaPuestoId)
+                                    )
+                                    .map(stripPuestoContextForStorage)
+                              : [];
+                    const hasKey = baseArr.some((r) => r.key === nextReporte.key);
+                    const nextCacheRaw = hasKey
+                        ? baseArr.map((r) => (r.key === nextReporte.key ? nextReporte : r))
+                        : [...baseArr, nextReporte];
+                    const nextCache = nextCacheRaw.map(stripPuestoContextForStorage);
+                    await writePuestoArticulosList(pidN, nextCache);
+                    void syncPuestoArticulosFragmentFromReportesList(pidN, nextCache);
+                }
             }
 
             await updateMainStructureCacheIfSameUltimoMantenimiento({
-                puestoId: activePuestoId,
+                puestoId: resolvePuestoIdForReporte(selectedReporte),
                 source: selectedReporte?.source ?? null,
                 estructuraId: selectedReporte?.estructura_id ?? null,
                 mantenimientoId: selectedActivo.id,
                 patch: mainStructurePatch,
             });
 
+            const refreshedOffline = await fetchReportes({ force: true });
+            const reporteKeyOffline = selectedReporte?.key;
+            await applyPuestoStorageToMantenimientosUI(reporteKeyOffline, refreshedOffline);
+            setIsUpdating(false);
+            setSelectedActivo(null);
+            setShowActivos(true);
+            resetForm();
             Alert.alert(
                 'Éxito',
                 esSoloEvaluacionLocal
                     ? 'Cambios guardados solo en caché (registro local / esperando jerarquía).'
                     : 'Los cambios se sincronizarán cuando vuelva la conexión.'
             );
-            setTimeout(async () => {
-                setIsUpdating(false);
-                setSelectedActivo(null);
-                setShowActivos(true);
-                resetForm();
-                if (selectedReporte) {
-                    await fetchActivos(selectedReporte);
-                }
-                await fetchReportes();
-            }, 2000);
         }
     };
 
@@ -2373,11 +2932,21 @@ export default function MantenimientoEquipoScreen() {
     const renderReporte = (reporte: ArticuloPuestoMantenimientoItem) => {
         const ultimo = reporte.ultimo_mantenimiento;
         const esperandoJerarquia = isMantenimientoSoloEvaluacionCache(ultimo as any);
+        const cardKey = `rep-${reporte.puesto_id_context ?? 'x'}-${reporte.key}-${(ultimo as any)?.id ?? 'x'}-${
+            (ultimo as any)?.estado ?? ''
+        }-${String((ultimo as any)?.observaciones ?? '').length}-m${(reporte.mantenimientos || []).length}`;
         return (
-            <ThemedView key={reporte.key} style={styles.bitacoraCard}>
+            <ThemedView key={cardKey} style={styles.bitacoraCard}>
                 <ThemedText style={styles.bitTitle}>
                     {reporte.articulo_nombre} ({reporte.tipo})
                 </ThemedText>
+
+                {reporte.puesto_nombre_context ? (
+                    <ThemedText style={styles.bitLine}>
+                        <ThemedText style={styles.bitLabel}>Puesto: </ThemedText>
+                        <ThemedText style={styles.bitValue}>{reporte.puesto_nombre_context}</ThemedText>
+                    </ThemedText>
+                ) : null}
 
                 {esperandoJerarquia ? (
                     <ThemedView style={styles.evaluacionJerarquiaBanner}>
@@ -2447,14 +3016,166 @@ export default function MantenimientoEquipoScreen() {
         }
     };
 
+    const applyArchivoDeletedLocally = useCallback(
+        async (params: {
+            reporteKey: string;
+            mantenimientoId: number;
+            archivoId: number;
+            file: ActivoFileRemote;
+        }) => {
+            const { reporteKey, mantenimientoId, archivoId, file } = params;
+            const pid = activePuestoId;
+            if ((file.original_name && file.original_name === armaFotoAntesName) || file.name === armaFotoAntesName) {
+                setArmaFotoAntesName('');
+            }
+            if ((file.original_name && file.original_name === armaFotoDespuesName) || file.name === armaFotoDespuesName) {
+                setArmaFotoDespuesName('');
+            }
+            setReportes((prev) => {
+                const rowMatch = prev.find((r) => r.key === reporteKey);
+                const pidResolved = rowMatch ? resolvePuestoIdForReporte(rowMatch) : pid;
+                const next = prev.map((r) => {
+                    if (r.key !== reporteKey) return r;
+                    return {
+                        ...r,
+                        mantenimientos: (r.mantenimientos || []).map((m) => {
+                            if (Number(m.id) !== Number(mantenimientoId)) return m;
+                            const arch = (m.archivos || []).filter((a) => Number(a.id) !== Number(archivoId));
+                            return { ...m, archivos: arch };
+                        }),
+                    };
+                });
+                if (pidResolved != null && Number.isFinite(pidResolved) && Number(pidResolved) > 0) {
+                    const toStore = next
+                        .filter((r) =>
+                            r.puesto_id_context != null
+                                ? Number(r.puesto_id_context) === Number(pidResolved)
+                                : Number(pidResolved) === Number(activePuestoId ?? marcaPuestoId)
+                        )
+                        .map(stripPuestoContextForStorage);
+                    queueMicrotask(() => {
+                        void writePuestoArticulosList(pidResolved, toStore);
+                        void syncPuestoArticulosFragmentFromReportesList(pidResolved, toStore);
+                    });
+                }
+                return next;
+            });
+            setSelectedReporte((prev) => {
+                if (!prev || prev.key !== reporteKey) return prev;
+                return {
+                    ...prev,
+                    mantenimientos: (prev.mantenimientos || []).map((m) => {
+                        if (Number(m.id) !== Number(mantenimientoId)) return m;
+                        const arch = (m.archivos || []).filter((a) => Number(a.id) !== Number(archivoId));
+                        return { ...m, archivos: arch };
+                    }),
+                };
+            });
+            setActivos((prev) =>
+                prev.map((m) => {
+                    if (Number(m.id) !== Number(mantenimientoId)) return m;
+                    const arch = (m.archivos || []).filter((a) => Number(a.id) !== Number(archivoId));
+                    return { ...m, archivos: arch };
+                })
+            );
+            setSelectedActivo((prev) => {
+                if (!prev || Number(prev.id) !== Number(mantenimientoId)) return prev;
+                const arch = (prev.archivos || []).filter((a) => Number(a.id) !== Number(archivoId));
+                return { ...prev, archivos: arch };
+            });
+            setActivoFiles((prev) => prev.filter((a) => Number(a.id) !== Number(archivoId)));
+        },
+        [activePuestoId, armaFotoAntesName, armaFotoDespuesName, marcaPuestoId, resolvePuestoIdForReporte]
+    );
+
+    const performDeleteArchivoAdjunto = useCallback(
+        async (activo: ArticuloMantenimiento, file: ActivoFileRemote, reporte: ArticuloPuestoMantenimientoItem | null) => {
+            if (!reporte?.key) {
+                Alert.alert('Error', 'No se pudo identificar el artículo (reporte).');
+                return;
+            }
+            if (!Number.isFinite(Number(file.id)) || Number(file.id) <= 0) {
+                return;
+            }
+            if (!Number.isFinite(Number(activo.id)) || Number(activo.id) <= 0) {
+                Alert.alert('Mantenimiento', 'Este registro aún no está en el servidor; no se pueden eliminar adjuntos remotos.');
+                return;
+            }
+            const online = await getConnectionStatus();
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (online && apiUrl) {
+                const res = await authedFetch({
+                    url: `${apiUrl}/api/articulo-mantenimiento/${activo.id}/archivos/${file.id}`,
+                    init: { method: 'DELETE', headers: { 'Content-Type': 'application/json' } },
+                    refreshAccessToken,
+                    logout,
+                });
+                if (!res) {
+                    return;
+                }
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data?.status) {
+                    Alert.alert('Error', data?.message || 'No se pudo eliminar el archivo');
+                    return;
+                }
+            } else {
+                const newEntry = {
+                    id: `del-archivo-${file.id}-${Date.now()}`,
+                    type: 'delete_archivo' as const,
+                    activoMantenimientoId: Number(activo.id),
+                    archivoId: Number(file.id),
+                    puestoId: resolvePuestoIdForReporte(reporte),
+                    reporteKey: reporte.key,
+                    source: reporte.source,
+                    estructuraId: reporte.estructura_id,
+                };
+                const qStr = await AsyncStorage.getItem(ARTICULO_MANTENIMIENTO_DELETE_ARCHIVO_ACTIONS_KEY);
+                const q = qStr ? JSON.parse(qStr) : [];
+                const list = Array.isArray(q) ? q : [];
+                if (!list.some((x: any) => Number(x?.archivoId) === Number(file.id) && x?.type === 'delete_archivo')) {
+                    list.push(newEntry);
+                    await AsyncStorage.setItem(ARTICULO_MANTENIMIENTO_DELETE_ARCHIVO_ACTIONS_KEY, JSON.stringify(list));
+                }
+            }
+            await applyArchivoDeletedLocally({
+                reporteKey: reporte.key,
+                mantenimientoId: Number(activo.id),
+                archivoId: Number(file.id),
+                file,
+            });
+            void fetchReportes();
+        },
+        [applyArchivoDeletedLocally, fetchReportes, getConnectionStatus, logout, refreshAccessToken, resolvePuestoIdForReporte]
+    );
+
+    const confirmDeleteArchivoAdjunto = useCallback(
+        (activo: ArticuloMantenimiento, file: ActivoFileRemote, reporte: ArticuloPuestoMantenimientoItem | null) => {
+            Alert.alert('Confirmar', '¿Eliminar este archivo? No se podrá deshacer.', [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Eliminar',
+                    style: 'destructive',
+                    onPress: () => {
+                        void performDeleteArchivoAdjunto(activo, file, reporte);
+                    },
+                },
+            ]);
+        },
+        [performDeleteArchivoAdjunto]
+    );
+
     const renderActivo = (activo: ArticuloMantenimiento) => {
         const archivos = activo.archivos || [];
         const isSolucionado = activo.fecha_solucion !== null && activo.fecha_solucion !== undefined;
         const fechaFormateada = formatFechaSolucion(activo.fecha_solucion);
         const soloInformativo = isMantenimientoSoloEvaluacionCache(activo);
 
+        const activoListKey = `ac-${activo.id}-${String(activo.id_local || '')}-${
+            activo.estado || ''
+        }-${String(activo.observaciones || '').length}-a${(activo.archivos || []).length}`;
+
         return (
-            <ThemedView key={activo.id} style={styles.bitacoraCard}>
+            <ThemedView key={activoListKey} style={styles.bitacoraCard}>
                 <ThemedView style={styles.activoHeader}>
                     <ThemedText style={styles.bitTitle}>
                         {selectedReporte?.articulo_nombre || 'Artículo'} - Mantenimiento #{activo.id}
@@ -2504,7 +3225,16 @@ export default function MantenimientoEquipoScreen() {
                 ) : null}
 
                 {archivos.length > 0 && (
-                    <ActivoFilesViewer activoId={activo.id} files={archivos} accessToken={accessToken} />
+                    <ActivoFilesViewer
+                        activoId={activo.id}
+                        files={archivos}
+                        accessToken={accessToken}
+                        onRequestDeleteFile={
+                            !soloInformativo && Number(activo.id) > 0 && selectedReporte
+                                ? (f) => confirmDeleteArchivoAdjunto(activo, f, selectedReporte)
+                                : undefined
+                        }
+                    />
                 )}
 
                 <ThemedView style={styles.listItemButtons}>
@@ -2676,34 +3406,16 @@ export default function MantenimientoEquipoScreen() {
     };
 
     const openMovimientosModal = async (activo: ArticuloPuestoMantenimientoItem) => {
-        let activoToUse = activo;
+        /** Fila del artículo: misma estructura que `puesto_{id}_articulos` (sin caché por artículo). */
+        const activoToUse = activo;
         const isConnected = await getConnectionStatus();
-        if (!isConnected && activePuestoId && activo?.estructura_id) {
-            const artNode = await getArticuloFromMainStructure({
-                puestoId: activePuestoId,
-                source: activo.source,
-                estructuraId: activo.estructura_id,
-            });
-            if (artNode) {
-                activoToUse = {
-                    ...activo,
-                    movimientos: Array.isArray(artNode?.movimientos)
-                        ? artNode.movimientos
-                        : (activo.movimientos || []),
-                    tipos_mantenimiento: Array.isArray(artNode?.tipos_mantenimiento)
-                        ? artNode.tipos_mantenimiento
-                        : (activo.tipos_mantenimiento || []),
-                };
-            }
-        }
         setMovActivo(activoToUse);
         const current = await loadMarcaContext();
         if (!current?.id) {
             Alert.alert('Error', 'Marca no encontrada');
             return;
         }
-
-        const cacheKey = `movimientos_articulo_${activoToUse.key}_cache`;
+        const pid = resolvePuestoIdForReporte(activoToUse);
         if (isConnected && activoToUse.estructura_id) {
             const res = await listMovimientosArticuloMantenimiento({
                 parent: { source: activoToUse.source, estructuraId: activoToUse.estructura_id },
@@ -2714,37 +3426,52 @@ export default function MantenimientoEquipoScreen() {
             if (res.status && res.data) {
                 const list = res.data.map((m: any) => ({ ...m, id_local: m.id_local || '' }));
                 setMovimientos(list);
-                await AsyncStorage.setItem(cacheKey, JSON.stringify(list));
+                if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
+                    setSelectedReporte((sr) => (sr && sr.key === activoToUse.key ? { ...sr, movimientos: list } : sr));
+                    setReportes((prev) => {
+                        const next = prev.map((r) =>
+                            r.key === activoToUse.key ? { ...r, movimientos: list } : r
+                        );
+                        const toStore = next
+                            .filter((r) =>
+                                r.puesto_id_context != null
+                                    ? Number(r.puesto_id_context) === Number(pid)
+                                    : Number(pid) === Number(activePuestoId ?? marcaPuestoId)
+                            )
+                            .map(stripPuestoContextForStorage);
+                        void (async () => {
+                            try {
+                                await writePuestoArticulosList(Number(pid), toStore);
+                                await syncPuestoArticulosFragmentFromReportesList(Number(pid), toStore);
+                            } catch (e) {
+                                console.error('openMovimientosModal GET list → puesto_*_articulos:', e);
+                            }
+                        })();
+                        return next;
+                    });
+                }
             } else {
                 setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
             }
         } else {
-            // Offline: preferir main_structure_cache (fuente de verdad), luego cache local
-            if (activePuestoId && activoToUse?.estructura_id) {
-                const artNode = await getArticuloFromMainStructure({
-                    puestoId: activePuestoId,
-                    source: activoToUse.source,
-                    estructuraId: activoToUse.estructura_id,
-                });
-                if (Array.isArray(artNode?.movimientos)) {
-                    setMovimientos(artNode.movimientos.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-                } else {
-                    const cacheStr = await AsyncStorage.getItem(cacheKey);
-                    if (cacheStr) {
-                        const cached = JSON.parse(cacheStr);
-                        setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-                    } else {
-                        setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
+            let fromPuesto: any[] | null = null;
+            if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
+                try {
+                    const pl = await readPuestoArticulosList(Number(pid));
+                    if (pl?.length) {
+                        const row = pl.find((r) => r.key === activoToUse.key);
+                        if (row && Array.isArray(row.movimientos)) fromPuesto = row.movimientos;
                     }
+                } catch (e) {
+                    console.error('openMovimientosModal offline read puesto list:', e);
                 }
+            }
+            if (fromPuesto) {
+                setMovimientos(fromPuesto.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
             } else {
-                const cacheStr = await AsyncStorage.getItem(cacheKey);
-                if (cacheStr) {
-                    const cached = JSON.parse(cacheStr);
-                    setMovimientos(cached.map((m: any) => ({ ...m, id_local: m.id_local || '' })));
-                } else {
-                    setMovimientos(Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []);
-                }
+                setMovimientos(
+                    Array.isArray(activoToUse.movimientos) ? activoToUse.movimientos : []
+                );
             }
         }
 
@@ -2806,10 +3533,31 @@ export default function MantenimientoEquipoScreen() {
         parent: ArticuloPuestoMantenimientoItem,
         nextMovs: MovimientoArticuloMantenimientoItem[]
     ) => {
-        const cacheKey = `movimientos_articulo_${parent.key}_cache`;
-        await AsyncStorage.setItem(cacheKey, JSON.stringify(nextMovs));
         setMovimientos(nextMovs);
         setMovActivo((prev) => (prev ? { ...prev, movimientos: nextMovs } : prev));
+        setReportes((prev) => {
+            const nextReportes = prev.map((r) => (r.key === parent.key ? { ...r, movimientos: nextMovs } : r));
+            const pid = resolvePuestoIdForReporte(parent);
+            if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
+                const toStore = nextReportes
+                    .filter((r) =>
+                        r.puesto_id_context != null
+                            ? Number(r.puesto_id_context) === Number(pid)
+                            : Number(pid) === Number(activePuestoId ?? marcaPuestoId)
+                    )
+                    .map(stripPuestoContextForStorage);
+                void (async () => {
+                    try {
+                        await writePuestoArticulosList(Number(pid), toStore);
+                        await syncPuestoArticulosFragmentFromReportesList(Number(pid), toStore);
+                    } catch (e) {
+                        console.error('persistMovimientosToActivosCache:', e);
+                    }
+                })();
+            }
+            return nextReportes;
+        });
+        setSelectedReporte((sr) => (sr && sr.key === parent.key ? { ...sr, movimientos: nextMovs } : sr));
     };
 
     const getMovItemKey = useCallback((m: MovimientoArticuloMantenimientoItem): string => {
@@ -2833,6 +3581,7 @@ export default function MantenimientoEquipoScreen() {
                 if (res.status) {
                     Alert.alert('Éxito', 'Movimiento creado correctamente');
                     setMovIsCreating(false);
+                    void fetchReportes();
                     await openMovimientosModal(movActivo);
                 } else {
                     Alert.alert('Error', res.message || 'No se pudo crear el movimiento');
@@ -2863,7 +3612,7 @@ export default function MantenimientoEquipoScreen() {
                     id: localId,
                     id_local: localId,
                     parent,
-                    puestoId: activePuestoId,
+                    puestoId: resolvePuestoIdForReporte(movActivo),
                     parentKey: movActivo.key,
                     requestData: payload,
                 });
@@ -2882,6 +3631,7 @@ export default function MantenimientoEquipoScreen() {
                 Alert.alert('Éxito', 'Movimiento actualizado correctamente');
                 setMovIsCreating(false);
                 setMovEditing(null);
+                void fetchReportes();
                 await openMovimientosModal(movActivo);
             } else {
                 Alert.alert('Error', res.message || 'No se pudo actualizar el movimiento');
@@ -2915,7 +3665,7 @@ export default function MantenimientoEquipoScreen() {
                         id: movEditing.id_local,
                         id_local: movEditing.id_local,
                         parent,
-                        puestoId: activePuestoId,
+                        puestoId: resolvePuestoIdForReporte(movActivo),
                         parentKey: movActivo.key,
                         requestData: payload,
                     });
@@ -2925,7 +3675,7 @@ export default function MantenimientoEquipoScreen() {
                     type: 'update',
                     id: movEditing.id,
                     parent,
-                    puestoId: activePuestoId,
+                    puestoId: resolvePuestoIdForReporte(movActivo),
                     parentKey: movActivo.key,
                     requestData: payload,
                 });
@@ -2985,6 +3735,7 @@ export default function MantenimientoEquipoScreen() {
                                 const res = await deleteMovimientoArticuloMantenimiento({ parent, id: m.id, marcaId: current.id, refreshAccessToken, logout });
                                 if (res.status) {
                                     Alert.alert('Éxito', 'Movimiento eliminado correctamente');
+                                    void fetchReportes();
                                     await openMovimientosModal(movActivo);
                                 } else {
                                     Alert.alert('Error', res.message || 'No se pudo eliminar el movimiento');
@@ -2997,7 +3748,7 @@ export default function MantenimientoEquipoScreen() {
                                     id: m.id,
                                     parent,
                                     marcaId: current.id,
-                                    puestoId: activePuestoId,
+                                    puestoId: resolvePuestoIdForReporte(movActivo),
                                     parentKey: movActivo.key,
                                 });
                                 Alert.alert('Eliminado (offline)', 'La eliminación se sincronizará cuando vuelva la conexión.');
@@ -3244,6 +3995,13 @@ export default function MantenimientoEquipoScreen() {
                             <TouchableOpacity
                                 style={styles.armasMediaButton}
                                 onPress={async () => {
+                                    if (armaFotoAntesLocal?.localFileName) {
+                                        try {
+                                            await deleteFile(armaFotoAntesLocal.localFileName);
+                                        } catch {
+                                            /* idempotente */
+                                        }
+                                    }
                                     const imgFile = await pickArmaImageAsFile('arma_foto_antes');
                                     if (imgFile) {
                                         setArmaFotoAntesLocal(imgFile);
@@ -3252,17 +4010,24 @@ export default function MantenimientoEquipoScreen() {
                                 }}
                             >
                                 <Ionicons name="camera" size={18} color="#fff" />
-                                <ThemedText style={styles.armasMediaButtonText}>{(armaFotoAntesLocal || armaFotoAntesName) ? 'Cambiar' : 'Subir'}</ThemedText>
+                                <ThemedText style={styles.armasMediaButtonText}>{armaFotoAntesLocal ? 'Cambiar' : 'Subir'}</ThemedText>
                             </TouchableOpacity>
                             {armaFotoAntesLocal ? (
                                 <>
                                     <Image
-                                        source={{ uri: `data:${armaFotoAntesLocal.mimeType || 'image/jpeg'};base64,${armaFotoAntesLocal.base64}` }}
+                                        source={{ uri: localMantenimientoFileImageUri(armaFotoAntesLocal) }}
                                         style={styles.armasThumb}
                                     />
                                     <TouchableOpacity
                                         style={styles.armasRemoveButton}
-                                        onPress={() => {
+                                        onPress={async () => {
+                                            if (armaFotoAntesLocal?.localFileName) {
+                                                try {
+                                                    await deleteFile(armaFotoAntesLocal.localFileName);
+                                                } catch {
+                                                    /* idempotente */
+                                                }
+                                            }
                                             setArmaFotoAntesLocal(null);
                                             setArmaFotoAntesName('');
                                         }}
@@ -3270,27 +4035,7 @@ export default function MantenimientoEquipoScreen() {
                                         <Ionicons name="trash" size={18} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </>
-                            ) : (armaFotoAntesName && selectedActivo?.archivos?.length ? (() => {
-                                const remote = (selectedActivo.archivos || []).find((f) => f.original_name === armaFotoAntesName || f.name === armaFotoAntesName);
-                                if (!remote) return null;
-                                const uri = buildFileUrl(selectedActivo?.id, remote);
-                                if (!uri) return null;
-                                return (
-                                    <>
-                                        <Image source={{ uri }} style={styles.armasThumb} />
-                                        <TouchableOpacity
-                                            style={styles.armasRemoveButton}
-                                            onPress={() => {
-                                                // No borramos del servidor aquí; solo removemos del formulario y se reemplaza al guardar
-                                                setArmaFotoAntesName('');
-                                                setArmaFotoAntesLocal(null);
-                                            }}
-                                        >
-                                            <Ionicons name="trash" size={18} color="#FF3B30" />
-                                        </TouchableOpacity>
-                                    </>
-                                );
-                            })() : null)}
+                            ) : null}
                         </ThemedView>
 
                         {tipo === 'Preventivo' ? (
@@ -3360,6 +4105,13 @@ export default function MantenimientoEquipoScreen() {
                             <TouchableOpacity
                                 style={styles.armasMediaButton}
                                 onPress={async () => {
+                                    if (armaFotoDespuesLocal?.localFileName) {
+                                        try {
+                                            await deleteFile(armaFotoDespuesLocal.localFileName);
+                                        } catch {
+                                            /* idempotente */
+                                        }
+                                    }
                                     const imgFile = await pickArmaImageAsFile('arma_foto_despues');
                                     if (imgFile) {
                                         setArmaFotoDespuesLocal(imgFile);
@@ -3368,17 +4120,24 @@ export default function MantenimientoEquipoScreen() {
                                 }}
                             >
                                 <Ionicons name="camera" size={18} color="#fff" />
-                                <ThemedText style={styles.armasMediaButtonText}>{(armaFotoDespuesLocal || armaFotoDespuesName) ? 'Cambiar' : 'Subir'}</ThemedText>
+                                <ThemedText style={styles.armasMediaButtonText}>{armaFotoDespuesLocal ? 'Cambiar' : 'Subir'}</ThemedText>
                             </TouchableOpacity>
                             {armaFotoDespuesLocal ? (
                                 <>
                                     <Image
-                                        source={{ uri: `data:${armaFotoDespuesLocal.mimeType || 'image/jpeg'};base64,${armaFotoDespuesLocal.base64}` }}
+                                        source={{ uri: localMantenimientoFileImageUri(armaFotoDespuesLocal) }}
                                         style={styles.armasThumb}
                                     />
                                     <TouchableOpacity
                                         style={styles.armasRemoveButton}
-                                        onPress={() => {
+                                        onPress={async () => {
+                                            if (armaFotoDespuesLocal?.localFileName) {
+                                                try {
+                                                    await deleteFile(armaFotoDespuesLocal.localFileName);
+                                                } catch {
+                                                    /* idempotente */
+                                                }
+                                            }
                                             setArmaFotoDespuesLocal(null);
                                             setArmaFotoDespuesName('');
                                         }}
@@ -3386,26 +4145,7 @@ export default function MantenimientoEquipoScreen() {
                                         <Ionicons name="trash" size={18} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </>
-                            ) : (armaFotoDespuesName && selectedActivo?.archivos?.length ? (() => {
-                                const remote = (selectedActivo.archivos || []).find((f) => f.original_name === armaFotoDespuesName || f.name === armaFotoDespuesName);
-                                if (!remote) return null;
-                                const uri = buildFileUrl(selectedActivo?.id, remote);
-                                if (!uri) return null;
-                                return (
-                                    <>
-                                        <Image source={{ uri }} style={styles.armasThumb} />
-                                        <TouchableOpacity
-                                            style={styles.armasRemoveButton}
-                                            onPress={() => {
-                                                setArmaFotoDespuesName('');
-                                                setArmaFotoDespuesLocal(null);
-                                            }}
-                                        >
-                                            <Ionicons name="trash" size={18} color="#FF3B30" />
-                                        </TouchableOpacity>
-                                    </>
-                                );
-                            })() : null)}
+                            ) : null}
                         </ThemedView>
 
                         <ThemedText style={styles.armasSectionTitle}>Armero</ThemedText>
@@ -3697,19 +4437,31 @@ export default function MantenimientoEquipoScreen() {
                     </TouchableOpacity>
                     {activoFiles.filter(f => f.type === 'document').length > 0 && (
                         <ThemedView style={styles.filesList}>
-                            {activoFiles.filter(f => f.type === 'document').map(file => (
-                                <ThemedView key={file.id} style={styles.fileRow}>
-                                    <Ionicons name="document-text-outline" size={16} color="#007AFF" />
-                                    <ThemedText numberOfLines={1} style={styles.fileName}>
-                                        {file.original_name || file.name}
-                                    </ThemedText>
-                                    <TouchableOpacity onPress={() => {
-                                        const url = buildFileUrl(selectedActivo?.id, file);
-                                        if (url) Linking.openURL(url);
-                                    }}>
-                                        <Ionicons name="open-outline" size={16} color="#007AFF" />
-                                    </TouchableOpacity>
-                                </ThemedView>
+                            {activoFiles.filter(f => f.type === 'document').map((file) => (
+                                <View key={file.id} style={styles.activoRemoteFileWrapRow}>
+                                    {selectedActivo && selectedReporte && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => confirmDeleteArchivoAdjunto(selectedActivo, file, selectedReporte)}
+                                        >
+                                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ThemedView style={styles.fileRow}>
+                                        <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                                            {file.original_name || file.name}
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            onPress={() => {
+                                                const url = buildFileUrl(selectedActivo?.id, file);
+                                                if (url) Linking.openURL(url);
+                                            }}
+                                        >
+                                            <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -3721,7 +4473,7 @@ export default function MantenimientoEquipoScreen() {
                                     <ThemedText numberOfLines={1} style={styles.fileName}>
                                         {file.name}
                                     </ThemedText>
-                                    <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
+                                    <TouchableOpacity onPress={() => void removeLocalFile(file)}>
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </ThemedView>
@@ -3741,23 +4493,35 @@ export default function MantenimientoEquipoScreen() {
                     </TouchableOpacity>
                     {activoFiles.filter(f => f.type === 'image').length > 0 && (
                         <ThemedView style={styles.filesList}>
-                            {activoFiles.filter(f => f.type === 'image').map(file => (
-                                <ThemedView key={file.id} style={styles.fileRow}>
-                                    <Image
-                                        source={{ uri: buildFileUrl(selectedActivo?.id, file) }}
-                                        style={styles.filePreviewImage}
-                                        resizeMode="cover"
-                                    />
-                                    <ThemedText numberOfLines={1} style={styles.fileName}>
-                                        {file.original_name || file.name}
-                                    </ThemedText>
-                                    <TouchableOpacity onPress={() => {
-                                        const url = buildFileUrl(selectedActivo?.id, file);
-                                        if (url) Linking.openURL(url);
-                                    }}>
-                                        <Ionicons name="open-outline" size={16} color="#007AFF" />
-                                    </TouchableOpacity>
-                                </ThemedView>
+                            {activoFiles.filter(f => f.type === 'image').map((file) => (
+                                <View key={file.id} style={styles.activoRemoteFileWrapRow}>
+                                    {selectedActivo && selectedReporte && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => confirmDeleteArchivoAdjunto(selectedActivo, file, selectedReporte)}
+                                        >
+                                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ThemedView style={styles.fileRow}>
+                                        <Image
+                                            source={{ uri: buildFileUrl(selectedActivo?.id, file) }}
+                                            style={styles.filePreviewImage}
+                                            resizeMode="cover"
+                                        />
+                                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                                            {file.original_name || file.name}
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            onPress={() => {
+                                                const url = buildFileUrl(selectedActivo?.id, file);
+                                                if (url) Linking.openURL(url);
+                                            }}
+                                        >
+                                            <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -3767,7 +4531,7 @@ export default function MantenimientoEquipoScreen() {
                                 <ThemedView key={file.id} style={styles.fileRow}>
                                     <Image
                                         source={{
-                                            uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}`,
+                                            uri: localMantenimientoFileImageUri(file),
                                         }}
                                         style={styles.filePreviewImage}
                                         resizeMode="cover"
@@ -3775,7 +4539,7 @@ export default function MantenimientoEquipoScreen() {
                                     <ThemedText numberOfLines={1} style={styles.fileName}>
                                         {file.name}
                                     </ThemedText>
-                                    <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
+                                    <TouchableOpacity onPress={() => void removeLocalFile(file)}>
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </ThemedView>
@@ -3795,19 +4559,31 @@ export default function MantenimientoEquipoScreen() {
                     </TouchableOpacity>
                     {activoFiles.filter(f => f.type === 'audio').length > 0 && (
                         <ThemedView style={styles.filesList}>
-                            {activoFiles.filter(f => f.type === 'audio').map(file => (
-                                <ThemedView key={file.id} style={styles.fileRow}>
-                                    <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
-                                    <ThemedText numberOfLines={1} style={styles.fileName}>
-                                        {file.original_name || file.name}
-                                    </ThemedText>
-                                    <TouchableOpacity onPress={() => {
-                                        const url = buildFileUrl(selectedActivo?.id, file);
-                                        if (url) Linking.openURL(url);
-                                    }}>
-                                        <Ionicons name="open-outline" size={16} color="#007AFF" />
-                                    </TouchableOpacity>
-                                </ThemedView>
+                            {activoFiles.filter(f => f.type === 'audio').map((file) => (
+                                <View key={file.id} style={styles.activoRemoteFileWrapRow}>
+                                    {selectedActivo && selectedReporte && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => confirmDeleteArchivoAdjunto(selectedActivo, file, selectedReporte)}
+                                        >
+                                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ThemedView style={styles.fileRow}>
+                                        <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                                            {file.original_name || file.name}
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            onPress={() => {
+                                                const url = buildFileUrl(selectedActivo?.id, file);
+                                                if (url) Linking.openURL(url);
+                                            }}
+                                        >
+                                            <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -3819,7 +4595,7 @@ export default function MantenimientoEquipoScreen() {
                                     <ThemedText numberOfLines={1} style={styles.fileName}>
                                         {file.name}
                                     </ThemedText>
-                                    <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
+                                    <TouchableOpacity onPress={() => void removeLocalFile(file)}>
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </ThemedView>
@@ -3839,19 +4615,31 @@ export default function MantenimientoEquipoScreen() {
                     </TouchableOpacity>
                     {activoFiles.filter(f => f.type === 'video').length > 0 && (
                         <ThemedView style={styles.filesList}>
-                            {activoFiles.filter(f => f.type === 'video').map(file => (
-                                <ThemedView key={file.id} style={styles.fileRow}>
-                                    <Ionicons name="videocam-outline" size={16} color="#007AFF" />
-                                    <ThemedText numberOfLines={1} style={styles.fileName}>
-                                        {file.original_name || file.name}
-                                    </ThemedText>
-                                    <TouchableOpacity onPress={() => {
-                                        const url = buildFileUrl(selectedActivo?.id, file);
-                                        if (url) Linking.openURL(url);
-                                    }}>
-                                        <Ionicons name="open-outline" size={16} color="#007AFF" />
-                                    </TouchableOpacity>
-                                </ThemedView>
+                            {activoFiles.filter(f => f.type === 'video').map((file) => (
+                                <View key={file.id} style={styles.activoRemoteFileWrapRow}>
+                                    {selectedActivo && selectedReporte && Number(file.id) > 0 ? (
+                                        <TouchableOpacity
+                                            style={styles.activoRemoteDeleteFab}
+                                            onPress={() => confirmDeleteArchivoAdjunto(selectedActivo, file, selectedReporte)}
+                                        >
+                                            <Ionicons name="trash" size={16} color="#FF3B30" />
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    <ThemedView style={styles.fileRow}>
+                                        <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                                        <ThemedText numberOfLines={1} style={styles.fileName}>
+                                            {file.original_name || file.name}
+                                        </ThemedText>
+                                        <TouchableOpacity
+                                            onPress={() => {
+                                                const url = buildFileUrl(selectedActivo?.id, file);
+                                                if (url) Linking.openURL(url);
+                                            }}
+                                        >
+                                            <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                        </TouchableOpacity>
+                                    </ThemedView>
+                                </View>
                             ))}
                         </ThemedView>
                     )}
@@ -3863,7 +4651,7 @@ export default function MantenimientoEquipoScreen() {
                                     <ThemedText numberOfLines={1} style={styles.fileName}>
                                         {file.name}
                                     </ThemedText>
-                                    <TouchableOpacity onPress={() => removeLocalFile('video', file.id)}>
+                                    <TouchableOpacity onPress={() => void removeLocalFile(file)}>
                                         <Ionicons name="trash" size={16} color="#FF3B30" />
                                     </TouchableOpacity>
                                 </ThemedView>
@@ -3923,8 +4711,12 @@ export default function MantenimientoEquipoScreen() {
                         </ThemedView>
                     ) : null}
 
-                    {/* Filtros jerárquicos (Empresa → ... → Puesto) */}
-                    {!isUpdating && !showActivos && hasCurrentMarca && (
+                    {/* Filtros jerárquicos (Empresa → ... → Puesto); OPERATIVO: datos por corpo de current_marca (sin selectores) */}
+                    {!isUpdating &&
+                        !showActivos &&
+                        hasCurrentMarca &&
+                        roleName != null &&
+                        roleName !== 'OPERATIVO' && (
                         <ThemedView style={styles.filtersMain}>
                             <ThemedView style={styles.filterHeader}>
                                 <TouchableOpacity
@@ -5240,6 +6032,31 @@ const styles = StyleSheet.create({
         height: 40,
         borderRadius: 4,
         backgroundColor: '#F0F0F0',
+    },
+    activoRemoteFileWrap: {
+        position: 'relative',
+        alignSelf: 'center',
+        width: '100%',
+        marginBottom: 8,
+    },
+    activoRemoteFileWrapRow: {
+        position: 'relative',
+        width: '100%',
+        marginBottom: 8,
+    },
+    activoRemoteDeleteFab: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        zIndex: 10,
+        backgroundColor: 'rgba(255,255,255,0.95)',
+        borderRadius: 14,
+        padding: 6,
+        elevation: 3,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.2,
+        shadowRadius: 2,
     },
     collapsableSection: {
         marginTop: 12,

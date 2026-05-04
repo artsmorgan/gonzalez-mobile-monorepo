@@ -29,7 +29,8 @@ export async function GET(
                 table: "c_apertura_cierre_puesto",
                 operation: "findMany",
                 where: {
-                    corpo_id: corpoId
+                    corpo_id: corpoId,
+                    isActive: true,
                 },
                 orderBy: {
                     created_at: 'desc'
@@ -45,10 +46,76 @@ export async function GET(
         });
 
         const recordsArray = Array.isArray(records) ? records : [];
+
+        const empresaIds = [
+            ...new Set(
+                recordsArray
+                    .map((r: any) => Number(r?.empresa_id))
+                    .filter((n: number) => Number.isFinite(n) && n > 0)
+            ),
+        ];
+        const contratoIds = [
+            ...new Set(
+                recordsArray
+                    .map((r: any) => Number(r?.contrato_id))
+                    .filter((n: number) => Number.isFinite(n) && n > 0)
+            ),
+        ];
+
+        const empresaNombreById = new Map<number, string>();
+        const contratoNombreById = new Map<number, string>();
+
+        await Promise.all([
+            ...empresaIds.map(async (id) => {
+                try {
+                    const row = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "e_estructura_empresa",
+                            operation: "findUnique",
+                            where: { id },
+                        },
+                    });
+                    if (row && typeof (row as any).nombre === "string") {
+                        empresaNombreById.set(id, String((row as any).nombre));
+                    }
+                } catch {
+                    /* ignore */
+                }
+            }),
+            ...contratoIds.map(async (id) => {
+                try {
+                    const row = await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "GET",
+                            table: "e_estructura_contrato",
+                            operation: "findUnique",
+                            where: { id },
+                        },
+                    });
+                    if (row && typeof (row as any).nombre === "string") {
+                        contratoNombreById.set(id, String((row as any).nombre));
+                    }
+                } catch {
+                    /* ignore */
+                }
+            }),
+        ]);
+
         const recordsWithIdLocal = recordsArray.map((record: any) => ({
             ...record,
             id_local: "",
+            empresa_nombre:
+                Number(record?.empresa_id) > 0
+                    ? empresaNombreById.get(Number(record.empresa_id)) ?? null
+                    : null,
             cliente_nombre: record.e_estructura_cliente?.nombre || null,
+            contrato_nombre:
+                Number(record?.contrato_id) > 0
+                    ? contratoNombreById.get(Number(record.contrato_id)) ?? null
+                    : null,
             corpo_nombre: record.e_estructura_sucursal?.nombre || null,
             puesto_nombre: record.e_estructura_puesto?.nombre || null,
             division_nombre: record.n_division?.nombre || null,

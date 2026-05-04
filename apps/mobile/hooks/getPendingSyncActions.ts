@@ -30,6 +30,7 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'movimientos_llaveros_actions',
         'movimientos_activos_mantenimiento_actions',
         'articulo_mantenimiento_actions',
+        'articulo_mantenimiento_delete_archivo_actions',
         'movimientos_articulos_mantenimiento_actions',
         'activo_mantenimiento_actions',
         'documentos_entregados_actions',
@@ -72,6 +73,14 @@ export function pendingActionRowId(storageKey: string, action: any, index: numbe
     if (storageKey === 'checklist_supervision_actions' && action && typeof action === 'object') {
         return `checklist|${action.type || ''}|${action.id_local || ''}|${action.id ?? ''}`;
     }
+    // Cola mixta: el mismo `id` numérico puede repetirse entre distintos `type` (p. ej. registro 7 OCP y otra evaluación 7).
+    if (storageKey === 'evaluations_actions' && action && typeof action === 'object') {
+        const t = String(action.type ?? '');
+        const act = String(action.action ?? '');
+        const id = action.id != null && action.id !== '' ? String(action.id) : '';
+        const idLocal = action.id_local != null && action.id_local !== '' ? String(action.id_local) : '';
+        return `eval|${t}|${act}|${id}|${idLocal}|i${index}`;
+    }
     if (action?.id != null && action.id !== '') return String(action.id);
     if (action?.id_local) return String(action.id_local);
     return `${storageKey}-${index}`;
@@ -90,6 +99,24 @@ function checklistActionMatchesMarker(action: any, marker: string): boolean {
     );
 }
 
+function evaluationsActionMatchesIndexMarker(action: any, marker: string, index: number): boolean {
+    if (!marker.startsWith('eval|')) return false;
+    const parts = marker.split('|');
+    if (parts.length < 6) return false;
+    const t = parts[1] ?? '';
+    const act = parts[2] ?? '';
+    const id = parts[3] ?? '';
+    const idLocal = parts[4] ?? '';
+    const idxPart = parts[5] ?? '';
+    if (!idxPart.startsWith('i') || String(index) !== idxPart.slice(1)) return false;
+    return (
+        String(action?.type ?? '') === t &&
+        String(action?.action ?? '') === act &&
+        String(action?.id ?? '') === id &&
+        String(action?.id_local ?? '') === idLocal
+    );
+}
+
 /**
  * Elimina una acción específica de su variable AsyncStorage
  */
@@ -104,9 +131,12 @@ export async function removePendingAction(
         const actions = JSON.parse(actionsStr);
         if (!Array.isArray(actions)) return false;
 
-        const updatedActions = actions.filter((action: any) => {
+        const updatedActions = actions.filter((action: any, index: number) => {
             if (storageKey === 'checklist_supervision_actions' && actionId.startsWith('checklist|')) {
                 return !checklistActionMatchesMarker(action, actionId);
+            }
+            if (storageKey === 'evaluations_actions' && actionId.startsWith('eval|')) {
+                return !evaluationsActionMatchesIndexMarker(action, actionId, index);
             }
             return String(action.id) !== String(actionId);
         });

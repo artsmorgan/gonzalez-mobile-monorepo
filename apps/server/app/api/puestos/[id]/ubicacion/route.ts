@@ -26,11 +26,21 @@ export async function PUT(
             );
         }
 
-        const { latitud, longitud } = await req.json();
+        const body = await req.json();
+        const latitud = body?.latitud;
+        const longitud = body?.longitud;
 
         if (latitud === undefined || longitud === undefined) {
             return NextResponse.json(
                 { status: false, message: "Latitud y longitud son requeridas" },
+                { status: 400 }
+            );
+        }
+
+        const clearing = latitud === null && longitud === null;
+        if (!clearing && (latitud === null || longitud === null)) {
+            return NextResponse.json(
+                { status: false, message: "Latitud y longitud deben enviarse ambas o ambas en null para borrar" },
                 { status: 400 }
             );
         }
@@ -55,7 +65,6 @@ export async function PUT(
 
         const puestoObj = puesto as any;
 
-        // Actualizar coordenadas
         const updatedPuesto = await callDynamicPrisma({
             req,
             data: {
@@ -63,10 +72,12 @@ export async function PUT(
                 table: "e_estructura_puesto",
                 operation: "update",
                 where: { id: puestoId },
-                data: {
-                    coordenadas_gpslat: String(latitud),
-                    coordenadas_gpslng: String(longitud),
-                },
+                data: clearing
+                    ? { coordenadas_gpslat: null, coordenadas_gpslng: null }
+                    : {
+                        coordenadas_gpslat: String(latitud),
+                        coordenadas_gpslng: String(longitud),
+                    },
             },
         });
 
@@ -115,11 +126,14 @@ export async function PUT(
                 }
             }
 
+            const notifBody = clearing
+                ? `Se ha eliminado la ubicación GPS del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'}`
+                : `Se ha actualizado la ubicación del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'} a la latitud ${latitud} y longitud ${longitud}`;
             await sendNotificationByPlaza(
                 req,
                 marcaDiaId,
-                "Ubicación del puesto actualizada",
-                `Se ha actualizado la ubicación del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'} a la latitud ${latitud} y longitud ${longitud}`,
+                clearing ? "Ubicación del puesto eliminada" : "Ubicación del puesto actualizada",
+                notifBody,
                 plazas.map((plaza: any) => plaza.id)
             );
         }
@@ -127,7 +141,9 @@ export async function PUT(
         return NextResponse.json(
             {
                 status: true,
-                message: "Ubicación del puesto actualizada correctamente",
+                message: clearing
+                    ? "Ubicación del puesto eliminada correctamente"
+                    : "Ubicación del puesto actualizada correctamente",
                 data: updatedPuesto,
             },
             { status: 200 }

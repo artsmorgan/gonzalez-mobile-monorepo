@@ -5,6 +5,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
+import { mergeCurrentMarcaHierarchyIntoLunchRequest } from '@/hooks/lunchTimeMarcaHierarchy';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState, useRef } from 'react';
@@ -649,6 +650,21 @@ export default function LunchTimeScreen() {
       const fin = esManual ? manualEnd : new Date();
       const pausasList = esManual ? manualPausasList : pausas;
 
+      const payload: Record<string, any> = {
+        empleadoId: employee?.id,
+        inicio: inicio?.toISOString(),
+        fin: fin?.toISOString(),
+        pausas: JSON.stringify(
+          pausasList?.map((p) => ({
+            inicio: p.inicio.toISOString(),
+            fin: p.fin.toISOString(),
+            razon: p.razon,
+          })) || []
+        ),
+        es_manual: esManual,
+      };
+      await mergeCurrentMarcaHierarchyIntoLunchRequest(payload);
+
       const response = await authedFetch({
         url: `${apiUrl}/api/lunch-time`,
         init: {
@@ -656,17 +672,7 @@ export default function LunchTimeScreen() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-          empleadoId: employee?.id,
-          inicio: inicio?.toISOString(),
-          fin: fin?.toISOString(),
-          pausas: JSON.stringify(pausasList?.map(p => ({
-            inicio: p.inicio.toISOString(),
-            fin: p.fin.toISOString(),
-            razon: p.razon
-          })) || []),
-          es_manual: esManual
-          }),
+          body: JSON.stringify(payload),
         },
         refreshAccessToken,
         logout,
@@ -696,6 +702,21 @@ export default function LunchTimeScreen() {
         throw new Error('Server URL not configured');
       }
 
+      const payload: Record<string, any> = {
+        empleadoId: employee?.id,
+        inicio: start.toISOString(),
+        fin: end.toISOString(),
+        pausas: JSON.stringify(
+          pausasList.map((p) => ({
+            inicio: p.inicio.toISOString(),
+            fin: p.fin.toISOString(),
+            razon: p.razon,
+          }))
+        ),
+        es_manual: esManual,
+      };
+      await mergeCurrentMarcaHierarchyIntoLunchRequest(payload);
+
       const response = await authedFetch({
         url: `${apiUrl}/api/lunch-time`,
         init: {
@@ -703,17 +724,7 @@ export default function LunchTimeScreen() {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({
-          empleadoId: employee?.id,
-          inicio: start.toISOString(),
-          fin: end.toISOString(),
-          pausas: JSON.stringify(pausasList.map(p => ({
-            inicio: p.inicio.toISOString(),
-            fin: p.fin.toISOString(),
-            razon: p.razon
-          }))),
-          es_manual: esManual
-          }),
+          body: JSON.stringify(payload),
         },
         refreshAccessToken,
         logout,

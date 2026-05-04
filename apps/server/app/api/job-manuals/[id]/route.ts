@@ -225,62 +225,17 @@ export async function DELETE(
             );
         }
 
-        // Borrar archivos físicos y registros relacionados
-        // Eliminar relaciones de firmas/visualizaciones
+        // Baja lógica: no se eliminan filas ni archivos en disco (compatibilidad con listados e historial)
         await callDynamicPrisma({
             req,
             data: {
-                action: "DELETE",
-                table: "e_empleado_visualizacion_manual_puesto",
-                operation: "deleteMany",
-                where: { manual_puesto_id: id },
-            },
-        });
-
-        // Eliminar archivos de BD
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "DELETE",
-                table: "e_archivos_manual_puesto",
-                operation: "deleteMany",
-                where: { manual_puesto_id: id },
-            },
-        });
-
-        // Eliminar relaciones de puestos
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "DELETE",
-                table: "e_puestos_manual_puesto",
-                operation: "deleteMany",
-                where: { manual_puesto_id: id },
-            },
-        });
-
-        // Finalmente eliminar el manual
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "DELETE",
+                action: "UPDATE",
                 table: "e_manual_puesto",
-                operation: "delete",
+                operation: "update",
                 where: { id },
+                data: { isActive: false },
             },
         });
-
-        // Eliminar archivos del filesystem
-        const dir = path.join(
-            process.cwd(),
-            "public",
-            "uploads",
-            "job-manuals",
-            `${id}`
-        );
-        if (fs.existsSync(dir)) {
-            fs.rmSync(dir, { recursive: true, force: true });
-        }
 
         return NextResponse.json(
             { status: true, message: "Manual eliminado con éxito" },

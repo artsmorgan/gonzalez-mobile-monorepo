@@ -8,6 +8,10 @@ export type DocumentoEntregadoItem = {
   id: number;
   cliente_id: number;
   corpo_id: number;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
   fecha: string; // ISO / yyyy-mm-dd
   nombre_oficial_entrega: string;
   nombre_oficial_recibe: string;
@@ -16,6 +20,7 @@ export type DocumentoEntregadoItem = {
   firma_representante_cliente: string;
   firma_responsable: string;
   id_local?: string;
+  isActive?: boolean;
 };
 
 export type DocumentTypeItem = {
@@ -98,7 +103,10 @@ export async function listDocumentosEntregados({
 
     if (!response) return { status: false, message: 'Sesión expirada' };
 
-    const data = await response.json();
+    const data: any = await response.json();
+    if (data?.data && Array.isArray(data.data)) {
+      data.data = data.data.filter((r: any) => r && (r as any).isActive !== false);
+    }
     return data;
   } catch (error: any) {
     console.error('Error listing documentos entregados:', error);
@@ -132,7 +140,8 @@ export async function createDocumentoEntregado({
 
     const data: any = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
-    return data;
+    const id = data.id != null ? Number(data.id) : data?.data?.id != null ? Number(data.data.id) : undefined;
+    return { ...data, id };
   } catch (error: any) {
     console.error('Error creating documento entregado:', error);
     return { status: false, message: error.message || 'Error al crear documento entregado' };

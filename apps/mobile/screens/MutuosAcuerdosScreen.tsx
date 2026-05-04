@@ -43,6 +43,7 @@ import {
   signMutuoAcuerdoEjecutivo,
 } from '@/hooks/mutuosAcuerdosFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { saveFile, getFile, deleteFile } from '@/hooks/fileStorage';
 import type { RootStackParamList } from '../App';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'MutuosAcuerdos'>;
@@ -132,8 +133,9 @@ const estadoBucketMutuo = (r: MutuoAcuerdo): 'pendiente' | 'aprobado' | 'rechaza
   return 'pendiente';
 };
 
+/** Adjunto en documentos de la app (mismo patrón que acta de entrega). */
 type AttachedDocument = {
-  base64: string;
+  localFileName: string;
   extension: string;
   original_name: string;
   mimeType?: string;
@@ -275,6 +277,7 @@ export default function MutuosAcuerdosScreen() {
     const fechaReemplazaYmd = filterFechaReemplaza ? normalizeDateToYMD(filterFechaReemplaza) : '';
 
     return records.filter((r) => {
+      if (r != null && (r as MutuoAcuerdo).isActive === false) return false;
       const estado = estadoBucketMutuo(r);
       const matchesEstado = filterEstado === 'all' || estado === filterEstado;
 
@@ -380,10 +383,12 @@ export default function MutuosAcuerdosScreen() {
     const cedula = String(empleadoData?.cedula || '').trim();
     if (!employeeId || !nombre) throw new Error('Empleado inválido');
 
+    console.log("empleadoData", empleadoData);
+
     updateSection(section, (prev) => ({
       ...prev,
       employeeId,
-      employeeNombre: nombre,
+      employeeNombre: empleadoData?.nombre_completo || nombre,
       employeeCedula: cedula,
     }));
     const sectionState = section === 'ausente' ? ausente : reemplaza;
@@ -475,6 +480,13 @@ export default function MutuosAcuerdosScreen() {
     setFirmaResponsable('');
     setAusente(emptySection(horaAccion));
     setReemplaza(emptySection(horaAccion));
+    if (attachedDocument?.localFileName) {
+      try {
+        await deleteFile(attachedDocument.localFileName);
+      } catch {
+        /* idempotente */
+      }
+    }
     setAttachedDocument(null);
   };
 
@@ -497,12 +509,42 @@ export default function MutuosAcuerdosScreen() {
       return;
     }
 
+    const marcaAusenteSel = ausente.marcas.find((m) => m.id === ausente.selectedMarcaId);
+    const eid = marcaAusenteSel?.empresa_id != null ? Number(marcaAusenteSel.empresa_id) : 0;
+    const did = marcaAusenteSel?.division_id != null ? Number(marcaAusenteSel.division_id) : 0;
+    const cid = marcaAusenteSel?.contrato_id != null ? Number(marcaAusenteSel.contrato_id) : 0;
+    const pid = marcaAusenteSel?.puesto_id != null ? Number(marcaAusenteSel.puesto_id) : 0;
+    if (!eid || !did || !cid || !pid) {
+      Alert.alert(
+        'Error',
+        'La marca del empleado ausente no incluye jerarquía completa (empresa, división, contrato, puesto). Vuelva a cargar las marcas.'
+      );
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) {
         Alert.alert('Error', 'No se pudo obtener la hora de la acción');
         return;
+      }
+
+      let filePayload: Record<string, string> = {};
+      if (attachedDocument?.localFileName) {
+        try {
+          const g = await getFile(attachedDocument.localFileName);
+          filePayload = {
+            file_base64: g.base64,
+            extension: attachedDocument.extension,
+            original_name: attachedDocument.original_name,
+            mimeType: attachedDocument.mimeType || '',
+            type: attachedDocument.type,
+          };
+        } catch (e: any) {
+          Alert.alert('Error', e?.message || 'No se pudo leer el archivo adjunto');
+          return;
+        }
       }
 
       const response = await createMutuoAcuerdo({
@@ -512,15 +554,11 @@ export default function MutuosAcuerdosScreen() {
           motivo: motivo.trim(),
           hora_accion: horaAccion,
           firma_responsable: firmaResponsable.trim(),
-          ...(attachedDocument
-            ? {
-                file_base64: attachedDocument.base64,
-                extension: attachedDocument.extension,
-                original_name: attachedDocument.original_name,
-                mimeType: attachedDocument.mimeType,
-                type: attachedDocument.type,
-              }
-            : {}),
+          empresa_id: eid,
+          division_id: did,
+          contrato_id: cid,
+          puesto_id: pid,
+          ...(Object.keys(filePayload).length > 0 ? filePayload : {}),
         },
         refreshAccessToken,
         logout,
@@ -579,20 +617,6 @@ export default function MutuosAcuerdosScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const fileResponse = await fetch(asset.uri);
-      const blob = await fileResponse.blob();
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const raw = reader.result;
-          if (typeof raw !== 'string') return reject(new Error('No se pudo leer el archivo'));
-          const parts = raw.split(',');
-          resolve(parts.length > 1 ? parts[1] : parts[0]);
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
-        reader.readAsDataURL(blob);
-      });
-
       const extension =
         String(asset.name || '')
           .split('.')
@@ -600,8 +624,24 @@ export default function MutuosAcuerdosScreen() {
           ?.toLowerCase()
           ?.trim() || 'dat';
 
+      if (attachedDocument?.localFileName) {
+        try {
+          await deleteFile(attachedDocument.localFileName);
+        } catch {
+          /* idempotente */
+        }
+      }
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || 'adjunto',
+        extension,
+        type: 'text',
+        prefix: 'mutuo_acuerdo',
+      });
+
       setAttachedDocument({
-        base64,
+        localFileName,
         extension,
         original_name: asset.name || `archivo.${extension}`,
         mimeType: asset.mimeType || undefined,
@@ -908,7 +948,19 @@ export default function MutuosAcuerdosScreen() {
                   <ThemedText style={styles.fileSelectedText} numberOfLines={2}>
                     {attachedDocument.original_name}
                   </ThemedText>
-                  <TouchableOpacity onPress={() => setAttachedDocument(null)} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    onPress={async () => {
+                      if (attachedDocument?.localFileName) {
+                        try {
+                          await deleteFile(attachedDocument.localFileName);
+                        } catch {
+                          /* idempotente */
+                        }
+                      }
+                      setAttachedDocument(null);
+                    }}
+                    activeOpacity={0.85}
+                  >
                     <Ionicons name="close-circle" size={20} color="#CC3333" />
                   </TouchableOpacity>
                 </ThemedView>
@@ -1472,6 +1524,16 @@ const styles = StyleSheet.create({
 
   formCard: { marginTop: 12, backgroundColor: '#fff', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
   formTitle: { fontSize: 18, fontWeight: '800', marginBottom: 10, color: '#000' },
+  hierarchyInfoBox: {
+    marginBottom: 12,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F5F7FA',
+    borderWidth: 1,
+    borderColor: '#E0E4EA',
+  },
+  hierarchyInfoTitle: { fontSize: 13, fontWeight: '700', color: '#333', marginBottom: 6 },
+  hierarchyInfoLine: { fontSize: 12, color: '#555', lineHeight: 18 },
   sectionTitle: { marginTop: 14, marginBottom: 8, fontSize: 15, fontWeight: '800', color: '#007AFF' },
   label: { fontSize: 13, fontWeight: '700', marginTop: 10, color: '#333' },
   input: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, backgroundColor: '#fff', color: '#000', marginBottom: 6 },

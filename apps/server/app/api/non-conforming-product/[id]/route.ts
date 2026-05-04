@@ -73,6 +73,10 @@ export async function PUT(
         const {
             cliente_id,
             corpo_id,
+            empresa_id,
+            division_id,
+            contrato_id,
+            puesto_id,
             fecha_identificacion,
             responsable_cuenta,
             tipo_servicio_no_conforme,
@@ -110,6 +114,10 @@ export async function PUT(
         const updateData: any = {
             cliente_id: cliente_id !== undefined ? Number(cliente_id) : existingRecordObj.cliente_id,
             corpo_id: corpo_id !== undefined ? Number(corpo_id) : existingRecordObj.corpo_id,
+            empresa_id: empresa_id !== undefined ? Number(empresa_id) : existingRecordObj.empresa_id,
+            division_id: division_id !== undefined ? Number(division_id) : existingRecordObj.division_id,
+            contrato_id: contrato_id !== undefined ? Number(contrato_id) : existingRecordObj.contrato_id,
+            puesto_id: puesto_id !== undefined ? Number(puesto_id) : existingRecordObj.puesto_id,
             fecha_identificacion:
                 fecha_identificacion !== undefined ? (parseDateOnly(fecha_identificacion) ?? fechaIdentExisting) : fechaIdentExisting,
             responsable_cuenta: responsable_cuenta !== undefined ? String(responsable_cuenta ?? "") : existingRecordObj.responsable_cuenta,
@@ -201,29 +209,9 @@ export async function PUT(
             });
         }
 
-        // Adjuntos: si el cliente manda `archivos`, hacemos reemplazo total (como Quejas).
+        // Adjuntos: `archivos` añade nuevos; los existentes se mantienen. Quitar uno: DELETE /archivo/[archivoId].
         if (archivos !== undefined) {
-            let filesParsed: PncFileInput[] = [];
-            filesParsed = safeParseJson<PncFileInput[]>(archivos, []);
-
-            const dir = path.join(process.cwd(), "public", "uploads", "non-conforming-product", `${updatedRecordObj.id}`);
-
-            await callDynamicPrisma({
-                req,
-                data: {
-                    action: "DELETE",
-                    table: "e_archivos_producto_no_conforme",
-                    operation: "deleteMany",
-                    where: { pnc_id: updatedRecordObj.id },
-                },
-            });
-            if (fs.existsSync(dir)) {
-                try {
-                    fs.rmSync(dir, { recursive: true, force: true });
-                } catch {
-                    // ignore
-                }
-            }
+            const filesParsed = safeParseJson<PncFileInput[]>(archivos, []);
 
             if (filesParsed.length > 0) {
                 const uploadResp = await uploadDynamicFiles({
@@ -280,6 +268,7 @@ export async function PUT(
                 message: "Producto no conforme actualizado correctamente",
                 data: {
                     ...(fullRecordObj ?? updatedRecordObj),
+                    id: updatedRecordObj.id,
                     id_local: "",
                     files: archivosArray.map((f: any) => ({
                         id: f.id,

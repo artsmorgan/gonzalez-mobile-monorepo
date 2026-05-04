@@ -37,11 +37,12 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
 import {
-  filterAgendaFromEvaluationsCacheByPuesto,
-  mergeEvaluationsCacheAgendaMinutaForPuesto,
+  filterAgendaFromEvaluationsCacheByCorpo,
+  mergeEvaluationsCacheAgendaMinutaForCorpo,
 } from '@/hooks/agendaMinutaCacheHelpers';
 import authedFetch from '@/hooks/authedFetch';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type PhysicalMinuteAgendaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PhysicalMinuteAgenda'>;
 
@@ -112,6 +113,11 @@ function hasAgendaMinutaServerId(r: { id?: number | string | null } | null | und
   return Number.isFinite(n) && n > 0;
 }
 
+function getNonEmptyLocalKey(value: any): string | null {
+  const s = String(value ?? '').trim();
+  return s.length > 0 ? s : null;
+}
+
 async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, payload: any) {
   const actionsStr = await AsyncStorage.getItem('evaluations_actions');
   let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -150,6 +156,7 @@ async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, 
 }
 
 const getConnectionStatus = async (): Promise<boolean> => {
+  //return false;
   const networkState = await Network.getNetworkStateAsync();
   return networkState.isConnected && networkState.isInternetReachable ? true : false;
 };
@@ -227,6 +234,38 @@ const parseTimeHHmm = (s: string | null | undefined): Date => {
   return new Date(1970, 0, 1, hh, mm, 0, 0);
 };
 
+const normalizeDateYmd = (value: any): string | null => {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const s = value.trim();
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    const dmy = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  }
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+const normalizeTimeToHHmm = (value: any): string | null => {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const s = value.trim();
+    const hhmm = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (hhmm) return `${String(Number(hhmm[1])).padStart(2, '0')}:${hhmm[2]}`;
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return formatTimeHHmm(d);
+    return null;
+  }
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return null;
+  return formatTimeHHmm(d);
+};
+
 const safeJsonParse = <T,>(value: any, fallback: T): T => {
   try {
     if (!value) return fallback;
@@ -275,6 +314,18 @@ const getMarcaRoleDivisionId = (current: any): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const getArray = <T = any,>(...candidates: any[]): T[] => {
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c as T[];
+  }
+  return [];
+};
+
+const toValidId = (value: any): number | null => {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 const resolveDivisionIdInStructure = (
   tree: StructureTree,
   empresaId: number | null,
@@ -285,7 +336,7 @@ const resolveDivisionIdInStructure = (
   const empresa = tree.find((e: any) => Number(e?.id) === Number(empresaId));
   const clientes = Array.isArray(empresa?.clientes) ? empresa.clientes : [];
   const cliente = clientes.find((c: any) => Number(c?.id) === Number(clienteId));
-  const divisiones = Array.isArray(cliente?.division) ? cliente.division : [];
+  const divisiones = getArray(cliente?.division, (cliente as any)?.divisiones);
   if (divisiones.some((d: any) => Number(d?.id) === Number(divisionId))) return divisionId;
   return null;
 };
@@ -294,7 +345,7 @@ const resolveHierarchyByPuestoId = (tree: StructureTree, puestoId: number | null
   if (!Array.isArray(tree) || tree.length === 0 || puestoId == null) return null;
   for (const empresa of tree as any[]) {
     for (const cliente of empresa?.clientes || []) {
-      for (const division of cliente?.division || []) {
+      for (const division of getArray(cliente?.division, cliente?.divisiones)) {
         for (const contrato of division?.contratos || []) {
           for (const sucursal of contrato?.sucursales || []) {
             const puestos = Array.isArray(sucursal?.puestos) ? sucursal.puestos : [];
@@ -337,6 +388,9 @@ export default function PhysicalMinuteAgendaScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  const [filterFecha, setFilterFecha] = useState('');
+  const [filterHoraInicio, setFilterHoraInicio] = useState('');
+  const [filterHoraFin, setFilterHoraFin] = useState('');
 
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
@@ -503,12 +557,12 @@ export default function PhysicalMinuteAgendaScreen() {
       const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
       const divisionIdRaw = getMarcaRoleDivisionId(current);
 
-      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
-      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
-      setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? Number(divisionIdRaw) : null);
-      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null);
-      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
-      setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null);
+      setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? toValidId(empresaIdRaw) : null);
+      setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? toValidId(clienteIdRaw) : null);
+      setMarcaDivisionId(divisionIdRaw !== undefined && divisionIdRaw !== null ? toValidId(divisionIdRaw) : null);
+      setMarcaContratoId(contratoIdRaw !== undefined && contratoIdRaw !== null ? toValidId(contratoIdRaw) : null);
+      setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? toValidId(corpoIdRaw) : null);
+      setMarcaPuestoId(puestoIdRaw !== undefined && puestoIdRaw !== null ? toValidId(puestoIdRaw) : null);
 
       return current;
     } catch {
@@ -527,26 +581,13 @@ export default function PhysicalMinuteAgendaScreen() {
   const fetchMainStructure = useCallback(async (): Promise<StructureTree> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) {
-            setStructure(parsed);
-            return parsed as StructureTree;
-          }
-          setStructure([]);
-          return [];
-        } catch {
-          // ignore
-          setStructure([]);
-          return [];
-        }
+      const mergedTree = await loadMainStructureTreeMerged();
+      if (Array.isArray(mergedTree)) {
+        setStructure(mergedTree as StructureTree);
+        return mergedTree as StructureTree;
       }
-      else {
-        setStructure([]);
-        return [];
-      }
+      setStructure([]);
+      return [];
       /*
       const isConnected = await getConnectionStatus();
       if (!isConnected) return;
@@ -580,7 +621,7 @@ export default function PhysicalMinuteAgendaScreen() {
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const applyHierarchyFiltersFromMarca = useCallback((current: any, tree: StructureTree) => {
     if (!current) return;
@@ -591,11 +632,11 @@ export default function PhysicalMinuteAgendaScreen() {
     const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
     const divisionIdRaw = getMarcaRoleDivisionId(current);
 
-    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
-    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
-    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
-    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null;
+    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? toValidId(empresaIdRaw) : null;
+    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? toValidId(clienteIdRaw) : null;
+    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? toValidId(contratoIdRaw) : null;
+    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? toValidId(corpoIdRaw) : null;
+    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? toValidId(puestoIdRaw) : null;
     const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
 
     // Importante: setear de padre a hijo para no disparar limpiezas en cascada.
@@ -604,7 +645,8 @@ export default function PhysicalMinuteAgendaScreen() {
     setFilterDivisionId(divisionId);
     setFilterContratoId(contratoId);
     setFilterCorpoId(corpoId);
-    setFilterPuestoId(puestoId);
+    // "Puesto" es solo un filtro visual; inicia vacío para mostrar todos los registros del corpo.
+    setFilterPuestoId(null);
   }, []);
 
   const applyHierarchyFormFromMarca = useCallback((current: any, tree: StructureTree) => {
@@ -616,11 +658,11 @@ export default function PhysicalMinuteAgendaScreen() {
     const puestoIdRaw = current?.puesto?.id ?? current?.puesto_id;
     const divisionIdRaw = getMarcaRoleDivisionId(current);
 
-    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null;
-    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null;
-    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? Number(contratoIdRaw) : null;
-    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? Number(puestoIdRaw) : null;
+    const empresaId = empresaIdRaw !== undefined && empresaIdRaw !== null ? toValidId(empresaIdRaw) : null;
+    const clienteId = clienteIdRaw !== undefined && clienteIdRaw !== null ? toValidId(clienteIdRaw) : null;
+    const contratoId = contratoIdRaw !== undefined && contratoIdRaw !== null ? toValidId(contratoIdRaw) : null;
+    const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? toValidId(corpoIdRaw) : null;
+    const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? toValidId(puestoIdRaw) : null;
     const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
 
     pendingCreateHierarchyRef.current = {
@@ -734,7 +776,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
   const filterDivisiones = useMemo(() => {
     const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-    return cliente?.division || [];
+    return getArray(cliente?.division, cliente?.divisiones);
   }, [filterClientes, filterClienteId]);
 
   const filterContratos = useMemo(() => {
@@ -752,6 +794,28 @@ export default function PhysicalMinuteAgendaScreen() {
     return sucursal?.puestos || [];
   }, [filterSucursales, filterCorpoId]);
 
+  const visualFilterPuestos = useMemo(() => {
+    if (Array.isArray(filterPuestos) && filterPuestos.length > 0) return filterPuestos;
+    const map = new Map<number, { id: number; nombre: string }>();
+    for (const r of records || []) {
+      const pid = Number((r as any)?.puesto_id);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      const label = String((r as any)?.puesto_nombre || `Puesto ${pid}`).trim();
+      if (!map.has(pid)) map.set(pid, { id: pid, nombre: label });
+    }
+    return Array.from(map.values());
+  }, [filterPuestos, records]);
+
+  const hasValidVisualPuestoSelected = useMemo(() => {
+    if (!Number.isFinite(Number(filterPuestoId)) || Number(filterPuestoId) <= 0) return false;
+    return visualFilterPuestos.some((p: any) => Number(p?.id) === Number(filterPuestoId));
+  }, [filterPuestoId, visualFilterPuestos]);
+
+  useEffect(() => {
+    if (filterPuestoId == null) return;
+    if (!hasValidVisualPuestoSelected) setFilterPuestoId(null);
+  }, [filterPuestoId, hasValidVisualPuestoSelected]);
+
   const selectedEmpresaNode = useMemo<StructureEmpresa | null>(() => {
     if (selectedEmpresaId === null) return null;
     return (structure.find((e: any) => e.id === selectedEmpresaId) as StructureEmpresa) ?? null;
@@ -767,7 +831,7 @@ export default function PhysicalMinuteAgendaScreen() {
   }, [clienteNodes, selectedClienteId]);
 
   const divisionNodes = useMemo<StructureDivision[]>(() => {
-    return (selectedClienteNode?.division ?? []) as StructureDivision[];
+    return getArray(selectedClienteNode?.division, (selectedClienteNode as any)?.divisiones) as StructureDivision[];
   }, [selectedClienteNode]);
 
   const selectedDivisionNode = useMemo<StructureDivision | null>(() => {
@@ -1244,7 +1308,7 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const fetchRecords = useCallback(async () => {
-    let searchPuestoIdNum: number | null = null;
+    let searchCorpoIdNum: number | null = null;
     try {
       setIsLoading(true);
       setError(null);
@@ -1263,11 +1327,11 @@ export default function PhysicalMinuteAgendaScreen() {
       const isOperativoUser = rn === 'OPERATIVO';
 
       if (isOperativoUser && currentMarca) {
-        const p = Number(currentMarca?.puesto?.id ?? currentMarca?.puesto_id);
-        searchPuestoIdNum = Number.isFinite(p) && p > 0 ? p : null;
+        const c = Number(currentMarca?.corpo?.id ?? currentMarca?.corpo_id);
+        searchCorpoIdNum = Number.isFinite(c) && c > 0 ? c : null;
       } else {
-        const p = Number(filterPuestoId);
-        searchPuestoIdNum = Number.isFinite(p) && p > 0 ? p : null;
+        const c = Number(filterCorpoId);
+        searchCorpoIdNum = Number.isFinite(c) && c > 0 ? c : null;
       }
 
       const parseEvaluationsCacheArray = async (): Promise<any[]> => {
@@ -1281,7 +1345,7 @@ export default function PhysicalMinuteAgendaScreen() {
         }
       };
 
-      if (searchPuestoIdNum == null) {
+      if (searchCorpoIdNum == null) {
         setRecords([]);
         return;
       }
@@ -1293,41 +1357,25 @@ export default function PhysicalMinuteAgendaScreen() {
           throw new Error('Server URL not configured');
         }
 
-        const params = new URLSearchParams();
-        params.append('puesto_id', String(searchPuestoIdNum));
-
-        const response = await authedFetch({
-          url: `${apiUrl}/api/agenda-minuta?${params.toString()}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
+        const data = await listAgendaMinutaByCorpo({
+          corpo_id: String(searchCorpoIdNum),
           refreshAccessToken,
           logout,
         });
-        if (!response) return;
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
         const fullCache = await parseEvaluationsCacheArray();
 
         if (data.status && Array.isArray(data.data)) {
-          const merged = mergeEvaluationsCacheAgendaMinutaForPuesto(fullCache, data.data, searchPuestoIdNum);
+          const merged = mergeEvaluationsCacheAgendaMinutaForCorpo(fullCache, data.data, searchCorpoIdNum);
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
-          const forList = filterAgendaFromEvaluationsCacheByPuesto(merged, searchPuestoIdNum);
+          const forList = filterAgendaFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
           setRecords(forList as AgendaMinutaRecord[]);
         } else {
-          const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, searchPuestoIdNum);
+          const forList = filterAgendaFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
           setRecords(forList as AgendaMinutaRecord[]);
         }
       } else {
         const fullCache = await parseEvaluationsCacheArray();
-        const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, searchPuestoIdNum);
+        const forList = filterAgendaFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
         setRecords(forList as AgendaMinutaRecord[]);
       }
     } catch (err) {
@@ -1346,14 +1394,14 @@ export default function PhysicalMinuteAgendaScreen() {
           currentMarcaCatch?.role_division?.role?.nombre ??
           null;
         const isOperativoCatch = rnCatch === 'OPERATIVO';
-        let pidCatch: number | null = searchPuestoIdNum;
-        if (pidCatch == null) {
+        let corpoCatch: number | null = searchCorpoIdNum;
+        if (corpoCatch == null) {
           if (isOperativoCatch && currentMarcaCatch) {
-            const p = Number(currentMarcaCatch?.puesto?.id ?? currentMarcaCatch?.puesto_id);
-            pidCatch = Number.isFinite(p) && p > 0 ? p : null;
+            const c = Number(currentMarcaCatch?.corpo?.id ?? currentMarcaCatch?.corpo_id);
+            corpoCatch = Number.isFinite(c) && c > 0 ? c : null;
           } else {
-            const p = Number(filterPuestoId);
-            pidCatch = Number.isFinite(p) && p > 0 ? p : null;
+            const c = Number(filterCorpoId);
+            corpoCatch = Number.isFinite(c) && c > 0 ? c : null;
           }
         }
 
@@ -1367,7 +1415,7 @@ export default function PhysicalMinuteAgendaScreen() {
             /* ignore */
           }
         }
-        const forList = filterAgendaFromEvaluationsCacheByPuesto(fullCache, pidCatch);
+        const forList = filterAgendaFromEvaluationsCacheByCorpo(fullCache, corpoCatch);
         setRecords(forList as AgendaMinutaRecord[]);
       } catch {
         // ignore
@@ -1375,7 +1423,7 @@ export default function PhysicalMinuteAgendaScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId, refreshAccessToken, logout]);
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, refreshAccessToken, logout]);
 
   // Inicializar filtros desde current_marca al cargar
   useFocusEffect(
@@ -1392,10 +1440,10 @@ export default function PhysicalMinuteAgendaScreen() {
     }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
   );
 
-  // Recargar registros cuando cambian los filtros de cualquier nivel de la jerarquía
+  // Recargar registros al definir/actualizar corpo (operativo usa current_marca.corpo)
   useEffect(() => {
     fetchRecords();
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, filterPuestoId]);
+  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
 
   // Limpiar filtros dependientes cuando cambia un nivel superior
   useEffect(() => {
@@ -1484,7 +1532,10 @@ export default function PhysicalMinuteAgendaScreen() {
     const temasArray = temasATratar.map((t) => t.tema.trim()).filter((t) => t.length > 0);
 
     return {
+      empresa_id: selectedEmpresaId,
       cliente_id: selectedClienteId,
+      division_id: selectedDivisionId,
+      contrato_id: selectedContratoId,
       corpo_id: selectedSucursalId,
       puesto_id: selectedPuestoId,
       numero: numeroNum,
@@ -1498,6 +1549,9 @@ export default function PhysicalMinuteAgendaScreen() {
       temas_a_tratar: JSON.stringify(temasArray),
       observaciones: observaciones.trim() || ' ',
       firma_responsable: firmaResponsable,
+      cliente_nombre: selectedClienteNode?.nombre ?? null,
+      corpo_nombre: sucursalNombre,
+      puesto_nombre: puestoNombre,
     };
   };
 
@@ -1518,6 +1572,31 @@ export default function PhysicalMinuteAgendaScreen() {
             logout,
           });
           if (res.status) {
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const editLocalKey = getNonEmptyLocalKey(editingRecord.id_local);
+            const updatedCache = cache.map((it: any) => {
+              const sameServerId =
+                Number(it?.id) > 0 && Number(editingRecord.id) > 0 && Number(it.id) === Number(editingRecord.id);
+              const sameLocalKey =
+                editLocalKey != null && getNonEmptyLocalKey(it?.id_local) === editLocalKey;
+              if (
+                (sameServerId || sameLocalKey) &&
+                (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda')
+              ) {
+                return {
+                  ...it,
+                  ...payload,
+                  id: Number(editingRecord.id),
+                  id_local: editLocalKey || '',
+                  synced: true,
+                  type: 'agenda_minuta',
+                  isActive: true,
+                };
+              }
+              return it;
+            });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
             Alert.alert('Éxito', res.message || 'Agenda minuta actualizada correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
@@ -1558,10 +1637,16 @@ export default function PhysicalMinuteAgendaScreen() {
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const editLocalKey = getNonEmptyLocalKey(editingRecord.id_local);
         const updatedCache = cache.map((it: any) => {
+          const sameServerId =
+            Number(it?.id) > 0 && Number(editingRecord.id) > 0 && Number(it.id) === Number(editingRecord.id);
+          const sameQueueKey = getNonEmptyLocalKey(it?.id_local) === getNonEmptyLocalKey(queueKey);
+          const sameEditLocalKey =
+            editLocalKey != null && getNonEmptyLocalKey(it?.id_local) === editLocalKey;
           if (
-            (it.id === editingRecord.id || it.id_local === queueKey || it.id_local === editingRecord.id_local) &&
-            it.type === 'agenda_minuta'
+            (sameServerId || sameQueueKey || sameEditLocalKey) &&
+            (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda')
           ) {
             return {
               ...it,
@@ -1586,6 +1671,26 @@ export default function PhysicalMinuteAgendaScreen() {
         if (isConnected) {
           const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
+            const cacheStrDraft = await AsyncStorage.getItem('evaluations_cache');
+            const cacheDraft = cacheStrDraft ? JSON.parse(cacheStrDraft) : [];
+            const createdId = Number(res?.data?.id);
+            const updatedCacheDraft = cacheDraft.map((it: any) => {
+              if (
+                String(it.id_local) === String(editingRecord.id_local) &&
+                (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda')
+              ) {
+                return {
+                  ...it,
+                  ...payload,
+                  id: Number.isFinite(createdId) && createdId > 0 ? createdId : it.id,
+                  synced: true,
+                  type: 'agenda_minuta',
+                  isActive: true,
+                };
+              }
+              return it;
+            });
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCacheDraft));
             Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
@@ -1607,7 +1712,7 @@ export default function PhysicalMinuteAgendaScreen() {
         const cacheStrDraft = await AsyncStorage.getItem('evaluations_cache');
         const cacheDraft = cacheStrDraft ? JSON.parse(cacheStrDraft) : [];
         const updatedCacheDraft = cacheDraft.map((it: any) => {
-          if (it.id_local === draftLocalId && it.type === 'agenda_minuta') {
+          if (it.id_local === draftLocalId && (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda')) {
             return {
               ...it,
               ...payload,
@@ -1631,6 +1736,35 @@ export default function PhysicalMinuteAgendaScreen() {
       if (isConnected) {
         const res = await createAgendaMinuta({ requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          const cacheStrOnline = await AsyncStorage.getItem('evaluations_cache');
+          const cacheOnline = cacheStrOnline ? JSON.parse(cacheStrOnline) : [];
+          const horaAccionOnline = await getHoraAccion();
+          const createdId = Number(res?.data?.id);
+          const newCacheRecordOnline: AgendaMinutaRecord = {
+            id: Number.isFinite(createdId) && createdId > 0 ? createdId : '',
+            id_local: '',
+            cliente_id: payload.cliente_id,
+            corpo_id: payload.corpo_id,
+            puesto_id: payload.puesto_id,
+            numero: payload.numero,
+            titulo: payload.titulo,
+            fecha: payload.fecha,
+            hora_inicio: payload.hora_inicio,
+            hora_fin: payload.hora_fin,
+            autor: payload.autor,
+            participantes: payload.participantes,
+            acuerdos: payload.acuerdos,
+            temas_a_tratar: payload.temas_a_tratar,
+            observaciones: payload.observaciones,
+            firma_responsable: payload.firma_responsable,
+            created_at: new Date(horaAccionOnline).toISOString(),
+            synced: true,
+            cliente_nombre: payload.cliente_nombre ?? null,
+            corpo_nombre: payload.corpo_nombre ?? null,
+            puesto_nombre: payload.puesto_nombre ?? null,
+          };
+          cacheOnline.push({ ...newCacheRecordOnline, type: 'agenda_minuta', isActive: true });
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cacheOnline));
           Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
           setTimeout(() => {
             cancelCreateOrEdit();
@@ -1673,8 +1807,11 @@ export default function PhysicalMinuteAgendaScreen() {
         firma_responsable: payload.firma_responsable,
         created_at: new Date(horaAccion).toISOString(),
         synced: false,
+        cliente_nombre: payload.cliente_nombre ?? null,
+        corpo_nombre: payload.corpo_nombre ?? null,
+        puesto_nombre: payload.puesto_nombre ?? null,
       };
-      cache.push({ ...newCacheRecord, type: 'agenda_minuta' });
+      cache.push({ ...newCacheRecord, type: 'agenda_minuta', isActive: true });
       await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
       Alert.alert('Éxito', 'Agenda minuta registrada localmente. Se sincronizará cuando haya conexión.');
       setTimeout(() => {
@@ -1714,6 +1851,38 @@ export default function PhysicalMinuteAgendaScreen() {
             if (isConnected && hasAgendaMinutaServerId(r)) {
               const res = await deleteAgendaMinuta({ id: r.id, refreshAccessToken, logout });
               if (res.status) {
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                const rid = String(r.id);
+                const rowLocalKey = getNonEmptyLocalKey(r.id_local);
+                actions = actions.filter(
+                  (a: any) =>
+                    !(
+                      isAgendaEvalAction(a) &&
+                      (
+                        String(a.id) === rid ||
+                        String(a.remote_id) === rid ||
+                        (rowLocalKey != null && getNonEmptyLocalKey(a.id_local) === rowLocalKey)
+                      )
+                    )
+                );
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+                const rowLocalKeyForCache = getNonEmptyLocalKey(r.id_local);
+                const updatedCache = cache.filter(
+                  (it: any) =>
+                    !(
+                      (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda') &&
+                      (
+                        String(it.id) === rid ||
+                        (rowLocalKeyForCache != null && getNonEmptyLocalKey(it.id_local) === rowLocalKeyForCache)
+                      )
+                    )
+                );
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                 Alert.alert('Éxito', 'Eliminado');
                 fetchRecords();
                 return;
@@ -1761,8 +1930,16 @@ export default function PhysicalMinuteAgendaScreen() {
 
             const cacheStr = await AsyncStorage.getItem('evaluations_cache');
             const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            const rowLocalKey = getNonEmptyLocalKey(r.id_local);
             const updatedCache = cache.filter(
-              (it: any) => !(it.type === 'agenda_minuta' && (it.id_local === r.id_local || it.id === r.id))
+              (it: any) =>
+                !(
+                  (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda') &&
+                  (
+                    (rowLocalKey != null && getNonEmptyLocalKey(it.id_local) === rowLocalKey) ||
+                    (Number(it.id) > 0 && Number(r.id) > 0 && Number(it.id) === Number(r.id))
+                  )
+                )
             );
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
             Alert.alert('Modo Offline', 'Eliminado offline. Se sincronizará cuando haya conexión.');
@@ -1779,6 +1956,26 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const renderList = () => {
+    const recordsToShow = (records || []).filter((r: any) => {
+      if (hasValidVisualPuestoSelected && Number(r?.puesto_id) !== Number(filterPuestoId)) return false;
+      const ymd = normalizeDateYmd(r?.fecha);
+      if (filterFecha.trim()) {
+        const wantDate = normalizeDateYmd(filterFecha.trim());
+        if (!wantDate || ymd !== wantDate) return false;
+      }
+      const hi = normalizeTimeToHHmm(r?.hora_inicio);
+      if (filterHoraInicio.trim()) {
+        const wantHi = normalizeTimeToHHmm(filterHoraInicio.trim());
+        if (!wantHi || hi !== wantHi) return false;
+      }
+      const hf = normalizeTimeToHHmm(r?.hora_fin);
+      if (filterHoraFin.trim()) {
+        const wantHf = normalizeTimeToHHmm(filterHoraFin.trim());
+        if (!wantHf || hf !== wantHf) return false;
+      }
+      return true;
+    });
+
     if (isLoading) {
       return (
         <ThemedView style={styles.loadingContainer}>
@@ -1796,7 +1993,7 @@ export default function PhysicalMinuteAgendaScreen() {
       );
     }
 
-    if (records.length === 0) {
+    if (recordsToShow.length === 0) {
       return (
         <ThemedView style={styles.emptyContainer}>
           <ThemedText style={styles.emptyText}>No hay agendas minuta.</ThemedText>
@@ -1806,7 +2003,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
     return (
       <ThemedView style={styles.listContainer}>
-        {records.map((r) => {
+        {recordsToShow.map((r) => {
           const itemKey = String(r.id || r.id_local || '');
           const participantesArr = safeJsonParse<any[]>(r.participantes, []);
           const { items: acuerdosArr, meta: acuerdosMeta } = parseAcuerdosPayload(r.acuerdos);
@@ -2009,8 +2206,8 @@ export default function PhysicalMinuteAgendaScreen() {
               <>
                 <ThemedText style={styles.label}>Empresa</ThemedText>
                 <View style={styles.pickerWrapper}>
-                  <Picker selectedValue={selectedEmpresaId} onValueChange={(v) => setSelectedEmpresaId(v)} style={styles.picker}>
-                    <Picker.Item label="Seleccione empresa" value={null} color="#000000" />
+                  <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => setSelectedEmpresaId(Number(v) || null)} style={styles.picker}>
+                    <Picker.Item label="Seleccione empresa" value={0} color="#000000" />
                     {empresaOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2020,12 +2217,12 @@ export default function PhysicalMinuteAgendaScreen() {
                 <ThemedText style={styles.label}>Cliente</ThemedText>
                 <View style={styles.pickerWrapper}>
                   <Picker
-                    selectedValue={selectedClienteId}
+                    selectedValue={selectedClienteId ?? 0}
                     enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                    onValueChange={(v) => setSelectedClienteId(v)}
+                    onValueChange={(v) => setSelectedClienteId(Number(v) || null)}
                     style={styles.picker}
                   >
-                    <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={null} color="#000000" />
+                    <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={0} color="#000000" />
                     {clienteOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2035,12 +2232,12 @@ export default function PhysicalMinuteAgendaScreen() {
                 <ThemedText style={styles.label}>División</ThemedText>
                 <View style={styles.pickerWrapper}>
                   <Picker
-                    selectedValue={selectedDivisionId}
+                    selectedValue={selectedDivisionId ?? 0}
                     enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                    onValueChange={(v) => setSelectedDivisionId(v)}
+                    onValueChange={(v) => setSelectedDivisionId(Number(v) || null)}
                     style={styles.picker}
                   >
-                    <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={null} color="#000000" />
+                    <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={0} color="#000000" />
                     {divisionOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2050,12 +2247,12 @@ export default function PhysicalMinuteAgendaScreen() {
                 <ThemedText style={styles.label}>Contrato</ThemedText>
                 <View style={styles.pickerWrapper}>
                   <Picker
-                    selectedValue={selectedContratoId}
+                    selectedValue={selectedContratoId ?? 0}
                     enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                    onValueChange={(v) => setSelectedContratoId(v)}
+                    onValueChange={(v) => setSelectedContratoId(Number(v) || null)}
                     style={styles.picker}
                   >
-                    <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={null} color="#000000" />
+                    <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={0} color="#000000" />
                     {contratoOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2065,12 +2262,12 @@ export default function PhysicalMinuteAgendaScreen() {
                 <ThemedText style={styles.label}>Sucursal</ThemedText>
                 <View style={styles.pickerWrapper}>
                   <Picker
-                    selectedValue={selectedSucursalId}
+                    selectedValue={selectedSucursalId ?? 0}
                     enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                    onValueChange={(v) => setSelectedSucursalId(v)}
+                    onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
                     style={styles.picker}
                   >
-                    <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={null} color="#000000" />
+                    <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={0} color="#000000" />
                     {sucursalOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2080,12 +2277,12 @@ export default function PhysicalMinuteAgendaScreen() {
                 <ThemedText style={styles.label}>Puesto</ThemedText>
                 <View style={styles.pickerWrapper}>
                   <Picker
-                    selectedValue={selectedPuestoId}
+                    selectedValue={selectedPuestoId ?? 0}
                     enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                    onValueChange={(v) => setSelectedPuestoId(v)}
+                    onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
                     style={styles.picker}
                   >
-                    <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={null} color="#000000" />
+                    <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={0} color="#000000" />
                     {puestoOptions.map((o) => (
                       <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
                     ))}
@@ -2569,8 +2766,8 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
             </ThemedView>
 
-      {/* Filtros jerárquicos: solo si el rol no es OPERATIVO */}
-      {roleName != null && roleName !== 'OPERATIVO' && (
+      {/* Filtros siempre visibles; jerarquía solo para no operativos */}
+      {roleName != null && (
               <ThemedView style={styles.filtersMain}>
                 <ThemedView style={styles.filterHeader}>
                   <TouchableOpacity
@@ -2591,7 +2788,10 @@ export default function PhysicalMinuteAgendaScreen() {
                       setFilterDivisionId(null);
                       setFilterContratoId(null);
                       setFilterCorpoId(marcaCorpoId);
-                      setFilterPuestoId(marcaPuestoId);
+                      setFilterPuestoId(null);
+                      setFilterFecha('');
+                      setFilterHoraInicio('');
+                      setFilterHoraFin('');
                     }}>
                       <Ionicons name="refresh" size={16} color="#FF3B30" />
                       <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
@@ -2600,18 +2800,20 @@ export default function PhysicalMinuteAgendaScreen() {
                 </ThemedView>
                 {isFiltersExpanded && (
                   <ThemedView style={styles.filterContent}>
+                    {roleName !== 'OPERATIVO' && (
+                      <>
                     {/* Árbol jerárquico para filtros */}
                     <ThemedView style={styles.filterGroup}>
                       <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
-                          selectedValue={filterEmpresaId || ''}
+                          selectedValue={filterEmpresaId ?? 0}
                           onValueChange={(value) => {
-                            setFilterEmpresaId(value && value !== '' ? Number(value) : null);
+                            setFilterEmpresaId(Number(value) || null);
                           }}
                           style={styles.picker}
                         >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                          <Picker.Item label="Seleccionar..." value={0} color="#000000" />
                           {filterEmpresas.map((e: any) => (
                             <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
                           ))}
@@ -2624,13 +2826,13 @@ export default function PhysicalMinuteAgendaScreen() {
                         <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterClienteId || ''}
+                            selectedValue={filterClienteId ?? 0}
                             onValueChange={(value) => {
-                              setFilterClienteId(value && value !== '' ? Number(value) : null);
+                              setFilterClienteId(Number(value) || null);
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
                             {filterClientes.map((c: any) => (
                               <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
@@ -2644,13 +2846,13 @@ export default function PhysicalMinuteAgendaScreen() {
                         <ThemedText style={styles.filterLabel}>División:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterDivisionId || ''}
+                            selectedValue={filterDivisionId ?? 0}
                             onValueChange={(value) => {
-                              setFilterDivisionId(value && value !== '' ? Number(value) : null);
+                              setFilterDivisionId(Number(value) || null);
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
                             {filterDivisiones.map((d: any) => (
                               <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
                             ))}
@@ -2664,13 +2866,13 @@ export default function PhysicalMinuteAgendaScreen() {
                         <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterContratoId || ''}
+                            selectedValue={filterContratoId ?? 0}
                             onValueChange={(value) => {
-                              setFilterContratoId(value && value !== '' ? Number(value) : null);
+                              setFilterContratoId(Number(value) || null);
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
                             {filterContratos.map((c: any) => (
                               <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
                             ))}
@@ -2684,13 +2886,13 @@ export default function PhysicalMinuteAgendaScreen() {
                         <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
-                            selectedValue={filterCorpoId || ''}
+                            selectedValue={filterCorpoId ?? 0}
                             onValueChange={(value) => {
-                              setFilterCorpoId(value && value !== '' ? Number(value) : null);
+                              setFilterCorpoId(Number(value) || null);
                             }}
                             style={styles.picker}
                           >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
                             {filterSucursales.map((s: any) => (
                               <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
                             ))}
@@ -2699,23 +2901,57 @@ export default function PhysicalMinuteAgendaScreen() {
                       </ThemedView>
                     )}
 
-                    {filterCorpoId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterPuestoId || ''}
-                            onValueChange={(value) => setFilterPuestoId(value && value !== '' ? Number(value) : null)}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                            {filterPuestos.map((p: any) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
+                      </>
                     )}
+
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Puesto (solo visual):</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={filterPuestoId ?? 0}
+                          onValueChange={(value) => setFilterPuestoId(Number(value) || null)}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value={0} color="#000000" />
+                          {visualFilterPuestos.map((p: any) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Fecha (YYYY-MM-DD)</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={filterFecha}
+                        onChangeText={setFilterFecha}
+                        placeholder="2026-04-29"
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Hora inicio (HH:mm)</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={filterHoraInicio}
+                        onChangeText={setFilterHoraInicio}
+                        placeholder="08:00"
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
+
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Hora fin (HH:mm)</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={filterHoraFin}
+                        onChangeText={setFilterHoraFin}
+                        placeholder="17:00"
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
                   </ThemedView>
                 )}
               </ThemedView>

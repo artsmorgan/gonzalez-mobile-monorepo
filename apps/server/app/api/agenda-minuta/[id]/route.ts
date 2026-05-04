@@ -80,10 +80,25 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const data: any = {};
+    if (body.empresa_id !== undefined) {
+      const n = parseInt(String(body.empresa_id), 10);
+      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "empresa_id inválido" }, { status: 400 });
+      data.empresa_id = n;
+    }
     if (body.cliente_id !== undefined) {
       const n = parseInt(String(body.cliente_id), 10);
       if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "cliente_id inválido" }, { status: 400 });
       data.cliente_id = n;
+    }
+    if (body.division_id !== undefined) {
+      const n = parseInt(String(body.division_id), 10);
+      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "division_id inválido" }, { status: 400 });
+      data.division_id = n;
+    }
+    if (body.contrato_id !== undefined) {
+      const n = parseInt(String(body.contrato_id), 10);
+      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "contrato_id inválido" }, { status: 400 });
+      data.contrato_id = n;
     }
     if (body.corpo_id !== undefined) {
       const n = parseInt(String(body.corpo_id), 10);
@@ -278,9 +293,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     await callDynamicPrisma({
       req,
       data: {
-        action: "DELETE",
+        action: "UPDATE",
         table: "c_agenda_minuta",
         where: { id: idNum },
+        data: { isActive: false },
       },
     });
 

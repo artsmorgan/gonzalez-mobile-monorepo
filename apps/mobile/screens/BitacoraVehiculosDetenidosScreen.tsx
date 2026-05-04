@@ -45,8 +45,27 @@ import {
   listBitacoraVehiculoDetenido,
   updateBitacoraVehiculoDetenido,
 } from '@/hooks/bitacoraVehiculoDetenidoFunctions';
-import { listCorporateVehiclesByCorpo } from '@/hooks/evaluationFunctions';
 import { BITACORA_VEHICULO_DETENIDO_EVAL_TYPE } from '@/hooks/corporateEvaluationsSync';
+import {
+  bitacoraLinkFromCacheItem,
+  bitacoraLinkFromRequestPayload,
+  clearBitacoraFromMainStructureByBitacoraRef,
+  findBitacoraDetenidoInMainStructureByLocalKey,
+  loadMainStructureTreeMerged,
+  mergeBitacorasDetenidosForSucursalFromServer,
+  moveBitacoraDetenidoRowBetweenSucursales,
+  moveBitacoraOnMainStructureCache,
+  readBitacorasForSucursalFromMainStructure,
+  removeBitacoraDetenidoRowFromMainStructure,
+  setBitacoraOnUsoInMainStructureCache,
+  upsertBitacoraDetenidoRowInMainStructure,
+} from '@/hooks/bitacoraMainStructureCache';
+import {
+  findHierarchyByCorpoIn,
+  findHierarchyByPuestoIn,
+  getFirstPuestoIdFromSucursalInTree,
+} from '@/hooks/llavesMainStructureHelpers';
+import { readCorporateVehiclesForSucursalFromMainStructure } from '@/hooks/corporateVehiclesMainStructure';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
@@ -55,6 +74,84 @@ type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
 
 type MainStructureTree = any[];
+
+type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
+
+type MarcaSnapshot = {
+  current: Record<string, any>;
+  roleName: RoleName;
+  isOperativo: boolean;
+  marcaDivisionId: number | null;
+  marcaCorpoId: number | null;
+  marcaClienteId: number | null;
+  marcaEmpresaId: number | null;
+  filterEmpresaId: number | null;
+  filterClienteId: number | null;
+  filterDivisionId: number | null;
+  filterContratoId: number | null;
+  filterSucursalId: number | null;
+};
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** ID sucursal en registro o caché (`sucursal_id` o `corpo_id`). */
+function bitacoraRecordSucursalId(b: any): number {
+  return Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
+}
+
+function normalizeVehiculoNodeFromTree(v: any): any {
+  const usosRaw = v?.usos ?? v?.c_usos_vehiculos_corporativos ?? [];
+  const usos = Array.isArray(usosRaw) ? usosRaw : [];
+  return { ...v, usos, c_usos_vehiculos_corporativos: usos };
+}
+
+function isPositiveServerId(value: unknown): boolean {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0;
+}
+
+function resolveLocalEntityKey(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim();
+  if (!s) return null;
+  return isPositiveServerId(s) ? null : s;
+}
+
+/** Vehículos corporativos de una sucursal según el árbol principal (fragmentos mergeados o caché legada). */
+function getVehiculosCorporativosFromTree(tree: MainStructureTree, corpoId: number): any[] {
+  const cid = Number(corpoId);
+  for (const empresa of tree || []) {
+    for (const cliente of empresa.clientes || []) {
+      const divisiones = cliente.division || cliente.divisiones || [];
+      for (const division of divisiones) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              const raw = sucursal.vehiculos_corporativos || sucursal.c_vehiculos_corporativos || [];
+              if (!Array.isArray(raw)) return [];
+              return raw.map(normalizeVehiculoNodeFromTree);
+            }
+          }
+        }
+      }
+    }
+  }
+  return [];
+}
 
 type MovimientoVehiculo = {
   movimiento: string;
@@ -470,7 +567,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const isPrefillMode = !!prefill;
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [hasCurrentMarca, setHasCurrentMarca] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bitacoras, setBitacoras] = useState<BitacoraVehiculoDetenidoItem[]>([]);
@@ -510,6 +607,29 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
   const [marcaClienteId, setMarcaClienteId] = useState<number | null>(null);
   const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null);
+  const [roleName, setRoleName] = useState<RoleName>(null);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
+  const filterEmpresaIdRef = useRef<number | null>(null);
+  const filterClienteIdRef = useRef<number | null>(null);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  /** Jerarquía del formulario (visible si no es OPERATIVO). */
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Vehículo corporativo / Uso (vinculación bitácora)
   const [selectedCorporateVehicleId, setSelectedCorporateVehicleId] = useState<number | null>(null);
@@ -521,8 +641,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [availableCorporateUses, setAvailableCorporateUses] = useState<any[]>([]);
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const [prefillVehicleInfo, setPrefillVehicleInfo] = useState<{ vehiculo?: any; uso?: any } | null>(null);
+  /** Prefill desde CorporateVehicles: jerarquía elegida automáticamente y selects bloqueados. */
+  const [prefillFormHierarchyLocked, setPrefillFormHierarchyLocked] = useState(false);
   // Vehículo temporal para casos donde el vehículo no está en la lista cargada
   const [tempVehicle, setTempVehicle] = useState<any | null>(null);
+  const loadedVehiclesCorpoRef = useRef<number | null>(null);
 
   // Datos adicionales del vehículo (opcionales) y control para registrar vehículo nuevo
   const [shouldRegisterVehicle, setShouldRegisterVehicle] = useState<boolean>(false);
@@ -595,15 +718,435 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const handleMenuClose = () => setIsMenuVisible(false);
   const handleHomePress = () => navigation.navigate('Home');
 
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaDivisionId(null);
+        setMarcaCorpoId(null);
+        setMarcaClienteId(null);
+        setMarcaEmpresaId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current?.id) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
+        const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
+        const divId = numOrNull(divIdRaw);
+        const corpoId = numOrNull(corpoIdRaw);
+        const clienteId = numOrNull(clienteIdRaw);
+        const empresaId = numOrNull(empresaIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+        const rn = typeof role === 'string' ? (role as RoleName) : null;
+
+        setMarcaDivisionId(divId);
+        setMarcaCorpoId(corpoId);
+        setMarcaClienteId(clienteId);
+        setMarcaEmpresaId(empresaId);
+        setRoleName(rn);
+        setMarcaId(Number(current.id));
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaDivisionId: divId,
+          marcaCorpoId: corpoId,
+          marcaClienteId: clienteId,
+          marcaEmpresaId: empresaId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        return null;
+      }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+      setFilterSucursalId(fs);
+      filterSucursalIdRef.current = fs;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (bitácora vehículos):', e);
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async () => {
+    setIsStructureLoading(true);
+    try {
+      const loaded = await loadMainStructureTreeMerged();
+      setStructure(Array.isArray(loaded) ? loaded : []);
+    } catch (e) {
+      console.error('Error loading main structure (bitácora vehículos):', e);
+      setStructure([]);
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c: any) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d: any) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c: any) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const formEmpresaNode = useMemo(() => {
+    if (formEmpresaId === null) return null;
+    return structure.find((e) => e.id === formEmpresaId) ?? null;
+  }, [structure, formEmpresaId]);
+  const formClienteOptions = useMemo(() => {
+    if (!formEmpresaNode) return [];
+    return (formEmpresaNode.clientes || []).map((c: any) => ({ id: c.id, nombre: c.nombre }));
+  }, [formEmpresaNode]);
+  const formClienteNode = useMemo(() => {
+    if (!formEmpresaNode || formClienteId === null) return null;
+    return formEmpresaNode.clientes.find((c: any) => c.id === formClienteId) ?? null;
+  }, [formEmpresaNode, formClienteId]);
+  const formDivisionOptions = useMemo(() => {
+    if (!formClienteNode) return [];
+    return (formClienteNode.division || []).map((d: any) => ({ id: d.id, nombre: d.nombre }));
+  }, [formClienteNode]);
+  const formDivisionNode = useMemo(() => {
+    if (!formClienteNode || formDivisionId === null) return null;
+    return (formClienteNode.division || []).find((d: any) => d.id === formDivisionId) ?? null;
+  }, [formClienteNode, formDivisionId]);
+  const formContratoOptions = useMemo(() => {
+    if (!formDivisionNode) return [];
+    return (formDivisionNode.contratos || []).map((c: any) => ({ id: c.id, nombre: c.nombre }));
+  }, [formDivisionNode]);
+  const formContratoNode = useMemo(() => {
+    if (!formDivisionNode || formContratoId === null) return null;
+    return (formDivisionNode.contratos || []).find((c: any) => c.id === formContratoId) ?? null;
+  }, [formDivisionNode, formContratoId]);
+  const formSucursalOptions = useMemo(() => {
+    if (!formContratoNode) return [];
+    return (formContratoNode.sucursales || []).map((s: any) => ({ id: s.id, nombre: s.nombre }));
+  }, [formContratoNode]);
+
+  const formSucursalNode = useMemo(() => {
+    if (!formContratoNode || formSucursalId === null) return null;
+    return (formContratoNode.sucursales || []).find((s: any) => Number(s.id) === Number(formSucursalId)) ?? null;
+  }, [formContratoNode, formSucursalId]);
+
+  const formPuestoOptions = useMemo(() => {
+    if (!formSucursalNode) return [];
+    return (formSucursalNode.puestos || []).map((p: any) => ({
+      id: p.id,
+      nombre: p.nombre != null ? String(p.nombre) : String(p.codigo ?? p.id),
+    }));
+  }, [formSucursalNode]);
+
+  const applyCurrentMarcaToFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setFormPuestoId(marca.puesto?.id != null ? Number(marca.puesto.id) : null);
+    } catch (e) {
+      console.error('applyCurrentMarcaToFormHierarchy (bitácora vehículos):', e);
+    }
+  }, []);
+
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setFormEmpresaId(empresaId);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setFormClienteId(clienteId);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+  const handleFormDivisionChange = (divisionId: number | null) => {
+    setFormDivisionId(divisionId);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+  const handleFormContratoChange = (contratoId: number | null) => {
+    setFormContratoId(contratoId);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const runFetchBitacoras = useCallback(
+    async (snap: MarcaSnapshot | null) => {
+      try {
+        setIsLoading(true);
+        setError(null);
+
+        if (isPrefillMode && !snap) {
+          setIsLoading(false);
+          return;
+        }
+
+        if (!snap) {
+          console.log(1);
+          setBitacoras([]);
+          setIsLoading(false);
+          return;
+        }
+
+        const isOperativo = snap.isOperativo;
+        const listCorpoId = isOperativo
+          ? snap.marcaCorpoId
+          : filterSucursalIdRef.current ?? snap.marcaCorpoId;
+
+        const sid = listCorpoId != null && Number(listCorpoId) > 0 ? Number(listCorpoId) : null;
+        const fromMain =
+          sid != null ? await readBitacorasForSucursalFromMainStructure(sid) : [];
+
+        const isConnected = await getConnectionStatus();
+
+        if (!isConnected) {
+          console.log(2);
+          setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
+          if (!sid) {
+            setError(
+              isOperativo
+                ? 'No se encontró la sucursal en la marca actual'
+                : 'Seleccione sucursal en el filtro para ver registros en caché'
+            );
+          } else {
+            setError(null);
+          }
+          setIsLoading(false);
+          return;
+        }
+
+        if (!sid || sid <= 0) {
+          console.log(3);
+          setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
+          setError(
+            isOperativo
+              ? 'No se encontró el ID de la sucursal (corpo) en la marca actual'
+              : 'Seleccione sucursal (corpo) en el filtro jerárquico para cargar los registros'
+          );
+          setIsLoading(false);
+          return;
+        }
+
+        setError(null);
+
+        const empresaIdForApi = isOperativo
+          ? snap.marcaEmpresaId ?? undefined
+          : filterEmpresaIdRef.current ?? undefined;
+        const clienteIdForApi = isOperativo
+          ? snap.marcaClienteId ?? undefined
+          : filterClienteIdRef.current ?? undefined;
+
+        const res = await listBitacoraVehiculoDetenido({
+          marcaId: Number(snap.current?.id ?? 0),
+          empresaId: typeof empresaIdForApi === 'number' ? empresaIdForApi : undefined,
+          clienteId: typeof clienteIdForApi === 'number' ? clienteIdForApi : undefined,
+          sucursalId: sid,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (!res.status) {
+          console.log(4);
+          setError(res.message || 'Error al cargar bitácoras');
+          setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
+          setIsLoading(false);
+          return;
+        }
+
+        const serverItems = Array.isArray(res.data) ? res.data : [];
+        const filteredItems = serverItems.filter((b: any) => bitacoraRecordSucursalId(b) === sid);
+        const serverList = filteredItems.map((b: any) => ({
+          ...b,
+          id_local: b.id_local || '',
+        }));
+
+        await mergeBitacorasDetenidosForSucursalFromServer({
+          sucursalId: sid,
+          serverRows: serverList,
+        });
+        const merged = await readBitacorasForSucursalFromMainStructure(sid);
+        console.log(5);
+        setBitacoras(merged as BitacoraVehiculoDetenidoItem[]);
+      } catch (e: any) {
+        setError(e.message || 'Error al cargar bitácoras');
+        try {
+          const snap2 = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          const isOp = snap2?.isOperativo ?? false;
+          const cid = isOp
+            ? snap2?.marcaCorpoId
+            : filterSucursalIdRef.current ?? snap2?.marcaCorpoId;
+          if (cid) {
+            const rows = await readBitacorasForSucursalFromMainStructure(Number(cid));
+            console.log(6);
+            setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
+          } else {
+            console.log(7);
+            setBitacoras([]);
+          }
+        } catch {
+          /* ignore */
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [isPrefillMode, refreshAccessToken, logout, syncMarcaFromStorage]
+  );
+
+  const fetchRecords = useCallback(async () => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap && !isPrefillMode) {
+      console.log(8);
+      setBitacoras([]);
+      return;
+    }
+    await runFetchBitacoras(snap);
+  }, [syncMarcaFromStorage, runFetchBitacoras, isPrefillMode]);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+  useEffect(() => {
+    filterEmpresaIdRef.current = filterEmpresaId;
+  }, [filterEmpresaId]);
+  useEffect(() => {
+    filterClienteIdRef.current = filterClienteId;
+  }, [filterClienteId]);
+
+  useEffect(() => {
+    if (!isPrefillMode) setPrefillFormHierarchyLocked(false);
+  }, [isPrefillMode]);
+
+  /** Sucursal activa para el formulario: marca si OPERATIVO; si no, sucursal elegida en el formulario. */
+  const resolveFormCorpoId = useCallback((): number | null => {
+    if (roleName === 'OPERATIVO') return marcaCorpoId;
+    return formSucursalId;
+  }, [roleName, marcaCorpoId, formSucursalId]);
+
+  /** Sincroniza empresa/cliente/sucursal del payload según rol y selects del formulario. */
+  const syncMarcaIdsFromFormOrMarca = useCallback(async () => {
+    if (roleName === 'OPERATIVO') {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (currentMarcaStr) {
+        const current = JSON.parse(currentMarcaStr);
+        setMarcaEmpresaId(numOrNull(current?.empresa?.id ?? current?.empresa_id));
+        setMarcaClienteId(numOrNull(current?.cliente?.id ?? current?.cliente_id));
+        setMarcaCorpoId(numOrNull(current?.corpo?.id ?? current?.corpo_id));
+      }
+      return;
+    }
+    setMarcaEmpresaId(formEmpresaId);
+    setMarcaClienteId(formClienteId);
+    setMarcaCorpoId(formSucursalId);
+  }, [roleName, formEmpresaId, formClienteId, formSucursalId]);
+
+  /** Nombres para campos readonly (empresa/cliente/sucursal) según árbol o marca. */
+  const resolveHierarchyDisplayNames = useCallback(async () => {
+    if (roleName === 'OPERATIVO') {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      const current = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+      return {
+        empresa: current?.empresa?.nombre ?? empresaNombre,
+        cliente: current?.cliente?.nombre ?? clienteNombre,
+        corpo: current?.corpo?.nombre ?? corpoNombre,
+      };
+    }
+    const fe = structure.find((e) => e.id === formEmpresaId);
+    const fc = fe?.clientes?.find((c: any) => c.id === formClienteId);
+    const fd = fc?.division?.find((d: any) => d.id === formDivisionId);
+    const fct = fd?.contratos?.find((c: any) => c.id === formContratoId);
+    const fs = fct?.sucursales?.find((s: any) => s.id === formSucursalId);
+    return {
+      empresa: fe?.nombre ?? '',
+      cliente: fc?.nombre ?? '',
+      corpo: fs?.nombre ?? '',
+    };
+  }, [roleName, structure, formEmpresaId, formClienteId, formDivisionId, formContratoId, formSucursalId, empresaNombre, clienteNombre, corpoNombre]);
+
   const resetAllFilters = () => {
     setFilterTipo('all');
     setFilterFecha('');
     setFilterSearch('');
+    void (async () => {
+      await resetListFiltersFromCurrentMarca();
+      await fetchRecords();
+    })();
   };
 
   const filteredBitacoras = useMemo(() => {
     const q = filterSearch.trim().toLowerCase();
     return bitacoras.filter((b) => {
+      if (b.isActive === false) return false;
       if (filterTipo !== 'all' && String(b.tipo) !== String(filterTipo)) return false;
       if (filterFecha) {
         const d = b.created_at ? String(b.created_at).split('T')[0] : '';
@@ -666,7 +1209,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
     return (
       <ThemedView key={key} style={styles.bitacoraCard}>
-        <ThemedText style={styles.bitTitle}>{b.tipo}</ThemedText>
+        <ThemedText style={styles.bitTitle}>{b.tipo} {b.id_local ? ' (offline)' : ''}</ThemedText> 
 
         {placa ? (
           <ThemedText style={styles.bitLine}>
@@ -683,14 +1226,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
             </ThemedText>
           </ThemedText>
         ) : null}
-
-        <ThemedText style={styles.bitLine}>
-          <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
-          <ThemedText style={styles.bitValue}>
-            {fecha}
-            {b.id_local ? ' (offline)' : ''}
-          </ThemedText>
-        </ThemedText>
 
         <TouchableOpacity style={styles.collapseButton} onPress={() => toggleBitacoraExpanded(key)}>
           <ThemedText style={styles.collapseButtonText}>
@@ -939,13 +1474,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const loadMarcaContext = async () => {
+  const loadMarcaContext = useCallback(async () => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
       setHasCurrentMarca(false);
       setMarcaEmpresaId(null);
       setMarcaClienteId(null);
       setMarcaCorpoId(null);
+      setMarcaDivisionId(null);
+      setRoleName(null);
       return null;
     }
     const current = JSON.parse(currentMarcaStr);
@@ -954,6 +1491,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
       setMarcaEmpresaId(null);
       setMarcaClienteId(null);
       setMarcaCorpoId(null);
+      setMarcaDivisionId(null);
+      setRoleName(null);
       return null;
     }
     setHasCurrentMarca(true);
@@ -965,63 +1504,47 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
     const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
     const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+    const divIdRaw = current?.roleDivision?.division?.id ?? current?.division_id;
+    const role =
+      current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
+    setRoleName(typeof role === 'string' ? (role as RoleName) : null);
+    setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
 
     setMarcaEmpresaId(empresaIdRaw !== undefined && empresaIdRaw !== null ? Number(empresaIdRaw) : null);
     setMarcaClienteId(clienteIdRaw !== undefined && clienteIdRaw !== null ? Number(clienteIdRaw) : null);
     setMarcaCorpoId(corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null);
 
     return current;
-  };
+  }, []);
 
-  // Cargar vehículos corporativos desde cache o API
+  /** Vehículos y usos desde el árbol principal (fragmentos / caché legada), sucursal / corpo. */
   const fetchCorporateVehicles = useCallback(async (corpoId: number) => {
     try {
       setIsLoadingVehicles(true);
-
-      // Intentar cargar desde cache primero
-      const cacheStr = await AsyncStorage.getItem('corporate_vehicles_corpo_cache');
-      if (cacheStr) {
-        try {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) {
-            // Filtrar por corpo_id
-            const filtered = cached.filter((v: any) => Number(v?.corpo_id ?? v?.sucursal_id) === corpoId);
-            setCorporateVehicles(filtered);
-            setIsLoadingVehicles(false);
-          }
-        } catch {
-          // ignore parse error
-        }
+      const fromMain = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
+      let list = Array.isArray(fromMain) ? fromMain.map(normalizeVehiculoNodeFromTree) : [];
+      if (list.length === 0) {
+        const tree = await loadMainStructureTreeMerged();
+        list = getVehiculosCorporativosFromTree(Array.isArray(tree) ? tree : [], corpoId);
       }
-
-      // Cargar desde API si hay conexión
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
-        const res = await listCorporateVehiclesByCorpo({
-          corpo_id: String(corpoId),
-          refreshAccessToken,
-          logout,
-        });
-        if (res.status && Array.isArray(res.data)) {
-          setCorporateVehicles(res.data);
-          // Actualizar cache
-          await AsyncStorage.setItem('corporate_vehicles_corpo_cache', JSON.stringify(res.data));
-        }
-      }
+      setCorporateVehicles(list);
     } catch (e: any) {
-      console.error('Error fetching corporate vehicles:', e);
+      console.error('Error loading corporate vehicles from main structure:', e);
+      setCorporateVehicles([]);
     } finally {
       setIsLoadingVehicles(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const getCorporateVehiclesForCorpo = useCallback(async (corpoId: number) => {
-    const cacheStr = await AsyncStorage.getItem('corporate_vehicles_corpo_cache');
-    if (!cacheStr) return [];
     try {
-      const cached = JSON.parse(cacheStr);
-      if (!Array.isArray(cached)) return [];
-      return cached.filter((v: any) => Number(v?.corpo_id ?? v?.sucursal_id) === Number(corpoId));
+      const fromMain = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
+      if (Array.isArray(fromMain) && fromMain.length > 0) {
+        return fromMain.map(normalizeVehiculoNodeFromTree);
+      }
+      const tree = await loadMainStructureTreeMerged();
+      if (!Array.isArray(tree) || tree.length === 0) return [];
+      return getVehiculosCorporativosFromTree(tree, corpoId);
     } catch {
       return [];
     }
@@ -1158,6 +1681,30 @@ export default function BitacoraVehiculosDetenidosScreen() {
     [fetchCorporateVehicles, fetchCorporateVehicleUses, getCorporateVehiclesForCorpo]
   );
 
+  useEffect(() => {
+    if (!isCreating || isPrefillMode) {
+      loadedVehiclesCorpoRef.current = null;
+      return;
+    }
+    const cid = resolveFormCorpoId();
+    if (cid != null && cid > 0) {
+      if (loadedVehiclesCorpoRef.current === Number(cid)) return;
+      loadedVehiclesCorpoRef.current = Number(cid);
+      void fetchCorporateVehicles(cid);
+    } else {
+      loadedVehiclesCorpoRef.current = null;
+      setCorporateVehicles([]);
+    }
+  }, [
+    isCreating,
+    isPrefillMode,
+    formSucursalId,
+    marcaCorpoId,
+    roleName,
+    fetchCorporateVehicles,
+    resolveFormCorpoId,
+  ]);
+
   // Obtener usos disponibles del vehículo seleccionado
   const selectedCorporateVehicle = useMemo(() => {
     const key =
@@ -1199,7 +1746,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     // Solo los que NO tienen bitácora asignada, pero mantener el uso "actual" (prefill o edición) aunque tenga bitácora.
     const filtered = list.filter(
       (u: any) =>
-        u?.bitacora_id == null ||
+        (u?.bitacora_id == null && !(u as any)?.bitacora) ||
         (lockedUsoId != null && Number(u?.id) === Number(lockedUsoId)) ||
         (lockedUsoLocal != null && String(u.id ?? u.id_local) === lockedUsoLocal)
     );
@@ -1252,110 +1799,43 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setPrefillVehicleInfo({ vehiculo: vehicle || undefined, uso: uso || undefined });
   }, [isPrefillMode, prefill, corporateVehicles, tempVehicle]);
 
-  const fetchBitacoras = async () => {
-    try {
-      setIsLoading(true);
-      setError(null);
-      const current = await loadMarcaContext();
-      if (!current && !isPrefillMode) {
-        setIsLoading(false);
-        return;
-      }
-
-      // Obtener corpoId directamente del objeto current en lugar del estado
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-      if (!corpoId) {
-        setError('No se encontró el ID de la sucursal (corpo) en la marca actual');
-        setIsLoading(false);
-        return;
-      }
-
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
-        const res = await listBitacoraVehiculoDetenido({
-          marcaId: current?.id ?? 0,
-          empresaId: marcaEmpresaId ?? undefined,
-          clienteId: marcaClienteId ?? undefined,
-          sucursalId: corpoId ?? undefined,
-          refreshAccessToken,
-          logout,
-        });
-        if (res.status) {
-          const serverItems = Array.isArray(res.data) ? res.data : [];
-          // Filtrar por corpo_id
-          const filteredItems = serverItems.filter((b: any) => {
-            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
-            return bCorpoId === corpoId;
-          });
-          const list = filteredItems.map((b: any) => ({
-            ...b,
-            id_local: b.id_local || '',
-          }));
-          setBitacoras(list);
-          await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(list));
-        } else {
-          setError(res.message || 'Error al cargar bitácoras');
-          // fallback cache filtrado
-          const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-          if (cacheStr) {
-            const cache = JSON.parse(cacheStr);
-            const filteredCache = cache.filter((b: any) => {
-              const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
-              return bCorpoId === corpoId;
-            });
-            setBitacoras(filteredCache);
-          }
-        }
-      } else {
-        // Offline: filtrar cache por corpo_id
-        const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const filteredCache = cache.filter((b: any) => {
-            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
-            return bCorpoId === corpoId;
-          });
-          setBitacoras(filteredCache);
-        }
-      }
-    } catch (e: any) {
-      setError(e.message || 'Error al cargar bitácoras');
-      const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-      if (cacheStr) {
-        const cache = JSON.parse(cacheStr);
-        const current = await loadMarcaContext();
-        const corpoId = current?.corpo?.id ?? current?.corpo_id;
-        if (corpoId) {
-          const filteredCache = cache.filter((b: any) => {
-            const bCorpoId = Number(b?.sucursal_id ?? b?.corpo_id ?? 0);
-            return bCorpoId === Number(corpoId);
-          });
-          setBitacoras(filteredCache);
-        } else {
-          setBitacoras(cache);
-        }
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   useFocusEffect(
     useCallback(() => {
-      fetchBitacoras();
-      // Cargar vehículos corporativos cuando se abre la ventana
-      (async () => {
-        const current = await loadMarcaContext();
-        if (current) {
-          const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-          const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-          if (corpoId) {
-            await fetchCorporateVehicles(corpoId);
-          }
+      let cancelled = false;
+      void (async () => {
+        const firstLoad = !listFiltersSyncedFromMarcaOnceRef.current;
+        const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: firstLoad });
+        if (cancelled) return;
+        listFiltersSyncedFromMarcaOnceRef.current = true;
+        await fetchMainStructure();
+        await loadMarcaContext();
+        if (!snap) {
+          if (!isPrefillMode) setBitacoras([]);
+          return;
+        }
+        const selectedSucursal = filterSucursalIdRef.current ?? snap.marcaCorpoId;
+        const shouldFetchList = snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
+        if (shouldFetchList) {
+          await runFetchBitacoras(snap);
+        } else {
+          setBitacoras([]);
         }
       })();
-    }, [fetchCorporateVehicles])
+      const handler = () => {
+        void (async () => {
+          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          if (!snap) return;
+          const selectedSucursal = filterSucursalIdRef.current ?? snap.marcaCorpoId;
+          const shouldFetchList = snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
+          if (shouldFetchList) await runFetchBitacoras(snap);
+        })();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, fetchMainStructure, runFetchBitacoras, loadMarcaContext, isPrefillMode])
   );
 
   useFocusEffect(
@@ -1366,11 +1846,45 @@ export default function BitacoraVehiculosDetenidosScreen() {
         setIsCreating(true);
         setEditing(null);
         setTempVehicle(null);
+        setPrefillFormHierarchyLocked(false);
+
+        await fetchMainStructure();
+
+        const rawM = await AsyncStorage.getItem('current_marca');
+        const marca = rawM ? JSON.parse(rawM) : null;
+        const rn =
+          marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+
+        let corpoId = prefill.sucursal_id ? Number(prefill.sucursal_id) : null;
+        if (corpoId == null || !Number.isFinite(corpoId) || corpoId <= 0) {
+          corpoId = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+        }
+
+        // Simplificado como CorporateVehicles: precarga jerárquica desde datos directos (prefill/marca),
+        // sin recorrer árbol por corpo en esta fase.
+        if (rn !== 'OPERATIVO') {
+          const empresaId = numOrNull(prefill.empresa_id) ?? numOrNull(marca?.empresa?.id ?? marca?.empresa_id);
+          const clienteId = numOrNull(prefill.cliente_id) ?? numOrNull(marca?.cliente?.id ?? marca?.cliente_id);
+          const divisionId = numOrNull(prefill.division_id) ?? getDivisionIdFromMarcaJson(marca);
+          const contratoId = numOrNull(prefill.contrato_id) ?? numOrNull(marca?.contrato?.id ?? marca?.contrato_id);
+          const sucursalId = numOrNull(prefill.sucursal_id) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+          const puestoId =
+            numOrNull((prefill as any).puesto_id) ?? numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
+
+          setFormEmpresaId(empresaId);
+          setFormClienteId(clienteId);
+          setFormDivisionId(divisionId);
+          setFormContratoId(contratoId);
+          setFormSucursalId(sucursalId);
+          setFormPuestoId(puestoId);
+          setPrefillFormHierarchyLocked(true);
+        }
 
         // Obtener datos del vehículo pasado como parámetro
         if (prefill.empresa_id) setMarcaEmpresaId(Number(prefill.empresa_id));
         if (prefill.cliente_id) setMarcaClienteId(Number(prefill.cliente_id));
         if (prefill.sucursal_id) setMarcaCorpoId(Number(prefill.sucursal_id));
+        else if (corpoId != null && corpoId > 0) setMarcaCorpoId(corpoId);
 
         const tipoCandidate = String(prefill.vehiculo_tipo || '').trim() as TipoBitacora;
         const tipoNext: TipoBitacora = TYPE_OPTIONS.includes(tipoCandidate) ? tipoCandidate : 'Vehículo';
@@ -1388,7 +1902,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
         }
 
         // Secuencia requerida: cargar vehículos -> seleccionar vehículo -> cargar usos -> seleccionar uso
-        const corpoId = prefill.sucursal_id ? Number(prefill.sucursal_id) : null;
         const vehiculoId =
           prefill.vehiculo_id != null && prefill.vehiculo_id > 0 ? Number(prefill.vehiculo_id) : null;
         const usoId = prefill.uso_id != null && prefill.uso_id > 0 ? Number(prefill.uso_id) : null;
@@ -1405,21 +1918,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
             tipo: String(prefill.vehiculo_tipo || ''),
             empresa_id: prefill.empresa_id ? Number(prefill.empresa_id) : undefined,
             cliente_id: prefill.cliente_id ? Number(prefill.cliente_id) : undefined,
-            sucursal_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : undefined,
-            corpo_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : undefined,
+            sucursal_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : corpoId ?? undefined,
+            corpo_id: prefill.sucursal_id ? Number(prefill.sucursal_id) : corpoId ?? undefined,
           },
         });
       })();
-    }, [prefill, preloadVehiculoYUso])
+    }, [prefill, preloadVehiculoYUso, fetchMainStructure])
   );
 
-  useEffect(() => {
-    const handler = () => fetchBitacoras();
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
 
   const requestLocation = async () => {
     try {
@@ -1441,16 +1947,18 @@ export default function BitacoraVehiculosDetenidosScreen() {
       return;
     }
 
-    const current = await loadMarcaContext();
+    await loadMarcaContext();
+    await syncMarcaIdsFromFormOrMarca();
     tipoRef.current = tipoNext;
     setTipo(tipoNext);
 
     const baseGeneral: Record<string, any> = {};
     // empresa/cliente/corpo para display (readonly en config actual)
     const now = new Date(horaAccion);
-    baseGeneral.empresa = current?.empresa?.nombre ?? empresaNombre ?? '';
-    baseGeneral.cliente = current?.cliente?.nombre ?? clienteNombre ?? '';
-    baseGeneral.corpo = current?.corpo?.nombre ?? corpoNombre ?? '';
+    const names = await resolveHierarchyDisplayNames();
+    baseGeneral.empresa = names.empresa;
+    baseGeneral.cliente = names.cliente;
+    baseGeneral.corpo = names.corpo;
     baseGeneral.fecha = dateToLocalString(now);
     baseGeneral.hora = timeToHHmm(now);
     setGeneralValues(baseGeneral);
@@ -1482,16 +1990,16 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setSelectedCorporateUseId(null);
     setSelectedCorporateVehicleIdLocal(null);
     setSelectedCorporateUseIdLocal(null);
+    await fetchMainStructure();
+    await applyCurrentMarcaToFormHierarchy();
+    await loadMarcaContext();
     await resetForm('Vehículo');
 
-    // Cargar vehículos corporativos cuando se abre el formulario en modo normal
-    const current = await loadMarcaContext();
-    if (current) {
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
-      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
-      if (corpoId) {
-        await fetchCorporateVehicles(corpoId);
-      }
+    const raw = await AsyncStorage.getItem('current_marca');
+    const marca = raw ? JSON.parse(raw) : null;
+    const corpoForVeh = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+    if (corpoForVeh != null && corpoForVeh > 0) {
+      await fetchCorporateVehicles(corpoForVeh);
     }
   };
 
@@ -1537,10 +2045,89 @@ export default function BitacoraVehiculosDetenidosScreen() {
         item.vehiculo_id !== undefined && item.vehiculo_id !== null ? Number(item.vehiculo_id) : null;
       const usoIdFromItem = item.uso_id !== undefined && item.uso_id !== null ? Number(item.uso_id) : null;
 
-      // Resolver corpoId
-      const current = await loadMarcaContext();
-      const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id ?? item.sucursal_id;
-      const corpoId = corpoIdRaw !== undefined && corpoIdRaw !== null ? Number(corpoIdRaw) : null;
+      const treeArr =
+        Array.isArray(structure) && structure.length > 0 ? structure : await loadMainStructureTreeMerged();
+      const rawM = await AsyncStorage.getItem('current_marca');
+      const marca = rawM ? JSON.parse(rawM) : null;
+      const rn =
+        marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      const itemCorpo = numOrNull(item.sucursal_id ?? (item as any).corpo_id);
+      const itemPuesto = numOrNull((item as any).puesto_id);
+      if (rn === 'OPERATIVO' && Array.isArray(treeArr) && treeArr.length > 0) {
+        let filledOp = false;
+        if (itemPuesto && itemPuesto > 0) {
+          const hp = findHierarchyByPuestoIn(treeArr, itemPuesto);
+          if (hp) {
+            setFormEmpresaId(hp.empresaId);
+            setFormClienteId(hp.clienteId);
+            setFormDivisionId(hp.divisionId);
+            setFormContratoId(hp.contratoId);
+            setFormSucursalId(hp.corpoId);
+            setFormPuestoId(hp.puestoId);
+            filledOp = true;
+          }
+        }
+        if (!filledOp && itemCorpo != null && itemCorpo > 0) {
+          const h = findHierarchyByCorpoIn(treeArr, itemCorpo);
+          if (h) {
+            setFormEmpresaId(h.empresaId);
+            setFormClienteId(h.clienteId);
+            setFormDivisionId(h.divisionId);
+            setFormContratoId(h.contratoId);
+            setFormSucursalId(h.corpoId);
+          }
+          const divStored = numOrNull((item as any).division_id);
+          const ctStored = numOrNull((item as any).contrato_id);
+          if (divStored) setFormDivisionId(divStored);
+          if (ctStored) setFormContratoId(ctStored);
+          if (itemPuesto) setFormPuestoId(itemPuesto);
+          else {
+            const firstP = getFirstPuestoIdFromSucursalInTree(treeArr, itemCorpo);
+            if (firstP) setFormPuestoId(firstP);
+          }
+        }
+      }
+      if (rn !== 'OPERATIVO' && Array.isArray(treeArr) && treeArr.length > 0) {
+        let filledFromPuesto = false;
+        if (itemPuesto && itemPuesto > 0) {
+          const hp = findHierarchyByPuestoIn(treeArr, itemPuesto);
+          if (hp) {
+            setFormEmpresaId(hp.empresaId);
+            setFormClienteId(hp.clienteId);
+            setFormDivisionId(hp.divisionId);
+            setFormContratoId(hp.contratoId);
+            setFormSucursalId(hp.corpoId);
+            setFormPuestoId(hp.puestoId);
+            filledFromPuesto = true;
+          }
+        }
+        if (!filledFromPuesto && itemCorpo != null && itemCorpo > 0) {
+          const h = findHierarchyByCorpoIn(treeArr, itemCorpo);
+          if (h) {
+            setFormEmpresaId(h.empresaId);
+            setFormClienteId(h.clienteId);
+            setFormDivisionId(h.divisionId);
+            setFormContratoId(h.contratoId);
+            setFormSucursalId(h.corpoId);
+          }
+          const divStored = numOrNull((item as any).division_id);
+          const ctStored = numOrNull((item as any).contrato_id);
+          if (divStored) setFormDivisionId(divStored);
+          if (ctStored) setFormContratoId(ctStored);
+          if (itemPuesto) {
+            setFormPuestoId(itemPuesto);
+          } else {
+            const firstP = getFirstPuestoIdFromSucursalInTree(treeArr, itemCorpo);
+            if (firstP) setFormPuestoId(firstP);
+          }
+        }
+      }
+
+      const corpoId = itemCorpo;
+      if (corpoId != null && corpoId > 0) {
+        await fetchCorporateVehicles(corpoId);
+      }
+      await loadMarcaContext();
 
       // Resolver vehiculoId: preferimos el del registro; fallback para registros viejos usando uso_id
       let vehiculoId: number | null = vehiculoIdFromItem && vehiculoIdFromItem > 0 ? vehiculoIdFromItem : null;
@@ -1705,13 +2292,40 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   };
 
-  const validateForm = () => {
+  const validateForm = async () => {
+    await syncMarcaIdsFromFormOrMarca();
+    const rawM = await AsyncStorage.getItem('current_marca');
+    const marca = rawM ? JSON.parse(rawM) : null;
+    const rn =
+      marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn !== 'OPERATIVO') {
+      if (!formSucursalId) {
+        Alert.alert('Error', 'Seleccione la sucursal (corpo) en la jerarquía del formulario');
+        return false;
+      }
+      if (!formPuestoId) {
+        Alert.alert('Error', 'Seleccione el puesto en la jerarquía del formulario');
+        return false;
+      }
+    } else {
+      const rawOp = await AsyncStorage.getItem('current_marca');
+      const mOp = rawOp ? JSON.parse(rawOp) : null;
+      let puestoOp = numOrNull(mOp?.puesto?.id ?? mOp?.puesto_id);
+      const corpoOp = numOrNull(mOp?.corpo?.id ?? mOp?.corpo_id);
+      if (!puestoOp && corpoOp) {
+        puestoOp = getFirstPuestoIdFromSucursalInTree(structure, corpoOp);
+      }
+      if (!puestoOp) {
+        Alert.alert('Error', 'No se encontró el puesto en la marca actual. Verifique la marca o la estructura en caché.');
+        return false;
+      }
+    }
     if (!marcaClienteId) {
-      Alert.alert('Error', 'No se encontró el cliente en la marca actual');
+      Alert.alert('Error', 'No se encontró el cliente; revise la jerarquía o la marca actual');
       return false;
     }
     if (!marcaCorpoId) {
-      Alert.alert('Error', 'No se encontró la sucursal en la marca actual');
+      Alert.alert('Error', 'No se encontró la sucursal; revise la jerarquía o la marca actual');
       return false;
     }
     // Seleccionar vehículo y uso es opcional: solo validamos jerarquía y contenido
@@ -1770,19 +2384,75 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const buildPayload = async () => {
+    await syncMarcaIdsFromFormOrMarca();
     const current = await loadMarcaContext();
+    const names = await resolveHierarchyDisplayNames();
     // Si no hay marca activa, el server permite crear usando empresa/cliente/sucursal
     const marca_id = current?.id ? Number(current.id) : undefined;
+
+    /** IDs de ubicación (empresa → puesto); evitar estado desfasado tras syncMarcaIdsFromFormOrMarca. */
+    let payloadEmpresaId = marcaEmpresaId;
+    let payloadClienteId = marcaClienteId;
+    let payloadSucursalId = marcaCorpoId;
+    let payloadDivisionId: number | null = null;
+    let payloadContratoId: number | null = null;
+    let payloadPuestoId: number | null = null;
+
+    if (roleName === 'OPERATIVO') {
+      const rawM = await AsyncStorage.getItem('current_marca');
+      if (rawM) {
+        try {
+          const m = JSON.parse(rawM);
+          payloadEmpresaId = numOrNull(m?.empresa?.id ?? m?.empresa_id);
+          payloadClienteId = numOrNull(m?.cliente?.id ?? m?.cliente_id);
+          payloadSucursalId = numOrNull(m?.corpo?.id ?? m?.corpo_id);
+          payloadDivisionId = getDivisionIdFromMarcaJson(m);
+          payloadContratoId = numOrNull(m?.contrato?.id ?? m?.contrato_id);
+          payloadPuestoId = numOrNull(m?.puesto?.id ?? m?.puesto_id);
+        } catch {
+          /* mantener estado */
+        }
+      }
+    } else {
+      payloadEmpresaId = formEmpresaId;
+      payloadClienteId = formClienteId;
+      payloadSucursalId = formSucursalId;
+      payloadDivisionId = formDivisionId;
+      payloadContratoId = formContratoId;
+      payloadPuestoId = formPuestoId;
+    }
+
+    const tree = Array.isArray(structure) ? structure : [];
+    if (payloadSucursalId && (!payloadDivisionId || !payloadContratoId)) {
+      const hc = findHierarchyByCorpoIn(tree, payloadSucursalId);
+      if (hc) {
+        payloadDivisionId = payloadDivisionId ?? hc.divisionId;
+        payloadContratoId = payloadContratoId ?? hc.contratoId;
+      }
+    }
+    if (!payloadPuestoId && payloadSucursalId) {
+      payloadPuestoId = getFirstPuestoIdFromSucursalInTree(tree, payloadSucursalId);
+    }
+    if (payloadPuestoId && (!payloadDivisionId || !payloadContratoId || !payloadSucursalId)) {
+      const hp = findHierarchyByPuestoIn(tree, payloadPuestoId);
+      if (hp) {
+        payloadDivisionId = payloadDivisionId ?? hp.divisionId;
+        payloadContratoId = payloadContratoId ?? hp.contratoId;
+        payloadSucursalId = payloadSucursalId ?? hp.corpoId;
+        payloadEmpresaId = payloadEmpresaId ?? hp.empresaId;
+        payloadClienteId = payloadClienteId ?? hp.clienteId;
+      }
+    }
 
     const infoGeneralArr = generalConfig.map((g) => {
       let value = '';
       if (g.kind === 'readonly') {
         if (g.key === 'empresa') {
-          value = current?.empresa?.nombre ?? empresaNombre;
+          value = names.empresa || current?.empresa?.nombre || empresaNombre;
         } else if (g.key === 'cliente') {
-          value = current?.cliente?.nombre ?? clienteNombre;
+          value = names.cliente || current?.cliente?.nombre || clienteNombre;
         } else if (g.key === 'corpo') {
-          value = current?.corpo?.nombre ?? corpoNombre;
+          value = names.corpo || current?.corpo?.nombre || corpoNombre;
         }
       } else {
         value = generalValues[g.key] ?? '';
@@ -1912,11 +2582,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const veh = selectedCorporateVehicle as any;
       const vl = veh.id_local;
       const vid = veh.id;
-      if (typeof vid === 'string' && String(vid).startsWith('local-')) {
+      const vidLocalKey = resolveLocalEntityKey(vid);
+      const vlLocalKey = resolveLocalEntityKey(vl);
+      if (vidLocalKey) {
         vehiculo_id = null;
-        vehiculo_id_local = String(vid);
-      } else if (vl && String(vl).startsWith('local-')) {
-        vehiculo_id_local = String(vl);
+        vehiculo_id_local = vidLocalKey;
+      } else if (vlLocalKey) {
+        vehiculo_id_local = vlLocalKey;
         if (!(typeof vid === 'number' && vid > 0)) vehiculo_id = null;
       }
     }
@@ -1935,11 +2607,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
       if (u) {
         const ul = u.id_local;
         const uid = u.id;
-        if (typeof uid === 'string' && String(uid).startsWith('local-')) {
+        const uidLocalKey = resolveLocalEntityKey(uid);
+        const ulLocalKey = resolveLocalEntityKey(ul);
+        if (uidLocalKey) {
           uso_id = null;
-          uso_id_local = String(uid);
-        } else if (ul && String(ul).startsWith('local-')) {
-          uso_id_local = String(ul);
+          uso_id_local = uidLocalKey;
+        } else if (ulLocalKey) {
+          uso_id_local = ulLocalKey;
           if (!(typeof uid === 'number' && uid > 0)) uso_id = null;
         }
       }
@@ -1947,9 +2621,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
     return {
       ...(marca_id ? { marca_id } : {}),
-      empresa_id: marcaEmpresaId,
-      cliente_id: marcaClienteId,
-      sucursal_id: marcaCorpoId,
+      empresa_id: payloadEmpresaId,
+      cliente_id: payloadClienteId,
+      sucursal_id: payloadSucursalId,
+      division_id: payloadDivisionId,
+      contrato_id: payloadContratoId,
+      puesto_id: payloadPuestoId,
+      isActive: true,
       vehiculo_id,
       uso_id,
       ...(vehiculo_id_local ? { vehiculo_id_local } : {}),
@@ -1964,53 +2642,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
     };
   };
 
-  const updateMainStructureCacheUseBitacora = useCallback(
-    async (params: {
-      sucursalId: number | null;
-      vehiculoId: number | null;
-      usoId: number | null;
-      bitacora: any;
-    }) => {
-      const { sucursalId, vehiculoId, usoId, bitacora } = params;
-      if (!sucursalId || !vehiculoId || !usoId) return;
-
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (!cacheStr) return;
-      const tree = safeParse<any[]>(cacheStr, []);
-      if (!Array.isArray(tree) || tree.length === 0) return;
-
-      let changed = false;
-      for (const emp of tree) {
-        for (const cli of emp?.clientes || []) {
-          const divs = cli?.division || cli?.divisiones || [];
-          for (const div of divs) {
-            for (const ct of div?.contratos || []) {
-              for (const suc of ct?.sucursales || []) {
-                if (Number(suc?.id) !== Number(sucursalId)) continue;
-                const vehs = suc?.vehiculos_corporativos || suc?.c_vehiculos_corporativos || [];
-                for (const v of vehs) {
-                  if (Number(v?.id) !== Number(vehiculoId)) continue;
-                  const usos = v?.usos || v?.c_usos_vehiculos_corporativos || [];
-                  for (const u of usos) {
-                    if (Number(u?.id) !== Number(usoId)) continue;
-                    u.bitacora_id = bitacora?.id ?? bitacora?.id_local ?? null;
-                    u.bitacora = bitacora ?? null;
-                    changed = true;
-                    break;
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (!changed) return;
-      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(tree));
-    },
-    []
-  );
-
   /** Cola de creación offline: va en evaluations_actions y se envía tras sync de vehículo/uso en corporateEvaluationsSync. */
   const upsertOfflineBitacoraCreateInEvaluations = async (localId: string, requestData: any) => {
     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -2023,7 +2654,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       id: localId,
       action: 'create',
       type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
-      payload: requestData,
+      payload: { ...requestData, bitacora_action_local_id: localId },
     };
     if (existingIdx !== -1) actions[existingIdx] = entry;
     else actions.push(entry);
@@ -2046,31 +2677,149 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const requestData = await buildPayload();
       const isConnected = await getConnectionStatus();
 
-      // Create
+      const sidForPayload = numOrNull(requestData.sucursal_id) ?? marcaCorpoId ?? formSucursalId;
+      const isUnsyncedDraft = !!(editing?.id === 0 && editing?.id_local);
+
+      const refreshBitacoraListFromMainStructure = async (savedSucursalId?: number | null) => {
+        const snapV = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+        const saved =
+          savedSucursalId != null && Number(savedSucursalId) > 0 ? Number(savedSucursalId) : null;
+        const listSid =
+          saved ??
+          (snapV?.isOperativo
+            ? snapV.marcaCorpoId
+            : filterSucursalIdRef.current ?? snapV?.marcaCorpoId);
+        if (listSid != null && listSid > 0) {
+          const rows = await readBitacorasForSucursalFromMainStructure(Number(listSid));
+          console.log(9);
+          setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
+        } else {
+          console.log(10);
+          setBitacoras([]);
+        }
+      };
+
+      // Create (nuevo registro) o borrador offline sin id de servidor
       if (!editing || !editing.id || editing.id === 0) {
+        // Edición de un CREATE pendiente: actualizar cola, caché y árbol principal + fragmentos (sin POST duplicado)
+        if (isUnsyncedDraft && editing.id_local) {
+          const id_local = editing.id_local;
+          await upsertOfflineBitacoraCreateInEvaluations(id_local, requestData);
+          const foundPrev = await findBitacoraDetenidoInMainStructureByLocalKey(id_local);
+          const prevRow = foundPrev?.row;
+          const oldLink = bitacoraLinkFromCacheItem(prevRow);
+          const newLink = bitacoraLinkFromRequestPayload(sidForPayload, requestData);
+          const createdAtKeep = prevRow?.created_at ?? new Date(horaAccion).toISOString();
+          await moveBitacoraOnMainStructureCache({
+            oldLink,
+            newLink,
+            bitacora: {
+              id: 0,
+              id_local,
+              tipo: tipoRef.current,
+              created_at: createdAtKeep,
+            },
+          });
+          const localItem: any = {
+            ...(prevRow || {}),
+            id: 0,
+            empresa_id: Number((requestData.empresa_id ?? marcaEmpresaId) || 0),
+            cliente_id: Number((requestData.cliente_id ?? marcaClienteId) || 0),
+            sucursal_id: Number((requestData.sucursal_id ?? marcaCorpoId) || 0),
+            division_id: requestData.division_id ?? (prevRow as any)?.division_id,
+            contrato_id: requestData.contrato_id ?? (prevRow as any)?.contrato_id,
+            puesto_id: requestData.puesto_id ?? (prevRow as any)?.puesto_id,
+            isActive: requestData.isActive !== false,
+            vehiculo_id: requestData.vehiculo_id ?? null,
+            uso_id: requestData.uso_id ?? null,
+            vehiculo_id_local: requestData.vehiculo_id_local,
+            uso_id_local: requestData.uso_id_local,
+            tipo: tipoRef.current,
+            informacion_general: requestData.informacion_general,
+            informacion_revision: requestData.informacion_revision,
+            movimientos_vehiculos: requestData.movimientos_vehiculos,
+            observaciones: requestData.observaciones,
+            firma_responsable: requestData.firma_responsable,
+            created_by: Number(employee.id),
+            created_at: createdAtKeep,
+            id_local,
+          };
+          const prevSid = foundPrev?.sucursalId ?? numOrNull(prevRow?.sucursal_id ?? prevRow?.corpo_id) ?? 0;
+          const newSid = Number((requestData.sucursal_id ?? marcaCorpoId) || 0);
+          if (prevSid && newSid && prevSid !== newSid) {
+            await moveBitacoraDetenidoRowBetweenSucursales({
+              row: localItem,
+              oldSucursalId: prevSid,
+              newSucursalId: newSid,
+              matchLocalKey: id_local,
+            });
+          } else {
+            await upsertBitacoraDetenidoRowInMainStructure(localItem, newSid || prevSid, id_local);
+          }
+          await refreshBitacoraListFromMainStructure(numOrNull(requestData.sucursal_id));
+          Alert.alert(
+            'Éxito',
+            isConnected
+              ? 'Cambios guardados. Se sincronizará con el servidor cuando corresponda.'
+              : 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.'
+          );
+          setTimeout(() => {
+            setIsCreating(false);
+            if (returnTo) navigation.goBack();
+          }, 2000);
+          return;
+        }
+
         if (isConnected) {
           const res = await createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout });
           if (!res.status) throw new Error(res.message || 'No se pudo crear');
 
-          // si se vinculó a un uso, reflejarlo en main_structure_cache
-          const vMain = selectedCorporateVehicleIdLocal == null ? selectedCorporateVehicleId : null;
-          const uMain = selectedCorporateUseIdLocal == null ? selectedCorporateUseId : null;
-          if (vMain && uMain) {
-            await updateMainStructureCacheUseBitacora({
-              sucursalId: marcaCorpoId,
-              vehiculoId: vMain,
-              usoId: uMain,
+          const newBitId = numOrNull((res as any).id ?? (res as any).data?.id);
+          const linkNew = bitacoraLinkFromRequestPayload(sidForPayload, requestData);
+          if (newBitId && linkNew) {
+            await setBitacoraOnUsoInMainStructureCache({
+              ...linkNew,
               bitacora: {
-                id: res.id,
+                id: newBitId,
                 tipo: tipoRef.current,
                 created_at: new Date(horaAccion).toISOString(),
               },
             });
           }
+          if (newBitId && sidForPayload) {
+            await upsertBitacoraDetenidoRowInMainStructure(
+              {
+                id: newBitId,
+                empresa_id: requestData.empresa_id,
+                cliente_id: requestData.cliente_id,
+                sucursal_id: sidForPayload,
+                corpo_id: sidForPayload,
+                division_id: requestData.division_id,
+                contrato_id: requestData.contrato_id,
+                puesto_id: requestData.puesto_id,
+                isActive: requestData.isActive !== false,
+                vehiculo_id: requestData.vehiculo_id ?? null,
+                uso_id: requestData.uso_id ?? null,
+                vehiculo_id_local: requestData.vehiculo_id_local,
+                uso_id_local: requestData.uso_id_local,
+                tipo: tipoRef.current,
+                informacion_general: requestData.informacion_general,
+                informacion_revision: requestData.informacion_revision,
+                movimientos_vehiculos: requestData.movimientos_vehiculos,
+                observaciones: requestData.observaciones,
+                firma_responsable: requestData.firma_responsable,
+                created_by: Number(employee.id),
+                created_at: new Date(horaAccion).toISOString(),
+                id_local: '',
+              },
+              sidForPayload,
+              null
+            );
+          }
 
           Alert.alert('Éxito', res.message || 'Bitácora creada correctamente');
           setTimeout(async () => {
-            await fetchBitacoras();
+            await fetchRecords();
             setIsCreating(false);
             if (returnTo) navigation.goBack();
           }, 2000);
@@ -2078,20 +2827,27 @@ export default function BitacoraVehiculosDetenidosScreen() {
         }
 
         // Offline create
-        const id_local = editing?.id_local && editing.id_local.length > 0 ? editing.id_local : generateRandomId();
+        const id_local =
+          editing?.id_local && editing.id_local.length > 0
+            ? editing.id_local
+            : `local-bitacora-${Date.now()}-${generateRandomId()}`;
         await upsertOfflineBitacoraCreateInEvaluations(id_local, requestData);
 
-        const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
         const createdAt = new Date(horaAccion).toISOString();
 
         const localItem: any = {
           id: 0,
-          empresa_id: Number(marcaEmpresaId || 0),
-          cliente_id: Number(marcaClienteId || 0),
-          sucursal_id: Number(marcaCorpoId || 0),
+          empresa_id: Number(requestData.empresa_id ?? 0),
+          cliente_id: Number(requestData.cliente_id ?? 0),
+          sucursal_id: Number(numOrNull(requestData.sucursal_id) || 0),
+          division_id: requestData.division_id,
+          contrato_id: requestData.contrato_id,
+          puesto_id: requestData.puesto_id,
+          isActive: requestData.isActive !== false,
           vehiculo_id: requestData.vehiculo_id ?? null,
           uso_id: requestData.uso_id ?? null,
+          vehiculo_id_local: requestData.vehiculo_id_local,
+          uso_id_local: requestData.uso_id_local,
           tipo: tipoRef.current,
           informacion_general: requestData.informacion_general,
           informacion_revision: requestData.informacion_revision,
@@ -2103,14 +2859,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
           id_local,
         };
 
-        // reflejar vínculo en main_structure_cache aun en offline (bitácora local)
-        const vMainOff = selectedCorporateVehicleIdLocal == null ? selectedCorporateVehicleId : null;
-        const uMainOff = selectedCorporateUseIdLocal == null ? selectedCorporateUseId : null;
-        if (vMainOff && uMainOff) {
-          await updateMainStructureCacheUseBitacora({
-            sucursalId: marcaCorpoId,
-            vehiculoId: vMainOff,
-            usoId: uMainOff,
+        const linkOff = bitacoraLinkFromRequestPayload(sidForPayload, requestData);
+        if (linkOff) {
+          await setBitacoraOnUsoInMainStructureCache({
+            ...linkOff,
             bitacora: {
               id: 0,
               id_local,
@@ -2120,9 +2872,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
           });
         }
 
-        const updatedCache = [localItem, ...cache.filter((b: any) => b.id_local !== id_local)];
-        await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-        setBitacoras(updatedCache);
+        const offSid = numOrNull(requestData.sucursal_id) ?? numOrNull(sidForPayload) ?? 0;
+        if (offSid) await upsertBitacoraDetenidoRowInMainStructure(localItem, offSid, id_local);
+        await refreshBitacoraListFromMainStructure(numOrNull(requestData.sucursal_id));
         Alert.alert('Éxito', 'Bitácora guardada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
           setIsCreating(false);
@@ -2131,7 +2883,35 @@ export default function BitacoraVehiculosDetenidosScreen() {
         return;
       }
 
-      // Update
+      // Update (registro con id de servidor)
+      const oldLinkUp = bitacoraLinkFromRequestPayload(numOrNull(editing.sucursal_id), {
+        sucursal_id: editing.sucursal_id,
+        vehiculo_id: editing.vehiculo_id,
+        uso_id: editing.uso_id,
+        vehiculo_id_local: (editing as any).vehiculo_id_local,
+        uso_id_local: (editing as any).uso_id_local,
+      });
+      const newLinkUp = bitacoraLinkFromRequestPayload(sidForPayload, requestData);
+      const bitacoraSnapUp = {
+        id: editing.id,
+        tipo: requestData.tipo ?? editing.tipo,
+        created_at: editing.created_at,
+      };
+
+      const mergedRowUp: any = {
+        ...editing,
+        ...requestData,
+        id: editing.id,
+        tipo: requestData.tipo ?? editing.tipo,
+        informacion_general: requestData.informacion_general,
+        informacion_revision: requestData.informacion_revision,
+        movimientos_vehiculos: requestData.movimientos_vehiculos,
+        observaciones: requestData.observaciones,
+        firma_responsable: requestData.firma_responsable,
+        vehiculo_id_local: requestData.vehiculo_id_local,
+        uso_id_local: requestData.uso_id_local,
+      };
+
       if (isConnected) {
         const res = await updateBitacoraVehiculoDetenido({
           id: editing.id,
@@ -2140,29 +2920,72 @@ export default function BitacoraVehiculosDetenidosScreen() {
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+        await moveBitacoraOnMainStructureCache({
+          oldLink: oldLinkUp,
+          newLink: newLinkUp,
+          bitacora: bitacoraSnapUp,
+        });
+        const oldSidUp = numOrNull(editing.sucursal_id);
+        const newSidUp = numOrNull(requestData.sucursal_id) ?? sidForPayload ?? 0;
+        if (oldSidUp && newSidUp && oldSidUp !== newSidUp) {
+          await moveBitacoraDetenidoRowBetweenSucursales({
+            row: mergedRowUp,
+            oldSucursalId: oldSidUp,
+            newSucursalId: newSidUp,
+            matchLocalKey: null,
+          });
+        } else if (newSidUp) {
+          await upsertBitacoraDetenidoRowInMainStructure(mergedRowUp, newSidUp, null);
+        }
         Alert.alert('Éxito', res.message || 'Bitácora actualizada correctamente');
         setTimeout(async () => {
-          await fetchBitacoras();
+          await fetchRecords();
           setIsCreating(false);
           if (returnTo) navigation.goBack();
         }, 2000);
         return;
       }
 
-      // Offline update: reemplazar "update" pendiente del mismo id (no apilar).
-      const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      const entry = { id: editing.id, type: 'update' as const, requestData };
-      const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
-      if (uidx !== -1) actions[uidx] = entry;
-      else actions.push(entry);
-      await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
+      // Offline update: cola un `update` en evaluations_actions (una sola entrada por id).
+      const evStrUp = await AsyncStorage.getItem('evaluations_actions');
+      const evUp = evStrUp ? JSON.parse(evStrUp) : [];
+      const nextEvUp = Array.isArray(evUp)
+        ? evUp.filter(
+            (a: any) =>
+              !(
+                a.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
+                a.action === 'update' &&
+                String(a.id) === String(editing.id)
+              )
+          )
+        : [];
+      nextEvUp.push({
+        id: editing.id,
+        action: 'update',
+        type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+        payload: requestData,
+        synced: false,
+      });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEvUp));
 
-      const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const updatedCache = cache.map((b: any) => (b.id === editing.id ? { ...b, ...requestData } : b));
-      await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-      setBitacoras(updatedCache);
+      await moveBitacoraOnMainStructureCache({
+        oldLink: oldLinkUp,
+        newLink: newLinkUp,
+        bitacora: bitacoraSnapUp,
+      });
+      const oldSidOff = numOrNull(editing.sucursal_id);
+      const newSidOff = numOrNull(requestData.sucursal_id) ?? sidForPayload ?? 0;
+      if (oldSidOff && newSidOff && oldSidOff !== newSidOff) {
+        await moveBitacoraDetenidoRowBetweenSucursales({
+          row: mergedRowUp,
+          oldSucursalId: oldSidOff,
+          newSucursalId: newSidOff,
+          matchLocalKey: null,
+        });
+      } else if (newSidOff) {
+        await upsertBitacoraDetenidoRowInMainStructure(mergedRowUp, newSidOff, null);
+      }
+      await refreshBitacoraListFromMainStructure(numOrNull(requestData.sucursal_id));
       Alert.alert('Éxito', 'Cambios guardados localmente. Se sincronizarán cuando haya conexión.');
       setTimeout(() => {
         setIsCreating(false);
@@ -2177,18 +3000,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const handleSave = () => {
     if (!employee) return;
-    if (!validateForm()) return;
-    const isCreate = !editing || !editing.id || editing.id === 0;
-    Alert.alert(
-      isCreate ? 'Confirmar registro' : 'Confirmar modificación',
-      isCreate
-        ? '¿Deseas crear esta bitácora con los datos ingresados?'
-        : '¿Deseas guardar los cambios en esta bitácora?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        { text: 'Aceptar', onPress: () => void executeSave() },
-      ]
-    );
+    void (async () => {
+      if (!(await validateForm())) return;
+      const isCreate = !editing || !editing.id || editing.id === 0;
+      Alert.alert(
+        isCreate ? 'Confirmar registro' : 'Confirmar modificación',
+        isCreate
+          ? '¿Deseas crear esta bitácora con los datos ingresados?'
+          : '¿Deseas guardar los cambios en esta bitácora?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Aceptar', onPress: () => void executeSave() },
+        ]
+      );
+    })();
   };
 
   const executeDelete = async (item: BitacoraVehiculoDetenidoItem) => {
@@ -2197,16 +3022,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
     try {
       const isConnected = await getConnectionStatus();
       if (item.id === 0 && item.id_local) {
-        const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
-        const updatedCache = cache.filter((b: any) => b.id_local !== item.id_local);
-        await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-        setBitacoras(updatedCache);
-
-        const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        const updatedActions = actions.filter((a: any) => !(a.type === 'create' && a.id === item.id_local));
-        await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
+        await clearBitacoraFromMainStructureByBitacoraRef({ idLocal: item.id_local });
+        await removeBitacoraDetenidoRowFromMainStructure({ idLocal: item.id_local });
+        const snapD = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+        const listSidD = snapD?.isOperativo
+          ? snapD.marcaCorpoId
+          : filterSucursalIdRef.current ?? snapD?.marcaCorpoId;
+        if (listSidD != null && listSidD > 0) {
+          const rows = await readBitacorasForSucursalFromMainStructure(Number(listSidD));
+          console.log(11);
+          setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
+        } else {
+          console.log(12);
+          setBitacoras([]);
+        }
 
         const evStr = await AsyncStorage.getItem('evaluations_actions');
         if (evStr) {
@@ -2215,8 +3044,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
             (e: any) =>
               !(
                 e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
-                e.action === 'create' &&
-                e.id === item.id_local
+                String(e.id) === String(item.id_local)
               )
           );
           await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEv));
@@ -2228,21 +3056,48 @@ export default function BitacoraVehiculosDetenidosScreen() {
       if (isConnected) {
         const res = await deleteBitacoraVehiculoDetenido({ id: item.id, refreshAccessToken, logout });
         if (!res.status) throw new Error(res.message || 'No se pudo eliminar');
-        await fetchBitacoras();
+        await clearBitacoraFromMainStructureByBitacoraRef({ bitacoraId: item.id });
+        await removeBitacoraDetenidoRowFromMainStructure({ bitacoraId: item.id });
+        await fetchRecords();
         Alert.alert('Éxito', 'Registro eliminado correctamente');
         return;
       }
 
-      const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({ id: item.id, type: 'delete' });
-      await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(actions));
+      await clearBitacoraFromMainStructureByBitacoraRef({ bitacoraId: item.id });
+      await removeBitacoraDetenidoRowFromMainStructure({ bitacoraId: item.id });
+      const evStrDel = await AsyncStorage.getItem('evaluations_actions');
+      const evDel = evStrDel ? JSON.parse(evStrDel) : [];
+      const nextEvDel = Array.isArray(evDel)
+        ? evDel.filter(
+            (e: any) =>
+              !(
+                e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
+                e.action === 'delete' &&
+                String(e.id) === String(item.id)
+              )
+          )
+        : [];
+      nextEvDel.push({
+        id: item.id,
+        action: 'delete',
+        type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+        payload: {},
+        synced: false,
+      });
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextEvDel));
 
-      const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-      const cache = cacheStr ? JSON.parse(cacheStr) : [];
-      const updatedCache = cache.filter((b: any) => b.id !== item.id);
-      await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-      setBitacoras(updatedCache);
+      const snapD = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+      const listSidD = snapD?.isOperativo
+        ? snapD.marcaCorpoId
+        : filterSucursalIdRef.current ?? snapD?.marcaCorpoId;
+      if (listSidD != null && listSidD > 0) {
+        const rows = await readBitacorasForSucursalFromMainStructure(Number(listSidD));
+        console.log(13);
+        setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
+      } else {
+        console.log(14);
+        setBitacoras([]);
+      }
       Alert.alert('Modo offline', 'Registro eliminado localmente. Se sincronizará cuando haya conexión.');
     } catch (e: any) {
       Alert.alert('Error', e.message || 'No se pudo eliminar');
@@ -2329,20 +3184,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   };
 
-  if (isLoading) {
-    return (
-      <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Revisión de vehículos" />
-        <ThemedView style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
-        </ThemedView>
-        <AppFooter />
-        <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="BitacoraVehiculosDetenidos" />
-      </ThemedView>
-    );
-  }
-
   if (!hasCurrentMarca && !isPrefillMode) {
     return (
       <ThemedView style={styles.container}>
@@ -2365,7 +3206,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="car-sport" size={22} color="#000000" /> Revisión de vehículos
+              <Ionicons name="build" size={22} color="#000000" /> Revisión de vehículos
             </ThemedText>
             <ThemedText style={styles.subtitle}>
               Gestiona los registros de revisión de vehículos
@@ -2398,6 +3239,150 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
               {isFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
+                  {roleName != null && roleName !== 'OPERATIVO' ? (
+                    <>
+                      {isStructureLoading ? (
+                        <ThemedView style={styles.inlineLoading}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                        </ThemedView>
+                      ) : structure.length === 0 ? (
+                        <ThemedText style={styles.emptyText}>Sin estructura en caché. Sincronice la app.</ThemedText>
+                      ) : (
+                        <>
+                          <ThemedText style={styles.filterHierarchyTitle}>Jerarquía (lista)</ThemedText>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                selectedValue={filterEmpresaId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterEmpresaId(next === 0 ? null : next);
+                                  setFilterClienteId(null);
+                                  setFilterDivisionId(null);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                                {filterEmpresaOptions.map((e: any) => (
+                                  <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                                selectedValue={filterClienteId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterClienteId(next === 0 ? null : next);
+                                  setFilterDivisionId(null);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterClienteOptionsMemo.map((c: any) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>División</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                                selectedValue={filterDivisionId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterDivisionId(next === 0 ? null : next);
+                                  setFilterContratoId(null);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterDivisionOptionsMemo.map((d: any) => (
+                                  <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                                selectedValue={filterContratoId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  setFilterContratoId(next === 0 ? null : next);
+                                  setFilterSucursalId(null);
+                                  filterSucursalIdRef.current = null;
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterContratoOptionsMemo.map((c: any) => (
+                                  <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                          <ThemedView style={styles.filterGroup}>
+                            <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                            <View style={styles.pickerWrapper}>
+                              <Picker
+                                enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                                selectedValue={filterSucursalId ?? 0}
+                                onValueChange={(v) => {
+                                  const next = Number(v) || 0;
+                                  const nextSuc = next === 0 ? null : next;
+                                  filterSucursalIdRef.current = nextSuc;
+                                  setFilterSucursalId(nextSuc);
+                                  void fetchRecords();
+                                }}
+                                style={styles.picker}
+                              >
+                                <Picker.Item
+                                  label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                  value={0}
+                                  color="#000000"
+                                />
+                                {filterSucursalOptionsMemo.map((s: any) => (
+                                  <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                                ))}
+                              </Picker>
+                            </View>
+                          </ThemedView>
+                        </>
+                      )}
+                    </>
+                  ) : null}
+
                   <ThemedView style={styles.filterGroupSearch}>
                     <ThemedText style={styles.filterLabel}>Buscar (placa/marca/oficial):</ThemedText>
                     <TextInput
@@ -2456,6 +3441,192 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 {editing ? 'Editar registro' : 'Nuevo registro'}
               </ThemedText>
 
+              {roleName != null && roleName !== 'OPERATIVO' ? (
+                <ThemedView style={{ marginBottom: 12 }}>
+                  <ThemedText style={styles.sectionTitle}>Ubicación del registro</ThemedText>
+                  {isStructureLoading ? (
+                    <ThemedText style={[styles.emptyText, { marginBottom: 8 }]}>
+                      Cargando estructura...
+                    </ThemedText>
+                  ) : null}
+                  {structure.length === 0 ? (
+                    <ThemedText style={[styles.emptyText, { marginBottom: 8 }]}>
+                      Sin estructura en caché. Los valores se mostrarán al terminar la carga.
+                    </ThemedText>
+                  ) : null}
+                  <>
+                      <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={!prefillFormHierarchyLocked && !isStructureLoading}
+                          selectedValue={formEmpresaId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormEmpresaChange(next === 0 ? null : next);
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateUseId(null);
+                            setSelectedCorporateUseIdLocal(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                          {structure.map((e: any) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={
+                            !prefillFormHierarchyLocked &&
+                            !isStructureLoading &&
+                            formEmpresaId != null &&
+                            formClienteOptions.length > 0
+                          }
+                          selectedValue={formClienteId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormClienteChange(next === 0 ? null : next);
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateUseId(null);
+                            setSelectedCorporateUseIdLocal(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formEmpresaId ? 'Seleccione cliente...' : 'Empresa primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formClienteOptions.map((c: { id: number; nombre: string }) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>División</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={
+                            !prefillFormHierarchyLocked &&
+                            !isStructureLoading &&
+                            formClienteId != null &&
+                            formDivisionOptions.length > 0
+                          }
+                          selectedValue={formDivisionId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormDivisionChange(next === 0 ? null : next);
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateUseId(null);
+                            setSelectedCorporateUseIdLocal(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formClienteId ? 'Seleccione división...' : 'Cliente primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formDivisionOptions.map((d: { id: number; nombre: string }) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={
+                            !prefillFormHierarchyLocked &&
+                            !isStructureLoading &&
+                            formDivisionId != null &&
+                            formContratoOptions.length > 0
+                          }
+                          selectedValue={formContratoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormContratoChange(next === 0 ? null : next);
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateUseId(null);
+                            setSelectedCorporateUseIdLocal(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formDivisionId ? 'Seleccione contrato...' : 'División primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formContratoOptions.map((c: { id: number; nombre: string }) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={
+                            !prefillFormHierarchyLocked &&
+                            !isStructureLoading &&
+                            formContratoId != null &&
+                            formSucursalOptions.length > 0
+                          }
+                          selectedValue={formSucursalId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setFormSucursalId(next === 0 ? null : next);
+                            setFormPuestoId(null);
+                            setSelectedCorporateVehicleId(null);
+                            setSelectedCorporateVehicleIdLocal(null);
+                            setSelectedCorporateUseId(null);
+                            setSelectedCorporateUseIdLocal(null);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formContratoId ? 'Seleccione sucursal...' : 'Contrato primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formSucursalOptions.map((s: { id: number; nombre: string }) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.filterLabel}>Puesto</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          enabled={
+                            !prefillFormHierarchyLocked &&
+                            !isStructureLoading &&
+                            formSucursalId != null &&
+                            formPuestoOptions.length > 0
+                          }
+                          selectedValue={formPuestoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setFormPuestoId(next === 0 ? null : next);
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formSucursalId ? 'Seleccione puesto...' : 'Sucursal primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formPuestoOptions.map((p: { id: number; nombre: string }) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </View>
+                  </>
+                </ThemedView>
+              ) : null}
+
               <ThemedText style={styles.sectionTitle}>Vinculación (Vehículos corporativos)</ThemedText>
 
               {isPrefillMode && prefillVehicleInfo ? (
@@ -2476,14 +3647,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
               ) : (
                 <>
                   <ThemedText style={styles.label}>Vehículo corporativo</ThemedText>
-                  {isLoadingVehicles ? (
-                    <ThemedView style={styles.inlineLoading}>
-                      <ActivityIndicator size="small" color="#007AFF" />
-                      <ThemedText style={styles.inlineLoadingText}>Cargando vehículos...</ThemedText>
-                    </ThemedView>
-                  ) : (
-                    <ThemedView style={styles.pickerContainer}>
-                      <Picker
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
                         selectedValue={
                           selectedCorporateVehicleIdLocal ??
                           (selectedCorporateVehicleId != null && selectedCorporateVehicleId > 0
@@ -2499,8 +3664,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                             setSelectedCorporateUseIdLocal(null);
                             return;
                           }
-                          if (s.startsWith('local-')) {
-                            setSelectedCorporateVehicleIdLocal(s);
+                          const localKey = resolveLocalEntityKey(s);
+                          if (localKey) {
+                            setSelectedCorporateVehicleIdLocal(localKey);
                             setSelectedCorporateVehicleId(null);
                           } else {
                             setSelectedCorporateVehicleIdLocal(null);
@@ -2535,10 +3701,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
                             }
 
                             // Autocompletar información adicional del vehículo
-      const kmVal = selectedVehicle.kilometraje;
-      const proxAceiteVal = selectedVehicle.prox_cambio_aceite;
-      const modeloVal = selectedVehicle.modelo;
-      const annoVal = selectedVehicle.anno;
+                          const kmVal = selectedVehicle.kilometraje;
+                          const proxAceiteVal = selectedVehicle.prox_cambio_aceite;
+                          const modeloVal = selectedVehicle.modelo;
+                          const annoVal = selectedVehicle.anno;
                           const tipoAutoriaVal = selectedVehicle.tipo_autoria;
 
                             setVehKilometraje(
@@ -2588,9 +3754,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           }
                         }}
                         style={styles.picker}
-                        enabled={!isPrefillMode}
+                        enabled={!isPrefillMode && !isLoadingVehicles}
                       >
-                        <Picker.Item label="Seleccione..." value="0" color="#000000" />
+                        <Picker.Item
+                          label={isLoadingVehicles ? 'Cargando vehículos...' : 'Seleccione...'}
+                          value="0"
+                          color="#000000"
+                        />
                         {corporateVehicles.map((v: any) => (
                           <Picker.Item
                             key={`veh_${v.id ?? v.id_local}`}
@@ -2611,8 +3781,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           />
                         )}
                       </Picker>
-                    </ThemedView>
-                  )}
+                  </ThemedView>
 
                   <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
                   <ThemedView style={styles.pickerContainer}>
@@ -2630,8 +3799,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           setSelectedCorporateUseIdLocal(null);
                           return;
                         }
-                        if (s.startsWith('local-')) {
-                          setSelectedCorporateUseIdLocal(s);
+                        const localKey = resolveLocalEntityKey(s);
+                        if (localKey) {
+                          setSelectedCorporateUseIdLocal(localKey);
                           setSelectedCorporateUseId(null);
                         } else {
                           setSelectedCorporateUseIdLocal(null);
@@ -3200,7 +4370,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
           {!isCreating && (
             <ThemedView style={styles.listContainer}>
-              {filteredBitacoras.length === 0 ? (
+              {isLoading ? (
+                <ThemedView style={styles.inlineLoading}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.inlineLoadingText}>Cargando registros...</ThemedText>
+                </ThemedView>
+              ) : filteredBitacoras.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>No hay registros.</ThemedText>
                 </ThemedView>
@@ -3457,6 +4632,22 @@ const styles = StyleSheet.create({
   filterGroupSearch: {
     marginBottom: 8,
     backgroundColor: '#F9F9F9',
+  },
+  filterGroup: {
+    marginBottom: 10,
+  },
+  filterHierarchyTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+    color: '#007AFF',
+  },
+  pickerWrapper: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
   },
   filterLabel: {
     fontSize: 13,

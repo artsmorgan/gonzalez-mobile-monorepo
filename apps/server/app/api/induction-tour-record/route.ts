@@ -11,14 +11,15 @@ export async function GET(req: NextRequest) {
 
         const empresaIdStr = req.nextUrl.searchParams.get("empresa_id");
         const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
+        const divisionIdStr = req.nextUrl.searchParams.get("division_id");
         const contratoIdStr = req.nextUrl.searchParams.get("contrato_id");
         const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
         const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
         const plazaIdStr = req.nextUrl.searchParams.get("plaza_id");
 
-        const where: any = {};
+        const where: any = { isActive: true };
 
-        // Si hay filtros jerárquicos, usarlos (prioridad: plaza > puesto > corpo > contrato > cliente > empresa)
+        // Si hay filtros jerárquicos, usarlos (prioridad: plaza > puesto > corpo > contrato > division > cliente > empresa)
         if (plazaIdStr) {
             where.plaza_id = parseInt(plazaIdStr);
         } else if (puestoIdStr) {
@@ -27,6 +28,8 @@ export async function GET(req: NextRequest) {
             where.corpo_id = parseInt(corpoIdStr);
         } else if (contratoIdStr) {
             where.contrato_id = parseInt(contratoIdStr);
+        } else if (divisionIdStr) {
+            where.division_id = parseInt(divisionIdStr);
         } else if (clienteIdStr) {
             // Si hay cliente pero no contrato, buscar todos los contratos del cliente
             const clienteId = parseInt(clienteIdStr);
@@ -91,7 +94,7 @@ export async function GET(req: NextRequest) {
                 return NextResponse.json({ status: true, data: [] }, { status: 200 });
             }
         } else {
-            return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+            return NextResponse.json({ status: false, message: "Debe especificar filtros jer?rquicos" }, { status: 400 });
         }
 
         const records = await callDynamicPrisma({
@@ -115,7 +118,7 @@ export async function GET(req: NextRequest) {
 
         return NextResponse.json({
             status: true,
-            message: "Registros de inducción y recorrido obtenidos correctamente",
+            message: "Registros de inducci?n y recorrido obtenidos correctamente",
             data: recordsWithIdLocal
         }, { status: 200 });
 
@@ -155,6 +158,7 @@ export async function POST(req: NextRequest) {
             marca_id,
             empresa_id,
             cliente_id,
+            division_id,
             contrato_id,
             corpo_id,
             puesto_id,
@@ -179,7 +183,7 @@ export async function POST(req: NextRequest) {
 
         const marcaIdNum = parseInt(String(marca_id), 10);
         if (Number.isNaN(marcaIdNum)) {
-            return NextResponse.json({ status: false, message: "Marca inválida" }, { status: 400 });
+            return NextResponse.json({ status: false, message: "Marca inv?lida" }, { status: 400 });
         }
 
         const marcaDia = await callDynamicPrisma({
@@ -196,16 +200,17 @@ export async function POST(req: NextRequest) {
         }
         const marcaDiaObj = marcaDia as any;
 
-        // Usar IDs del body si están presentes, sino usar los de la marca
+        // Usar IDs del body si est?n presentes, sino usar los de la marca
         const empresaId = empresa_id !== undefined && empresa_id !== null ? Number(empresa_id) : Number(marcaDiaObj.empresa_id);
         const clienteId = cliente_id !== undefined && cliente_id !== null ? Number(cliente_id) : Number(marcaDiaObj.cliente_id);
+        const divisionId = division_id !== undefined && division_id !== null ? Number(division_id) : Number(marcaDiaObj.division_id);
         const contratoId = contrato_id !== undefined && contrato_id !== null ? Number(contrato_id) : Number(marcaDiaObj.contrato_id);
         const corpoId = corpo_id !== undefined && corpo_id !== null ? Number(corpo_id) : Number(marcaDiaObj.corpo_id);
         const puestoId = puesto_id !== undefined && puesto_id !== null ? Number(puesto_id) : Number(marcaDiaObj.puesto_id);
         const plazaId = plaza_id !== undefined && plaza_id !== null ? Number(plaza_id) : Number(marcaDiaObj.plaza_id);
 
         if (
-            [empresaId, clienteId, contratoId, corpoId, puestoId, plazaId].some((n) => Number.isNaN(n) || n === 0)
+            [empresaId, clienteId, divisionId, contratoId, corpoId, puestoId, plazaId].some((n) => Number.isNaN(n) || n === 0)
         ) {
             return NextResponse.json({ status: false, message: "No se pudieron derivar los IDs de la marca" }, { status: 400 });
         }
@@ -216,7 +221,7 @@ export async function POST(req: NextRequest) {
         }
         const empleadoIdNum = Number(empleado_id);
         if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
-            return NextResponse.json({ status: false, message: "empleado_id inválido" }, { status: 400 });
+            return NextResponse.json({ status: false, message: "empleado_id inv?lido" }, { status: 400 });
         }
 
         const fechaParsed = parseFechaInput(fecha);
@@ -228,10 +233,12 @@ export async function POST(req: NextRequest) {
         const createData: any = {
             empresa_id: empresaId,
             cliente_id: clienteId,
+            division_id: divisionId,
             contrato_id: contratoId,
             corpo_id: corpoId,
             puesto_id: puestoId,
             plaza_id: plazaId,
+            isActive: true,
             empleado_id: empleadoIdNum,
             division: (division && String(division).trim()) ? String(division).trim() : "Otros",
             renglon_edificio: renglon_edificio ? String(renglon_edificio) : "",
@@ -267,7 +274,7 @@ export async function POST(req: NextRequest) {
         });
         const newRecordObj = new_record as any;
 
-        // Registrar cambio de creación
+        // Registrar cambio de creaci?n
         await callDynamicPrisma({
             req,
             data: {
@@ -284,6 +291,7 @@ export async function POST(req: NextRequest) {
                             id: newRecordObj.id,
                             empresa_id: newRecordObj.empresa_id,
                             cliente_id: newRecordObj.cliente_id,
+                            division_id: newRecordObj.division_id,
                             contrato_id: newRecordObj.contrato_id,
                             corpo_id: newRecordObj.corpo_id,
                             puesto_id: newRecordObj.puesto_id,
@@ -376,17 +384,18 @@ export async function POST(req: NextRequest) {
             const created_at_value = typeof newRecordObj.created_at === 'string' ? newRecordObj.created_at : (newRecordObj.created_at instanceof Date ? newRecordObj.created_at.toISOString() : createdAt.toISOString());
             let fechaRegistro = created_at_value.split("T")[0];
             let horaRegistro = created_at_value.split("T")[1].split(".")[0];
-            const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de inducción y recorrido misceláneo en la sucursal " + sucursalNombre + " para el cliente " + clienteNombre + " en la plaza " + plazaNombre + " el día " + fechaRegistro + " a las " + horaRegistro;
-            await sendNotificationByRole(req, newRecordObj.corpo_id, [Number(newRecordObj.created_by)], "Registro de inducción y recorrido misceláneo creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de inducci?n y recorrido miscel?neo en la sucursal " + sucursalNombre + " para el cliente " + clienteNombre + " en la plaza " + plazaNombre + " el d?a " + fechaRegistro + " a las " + horaRegistro;
+            await sendNotificationByRole(req, newRecordObj.corpo_id, [Number(newRecordObj.created_by)], "Registro de inducci?n y recorrido miscel?neo creado", descriptionNotificacion, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         return NextResponse.json({
             status: true,
-            message: "Registro de inducción y recorrido creado correctamente",
+            message: "Registro de inducci?n y recorrido creado correctamente",
             data: {
                 id: newRecordObj.id,
                 empresa_id: newRecordObj.empresa_id,
                 cliente_id: newRecordObj.cliente_id,
+                division_id: newRecordObj.division_id,
                 contrato_id: newRecordObj.contrato_id,
                 corpo_id: newRecordObj.corpo_id,
                 puesto_id: newRecordObj.puesto_id,

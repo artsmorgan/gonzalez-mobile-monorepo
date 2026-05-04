@@ -28,6 +28,7 @@ export type IncidentFile = {
   id_local?: string;
   base64?: string;
   mimeType?: string;
+  local_file_name?: string;
 };
 
 export type IncidentContributionFile = {
@@ -60,6 +61,13 @@ export type Incident = {
   id: number;
   /** Jerarquía (id de sucursal / `e_estructura_sucursal`, mismo valor que `corpo_id` en BD) */
   corpo_id?: number;
+  sucursal_id?: number;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  cliente_id?: number;
+  puesto_id?: number;
+  isActive?: boolean;
   estado: boolean;
   ejecutivo: IncidentExecutive;
   fecha_incidente: string; // ISO 8601 string
@@ -123,6 +131,8 @@ export type IncidentFileInput = {
   original_name?: string;
   file_base64: string; // base64 puro o data URI
   mimeType?: string;
+  /** Nombre en `Paths.document` (expo-file-system); rellenado al sincronizar con `getFile` */
+  local_file_name?: string;
 };
 
 export type IncidentContributionFileInput = {
@@ -131,6 +141,7 @@ export type IncidentContributionFileInput = {
   original_name?: string;
   file_base64: string; // base64 puro o data URI
   mimeType?: string;
+  local_file_name?: string;
 };
 
 export type CreateIncidentRequest = {
@@ -145,21 +156,40 @@ export type CreateIncidentRequest = {
   fecha_libro_novedades: string; // JSON string
   nombre_responsable_atencion: string;
   archivos: string | IncidentFileInput[]; // server acepta string o array
+  /** Jerarquía completa requerida por el API */
+  empresa_id: number;
+  division_id: number;
+  contrato_id: number;
+  cliente_id: number;
+  corpo_id: number;
+  puesto_id: number;
+  /** legado; mismo valor que corpo_id */
+  sucursal_id?: number;
 };
 
 export type CreateIncidentResponse = {
   status: boolean;
   message: string;
   incidentId?: number;
+  id?: number;
 };
 
 export type UpdateIncidentRequest = {
+  marca_id?: number;
   solucion: string;
   fecha_solucion: string;
   fecha_real_solucion: string;
   costo_asociado: string;
   consecutivo_informe: string;
   link_informe: string;
+  archivos?: string | IncidentFileInput[];
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  cliente_id?: number;
+  corpo_id?: number;
+  puesto_id?: number;
+  sucursal_id?: number;
 };
 
 export type BasicResponse = { status: boolean; message: string };

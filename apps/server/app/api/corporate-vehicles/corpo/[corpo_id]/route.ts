@@ -24,7 +24,7 @@ export async function GET(
         action: "GET",
         table: "c_vehiculos_corporativos",
         operation: "findMany",
-        where: { sucursal_id: sucursalId },
+        where: { sucursal_id: sucursalId, isActive: true },
         orderBy: { id: "desc" },
         include: { c_imagenes_vehiculos_corporativos: true, c_usos_vehiculos_corporativos: true },
       },

@@ -40,6 +40,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
@@ -62,6 +63,7 @@ type Turno = {
 type PermitRecord = {
   id: number;
   empleado_id: number;
+  isActive?: boolean;
   estado?: string | null;
   tipo: string;
   fecha_inicio: string;
@@ -100,13 +102,55 @@ type PlazaOption = {
 
 type AttachedDocument = {
   id: string;
-  base64: string;
+  /** Archivo en documentos de la app (mismo patrón que Acta de entrega). */
+  localFileName?: string;
+  base64?: string;
   extension: string;
   original_name: string;
   mimeType?: string;
   type: string;
   is_main: boolean;
 };
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  return numOrNull(raw);
+}
+
+function parsePermitHierarchyFromCurrentMarca(marca: any): {
+  empresa_id: number | null;
+  cliente_id: number | null;
+  division_id: number | null;
+  contrato_id: number | null;
+  corpo_id: number | null;
+  puesto_id: number | null;
+} {
+  return {
+    empresa_id: numOrNull(marca?.empresa?.id ?? marca?.empresa_id),
+    cliente_id: numOrNull(marca?.cliente?.id ?? marca?.cliente_id),
+    division_id: getDivisionIdFromMarcaJson(marca),
+    contrato_id: numOrNull(marca?.contrato?.id ?? marca?.contrato_id),
+    corpo_id: numOrNull(marca?.corpo?.id ?? marca?.corpo_id),
+    puesto_id: numOrNull(marca?.puesto?.id ?? marca?.puesto_id),
+  };
+}
+
+function stripBase64Payload(raw: string): string {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  const m = s.match(/^data:[^;]+;base64,(.+)$/i);
+  return m ? m[1].trim() : s;
+}
 
 const SIGNATURE_WEB_STYLE = `
 .m-signature-pad--footer { display: none; margin: 0; }
@@ -375,7 +419,7 @@ export default function PermitRequestScreenV2() {
       if (!cache) return;
       const parsed = JSON.parse(cache);
       if (!Array.isArray(parsed)) return;
-      setRecords(parsed);
+      setRecords(parsed.filter((r: any) => r?.isActive !== false));
     } catch {
       // ignore cache parse errors
     }
@@ -407,7 +451,7 @@ export default function PermitRequestScreenV2() {
       if (!resp) throw new Error('Sesión expirada');
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok || !json?.status) throw new Error(json?.message || 'No se pudieron cargar las solicitudes');
-      const data = Array.isArray(json.data) ? json.data : [];
+      const data = (Array.isArray(json.data) ? json.data : []).filter((r: any) => r?.isActive !== false);
       setRecords(data);
       await AsyncStorage.setItem(PERMIT_REQUEST_CACHE_KEY, JSON.stringify(data));
     } catch (e: any) {
@@ -568,28 +612,23 @@ export default function PermitRequestScreenV2() {
       });
       if (result.canceled || !result.assets?.length) return;
       for (const asset of result.assets) {
-        const fileResponse = await fetch(asset.uri);
-        const blob = await fileResponse.blob();
-        const base64 = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const raw = reader.result;
-            if (typeof raw !== 'string') return reject(new Error('No se pudo leer archivo'));
-            const parts = raw.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          };
-          reader.onerror = () => reject(reader.error ?? new Error('No se pudo leer archivo'));
-          reader.readAsDataURL(blob);
-        });
         const extension = String(asset.name || '').split('.').pop()?.toLowerCase()
           || String(asset.mimeType || '').split('/').pop()?.toLowerCase()
           || 'dat';
+        const storedType = normalizeFileType(asset.mimeType);
+        const localFileName = await saveFile({
+          uri: asset.uri,
+          originalName: asset.name || `archivo.${extension}`,
+          extension,
+          type: storedType,
+          prefix: 'permit_request',
+        });
         addAttachedDocument({
-          base64,
+          localFileName,
           extension,
           original_name: asset.name || `archivo.${extension}`,
           mimeType: asset.mimeType || undefined,
-          type: normalizeFileType(asset.mimeType),
+          type: storedType,
         });
       }
     } catch (e: any) {
@@ -616,17 +655,23 @@ export default function PermitRequestScreenV2() {
     if (!cameraRef.current) return;
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
         skipProcessing: false,
       });
-      if (!photo?.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto');
         return;
       }
       const extension = 'jpg';
+      const localFileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'photo',
+        extension,
+        type: 'image',
+        prefix: 'permit_request',
+      });
       addAttachedDocument({
-        base64: photo.base64,
+        localFileName,
         extension,
         original_name: `foto_${Date.now()}.jpg`,
         mimeType: 'image/jpeg',
@@ -644,6 +689,14 @@ export default function PermitRequestScreenV2() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
+    setAttachedDocuments((prev) => {
+      for (const f of prev) {
+        if (f.localFileName) {
+          void deleteFile(f.localFileName).catch(() => {});
+        }
+      }
+      return [];
+    });
     setSelectedPlazaId(null);
     setTipo('');
     setFechaInicio(new Date(horaAccion));
@@ -651,7 +704,6 @@ export default function PermitRequestScreenV2() {
     setComentarios('');
     setTurnosPreview([]);
     setTurnosMessage('');
-    setAttachedDocuments([]);
     setFirmaResponsable('');
   };
 
@@ -669,6 +721,50 @@ export default function PermitRequestScreenV2() {
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
+
+      const marcaRaw = await AsyncStorage.getItem('current_marca');
+      if (!marcaRaw) throw new Error('No hay marca actual (current_marca). No se puede enviar la jerarquía.');
+      const marca = JSON.parse(marcaRaw);
+      const hierarchy = parsePermitHierarchyFromCurrentMarca(marca);
+      const hierarchyKeys = ['empresa_id', 'cliente_id', 'division_id', 'contrato_id', 'corpo_id', 'puesto_id'] as const;
+      const missingH = hierarchyKeys.filter((k) => hierarchy[k] == null);
+      if (missingH.length) {
+        throw new Error(
+          `Faltan datos de jerarquía en la marca actual (${missingH.join(', ')}). Vuelve a marcar o sincroniza.`
+        );
+      }
+
+      const filesPayload: {
+        type: string;
+        extension: string;
+        original_name: string;
+        file_base64: string;
+        mimeType?: string;
+        is_main: boolean;
+      }[] = [];
+      for (const f of attachedDocuments) {
+        let rawB64 = '';
+        if (f.localFileName) {
+          try {
+            rawB64 = (await getFile(f.localFileName)).base64;
+          } catch {
+            throw new Error(`No se pudo leer el archivo local: ${f.original_name}`);
+          }
+        } else if (f.base64) {
+          rawB64 = f.base64;
+        }
+        const file_base64 = stripBase64Payload(rawB64);
+        if (!file_base64) continue;
+        filesPayload.push({
+          type: f.type,
+          extension: f.extension,
+          original_name: f.original_name,
+          file_base64,
+          mimeType: f.mimeType,
+          is_main: Boolean(f.is_main),
+        });
+      }
+
       const payload: any = {
         plaza_id: selectedPlazaId,
         tipo,
@@ -677,14 +773,13 @@ export default function PermitRequestScreenV2() {
         hora_accion: horaAccion,
         comentarios: comentarios.trim() || undefined,
         firma_responsable: firmaResponsable,
-        files: attachedDocuments.map((f) => ({
-          type: f.type,
-          extension: f.extension,
-          original_name: f.original_name,
-          file_base64: f.base64,
-          mimeType: f.mimeType,
-          is_main: Boolean(f.is_main),
-        })),
+        empresa_id: hierarchy.empresa_id,
+        cliente_id: hierarchy.cliente_id,
+        division_id: hierarchy.division_id,
+        contrato_id: hierarchy.contrato_id,
+        corpo_id: hierarchy.corpo_id,
+        puesto_id: hierarchy.puesto_id,
+        files: filesPayload,
       };
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request`,
@@ -1005,6 +1100,10 @@ export default function PermitRequestScreenV2() {
 
   const removeAttachment = (fileId: string) => {
     setAttachedDocuments((prev) => {
+      const victim = prev.find((f) => f.id === fileId);
+      if (victim?.localFileName) {
+        void deleteFile(victim.localFileName).catch(() => {});
+      }
       const filtered = prev.filter((f) => f.id !== fileId);
       if (!filtered.some((f) => f.is_main) && filtered.length > 0) {
         filtered[0] = { ...filtered[0], is_main: true };
@@ -1214,20 +1313,20 @@ export default function PermitRequestScreenV2() {
               </ThemedView>
 
               {!isLoading ? (
-                <TouchableOpacity
-                  style={[styles.createButton, !isOnline && styles.disabledButton]}
-                  disabled={!isOnline}
-                  onPress={() => {
-                    resetCreateForm();
-                    setIsCreating(true);
-                    fetchPlazas();
-                  }}
-                  activeOpacity={0.85}
-                >
-                  <ThemedText style={styles.createButtonText}>
-                    <Ionicons name="add" size={20} color="#FFFFFF" /> Nueva solicitud
-                  </ThemedText>
-                </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.createButton, !isOnline && styles.disabledButton]}
+              disabled={!isOnline}
+              onPress={() => {
+                resetCreateForm();
+                setIsCreating(true);
+                fetchPlazas();
+              }}
+              activeOpacity={0.85}
+            >
+              <ThemedText style={styles.createButtonText}>
+                <Ionicons name="add" size={20} color="#FFFFFF" /> Nueva solicitud
+              </ThemedText>
+            </TouchableOpacity>
               ) : null}
 
               {isLoading ? (
@@ -1257,17 +1356,17 @@ export default function PermitRequestScreenV2() {
                         <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>{r.tipo}
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        <ThemedText style={styles.cardLabel}>Inicio: </ThemedText>{formatDateDMY(r.fecha_inicio)}
+                        <ThemedText style={styles.cardLabel}>Inicio: </ThemedText>{convertDateTimestampToLocalString(r.fecha_inicio, false)}
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        <ThemedText style={styles.cardLabel}>Fin: </ThemedText>{formatDateDMY(r.fecha_fin)}
+                        <ThemedText style={styles.cardLabel}>Fin: </ThemedText>{convertDateTimestampToLocalString(r.fecha_fin, false)}
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Turnos: </ThemedText>{Array.isArray(r.turnos) ? r.turnos.length : 0}
                       </ThemedText>
-                      <ThemedText style={styles.cardLine}>
+                        <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Adjuntos: </ThemedText>{Array.isArray(r.archivos) ? r.archivos.length : 0}
-                      </ThemedText>
+                        </ThemedText>
                       {!!r.archivos?.length && (
                         <Collapsible title="Ver adjuntos">
                           <ThemedView style={styles.attachmentsList}>
@@ -1311,15 +1410,15 @@ export default function PermitRequestScreenV2() {
                       <ThemedView style={styles.actionsRow}>
                         {Boolean(r.can_complete_by_executive) && (
                           <>
-                            <TouchableOpacity
-                              style={[styles.actionBtn, styles.completeBtn]}
-                              onPress={() => openCompleteModal(r)}
-                              activeOpacity={0.85}
-                            >
-                              <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                          <TouchableOpacity
+                            style={[styles.actionBtn, styles.completeBtn]}
+                            onPress={() => openCompleteModal(r)}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
                               <ThemedText style={styles.actionBtnText}>Aprobar</ThemedText>
-                            </TouchableOpacity>
-                            <TouchableOpacity
+                          </TouchableOpacity>
+                          <TouchableOpacity
                               style={[
                                 styles.actionBtn,
                                 styles.rejectBtn,
@@ -1327,8 +1426,8 @@ export default function PermitRequestScreenV2() {
                               ]}
                               onPress={() => rejectRecord(r)}
                               disabled={rejectingRecordId === r.id}
-                              activeOpacity={0.85}
-                            >
+                            activeOpacity={0.85}
+                          >
                               {rejectingRecordId === r.id ? (
                                 <ActivityIndicator size="small" color="#FFFFFF" />
                               ) : (
@@ -1337,7 +1436,7 @@ export default function PermitRequestScreenV2() {
                                   <ThemedText style={styles.actionBtnText}>Rechazar</ThemedText>
                                 </>
                               )}
-                            </TouchableOpacity>
+                          </TouchableOpacity>
                           </>
                         )}
                       </ThemedView>
@@ -1470,7 +1569,7 @@ export default function PermitRequestScreenV2() {
               <ThemedView style={styles.attachButtonsRow}>
                 <TouchableOpacity style={[styles.secondaryAction, { backgroundColor: '#007AFF', gap: 6 }]} onPress={handlePickDocuments}>
                   <ThemedText style={styles.secondaryActionText}>Adjuntar archivo(s)</ThemedText>
-                </TouchableOpacity>
+              </TouchableOpacity>
                 <TouchableOpacity style={[styles.secondaryAction, { backgroundColor: '#34C759', gap: 6 }]} onPress={openCameraForPhoto}>
                   <ThemedText style={styles.secondaryActionText}>Abrir cámara</ThemedText>
                 </TouchableOpacity>
@@ -1492,7 +1591,11 @@ export default function PermitRequestScreenV2() {
                       </ThemedView>
                       {f.type === 'image' ? (
                         <Image
-                          source={{ uri: `data:${f.mimeType || 'image/jpeg'};base64,${f.base64}` }}
+                          source={{
+                            uri: f.localFileName
+                              ? getLocalFileDisplayUri(f.localFileName)
+                              : `data:${f.mimeType || 'image/jpeg'};base64,${f.base64 || ''}`,
+                          }}
                           style={styles.attachmentImage}
                           resizeMode="contain"
                         />

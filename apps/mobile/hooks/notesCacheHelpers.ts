@@ -39,7 +39,7 @@ export function filterNotesByPuestoId(
 ): any[] {
   if (puestoId == null || !Number.isFinite(Number(puestoId)) || Number(puestoId) <= 0) return [];
   const pid = Number(puestoId);
-  return (notas || []).filter((n) => resolveNotePuestoId(n, legacyFallbackPuestoId) === pid);
+  return (notas || []).filter((n) => n?.isActive !== false && resolveNotePuestoId(n, legacyFallbackPuestoId) === pid);
 }
 
 export function isNoteLocalPending(note: any): boolean {

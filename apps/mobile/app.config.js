@@ -48,6 +48,12 @@ module.exports = {
           resizeMode: "contain",
           backgroundColor: "#ffffff"
         }
+      ], [
+        "expo-file-system",
+        {
+          "supportsOpeningDocumentsInPlace": true,
+          "enableFileSharing": true
+        }
       ],
       "expo-font",
       "expo-web-browser",

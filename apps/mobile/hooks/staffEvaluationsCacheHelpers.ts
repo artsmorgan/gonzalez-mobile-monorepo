@@ -31,11 +31,13 @@ export function mergeStaffEvaluationsCacheForCorpo(
   const withoutCorpo = fullCache.filter((row) => getStaffEvalRecordCorpoId(row) !== cid);
   const existingCorpo = fullCache.filter((row) => getStaffEvalRecordCorpoId(row) === cid);
   const pending = existingCorpo.filter(isStaffEvalLocalPendingRecord);
-  const serverTagged = (freshFromServer || []).map((e) => ({
-    ...e,
-    corpo_id: e.corpo_id ?? e.sucursal_id ?? cid,
-    id_local: e.id_local ?? '',
-  }));
+  const serverTagged = (freshFromServer || [])
+    .filter((e: any) => e && e.isActive !== false)
+    .map((e) => ({
+      ...e,
+      corpo_id: e.corpo_id ?? e.sucursal_id ?? cid,
+      id_local: e.id_local ?? '',
+    }));
   return [...withoutCorpo, ...pending, ...serverTagged];
 }
 

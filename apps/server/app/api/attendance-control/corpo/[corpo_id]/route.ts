@@ -21,7 +21,8 @@ export async function GET(
                 table: "c_control_asistencia",
                 operation: "findMany",
                 where: {
-                    corpo_id: parseInt(corpo_id)
+                    corpo_id: parseInt(corpo_id),
+                    isActive: true,
                 },
                 orderBy: {
                     created_at: 'desc'
@@ -30,7 +31,9 @@ export async function GET(
         });
 
         const recordsArray = Array.isArray(records) ? records : [];
-        const recordsWithIdLocal = recordsArray.map((record: any) => ({
+        const recordsWithIdLocal = recordsArray
+            .filter((record: any) => record && record.isActive !== false)
+            .map((record: any) => ({
             ...record,
             id_local: ""
         }));

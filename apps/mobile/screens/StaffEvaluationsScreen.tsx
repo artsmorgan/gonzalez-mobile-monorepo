@@ -42,10 +42,19 @@ import {
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import {
   filterStaffEvaluationsCacheByCorpo,
   mergeStaffEvaluationsCacheForCorpo,
 } from '@/hooks/staffEvaluationsCacheHelpers';
+import {
+  buildStaffEvaluacionForSubmit,
+  deleteStaffEvalLocalImageFiles,
+  resolveStaffEvalImageDisplayUri,
+  saveCameraPhotoToStaffEvalFile,
+  staffEvalMakeLocalImageRef,
+  staffEvaluacionStringForActionPayload,
+} from '@/hooks/staffEvaluationsMediaSync';
 
 type StaffEvaluationsNavigationProp = NativeStackNavigationProp<
   RootStackParamList,
@@ -146,20 +155,29 @@ interface StaffEvaluation {
   id_local: string;
   corpo_id?: number;
   sucursal_id?: number;
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
+  plaza_id?: number;
+  isActive?: boolean;
+  synced?: boolean;
 }
 
 function stripQueuedStaffEvalSignatureUpdates(
   actions: any[],
   evaluationId: number,
-  field?: StaffEvaluationSignatureField
+  field?: StaffEvaluationSignatureField,
+  idLocal?: string | null
 ): any[] {
   const id = Number(evaluationId);
-  if (!Number.isFinite(id)) return actions;
   return actions.filter((a: any) => {
     if (a?.type !== 'update') return true;
-    if (Number(a.evaluationId) !== id) return true;
     if (field != null && a.field !== field) return true;
-    return false;
+    if (Number.isFinite(id) && id > 0 && Number(a.evaluationId) === id) return false;
+    if (id === 0 && idLocal && a?.id_local != null && String(a.id_local) === String(idLocal)) return false;
+    return true;
   });
 }
 
@@ -178,13 +196,29 @@ function appendOfflineStaffEvalDelete(actions: any[], evaluationId: number): any
 
 function appendOfflineStaffEvalSignatureUpdate(
   actions: any[],
-  params: { evaluationId: number; field: StaffEvaluationSignatureField; value: string | null }
+  params: { evaluationId: number; idLocal?: string | null; field: StaffEvaluationSignatureField; value: string | null }
 ): any[] {
-  let next = stripQueuedStaffEvalSignatureUpdates(actions, params.evaluationId, params.field);
+  let next = stripQueuedStaffEvalSignatureUpdates(actions, params.evaluationId, params.field, params.idLocal);
+  const idLocal = params.idLocal;
+  if (idLocal != null && String(idLocal).trim().length > 0) {
+    const createIdx = next.findIndex(
+      (a) => a?.type === 'create' && a?.id != null && String(a.id) === String(idLocal)
+    );
+    if (createIdx >= 0) {
+      return next.map((a, i) => {
+        if (i !== createIdx) return a;
+        const rd = { ...(a.requestData || {}) };
+        if (params.field === 'firma_empleado') rd.firma_empleado = params.value ?? '';
+        else if (params.field === 'firma_empleado_manual') rd.firma_empleado_manual = params.value ?? '';
+        return { ...a, requestData: rd };
+      });
+    }
+  }
   next.push({
     id: Math.random().toString(36).substring(2, 12),
     type: 'update',
     evaluationId: params.evaluationId,
+    id_local: params.idLocal ?? null,
     field: params.field,
     value: params.value ?? '',
   });
@@ -192,7 +226,7 @@ function appendOfflineStaffEvalSignatureUpdate(
 }
 
 async function patchStaffEvalSignatureInCache(
-  evaluationId: number,
+  target: StaffEvaluation,
   field: StaffEvaluationSignatureField,
   value: string | null
 ) {
@@ -205,9 +239,15 @@ async function patchStaffEvalSignatureInCache(
       field === 'firma_empleado'
         ? { firma_empleado: value }
         : { firma_empleado_manual: value };
-    const updated = cache.map((item: StaffEvaluation) =>
-      Number(item.id) === Number(evaluationId) ? { ...item, ...patch } : item
-    );
+    const updated = cache.map((item: StaffEvaluation) => {
+      const same =
+        (Number(target.id) > 0 && Number(item.id) === Number(target.id)) ||
+        (target.id_local != null &&
+          String(target.id_local).length > 0 &&
+          item.id_local != null &&
+          String(item.id_local) === String(target.id_local));
+      return same ? { ...item, ...patch } : item;
+    });
     await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updated));
   } catch {
     /* ignore */
@@ -759,18 +799,8 @@ export default function StaffEvaluationsScreen() {
       const cor = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
       setCorpoId(cor != null ? Number(cor) : null);
 
-      const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-      const tree: StaffStructureTree = structureCacheStr
-        ? (() => {
-            try {
-              const p = JSON.parse(structureCacheStr);
-              return Array.isArray(p) ? p : [];
-            } catch {
-              return [];
-            }
-          })()
-        : [];
-      setStructure(tree);
+      const tree = (await loadMainStructureTreeMerged()) as StaffStructureTree;
+      setStructure(Array.isArray(tree) ? tree : []);
       applyHierarchyToFilters(currentMarca, tree);
     } catch (e) {
       console.error('bootstrap staff evaluations:', e);
@@ -782,7 +812,12 @@ export default function StaffEvaluationsScreen() {
 
   const fetchEvaluationsForFilterCorpo = useCallback(async () => {
     const mId = marcaId;
-    const corpo_id = filterCorpoId != null ? Number(filterCorpoId) : null;
+    const corpo_id =
+      filterCorpoId != null && Number(filterCorpoId) > 0
+        ? Number(filterCorpoId)
+        : corpoId != null && Number(corpoId) > 0
+          ? Number(corpoId)
+          : null;
     if (!mId || corpo_id == null || !Number.isFinite(corpo_id) || corpo_id <= 0) {
       listFetchGenRef.current += 1;
       setIsListLoading(false);
@@ -836,10 +871,12 @@ export default function StaffEvaluationsScreen() {
         const fullCache = await parseStaffCache();
 
         if (evalData.status && Array.isArray(evalData.evaluaciones)) {
-          const withCorpo = (evalData.evaluaciones as StaffEvaluation[]).map((e) => ({
-            ...e,
-            corpo_id: e.corpo_id ?? e.sucursal_id ?? corpo_id,
-          }));
+          const withCorpo = (evalData.evaluaciones as StaffEvaluation[])
+            .filter((e) => e && e.isActive !== false)
+            .map((e) => ({
+              ...e,
+              corpo_id: e.corpo_id ?? e.sucursal_id ?? corpo_id,
+            }));
           const merged = mergeStaffEvaluationsCacheForCorpo(fullCache, withCorpo, corpo_id);
           await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(merged));
           const forList = filterStaffEvaluationsCacheByCorpo(merged, corpo_id) as StaffEvaluation[];
@@ -885,7 +922,7 @@ export default function StaffEvaluationsScreen() {
     } finally {
       if (!isStale()) setIsListLoading(false);
     }
-  }, [marcaId, filterCorpoId, refreshAccessToken, logout]);
+  }, [marcaId, filterCorpoId, corpoId, refreshAccessToken, logout]);
 
   const fetchEvaluationsForFilterCorpoRef = useRef<(() => Promise<void>) | null>(null);
   fetchEvaluationsForFilterCorpoRef.current = fetchEvaluationsForFilterCorpo;
@@ -901,14 +938,14 @@ export default function StaffEvaluationsScreen() {
   );
 
   useEffect(() => {
-    if (!marcaId || filterCorpoId == null) {
+    if (!marcaId || (filterCorpoId == null && (corpoId == null || Number(corpoId) <= 0))) {
       listFetchGenRef.current += 1;
       setIsListLoading(false);
       setEvaluaciones([]);
       return;
     }
     void fetchEvaluationsForFilterCorpoRef.current?.();
-  }, [marcaId, filterCorpoId]);
+  }, [marcaId, filterCorpoId, corpoId]);
 
   useEffect(() => {
     const handler = () => {
@@ -922,7 +959,17 @@ export default function StaffEvaluationsScreen() {
     };
   }, [filterCorpoId, marcaId]);
 
+
+  const printEvaluationsStaffCache = useCallback(async () => {
+    const evaluations_staff_cache = await AsyncStorage.getItem('evaluations_staff_cache');
+    console.log('evaluations_staff_cache', evaluations_staff_cache);
+    for (const ec of evaluations_staff_cache || []) {
+      console.log('ec', JSON.parse(ec));
+    }
+  }, []);
+
   useEffect(() => {
+    printEvaluationsStaffCache();
     if (isRestoringHierarchyRef.current) return;
     setSelectedClienteId(null);
     setSelectedDivisionId(null);
@@ -1387,7 +1434,7 @@ export default function StaffEvaluationsScreen() {
       Alert.alert('Aviso', 'Escanea un código QR primero.');
       return;
     }
-    if (addSignatureEvaluation.id === 0) {
+    if (addSignatureEvaluation.id === 0 && !addSignatureEvaluation.id_local) {
       Alert.alert('Aviso', 'Esta evaluación aún no está sincronizada. No se puede añadir firma.');
       return;
     }
@@ -1409,21 +1456,22 @@ export default function StaffEvaluationsScreen() {
                 if (!Array.isArray(actions)) actions = [];
                 actions = appendOfflineStaffEvalSignatureUpdate(actions, {
                   evaluationId: addSignatureEvaluation.id,
+                  idLocal: addSignatureEvaluation.id_local,
                   field: 'firma_empleado',
                   value: addSignatureQRValue,
                 });
                 await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
-                await patchStaffEvalSignatureInCache(
-                  addSignatureEvaluation.id,
-                  'firma_empleado',
-                  addSignatureQRValue
-                );
+                await patchStaffEvalSignatureInCache(addSignatureEvaluation, 'firma_empleado', addSignatureQRValue);
                 Alert.alert(
                   'Modo offline',
                   'Firma guardada localmente. Se sincronizará cuando haya conexión.'
                 );
                 closeAddSignatureModal();
                 reloadEvaluationsList();
+                return;
+              }
+              if (addSignatureEvaluation.id === 0) {
+                Alert.alert('Aviso', 'Sincroniza el registro antes de añadir firma con conexión.');
                 return;
               }
               const result = await updateStaffEvaluationSignature({
@@ -1452,7 +1500,7 @@ export default function StaffEvaluationsScreen() {
 
   const submitStaffSignatureManualFromModal = async (sig: string) => {
     const ev = addSignatureEvaluation;
-    if (!ev || addSignatureType !== 'firma_empleado_manual' || ev.id === 0) return;
+    if (!ev || addSignatureType !== 'firma_empleado_manual' || (ev.id === 0 && !ev.id_local)) return;
     setIsAddSignatureSubmitting(true);
     try {
       const hasConnection = await checkConnection();
@@ -1462,17 +1510,22 @@ export default function StaffEvaluationsScreen() {
         if (!Array.isArray(actions)) actions = [];
         actions = appendOfflineStaffEvalSignatureUpdate(actions, {
           evaluationId: ev.id,
+          idLocal: ev.id_local,
           field: 'firma_empleado_manual',
           value: sig,
         });
         await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
-        await patchStaffEvalSignatureInCache(ev.id, 'firma_empleado_manual', sig);
+        await patchStaffEvalSignatureInCache(ev, 'firma_empleado_manual', sig);
         Alert.alert(
           'Modo offline',
           'Firma guardada localmente. Se sincronizará cuando haya conexión.'
         );
         closeAddSignatureModal();
         reloadEvaluationsList();
+        return;
+      }
+      if (ev.id === 0) {
+        Alert.alert('Aviso', 'Sincroniza el registro antes de guardar la firma manual con conexión.');
         return;
       }
       const result = await updateStaffEvaluationSignature({
@@ -1509,7 +1562,11 @@ export default function StaffEvaluationsScreen() {
       Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
       return;
     }
-    if (!addSignatureEvaluation || addSignatureType !== 'firma_empleado_manual' || addSignatureEvaluation.id === 0)
+    if (
+      !addSignatureEvaluation ||
+      addSignatureType !== 'firma_empleado_manual' ||
+      (addSignatureEvaluation.id === 0 && !addSignatureEvaluation.id_local)
+    )
       return;
     if (isAddSignatureSubmitting) return;
     Alert.alert(
@@ -1616,16 +1673,16 @@ export default function StaffEvaluationsScreen() {
     }
     try {
       const photo: any = await cameraRef.current.takePictureAsync({
-        base64: true,
-        quality: Platform.OS === 'android' ? 0.45 : 0.55,
+        quality: Platform.OS === 'android' ? 0.5 : 0.6,
         skipProcessing: true,
       });
       setCameraVisible(false);
-      if (!photo || !photo.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la imagen');
         return;
       }
-      const formattedBase64 = `data:image/jpeg;base64,${photo.base64}`;
+      const fileName = await saveCameraPhotoToStaffEvalFile(photo.uri);
+      const ref = staffEvalMakeLocalImageRef(fileName);
       const [sectionIndexStr, questionIndexStr] = currentQuestionKey.split('-');
       const sIdx = parseInt(sectionIndexStr, 10);
       const qIdx = parseInt(questionIndexStr, 10);
@@ -1635,7 +1692,7 @@ export default function StaffEvaluationsScreen() {
         orientation = photo.width >= photo.height ? 'horizontal' : 'vertical';
       }
 
-      appendQuestionImage(sIdx, qIdx, formattedBase64, orientation);
+      appendQuestionImage(sIdx, qIdx, ref, orientation);
     } catch (error) {
       console.error('Error capturing question image:', error);
       setCameraVisible(false);
@@ -1706,16 +1763,9 @@ export default function StaffEvaluationsScreen() {
       const raw = await AsyncStorage.getItem('current_marca');
       let tree: StaffStructureTree = Array.isArray(structure) ? structure : [];
       if (tree.length === 0) {
-        const s = await AsyncStorage.getItem('main_structure_cache');
-        if (s) {
-          try {
-            const p = JSON.parse(s);
-            tree = Array.isArray(p) ? p : [];
-            setStructure(tree);
-          } catch {
-            tree = [];
-          }
-        }
+        const merged = (await loadMainStructureTreeMerged()) as StaffStructureTree;
+        tree = Array.isArray(merged) ? merged : [];
+        setStructure(tree);
       }
       if (raw && tree.length > 0) {
         applyHierarchyToFilters(JSON.parse(raw), tree);
@@ -1740,9 +1790,16 @@ export default function StaffEvaluationsScreen() {
     setIsCreateSubmitting(true);
     try {
       const sectionsForPayload = buildEvaluationPayloadSections();
+      const { evaluacion: evaluacionStr, fileSlots } = buildStaffEvaluacionForSubmit(
+        JSON.parse(JSON.stringify(sectionsForPayload)) as any
+      );
 
       const requestBody = {
         marca_id: marcaId,
+        empresa_id: selectedEmpresaId,
+        cliente_id: selectedClienteId,
+        division_id: selectedDivisionId,
+        contrato_id: selectedContratoId,
         corpo_id: selectedCorpoId,
         puesto_id: selectedPuestoId,
         plaza_id: selectedPlazaId,
@@ -1753,7 +1810,8 @@ export default function StaffEvaluationsScreen() {
         fecha_ingreso: fechaIngresoRef.current,
         fecha_evaluacion: fechaEvaluacionRef.current,
         tipo: tipoEvaluacionRef.current,
-        evaluacion: JSON.stringify(sectionsForPayload),
+        evaluacion: evaluacionStr,
+        _staffEvalFileSlots: fileSlots,
         comentarios: comentariosGeneralesRef.current.trim() || '-',
         firma_evaluador: firmaEvaluadorHash!,
         firma_empleado: firmaEmpleadoHash ?? null,
@@ -1769,6 +1827,11 @@ export default function StaffEvaluationsScreen() {
           logout,
         });
         if (result.status) {
+          try {
+            await deleteStaffEvalLocalImageFiles(sectionsForPayload);
+          } catch {
+            /* noop */
+          }
           Alert.alert('Éxito', result.message || 'Evaluación creada correctamente');
           setIsCreating(false);
           releaseHeavyCreateFormResources();
@@ -1778,6 +1841,11 @@ export default function StaffEvaluationsScreen() {
         }
       } else {
         const localId = Math.random().toString(36).substring(2, 12);
+        const { _staffEvalFileSlots: _unusedSlots, ...bodyForQueue } = requestBody as any;
+        const requestDataQueued = {
+          ...bodyForQueue,
+          evaluacion: staffEvaluacionStringForActionPayload(JSON.stringify(sectionsForPayload)),
+        };
         const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
         if (!Array.isArray(actions)) actions = [];
@@ -1787,7 +1855,7 @@ export default function StaffEvaluationsScreen() {
         actions.push({
           id: localId,
           type: 'create',
-          requestData: requestBody,
+          requestData: requestDataQueued,
         });
         await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));
 
@@ -1816,6 +1884,14 @@ export default function StaffEvaluationsScreen() {
           firma_empleado_manual: firmaEmpleadoManual || null,
           id_local: localId,
           corpo_id: selectedCorpoId ?? undefined,
+          empresa_id: selectedEmpresaId ?? undefined,
+          cliente_id: selectedClienteId ?? undefined,
+          division_id: selectedDivisionId ?? undefined,
+          contrato_id: selectedContratoId ?? undefined,
+          puesto_id: selectedPuestoId ?? undefined,
+          plaza_id: selectedPlazaId ?? undefined,
+          isActive: true,
+          synced: false,
         };
 
         cache.push(evaluacionCache);
@@ -1880,7 +1956,13 @@ export default function StaffEvaluationsScreen() {
         if (actionsStr && localId) {
           const actions = JSON.parse(actionsStr);
           const filteredActions = actions.filter(
-            (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+            (a: any) =>
+              !(
+                (a?.type === 'create' && String(a?.id) === String(localId)) ||
+                (a?.type === 'update' &&
+                  a?.id_local != null &&
+                  String(a.id_local) === String(localId))
+              )
           );
           await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(filteredActions));
         }
@@ -1905,9 +1987,15 @@ export default function StaffEvaluationsScreen() {
         const filteredCache = cache.filter((item: StaffEvaluation) => item.id !== ev.id);
         await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(filteredCache));
 
+        const effCorpo =
+          filterCorpoId != null && Number(filterCorpoId) > 0
+            ? Number(filterCorpoId)
+            : corpoId != null && Number(corpoId) > 0
+              ? Number(corpoId)
+              : null;
         const forList =
-          filterCorpoId != null
-            ? (filterStaffEvaluationsCacheByCorpo(filteredCache, filterCorpoId) as StaffEvaluation[])
+          effCorpo != null
+            ? (filterStaffEvaluationsCacheByCorpo(filteredCache, effCorpo) as StaffEvaluation[])
             : filteredCache;
         setEvaluaciones(forList);
 
@@ -2061,10 +2149,17 @@ export default function StaffEvaluationsScreen() {
   };
 
   const getQuestionImages = (q: EvaluationQuestion): string[] => {
-    if (Array.isArray(q.images) && q.images.length > 0) return q.images;
+    if (Array.isArray(q.images) && q.images.length > 0) return q.images as string[];
     if (q.image) return [q.image];
     return [];
   };
+
+  const resolveFormQuestionImageUri = (raw: string) =>
+    resolveStaffEvalImageDisplayUri(raw, {
+      evalId: 0,
+      hasIdLocal: true,
+      getServerImageUrl: () => '',
+    });
 
   const renderCreateForm = () => {
     if (!isCreating) return null;
@@ -2406,7 +2501,7 @@ export default function StaffEvaluationsScreen() {
                           questionImages.map((uri, idx) => (
                             <Image
                               key={idx}
-                              source={{ uri }}
+                              source={{ uri: resolveFormQuestionImageUri(uri) }}
                               style={[
                                 styles.questionImagePreview,
                                 q.imageOrientation === 'vertical'
@@ -2681,12 +2776,14 @@ export default function StaffEvaluationsScreen() {
                           <Image
                             key={idx}
                             source={{
-                              uri:
-                                ev.id_local === '' && !img.startsWith('data:')
-                                  ? appendTokenToUrl(
-                                    `${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${img}`
-                                  )
-                                  : img,
+                              uri: resolveStaffEvalImageDisplayUri(img, {
+                                evalId: Number(ev.id) || 0,
+                                hasIdLocal: !!(ev.id_local && String(ev.id_local).length > 0),
+                                getServerImageUrl: (name) =>
+                                  appendTokenToUrl(
+                                    `${Constants.expoConfig?.extra?.API_SERVER}/api/evaluation/${ev.id}/get-image/${encodeURIComponent(name)}`
+                                  ),
+                              }),
                             }}
                             style={[
                               styles.questionImagePreviewList,
@@ -2771,7 +2868,6 @@ export default function StaffEvaluationsScreen() {
             ) : (
               <>
                 <ThemedText style={styles.emptyText}>No hay firma del funcionario registrada</ThemedText>
-                {ev.id > 0 && (
                   <TouchableOpacity
                     style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
                     onPress={() => openAddSignatureModal('firma_empleado', ev)}
@@ -2779,7 +2875,6 @@ export default function StaffEvaluationsScreen() {
                     <Ionicons name="qr-code" size={20} color="#FFFFFF" />
                     <ThemedText style={styles.signatureButtonText}>Añadir firma digital</ThemedText>
                   </TouchableOpacity>
-                )}
               </>
             )}
 
@@ -2793,7 +2888,6 @@ export default function StaffEvaluationsScreen() {
             ) : (
               <>
                 <ThemedText style={styles.emptyText}>No hay firma manual registrada</ThemedText>
-                {ev.id > 0 && (
                   <TouchableOpacity
                     style={[styles.signatureButtonPrimary, { marginTop: 8 }]}
                     onPress={() => openAddSignatureModal('firma_empleado_manual', ev)}
@@ -2801,7 +2895,6 @@ export default function StaffEvaluationsScreen() {
                     <Ionicons name="create-outline" size={20} color="#FFFFFF" />
                     <ThemedText style={styles.signatureButtonText}>Añadir firma manual</ThemedText>
                   </TouchableOpacity>
-                )}
               </>
             )}
           </ThemedView>

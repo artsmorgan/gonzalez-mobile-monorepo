@@ -2,9 +2,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import fs from "fs";
 import path from "path";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
+
+type IncidentFileInput = {
+    type: string;
+    extension: string;
+    original_name?: string;
+    file_base64: string;
+};
+
+function safeParseJson<T>(value: any, fallback: T): T {
+    try {
+        if (typeof value === "string") {
+            const trimmed = value.trim();
+            if (trimmed.length === 0) return fallback;
+            return JSON.parse(trimmed) as T;
+        }
+        if (value === null || value === undefined) return fallback;
+        return value as T;
+    } catch {
+        return fallback;
+    }
+}
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -27,6 +49,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
         }
 
+        const body = await req.json();
         const {
             marca_id,
             solucion,
@@ -35,7 +58,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             costo_asociado,
             consecutivo_informe,
             link_informe,
-        } = await req.json();
+            archivos,
+            empresa_id: body_empresa_id,
+            division_id: body_division_id,
+            contrato_id: body_contrato_id,
+            cliente_id: body_cliente_id,
+            corpo_id: body_corpo_id,
+            puesto_id: body_puesto_id,
+        } = body ?? {};
 
         if (!marca_id) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
@@ -65,6 +95,24 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if (typeof link_informe === "string" && link_informe.trim().length > 0) {
             updateData.link_informe = link_informe;
         }
+        if (body_empresa_id != null && !Number.isNaN(parseInt(String(body_empresa_id), 10))) {
+            updateData.empresa_id = parseInt(String(body_empresa_id), 10);
+        }
+        if (body_cliente_id != null && !Number.isNaN(parseInt(String(body_cliente_id), 10))) {
+            updateData.cliente_id = parseInt(String(body_cliente_id), 10);
+        }
+        if (body_division_id != null && !Number.isNaN(parseInt(String(body_division_id), 10))) {
+            updateData.division_id = parseInt(String(body_division_id), 10);
+        }
+        if (body_contrato_id != null && !Number.isNaN(parseInt(String(body_contrato_id), 10))) {
+            updateData.contrato_id = parseInt(String(body_contrato_id), 10);
+        }
+        if (body_corpo_id != null && !Number.isNaN(parseInt(String(body_corpo_id), 10))) {
+            updateData.corpo_id = parseInt(String(body_corpo_id), 10);
+        }
+        if (body_puesto_id != null && !Number.isNaN(parseInt(String(body_puesto_id), 10))) {
+            updateData.puesto_id = parseInt(String(body_puesto_id), 10);
+        }
 
         const updated = await callDynamicPrisma({
             req,
@@ -75,6 +123,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 data: updateData
             }
         });
+
+        let filesParsed: IncidentFileInput[] = [];
+        if (archivos) {
+            filesParsed = safeParseJson<IncidentFileInput[]>(archivos, []);
+        }
+        if (filesParsed.length > 0) {
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `incidents/${incidentId}`,
+                files: filesParsed
+                    .filter((f) => f?.file_base64 && f?.extension && f?.type)
+                    .map((f) => ({
+                        type: f.type,
+                        extension: f.extension,
+                        original_name: f.original_name,
+                        file_base64: f.file_base64,
+                    })),
+            });
+
+            const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (const uploaded of uploadedFiles) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "c_archivos_incidente",
+                        data: {
+                            name: uploaded.name,
+                            original_name: uploaded.original_name || uploaded.name,
+                            type: uploaded.type,
+                            extension: uploaded.extension,
+                            incidente_id: incidentId,
+                        },
+                    },
+                });
+            }
+        }
 
         if (updated && incident.fecha_solucion) {
             const clasificacion = await callDynamicPrisma({

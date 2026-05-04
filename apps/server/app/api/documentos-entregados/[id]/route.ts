@@ -29,6 +29,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const {
       cliente_id,
       corpo_id,
+      empresa_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       fecha,
       nombre_oficial_entrega,
       nombre_oficial_recibe,
@@ -71,6 +75,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const existingFecha = existing.fecha instanceof Date ? existing.fecha : new Date(existing.fecha);
+    const parseOptInt = (v: any, fallback: number) => {
+      if (v === undefined || v === null || v === "") return fallback;
+      const n = parseInt(String(v), 10);
+      return Number.isFinite(n) ? n : fallback;
+    };
+
     const updateData: any = {
       fecha: fechaDate ? fechaDate.toISOString() : existingFecha.toISOString(),
       nombre_oficial_entrega:
@@ -86,6 +96,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             : null)
           : existing.firma_representante_cliente,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
+      empresa_id: empresa_id !== undefined ? parseOptInt(empresa_id, (existing as any).empresa_id ?? 0) : (existing as any).empresa_id ?? 0,
+      division_id: division_id !== undefined ? parseOptInt(division_id, (existing as any).division_id ?? 0) : (existing as any).division_id ?? 0,
+      contrato_id: contrato_id !== undefined ? parseOptInt(contrato_id, (existing as any).contrato_id ?? 0) : (existing as any).contrato_id ?? 0,
+      puesto_id: puesto_id !== undefined ? parseOptInt(puesto_id, (existing as any).puesto_id ?? 0) : (existing as any).puesto_id ?? 0,
     };
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -142,7 +156,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    return NextResponse.json({ status: true, message: "Documento entregado actualizado correctamente" }, { status: 200 });
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Documento entregado actualizado correctamente",
+        data: {
+          id,
+          empresa_id: updateData.empresa_id,
+          division_id: updateData.division_id,
+          contrato_id: updateData.contrato_id,
+          puesto_id: updateData.puesto_id,
+          cliente_id: clienteIdNum,
+          corpo_id: corpoIdNum,
+        },
+      },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/documentos-entregados/[id]:", errorMessage);
@@ -227,9 +256,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     await callDynamicPrisma({
       req,
       data: {
-        action: "DELETE",
+        action: "UPDATE",
         table: "e_control_documento_entregado_cliente",
         where: { id },
+        data: { isActive: false },
       },
     });
     return NextResponse.json({ status: true, message: "Documento entregado eliminado correctamente" }, { status: 200 });

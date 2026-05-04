@@ -37,9 +37,11 @@ import {
   createOpeningClosingPosition,
   updateOpeningClosingPosition,
   deleteOpeningClosingPosition,
+  deleteOpeningClosingPositionImage,
   listOpeningClosingPositionByCorpo,
 } from '@/hooks/evaluationFunctions';
 import {
+  dedupeOcpRows,
   filterOcpFromEvaluationsCacheByCorpo,
   mergeEvaluationsCacheOcpForCorpo,
 } from '@/hooks/openingClosingPositionCacheHelpers';
@@ -48,6 +50,13 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
 import { Collapsible } from '@/components/Collapsible';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import {
+  buildOpeningClosingImagenesJsonForUpload,
+  deleteOpeningClosingLocalFilesFromMeta,
+  stripOpeningClosingImagesForActionPayload,
+} from '@/hooks/openingClosingPositionFilesSync';
 
 type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
 
@@ -90,7 +99,8 @@ interface InventarioItem {
 
 type OcpImageLocal = {
   id_local: string;
-  base64: string;
+  localFileName: string;
+  uri?: string;
   extension: string;
   original_name: string;
 };
@@ -105,10 +115,12 @@ type OcpImageRemote = {
 interface OpeningClosingPosition {
   id: number | null;
   id_local: string;
+  empresa_id?: number;
   cliente_id: number;
   corpo_id: number;
   puesto_id: number;
   division_id: number;
+  contrato_id?: number;
   fecha: string; // ISO
   tipo: string;
   nombre_representante_cliente: string;
@@ -127,7 +139,7 @@ interface OpeningClosingPosition {
   puesto_nombre?: string | null;
   division_nombre?: string | null;
   images?: OcpImageRemote[];
-  images_local?: OcpImageLocal[]; // solo UI offline (base64)
+  images_local?: OcpImageLocal[]; // solo UI offline (metadatos de archivo local)
   created_at: string;
   synced?: boolean;
 }
@@ -156,6 +168,24 @@ const ACTIVIDADES_SEGURIDAD = [
   "Llaves de acceso",
   "Apertura o cierre de Libro de Novedades, donde se detallan las actividades de apertura de puesto.",
 ];
+
+function mergeActividadesWithSaved(template: ActividadItem[], saved: ActividadItem[]): ActividadItem[] {
+  const byPregunta = new Map<string, ActividadItem>();
+  for (const s of saved || []) {
+    const k = String(s?.pregunta ?? '').trim();
+    if (k) byPregunta.set(k, s);
+  }
+  return template.map((row) => {
+    const k = String(row.pregunta ?? '').trim();
+    const prev = byPregunta.get(k);
+    if (!prev) return { ...row };
+    return {
+      pregunta: row.pregunta,
+      respuesta: prev.respuesta ?? null,
+      observaciones: prev.observaciones ?? '',
+    };
+  });
+}
 
 const getMarcaRoleDivisionId = (current: any): number | null => {
   const raw = current?.roleDivision?.division?.id
@@ -282,6 +312,8 @@ export default function OpeningClosingPositionScreen() {
   const isRestoringHierarchyRef = useRef(false);
   const pendingFormHierarchyRef = useRef<HierarchyPath | null>(null);
   const isApplyingFormHierarchyRef = useRef(false);
+  /** Snapshot del registro al abrir edición (respuestas guardadas en BD para fusionar con la plantilla). */
+  const ocpEditSnapshotRef = useRef<OpeningClosingPosition | null>(null);
 
   // Filtros jerárquicos de la lista principal (Empresa -> Sucursal)
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -292,6 +324,7 @@ export default function OpeningClosingPositionScreen() {
   const filterCorpoIdRef = useRef<number | null>(null);
 
   const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [queryAccessToken, setQueryAccessToken] = useState<string>('');
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const fetchPositionsRef = useRef<(corpoIdOverride?: string | null) => Promise<void>>(async () => {});
 
@@ -561,6 +594,15 @@ export default function OpeningClosingPositionScreen() {
     return `data:image/png;base64,${signature}`;
   };
 
+  const appendTokenToUrl = useCallback((url: string): string => {
+    if (!url) return '';
+    const token = String(queryAccessToken || '').trim();
+    if (!token) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [queryAccessToken]);
+
   const decodeFirmaHash = (hash?: string | null) => {
     try {
       if (!hash || String(hash).trim().length === 0) return null;
@@ -586,6 +628,44 @@ export default function OpeningClosingPositionScreen() {
       observaciones: '',
     }));
   };
+
+  const handleDivisionPickerChange = useCallback(
+    (raw: number) => {
+      const next = Number(raw) || null;
+      setSelectedDivisionId(next);
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+
+      if (editingRecord && ocpEditSnapshotRef.current) {
+        const snap = ocpEditSnapshotRef.current;
+        const origDiv = Number(snap.division_id);
+        if (next === 4 || next === 5) {
+          const template = buildActividadesForDivision(next);
+          if (Number(next) === origDiv) {
+            let saved: ActividadItem[] = [];
+            try {
+              const parsed = JSON.parse(snap.actividades || '[]');
+              if (Array.isArray(parsed)) saved = parsed;
+            } catch {
+              saved = [];
+            }
+            setActividades(mergeActividadesWithSaved(template, saved));
+          } else {
+            setActividades(template);
+          }
+        } else {
+          setActividades([]);
+        }
+        return;
+      }
+
+      if (isCreating && !editingRecord) {
+        setActividades(buildActividadesForDivision(next));
+      }
+    },
+    [editingRecord, isCreating]
+  );
 
   const requestLocation = async () => {
     try {
@@ -636,51 +716,10 @@ export default function OpeningClosingPositionScreen() {
     if (mainStructureFetched) return;
     setIsStructureLoading(true);
     try {
-      // cache-first
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-          else setStructure([]);
-        } catch {
-          // ignore
-          setStructure([]);
-        }
-      }
-      else {
-        setStructure([]);
-      }
-      /*
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) throw new Error('Server URL not configured');
-
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!response) return;
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-      const data = await response.json().catch(() => ({}));
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-      */
-     setMainStructureFetched(true);
+      const mergedTree = await loadMainStructureTreeMerged();
+      if (Array.isArray(mergedTree)) setStructure(mergedTree as MainStructureTree);
+      else setStructure([]);
+      setMainStructureFetched(true);
     } catch (e) {
       console.error('Error fetching main structure for opening-closing-position:', e);
     } finally {
@@ -819,10 +858,10 @@ export default function OpeningClosingPositionScreen() {
           const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, searchCorpoIdNum);
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
           const forList = filterOcpFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
-          setPositions(forList as OpeningClosingPosition[]);
+          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
         } else if (searchCorpoIdNum != null) {
           const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
-          setPositions(forList as OpeningClosingPosition[]);
+          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
         } else {
           setPositions([]);
         }
@@ -837,8 +876,8 @@ export default function OpeningClosingPositionScreen() {
             /* ignore */
           }
         }
-        const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
-        setPositions(forList as OpeningClosingPosition[]);
+        const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum).filter((it: any) => it?.isActive !== false);
+        setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
       }
     } catch (err) {
       console.error('Error fetching positions:', err);
@@ -871,8 +910,8 @@ export default function OpeningClosingPositionScreen() {
           } catch {
             /* ignore */
           }
-          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, corpoForCache);
-          setPositions(forList as OpeningClosingPosition[]);
+          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, corpoForCache).filter((it: any) => it?.isActive !== false);
+          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
         }
       } catch (cacheErr) {
         console.error('Error loading from cache:', cacheErr);
@@ -885,6 +924,23 @@ export default function OpeningClosingPositionScreen() {
   useEffect(() => {
     filterCorpoIdRef.current = filterCorpoId;
   }, [filterCorpoId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('access_token');
+        if (!mounted) return;
+        setQueryAccessToken(token ? String(token).trim() : '');
+      } catch {
+        if (!mounted) return;
+        setQueryAccessToken('');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     fetchPositionsRef.current = fetchPositions;
@@ -908,8 +964,7 @@ export default function OpeningClosingPositionScreen() {
             null;
           setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
           await fetchMainStructure();
-          const treeCache = await AsyncStorage.getItem('main_structure_cache');
-          const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : [];
+          const tree = await loadMainStructureTreeMerged();
           const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, tree);
           if (rnRaw === 'OPERATIVO') {
             setFilterEmpresaId(null);
@@ -1102,9 +1157,9 @@ export default function OpeningClosingPositionScreen() {
 
   const filteredPositions = useMemo(() => {
     if (roleName === 'OPERATIVO') {
-      return positions || [];
+      return dedupeOcpRows(positions || []);
     }
-    return (positions || []).filter((record) => {
+    return dedupeOcpRows((positions || []).filter((record) => {
       const recordClienteId = Number(record.cliente_id);
       const recordDivisionId = Number(record.division_id);
       const recordCorpoId = Number(record.corpo_id);
@@ -1125,7 +1180,7 @@ export default function OpeningClosingPositionScreen() {
 
       if (filterCorpoId !== null && recordCorpoId !== Number(filterCorpoId)) return false;
       return true;
-    });
+    }));
   }, [
     positions,
     structure,
@@ -1202,6 +1257,7 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const startCreating = async () => {
+    ocpEditSnapshotRef.current = null;
     setIsCreating(true);
     setEditingRecord(null);
     pendingFormHierarchyRef.current = null;
@@ -1211,14 +1267,13 @@ export default function OpeningClosingPositionScreen() {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (currentMarca) {
       const currentMarcaData = JSON.parse(currentMarca);
-      const treeCache = await AsyncStorage.getItem('main_structure_cache');
-      const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : structure;
-      const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, Array.isArray(tree) ? tree : []);
+      const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, Array.isArray(structure) ? structure : []);
       applyFormHierarchySequential(hierarchy);
     }
   };
 
   const cancelCreating = async () => {
+    ocpEditSnapshotRef.current = null;
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
@@ -1227,6 +1282,7 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const startEditing = async (record: OpeningClosingPosition) => {
+    ocpEditSnapshotRef.current = record;
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
@@ -1250,18 +1306,18 @@ export default function OpeningClosingPositionScreen() {
 
     setEditingRecord({ id: record.id, id_local: record.id_local });
 
-    const treeCache = await AsyncStorage.getItem('main_structure_cache');
-    const tree = treeCache ? (JSON.parse(treeCache) as MainStructureTree) : structure;
-    const pathByPuesto = resolveHierarchyByPuestoId(Array.isArray(tree) ? tree : [], Number(record.puesto_id));
+    const pathByPuesto = resolveHierarchyByPuestoId(Array.isArray(structure) ? structure : [], Number(record.puesto_id));
     if (pathByPuesto) {
       applyFormHierarchySequential(pathByPuesto);
     } else {
       // fallback por datos directos del registro si no aparece en el árbol
       applyFormHierarchySequential({
-        empresaId: null,
+        empresaId:
+          record.empresa_id != null && Number(record.empresa_id) > 0 ? Number(record.empresa_id) : null,
         clienteId: Number(record.cliente_id),
         divisionId: Number(record.division_id),
-        contratoId: null,
+        contratoId:
+          record.contrato_id != null && Number(record.contrato_id) > 0 ? Number(record.contrato_id) : null,
         sucursalId: Number(record.corpo_id),
         puestoId: Number(record.puesto_id),
       });
@@ -1278,11 +1334,15 @@ export default function OpeningClosingPositionScreen() {
     setNombreRepresentanteCliente(record.nombre_representante_cliente || '');
     setNombreRepresentanteEmpresaEntrante(record.nombre_representante_empresa_entrante || '');
     setNombreRepresentanteEmpresaSaliente(record.nombre_representante_empresa_saliente || '');
-    setActividades(actividadesArray);
+    const divIdNum = Number(record.division_id);
+    const template = buildActividadesForDivision(
+      Number.isFinite(divIdNum) && divIdNum > 0 ? divIdNum : null
+    );
+    setActividades(mergeActividadesWithSaved(template, actividadesArray));
     setInventario(inventarioArray);
     setExpandedInventarioIndices(inventarioArray.map((_, i) => i));
 
-    setImagenesRemote(record.images || []);
+    setImagenesRemote([]);
     setImagenesLocal(record.images_local || []);
     setDeletedRemoteImageIds([]);
 
@@ -1294,6 +1354,7 @@ export default function OpeningClosingPositionScreen() {
   };
 
   const cancelEditing = async () => {
+    ocpEditSnapshotRef.current = null;
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
@@ -1402,16 +1463,22 @@ export default function OpeningClosingPositionScreen() {
 
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
         quality: 0.7,
         skipProcessing: false
       });
 
-      if (!photo || !photo.base64) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
+      const localFileName = await saveFile({
+        uri: String(photo.uri),
+        originalName: `foto_${Date.now()}`,
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'opening_closing_position',
+      });
       setIsCameraVisible(false);
 
       setTimeout(() => {
@@ -1419,7 +1486,8 @@ export default function OpeningClosingPositionScreen() {
           ...prev,
           {
             id_local: generateRandomId(),
-            base64: String(photo.base64),
+            localFileName,
+            uri: getLocalFileDisplayUri(localFileName),
             extension: 'jpg',
             original_name: `foto_${Date.now()}.jpg`,
           },
@@ -1438,7 +1506,11 @@ export default function OpeningClosingPositionScreen() {
       {
         text: 'Eliminar',
         style: 'destructive',
-        onPress: () => setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal)),
+        onPress: async () => {
+          const image = imagenesLocal.find((x) => x.id_local === idLocal);
+          if (image) await deleteOpeningClosingLocalFilesFromMeta([image]);
+          setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal));
+        },
       },
     ]);
   };
@@ -1533,20 +1605,13 @@ export default function OpeningClosingPositionScreen() {
       const actividadesStr = JSON.stringify(actividades || []);
       const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
 
-      const imagenesStr =
-        imagenesLocal.length > 0
-          ? JSON.stringify(
-            imagenesLocal.map((img) => ({
-              file_base64: img.base64,
-              extension: img.extension,
-              original_name: img.original_name,
-            }))
-          )
-          : null;
+      const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
 
       const requestData: any = {
         marca_id: currentMarcaData.id,
+        empresa_id: selectedEmpresaId || 0,
         cliente_id: selectedClienteId,
+        contrato_id: selectedContratoId || 0,
         corpo_id: selectedSucursalId,
         puesto_id: selectedPuestoId,
         division_id: selectedDivisionId,
@@ -1562,6 +1627,7 @@ export default function OpeningClosingPositionScreen() {
         firma_representante_empresa_entrante: fEntrante,
         firma_representante_empresa_saliente: fSaliente,
         firma_responsable: firmaResponsable,
+        imagenes_meta: stripOpeningClosingImagesForActionPayload(imagenesLocal),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
       };
 
@@ -1575,6 +1641,7 @@ export default function OpeningClosingPositionScreen() {
         });
 
         if (result.status) {
+          await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
           Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto guardado correctamente');
           setTimeout(() => {
             cancelCreating();
@@ -1601,9 +1668,11 @@ export default function OpeningClosingPositionScreen() {
           id: null,
           id_local: localId,
           cliente_id: selectedClienteId,
+          empresa_id: selectedEmpresaId || 0,
           corpo_id: selectedSucursalId,
           puesto_id: selectedPuestoId,
           division_id: selectedDivisionId,
+          contrato_id: selectedContratoId || 0,
           fecha: formatDate(fechaRealizado),
           tipo,
           nombre_representante_cliente: nombreRepresentanteCliente.trim(),
@@ -1681,22 +1750,15 @@ export default function OpeningClosingPositionScreen() {
       const actividadesStr = JSON.stringify(actividades || []);
       const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
 
-      const imagenesStr =
-        imagenesLocal.length > 0
-          ? JSON.stringify(
-            imagenesLocal.map((img) => ({
-              file_base64: img.base64,
-              extension: img.extension,
-              original_name: img.original_name,
-            }))
-          )
-          : null;
+      const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
 
       const requestData: any = {
+        empresa_id: selectedEmpresaId || 0,
         cliente_id: selectedClienteId,
         corpo_id: selectedSucursalId,
         puesto_id: selectedPuestoId,
         division_id: selectedDivisionId,
+        contrato_id: selectedContratoId || 0,
         fecha: formatDate(fechaRealizado),
         tipo,
         nombre_representante_cliente: nombreRepresentanteCliente.trim(),
@@ -1709,6 +1771,7 @@ export default function OpeningClosingPositionScreen() {
         firma_representante_empresa_entrante: fEntrante,
         firma_representante_empresa_saliente: fSaliente,
         firma_responsable: firmaResponsable,
+        imagenes_meta: stripOpeningClosingImagesForActionPayload(imagenesLocal),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
         ...(deletedRemoteImageIds.length > 0 ? { delete_imagenes: JSON.stringify(deletedRemoteImageIds) } : {}),
       };
@@ -1724,6 +1787,7 @@ export default function OpeningClosingPositionScreen() {
         });
 
         if (result.status) {
+          await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
           Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto actualizado correctamente');
           setTimeout(() => {
             cancelEditing();
@@ -1772,9 +1836,11 @@ export default function OpeningClosingPositionScreen() {
               return {
                 ...item,
                 cliente_id: selectedClienteId,
+                empresa_id: selectedEmpresaId || 0,
                 corpo_id: selectedSucursalId,
                 puesto_id: selectedPuestoId,
                 division_id: selectedDivisionId,
+                contrato_id: selectedContratoId || 0,
                 fecha: formatDate(fechaRealizado),
                 tipo,
                 nombre_representante_cliente: nombreRepresentanteCliente.trim(),
@@ -1875,7 +1941,7 @@ export default function OpeningClosingPositionScreen() {
                     (a: any) =>
                       !(
                         a.type === OCP_EVAL_TYPE &&
-                        (a.action === 'create' || a.action === 'update') &&
+                        (a.action === 'create' || a.action === 'update' || a.action === 'delete_file') &&
                         (String(a.id) === String(record.id_local) || String(a.id_local) === String(record.id_local))
                       )
                   );
@@ -1885,6 +1951,14 @@ export default function OpeningClosingPositionScreen() {
                       !(
                         a.type === OCP_EVAL_TYPE &&
                         a.action === 'update' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'delete_file' &&
                         (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
                       )
                   );
@@ -1910,6 +1984,10 @@ export default function OpeningClosingPositionScreen() {
                 const cacheStr = await AsyncStorage.getItem('evaluations_cache');
                 if (cacheStr) {
                   const cache = JSON.parse(cacheStr);
+                  const toDelete = cache.find((item: any) => ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position'));
+                  if (toDelete?.images_local) {
+                    await deleteOpeningClosingLocalFilesFromMeta(toDelete.images_local);
+                  }
                   const updatedCache = cache.filter((item: any) => !((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position'));
                   await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                 }
@@ -1927,6 +2005,103 @@ export default function OpeningClosingPositionScreen() {
         },
       ]
     );
+  };
+
+  const removeImageFromSavedRecord = async (
+    record: OpeningClosingPosition,
+    opts: { imageId?: number; idLocal?: string }
+  ) => {
+    const { imageId, idLocal } = opts;
+    const recordId = record.id || record.id_local;
+    if (!recordId || (!imageId && !idLocal)) return;
+    const recordIdStr = String(recordId);
+    const isConnected = await getConnectionStatus();
+    const isLocalDraft = record.id == null && !!record.id_local;
+
+    if (isConnected && !isLocalDraft && imageId) {
+      const result = await deleteOpeningClosingPositionImage({
+        id: recordIdStr,
+        imageId,
+        refreshAccessToken,
+        logout,
+      });
+      if (!result.status) {
+        Alert.alert('Error', result.message || 'No se pudo eliminar la imagen');
+        return;
+      }
+    } else {
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+      if (!Array.isArray(actions)) actions = [];
+
+      if (isLocalDraft && idLocal) {
+        const idx = actions.findIndex(
+          (a: any) =>
+            a.type === OCP_EVAL_TYPE &&
+            a.action === 'create' &&
+            (String(a.id) === String(record.id_local) || String(a.id_local) === String(record.id_local))
+        );
+        if (idx >= 0) {
+          const prevPayload = actions[idx].payload || {};
+          const prevMeta = Array.isArray(prevPayload.imagenes_meta) ? prevPayload.imagenes_meta : [];
+          const nextMeta = prevMeta.filter((m: any) => String(m?.id_local || '') !== String(idLocal));
+          actions[idx] = {
+            ...actions[idx],
+            payload: {
+              ...prevPayload,
+              imagenes_meta: nextMeta,
+            },
+          };
+        }
+      } else if (imageId) {
+        actions = actions.filter(
+          (a: any) =>
+            !(
+              a.type === OCP_EVAL_TYPE &&
+              a.action === 'delete_file' &&
+              String(a.id) === recordIdStr &&
+              Number(a?.payload?.imageId) === Number(imageId)
+            )
+        );
+        actions.push({
+          id: recordIdStr,
+          action: 'delete_file',
+          type: OCP_EVAL_TYPE,
+          payload: { imageId },
+          synced: false,
+        });
+      }
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+    }
+
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    if (cacheStr) {
+      const cache = JSON.parse(cacheStr);
+      const updatedCache = cache.map((item: any) => {
+        if (item.type !== OCP_EVAL_TYPE) return item;
+        if (!(String(item.id) === recordIdStr || String(item.id_local) === recordIdStr)) return item;
+        let nextImages = Array.isArray(item.images) ? item.images : [];
+        let nextLocal = Array.isArray(item.images_local) ? item.images_local : [];
+        if (imageId) {
+          nextImages = nextImages.filter((img: any) => Number(img?.id) !== Number(imageId));
+        }
+        if (idLocal) {
+          const removed = nextLocal.find((im: any) => String(im?.id_local) === String(idLocal));
+          if (removed) {
+            void deleteOpeningClosingLocalFilesFromMeta([removed]);
+          }
+          nextLocal = nextLocal.filter((im: any) => String(im?.id_local) !== String(idLocal));
+        }
+        return {
+          ...item,
+          images: nextImages,
+          images_local: nextLocal,
+          synced: false,
+        };
+      });
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+      await fetchPositions();
+    }
   };
 
   const handleMenuPress = () => {
@@ -1981,7 +2156,7 @@ export default function OpeningClosingPositionScreen() {
 
     return (
       <ThemedView style={styles.listContainer}>
-        {filteredPositions.map((record) => {
+        {filteredPositions.map((record, recordIdx) => {
           const itemKey = String((record.id ?? record.id_local) || '');
           let actividadesArr: any[] = [];
           let inventarioArr: any[] = [];
@@ -2005,7 +2180,7 @@ export default function OpeningClosingPositionScreen() {
           const isInventoryOpen = !!expandedInventoryById[itemKey];
 
           return (
-            <ThemedView key={record.id || record.id_local} style={styles.listItem}>
+            <ThemedView key={`ocp-${record.id ?? 'local'}-${record.id_local || 'none'}-${recordIdx}`} style={styles.listItem}>
               <ThemedView style={styles.listItemHeader}>
                 <ThemedView style={styles.listItemContent}>
                   <ThemedText style={styles.listItemTitle}>
@@ -2096,22 +2271,57 @@ export default function OpeningClosingPositionScreen() {
                         {imagesRemoteArr.map((img: any) => (
                           <ThemedView key={`${itemKey}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
                             <Image
-                              source={{ uri: String(img?.url || '') }}
+                              source={{ uri: appendTokenToUrl(String(img?.url || '')) }}
                               style={styles.photoPreviewMini}
                               resizeMode="contain"
                             />
+                            {!!img?.id && (
+                              <TouchableOpacity
+                                style={styles.removePhotoButton}
+                                onPress={(e: any) => {
+                                  e?.stopPropagation?.();
+                                  Alert.alert('Confirmar', '¿Eliminar esta imagen?', [
+                                    { text: 'Cancelar', style: 'cancel' },
+                                    {
+                                      text: 'Eliminar',
+                                      style: 'destructive',
+                                      onPress: () => removeImageFromSavedRecord(record, { imageId: Number(img.id) }),
+                                    },
+                                  ]);
+                                }}
+                              >
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            )}
                             {!!String(img?.original_name || '').trim() && (
                               <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
                             )}
                           </ThemedView>
                         ))}
                         {imagesLocalArr.map((img: any) => {
-                          const extRaw = String(img?.extension || 'jpg').replace('.', '').toLowerCase();
-                          const mime = extRaw === 'jpg' ? 'jpeg' : extRaw;
-                          const uri = `data:image/${mime};base64,${String(img?.base64 || '')}`;
+                          const uri = img?.uri || getLocalFileDisplayUri(String(img?.localFileName || ''));
+                          const localKey = String(img?.id_local || '');
                           return (
                             <ThemedView key={`${itemKey}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
                               <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                              {!!localKey && (
+                                <TouchableOpacity
+                                  style={styles.removePhotoButton}
+                                  onPress={(e: any) => {
+                                    e?.stopPropagation?.();
+                                    Alert.alert('Confirmar', '¿Eliminar esta imagen?', [
+                                      { text: 'Cancelar', style: 'cancel' },
+                                      {
+                                        text: 'Eliminar',
+                                        style: 'destructive',
+                                        onPress: () => removeImageFromSavedRecord(record, { idLocal: localKey }),
+                                      },
+                                    ]);
+                                  }}
+                                >
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              )}
                               {!!String(img?.original_name || '').trim() && (
                                 <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
                               )}
@@ -2528,13 +2738,7 @@ export default function OpeningClosingPositionScreen() {
                       <ThemedView style={styles.pickerWrapper}>
                         <Picker
                           selectedValue={selectedDivisionId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || null;
-                            setSelectedDivisionId(next);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                          }}
+                          onValueChange={(v) => handleDivisionPickerChange(Number(v))}
                           enabled={selectedClienteId !== null && divisionOptions.length > 0}
                           style={styles.picker}
                         >
@@ -2716,7 +2920,7 @@ export default function OpeningClosingPositionScreen() {
                     <ThemedView style={styles.photosContainer}>
                       {imagenesRemote.map((img) => (
                         <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
-                          <Image source={{ uri: img.url }} style={styles.photoPreview} resizeMode="contain" />
+                          <Image source={{ uri: appendTokenToUrl(String(img.url || '')) }} style={styles.photoPreview} resizeMode="contain" />
                           <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
                             <Ionicons name="trash" size={20} color="#FF3B30" />
                           </TouchableOpacity>
@@ -2724,7 +2928,7 @@ export default function OpeningClosingPositionScreen() {
                       ))}
                       {imagenesLocal.map((img) => (
                         <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
-                          <Image source={{ uri: `data:image/jpeg;base64,${img.base64}` }} style={styles.photoPreview} resizeMode="contain" />
+                          <Image source={{ uri: img.uri || getLocalFileDisplayUri(img.localFileName) }} style={styles.photoPreview} resizeMode="contain" />
                           <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
                             <Ionicons name="trash" size={20} color="#FF3B30" />
                           </TouchableOpacity>

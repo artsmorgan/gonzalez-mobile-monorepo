@@ -5,6 +5,7 @@ import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { mapComplaintMasterPublicRow } from "../mapPublicRow";
 
 export const runtime = "nodejs";
 
@@ -27,22 +28,6 @@ function safeParseJson<T>(value: any, fallback: T): T {
     } catch {
         return fallback;
     }
-}
-
-function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
-    const fileName = file.name;
-    const type = String(file.type || "file").toLowerCase();
-    let urlPath: string;
-    if (type === "image") {
-        urlPath = `/api/complaints-master/${recordId}/get-image/${fileName}`;
-    } else if (type === "audio") {
-        urlPath = `/api/complaints-master/${recordId}/get-audio/${fileName}`;
-    } else if (type === "video") {
-        urlPath = `/api/complaints-master/${recordId}/get-video/${fileName}`;
-    } else {
-        urlPath = `/api/complaints-master/${recordId}/get-file/${fileName}`;
-    }
-    return `${baseUrl}${urlPath}`;
 }
 
 export async function PUT(
@@ -86,6 +71,7 @@ export async function PUT(
             corpo_id: bodyCorpoId,
             puesto_id: bodyPuestoId,
             plaza_id: bodyPlazaId,
+            division_id: bodyDivisionId,
         } = await req.json();
 
         const pickNumericId = (value: unknown, fallback: number): number => {
@@ -138,6 +124,10 @@ export async function PUT(
             corpo_id: bodyCorpoId !== undefined ? pickNumericId(bodyCorpoId, existingRecordObj.corpo_id) : existingRecordObj.corpo_id,
             puesto_id: bodyPuestoId !== undefined ? pickNumericId(bodyPuestoId, existingRecordObj.puesto_id) : existingRecordObj.puesto_id,
             plaza_id: bodyPlazaId !== undefined ? pickNumericId(bodyPlazaId, existingRecordObj.plaza_id) : existingRecordObj.plaza_id,
+            division_id:
+                bodyDivisionId !== undefined
+                    ? pickNumericId(bodyDivisionId, existingRecordObj.division_id)
+                    : existingRecordObj.division_id,
         };
 
         // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -269,23 +259,12 @@ export async function PUT(
         });
 
         const fullRecordObj = fullRecord as any;
-        const anexosArray = Array.isArray(fullRecordObj?.c_anexos_quejas) ? fullRecordObj.c_anexos_quejas : [];
         const baseUrl = req.nextUrl.origin;
+        const mapped = mapComplaintMasterPublicRow(fullRecordObj ?? updatedRecordObj, baseUrl, updatedRecordObj.id);
         return NextResponse.json({
             status: true,
             message: "Queja actualizada correctamente",
-            data: {
-                ...(fullRecordObj ?? updatedRecordObj),
-                id_local: "",
-                files: anexosArray.map((f: any) => ({
-                    id: f.id,
-                    name: f.name,
-                    original_name: f.original_name,
-                    type: f.type,
-                    extension: f.extension,
-                    url: buildFileUrl(baseUrl, updatedRecordObj.id, f),
-                })),
-            }
+            data: mapped,
         }, { status: 200 });
 
     } catch (error: unknown) {

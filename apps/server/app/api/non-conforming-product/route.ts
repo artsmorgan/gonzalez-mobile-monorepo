@@ -63,6 +63,10 @@ export async function POST(req: NextRequest) {
     const {
       cliente_id,
       corpo_id,
+      empresa_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       fecha_identificacion,
       responsable_cuenta,
       tipo_servicio_no_conforme,
@@ -80,8 +84,18 @@ export async function POST(req: NextRequest) {
 
     const clienteId = Number(cliente_id);
     const corpoId = Number(corpo_id);
+    const empresaId = Number(empresa_id);
+    const divisionId = Number(division_id);
+    const contratoId = Number(contrato_id);
+    const puestoId = Number(puesto_id);
     if (!clienteId || !corpoId) {
       return NextResponse.json({ status: false, message: "Cliente y Sucursal son requeridos" }, { status: 400 });
+    }
+    if (!empresaId || !divisionId || !contratoId || !puestoId) {
+      return NextResponse.json(
+        { status: false, message: "empresa, división, contrato y puesto son requeridos" },
+        { status: 400 }
+      );
     }
 
     const fechaIdent = parseDateOnly(fecha_identificacion);
@@ -105,6 +119,10 @@ export async function POST(req: NextRequest) {
         data: {
           cliente_id: clienteId,
           corpo_id: corpoId,
+          empresa_id: empresaId,
+          division_id: divisionId,
+          contrato_id: contratoId,
+          puesto_id: puestoId,
           fecha_identificacion: fechaIdent.toISOString(),
           responsable_cuenta: String(responsable_cuenta ?? ""),
           tipo_servicio_no_conforme: String(tipo_servicio_no_conforme ?? ""),
@@ -270,6 +288,7 @@ export async function POST(req: NextRequest) {
         message: "Producto no conforme creado correctamente",
         data: {
           ...(fullRecordObj ?? newRecordObj),
+          id: newRecordObj.id,
           id_local: "",
           files: archivosArray.map((f: any) => ({
             id: f.id,

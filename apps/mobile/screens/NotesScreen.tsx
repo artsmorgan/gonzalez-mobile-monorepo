@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
@@ -15,7 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import { createNote as createNoteAPI, updateNote as updateNoteAPI, deleteNote as deleteNoteAPI } from '@/hooks/notesFunctions';
+import { createNote as createNoteAPI, updateNote as updateNoteAPI, deleteNote as deleteNoteAPI, deleteNoteImage as deleteNoteImageAPI } from '@/hooks/notesFunctions';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import {
   filterNotesByPuestoId,
@@ -31,6 +31,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
+import { saveFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
 
 type NotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Notes'>;
 
@@ -44,6 +47,17 @@ interface CurrentMarca {
   tipo_turno: string;
   horas_duracion: number;
   roleDivision?: {
+    role: {
+      id: number;
+      nombre: string;
+    };
+    division: {
+      id: number;
+      nombre: string;
+    };
+  };
+  /** Variante snake_case en JSON almacenado */
+  role_division?: {
     role: {
       id: number;
       nombre: string;
@@ -101,7 +115,7 @@ interface Note {
   is_modified?: boolean;
   firma_responsable?: string;
   firma_manual_responsable?: string | null;
-  images?: Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>;
+  images?: Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string; localFileName?: string }>;
   updated_at: string;
   id_local: string;
 }
@@ -114,6 +128,7 @@ interface EditingNote {
   division: string | null;
   categoria_id: number | null;
   relevancia: 'Baja' | 'Media' | 'Alta';
+  puesto_id: number;
 }
 
 type CambiosAppsModulesRow = {
@@ -145,6 +160,81 @@ type MainStructureClienteNode = { id: number; nombre: string; division: MainStru
 type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
 type MainStructureTree = MainStructureEmpresaNode[];
 
+type HierarchyFormIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+  puestoId: number;
+};
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyFormIds | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findPuestoMetaInStructure(structureArr: MainStructureTree, puestoId: number | null | undefined): Puesto | null {
+  if (puestoId == null) return null;
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of cliente.division || []) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return { id: puesto.id, nombre: String(puesto.nombre ?? '') };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
 export default function NotesScreen() {
@@ -161,6 +251,26 @@ export default function NotesScreen() {
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [puesto, setPuesto] = useState<Puesto | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [roleName, setRoleName] = useState<string | null>(null);
+
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterPuestoIdRef = useRef<number | null>(null);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   // Expanded notes state
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
@@ -184,6 +294,7 @@ export default function NotesScreen() {
     division: null,
     categoria_id: null,
     relevancia: 'Baja',
+    puesto_id: 0,
   });
 
   // Form refs for text inputs
@@ -226,14 +337,14 @@ export default function NotesScreen() {
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
-  const [images, setImages] = useState<Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string }>>([]);
+  const [images, setImages] = useState<Array<{ id?: number; name?: string; base64?: string; extension?: string; url?: string; localFileName?: string }>>([]);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const cameraRef = useRef<CameraView | null>(null);
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [isImagePreviewVisible, setIsImagePreviewVisible] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
 
-  // Enviar notas al cliente
+  // Estructura principal (caché) + enviar notas al cliente
   const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
   const [isSendNotesModalVisible, setIsSendNotesModalVisible] = useState(false);
   const [sendEmpresaId, setSendEmpresaId] = useState<number | null>(null);
@@ -270,30 +381,189 @@ export default function NotesScreen() {
     loadImageToken();
   }, [accessToken]);
 
-  useFocusEffect(
-    useCallback(() => {
-      fetchNotes();
-      fetchCategories();
-      fetchPuestosCorpo();
-      loadMainStructureCache();
-    }, [])
+  useEffect(() => {
+    filterPuestoIdRef.current = filterPuestoId;
+  }, [filterPuestoId]);
+
+  type MarcaSnapshot = {
+    current: Record<string, any>;
+    roleName: string | null;
+    isOperativo: boolean;
+    filterEmpresaId: number | null;
+    filterClienteId: number | null;
+    filterDivisionId: number | null;
+    filterContratoId: number | null;
+    filterSucursalId: number | null;
+    filterPuestoId: number | null;
+  };
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterPuestoIdRef.current = null;
+          setFilterPuestoId(null);
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? role : null;
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id);
+        const fp = numOrNull(current?.puesto?.id ?? current?.puesto_id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterPuestoIdRef.current = fp;
+          setFilterPuestoId(fp);
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+          filterPuestoId: fp,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        setRoleName(null);
+        return null;
+      }
+    },
+    []
   );
 
-  useEffect(() => {
-    const handler = () => {
-      Promise.all([
-        fetchNotes(),
-        fetchCategories(),
-        fetchPuestosCorpo(),
-        loadMainStructureCache(),
-      ]);
-    };
-
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      const fe = currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null;
+      const fc = currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null;
+      const fco = currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null;
+      const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+      const fp = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : numOrNull(currentMarca.puesto_id);
+      setFilterEmpresaId(fe);
+      setFilterClienteId(fc);
+      setFilterDivisionId(divId);
+      setFilterContratoId(fco);
+      setFilterSucursalId(fs);
+      filterPuestoIdRef.current = fp;
+      setFilterPuestoId(fp);
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (Notes):', e);
+    }
   }, []);
+
+  const applyCurrentMarcaToCreateFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') {
+        setFormEmpresaId(null);
+        setFormClienteId(null);
+        setFormDivisionId(null);
+        setFormContratoId(null);
+        setFormSucursalId(null);
+        setFormPuestoId(null);
+        return;
+      }
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setFormPuestoId(
+        marca.puesto?.id != null
+          ? Number(marca.puesto.id)
+          : marca.puesto_id != null
+            ? Number(marca.puesto_id)
+            : null
+      );
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateFormHierarchy (Notes):', e);
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    setIsStructureLoading(true);
+    try {
+      const parsed = await loadMainStructureTreeMerged();
+      if (Array.isArray(parsed)) {
+        setMainStructure(parsed);
+        return parsed;
+      }
+      setMainStructure([]);
+      return [];
+    } catch (e) {
+      console.error('Error loading main structure (Notes):', e);
+      setMainStructure([]);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setFormEmpresaId(empresaId);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setFormClienteId(clienteId);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const clearFormHierarchy = () => {
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
 
   // Función auxiliar para generar ID aleatorio
   const generateRandomId = () => {
@@ -307,6 +577,7 @@ export default function NotesScreen() {
 
   // Función para verificar conectividad
   const getConnectionStatus = async () => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     if (!networkState.isConnected) return false;
     if (networkState.isInternetReachable === false) return false;
@@ -344,10 +615,14 @@ export default function NotesScreen() {
   };
 
   const resolveNoteImageUri = (
-    image: { base64?: string; url?: string; name?: string },
+    image: { base64?: string; url?: string; name?: string; localFileName?: string },
     noteId: number | null | undefined,
     puestoId: number | null | undefined
   ) => {
+    if (image.localFileName) {
+      const local = getLocalFileDisplayUri(image.localFileName);
+      if (local) return local;
+    }
     if (image.base64) return image.base64;
     const builtUrl = buildNoteImageApiUrl(puestoId, noteId, image.name || null);
     if (builtUrl) return appendTokenToUrl(builtUrl);
@@ -483,8 +758,15 @@ export default function NotesScreen() {
         setIsCameraVisible(false);
         return;
       }
+      const localFileName = await saveFile({
+        uri: photo.uri,
+        originalName: `note-${Date.now()}`,
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'notes',
+      });
       setIsCameraVisible(false);
-      setImages((prev) => [...prev, { base64: `data:image/jpeg;base64,${photo.base64}`, extension: 'jpg' }]);
+      setImages((prev) => [...prev, { localFileName, extension: 'jpg', name: localFileName }]);
     } catch (e) {
       console.error('Error capturing photo:', e);
       Alert.alert('Error', 'No se pudo capturar la foto');
@@ -495,20 +777,138 @@ export default function NotesScreen() {
   const removeImage = (index: number) => {
     Alert.alert('Confirmar', '¿Eliminar esta foto?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => setImages((prev) => prev.filter((_, i) => i !== index)) },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const target = images[index];
+          const isPersistedImage = Number(editingNote?.id ?? 0) > 0 && Number(target?.id ?? 0) > 0;
+          if (isPersistedImage && editingNote) {
+            const isConnected = await getConnectionStatus();
+            if (isConnected) {
+              const res = await deleteNoteImageAPI({
+                noteId: Number(editingNote.id),
+                puestoId: Number(editingNote.puesto_id || currentMarca?.puesto?.id || 0),
+                imageId: Number(target.id),
+                refreshAccessToken,
+                logout,
+              });
+              if (!res.status) {
+                Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+                return;
+              }
+            } else {
+              const actionsStr = await AsyncStorage.getItem('notes_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({
+                type: 'delete_file',
+                id: Number(editingNote.id),
+                puestoId: Number(editingNote.puesto_id || currentMarca?.puesto?.id || 0),
+                fileId: Number(target.id),
+              });
+              await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
+            }
+          }
+          if (target?.localFileName) {
+            await deleteNotesLocalFilesFromMeta([target]);
+          }
+          setImages((prev) => prev.filter((_, i) => i !== index));
+        },
+      },
     ]);
   };
 
-  const buildImagenesJson = () =>
-    JSON.stringify(
-      images
-        .filter((img) => Boolean(img.base64))
-        .map((img, idx) => ({
-          file_base64: img.base64 || '',
-          extension: img.extension || 'jpg',
-          original_name: img.name || `note-${Date.now()}-${idx + 1}.jpg`,
-        }))
-    );
+  const removeImageFromNoteRecord = async (
+    note: Note,
+    img: { id?: number; name?: string; localFileName?: string }
+  ) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const noteId = Number(note?.id || 0);
+          const puestoId = Number(note?.puesto_id || currentMarca?.puesto?.id || 0);
+          const imageId = Number(img?.id || 0);
+          const isServerImage = noteId > 0 && imageId > 0;
+
+          if (isServerImage) {
+            const isConnected = await getConnectionStatus();
+            if (isConnected) {
+              const res = await deleteNoteImageAPI({
+                noteId,
+                puestoId,
+                imageId,
+                refreshAccessToken,
+                logout,
+              });
+              if (!res.status) {
+                Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+                return;
+              }
+            } else {
+              const actionsStr = await AsyncStorage.getItem('notes_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({
+                type: 'delete_file',
+                id: noteId,
+                puestoId,
+                fileId: imageId,
+              });
+              await AsyncStorage.setItem('notes_actions', JSON.stringify(actions));
+            }
+          }
+
+          if (img?.localFileName) {
+            await deleteNotesLocalFilesFromMeta([img as any]);
+          }
+
+          setNotes((prev) =>
+            prev.map((n) => {
+              const same = note.id_local
+                ? String(n.id_local) === String(note.id_local)
+                : Number(n.id) === Number(note.id);
+              if (!same) return n;
+              const nextImages = (Array.isArray(n.images) ? n.images : []).filter((x: any) => {
+                if (imageId > 0 && Number(x?.id || 0) > 0) return Number(x.id) !== imageId;
+                if (img?.name && x?.name) return String(x.name) !== String(img.name);
+                if (img?.localFileName && (x as any)?.localFileName) return String((x as any).localFileName) !== String(img.localFileName);
+                return true;
+              });
+              return { ...n, images: nextImages };
+            })
+          );
+
+          try {
+            const cacheStr = await AsyncStorage.getItem('notes_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
+            cache.notas = (Array.isArray(cache.notas) ? cache.notas : []).map((n: any) => {
+              const same = note.id_local
+                ? String(n.id_local) === String(note.id_local)
+                : Number(n.id) === Number(note.id);
+              if (!same) return n;
+              const nextImages = (Array.isArray(n.images) ? n.images : []).filter((x: any) => {
+                if (imageId > 0 && Number(x?.id || 0) > 0) return Number(x.id) !== imageId;
+                if (img?.name && x?.name) return String(x.name) !== String(img.name);
+                if (img?.localFileName && x?.localFileName) return String(x.localFileName) !== String(img.localFileName);
+                return true;
+              });
+              return { ...n, images: nextImages };
+            });
+            await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
+          } catch {
+            /* ignore */
+          }
+        },
+      },
+    ]);
+  };
+
+  const buildImagenesJson = async () =>
+    buildNotesImagenesJsonForUpload({
+      meta: stripNoteImagesForActionPayload(images),
+    });
 
   const formatDateDMY = (date: Date) => {
     const day = String(date.getDate()).padStart(2, '0');
@@ -673,17 +1073,6 @@ export default function NotesScreen() {
     }
   };
 
-  const loadMainStructureCache = async () => {
-    try {
-      const cache = await AsyncStorage.getItem('main_structure_cache');
-      const parsed = cache ? JSON.parse(cache) : [];
-      setMainStructure(Array.isArray(parsed) ? parsed : []);
-    } catch (error) {
-      console.error('Error loading main_structure_cache:', error);
-      setMainStructure([]);
-    }
-  };
-
   const fetchNotes = async () => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) {
@@ -696,8 +1085,41 @@ export default function NotesScreen() {
     setCurrentMarca(currentMarcaData);
     setHasCurrentMarca(true);
 
-    const listPuestoId =
-      currentMarcaData?.puesto?.id != null ? Number(currentMarcaData.puesto.id) : null;
+    const rn =
+      currentMarcaData?.roleDivision?.role?.nombre ??
+      currentMarcaData?.role_division?.role?.nombre ??
+      null;
+    const rnStr = typeof rn === 'string' ? rn : null;
+    setRoleName(rnStr);
+    const isOperativo = rnStr === 'OPERATIVO';
+
+    const marcaPuestoId = numOrNull(currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id);
+    const listPuestoId = isOperativo
+      ? marcaPuestoId
+      : numOrNull(filterPuestoIdRef.current);
+
+    let structureForLabels: MainStructureTree = Array.isArray(mainStructure) ? mainStructure : [];
+    if (!Array.isArray(structureForLabels) || structureForLabels.length === 0) {
+      try {
+        const parsed = await loadMainStructureTreeMerged();
+        structureForLabels = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        structureForLabels = [];
+      }
+    }
+
+    const resolvePuestoLabel = (pid: number | null) => {
+      if (pid == null || !Number.isFinite(pid) || pid <= 0) return null;
+      const fromTree = findPuestoMetaInStructure(structureForLabels, pid);
+      if (fromTree) return fromTree;
+      if (marcaPuestoId === pid && currentMarcaData?.puesto) {
+        return {
+          id: pid,
+          nombre: String(currentMarcaData.puesto.nombre ?? ''),
+        };
+      }
+      return { id: pid, nombre: `Puesto ${pid}` };
+    };
 
     try {
       setIsLoading(true);
@@ -706,12 +1128,20 @@ export default function NotesScreen() {
 
       const notesCacheRaw = await AsyncStorage.getItem('notes_cache');
       const cachedData = parseNotesCache(notesCacheRaw);
-      const legacyPid = cachedData.puesto?.id ?? listPuestoId;
+      const legacyPid = cachedData.puesto?.id ?? marcaPuestoId;
 
       if (!listPuestoId || listPuestoId <= 0) {
-        setError('No se encontró el puesto en la marca actual. No se pueden cargar las notas.');
-        setNotes([]);
-        setPuesto(currentMarcaData.puesto || null);
+        if (!isOperativo) {
+          setNotes([]);
+          setPuesto(null);
+          setOfflineMessage(
+            'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+          );
+        } else {
+          setError('No se encontró el puesto en la marca actual. No se pueden cargar las notas.');
+          setNotes([]);
+          setPuesto(currentMarcaData.puesto || null);
+        }
         return;
       }
 
@@ -742,21 +1172,23 @@ export default function NotesScreen() {
         const data = await response.json();
 
         if (data.status) {
+          const serverRows = Array.isArray(data.notas) ? data.notas.filter((n: any) => n?.isActive !== false) : [];
           const mergedAll = mergeNotesCacheForPuesto(
             cachedData.notas || [],
-            data.notas || [],
+            serverRows,
             listPuestoId,
             legacyPid,
             mergeNotesBase64FromCache
           );
           const forList = filterNotesByPuestoId(mergedAll, listPuestoId, listPuestoId);
           setNotes(forList);
-          setPuesto(currentMarcaData.puesto || null);
+          setPuesto(resolvePuestoLabel(listPuestoId));
+          const puestoMeta = resolvePuestoLabel(listPuestoId);
           await AsyncStorage.setItem(
             'notes_cache',
             JSON.stringify({
               notas: mergedAll,
-              puesto: currentMarcaData.puesto || null,
+              puesto: puestoMeta,
             })
           );
         } else {
@@ -766,13 +1198,14 @@ export default function NotesScreen() {
         const forList = filterNotesByPuestoId(cachedData.notas || [], listPuestoId, legacyPid);
         if (forList.length > 0) {
           setNotes(forList);
-          setPuesto(currentMarcaData.puesto || null);
+          setPuesto(resolvePuestoLabel(listPuestoId));
           setOfflineMessage('Modo Offline: no hay conexión a internet. Mostrando datos guardados.');
         } else {
           setOfflineMessage(
-            'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+            'Sin conexión: no hay datos guardados previamente para este puesto. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
           );
           setNotes([]);
+          setPuesto(resolvePuestoLabel(listPuestoId));
         }
       }
     } catch (err) {
@@ -780,28 +1213,29 @@ export default function NotesScreen() {
       try {
         const notesCacheRaw = await AsyncStorage.getItem('notes_cache');
         const cachedData = parseNotesCache(notesCacheRaw);
-        const legacyPid = cachedData.puesto?.id ?? listPuestoId;
+        const legacyPid = cachedData.puesto?.id ?? marcaPuestoId;
         if (listPuestoId && listPuestoId > 0) {
           const forList = filterNotesByPuestoId(cachedData.notas || [], listPuestoId, legacyPid);
           if (forList.length > 0) {
             setNotes(forList);
-            setPuesto(currentMarcaData.puesto || null);
-            setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
+            setPuesto(resolvePuestoLabel(listPuestoId));
+          setOfflineMessage('Modo Offline: error de conexión. Mostrando datos guardados.');
           } else if (isProbablyNetworkError(err)) {
             setOfflineMessage(
-              'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
+              'Sin conexión: no hay datos guardados previamente para este puesto. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
             );
             setNotes([]);
-          } else {
+            setPuesto(resolvePuestoLabel(listPuestoId));
+        } else {
             setError('Error al cargar las notas');
           }
         } else if (isProbablyNetworkError(err)) {
           setOfflineMessage(
             'Sin conexión: no hay datos guardados previamente. Puedes crear notas offline y se sincronizarán cuando haya conexión.'
           );
-          setNotes([]);
-        } else {
-          setError('Error al cargar las notas');
+            setNotes([]);
+          } else {
+            setError('Error al cargar las notas');
         }
       } catch (cacheErr) {
         if (isProbablyNetworkError(err) || isProbablyNetworkError(cacheErr)) {
@@ -817,6 +1251,36 @@ export default function NotesScreen() {
       setIsLoading(false);
     }
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        await fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+        }
+        if (cancelled) return;
+        await fetchNotes();
+        await fetchCategories();
+        await fetchPuestosCorpo();
+      })();
+      const handler = () => {
+        void (async () => {
+          await fetchMainStructure();
+          await fetchNotes();
+          await fetchCategories();
+          await fetchPuestosCorpo();
+        })();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [fetchMainStructure, syncMarcaFromStorage])
+  );
 
   const fetchNotesByPuestoForSend = async (puestoId: number) => {
     try {
@@ -837,7 +1301,7 @@ export default function NotesScreen() {
       if (!response) return;
       const data = await response.json();
       if (data.status) {
-        setSendNotesPreview(Array.isArray(data.notas) ? data.notas : []);
+        setSendNotesPreview(Array.isArray(data.notas) ? data.notas.filter((n: any) => n?.isActive !== false) : []);
       } else {
         Alert.alert('Error', data.message || 'No se pudieron cargar las notas del puesto');
       }
@@ -946,23 +1410,46 @@ export default function NotesScreen() {
             setIsSubmitting(true);
             setSubmitResponse(null);
             try {
-              // Determine puestos array based on role
-              const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
-              let puestosArray: number[] = [];
+              const rn =
+                currentMarcaData?.roleDivision?.role?.nombre ??
+                currentMarcaData?.role_division?.role?.nombre ??
+                null;
+              const isOperativo = rn === 'OPERATIVO';
+              const isSupervisor = rn === 'SUPERVISOR';
 
-              if (isSupervisor) {
-                // For supervisor: use selected puestos (convert to string)
-                puestosArray = selectedPuestos.map(id => id);
-              } else {
-                // For non-supervisor: use only current puesto
-                const currentPuestoId = currentMarcaData?.puesto?.id;
-                if (currentPuestoId) {
-                  puestosArray = [currentPuestoId];
-                } else {
-                  puestosArray = [0];
+              let puestosArray: number[] = [];
+              let apiPuestoId = 0;
+
+              if (isOperativo && isSupervisor) {
+                puestosArray = selectedPuestos.length > 0 ? selectedPuestos : [];
+                const marcaPid = numOrNull(currentMarcaData?.puesto?.id);
+                apiPuestoId = puestosArray[0] ?? marcaPid ?? 0;
+                if (puestosArray.length === 0 && marcaPid) {
+                  puestosArray = [marcaPid];
+                  apiPuestoId = marcaPid;
                 }
+              } else if (isOperativo) {
+                const currentPuestoId = numOrNull(currentMarcaData?.puesto?.id);
+                puestosArray = currentPuestoId ? [currentPuestoId] : [0];
+                apiPuestoId = currentPuestoId ?? 0;
+              } else {
+                const fp = numOrNull(formPuestoId);
+                if (!fp || fp <= 0) {
+                  Alert.alert('Validación', 'Seleccione un puesto en la jerarquía del formulario.');
+                  setIsSubmitting(false);
+                  return;
+                }
+                puestosArray = [fp];
+                apiPuestoId = fp;
               }
 
+              if (!apiPuestoId || apiPuestoId <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto para crear la nota.');
+                setIsSubmitting(false);
+                return;
+              }
+
+              const imagenesJson = await buildImagenesJson();
               const requestBody = {
                 empleado_id: employee?.id,
                 titulo: tituloRef.current,
@@ -970,10 +1457,15 @@ export default function NotesScreen() {
                 division: newNote.division,
                 categoria_id: newNote.categoria_id,
                 relevancia: newNote.relevancia,
+                empresa_id: formEmpresaId ?? currentMarcaData?.empresa?.id ?? null,
+                cliente_id: formClienteId ?? currentMarcaData?.cliente?.id ?? null,
+                division_id: formDivisionId ?? getDivisionIdFromMarcaJson(currentMarcaData),
+                contrato_id: formContratoId ?? currentMarcaData?.contrato?.id ?? null,
+                corpo_id: formSucursalId ?? currentMarcaData?.corpo?.id ?? null,
                 puestos: JSON.stringify(puestosArray),
                 firma_responsable: firmaResponsableHash.trim(),
                 firma_manual_responsable: firmaManualResponsable,
-                imagenes: buildImagenesJson(),
+                imagenes: imagenesJson,
               };
 
               // Verificar conectividad
@@ -984,7 +1476,7 @@ export default function NotesScreen() {
                 const data = await createNoteAPI({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
-                  puestoId: currentMarcaData.puesto.id,
+                  puestoId: apiPuestoId,
                   refreshAccessToken,
                   logout,
                 });
@@ -992,7 +1484,8 @@ export default function NotesScreen() {
                 if (data.status) {
                   Alert.alert('Éxito', data.message || 'Nota creada correctamente');
                   setIsCreating(false);
-                  setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
+                  setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja', puesto_id: 0 });
+                  clearFormHierarchy();
                   setSelectedPuestos([]);
                   setFirmaResponsableHash('');
                   setFirmaManualResponsable(null);
@@ -1015,7 +1508,8 @@ export default function NotesScreen() {
                 nextActions.push({
                   requestData: requestBody,
                   marcaId: currentMarcaData.id,
-                  puestoId: currentMarcaData.puesto.id,
+                  puestoId: apiPuestoId,
+                  notes_images_meta: stripNoteImagesForActionPayload(images),
                   id: localId,
                   type: 'create',
                 });
@@ -1023,16 +1517,20 @@ export default function NotesScreen() {
 
                 // Crear nota en cache
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
-                const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
+                const cache = parseNotesCache(cacheStr);
 
-                const offlinePuestoId =
-                  currentMarcaData?.puesto?.id ?? puestosArray[0] ?? 0;
+                const offlinePuestoId = apiPuestoId || puestosArray[0] || 0;
                 const newNoteCache = {
                   id: 0,
                   puesto_id: offlinePuestoId,
                   titulo: tituloRef.current,
                   description: descriptionRef.current,
                   division: newNote.division,
+                  empresa_id: formEmpresaId ?? currentMarcaData?.empresa?.id ?? null,
+                  cliente_id: formClienteId ?? currentMarcaData?.cliente?.id ?? null,
+                  division_id: formDivisionId ?? getDivisionIdFromMarcaJson(currentMarcaData),
+                  contrato_id: formContratoId ?? currentMarcaData?.contrato?.id ?? null,
+                  corpo_id: formSucursalId ?? currentMarcaData?.corpo?.id ?? null,
                   categoria_id: newNote.categoria_id,
                   relevancia: newNote.relevancia,
                   empleado: employee?.name || 'Desconocido',
@@ -1045,7 +1543,7 @@ export default function NotesScreen() {
                   id_local: localId,
                 };
 
-                cache.notas.push(newNoteCache);
+                cache.notas.push(newNoteCache as any);
                 if (!cache.puesto && currentMarcaData?.puesto) {
                   cache.puesto = currentMarcaData.puesto;
                 }
@@ -1053,7 +1551,8 @@ export default function NotesScreen() {
 
                 Alert.alert('Éxito', 'Nota creada localmente. Se sincronizará cuando haya conexión.');
                 setIsCreating(false);
-                setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
+                setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja', puesto_id: 0 });
+                clearFormHierarchy();
                 setSelectedPuestos([]);
                 setFirmaResponsableHash('');
                 setFirmaManualResponsable(null);
@@ -1096,6 +1595,7 @@ export default function NotesScreen() {
             setIsSubmitting(true);
             setSubmitResponse(null);
             try {
+              const imagenesJson = await buildImagenesJson();
               const requestBody = {
                 empleado_id: employee?.id,
                 titulo: tituloRef.current,
@@ -1103,9 +1603,14 @@ export default function NotesScreen() {
                 division: editingNote.division,
                 categoria_id: editingNote.categoria_id,
                 relevancia: editingNote.relevancia,
+                empresa_id: formEmpresaId ?? currentMarca?.empresa?.id ?? null,
+                cliente_id: formClienteId ?? currentMarca?.cliente?.id ?? null,
+                division_id: formDivisionId ?? getDivisionIdFromMarcaJson(currentMarca),
+                contrato_id: formContratoId ?? currentMarca?.contrato?.id ?? null,
+                corpo_id: formSucursalId ?? currentMarca?.corpo?.id ?? null,
                 firma_responsable: firmaResponsableHash.trim(),
                 firma_manual_responsable: firmaManualResponsable,
-                imagenes: buildImagenesJson(),
+                imagenes: imagenesJson,
               };
 
               // Verificar conectividad
@@ -1116,7 +1621,7 @@ export default function NotesScreen() {
                 const data = await updateNoteAPI({
                   requestData: requestBody,
                   noteId: noteId,
-                  puestoId: currentMarca?.puesto?.id || 0,
+                  puestoId: editingNote.puesto_id || currentMarca?.puesto?.id || 0,
                   marcaId: currentMarca?.id || 0,
                   refreshAccessToken,
                   logout,
@@ -1137,7 +1642,11 @@ export default function NotesScreen() {
                 const marcaStr = await AsyncStorage.getItem('current_marca');
                 const marcaData = marcaStr ? JSON.parse(marcaStr) : null;
                 const marcaIdOffline = marcaData?.id ?? currentMarca?.id ?? 0;
-                const puestoIdOffline = marcaData?.puesto?.id ?? currentMarca?.puesto?.id ?? 0;
+                const puestoIdOffline =
+                  editingNote.puesto_id ||
+                  marcaData?.puesto?.id ||
+                  currentMarca?.puesto?.id ||
+                  0;
 
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1154,12 +1663,14 @@ export default function NotesScreen() {
                     actions[actionIndex] = {
                       ...actions[actionIndex],
                       requestData: requestBody,
+                      notes_images_meta: stripNoteImagesForActionPayload(images),
                       marcaId: actions[actionIndex].marcaId ?? marcaIdOffline,
                       puestoId: actions[actionIndex].puestoId ?? puestoIdOffline,
                     };
                   } else {
                     actions.push({
                       requestData: requestBody,
+                      notes_images_meta: stripNoteImagesForActionPayload(images),
                       marcaId: marcaIdOffline,
                       puestoId: puestoIdOffline,
                       id: localKey,
@@ -1173,7 +1684,8 @@ export default function NotesScreen() {
                   );
                   actions.push({
                     requestData: requestBody,
-                    puestoId: currentMarca?.puesto?.id || 0,
+                    notes_images_meta: stripNoteImagesForActionPayload(images),
+                    puestoId: editingNote.puesto_id || currentMarca?.puesto?.id || 0,
                     id: noteId,
                     type: 'update',
                   });
@@ -1240,10 +1752,16 @@ export default function NotesScreen() {
               if (!isConnected || note.id === 0 || !!note.id_local) {
                 const cacheStr = await AsyncStorage.getItem('notes_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : { notas: [], puesto: null };
+                const removedNote = (cache.notas || []).find((n: Note) =>
+                  note.id_local ? n.id_local === note.id_local : n.id === note.id
+                );
                 cache.notas = (cache.notas || []).filter((n: Note) =>
                   note.id_local ? n.id_local !== note.id_local : n.id !== note.id
                 );
                 await AsyncStorage.setItem('notes_cache', JSON.stringify(cache));
+                if (removedNote?.images) {
+                  await deleteNotesLocalFilesFromMeta(removedNote.images as any[]);
+                }
 
                 const actionsStr = await AsyncStorage.getItem('notes_actions');
                 let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1257,7 +1775,7 @@ export default function NotesScreen() {
                   }
                   return !(
                     (Number(a.id) === Number(note.id) || String(a.id) === String(note.id)) &&
-                    (a.type === 'create' || a.type === 'update')
+                    (a.type === 'create' || a.type === 'update' || a.type === 'delete_file')
                   );
                 });
                 if (!note.id_local && note.id !== 0) {
@@ -1324,7 +1842,8 @@ export default function NotesScreen() {
     setExpandedNotes(newExpanded);
   };
 
-  const startEditing = (note: Note) => {
+  const startEditing = async (note: Note) => {
+    clearFormHierarchy();
     setEditingNote({
       id: note.id,
       id_local: note.id_local,
@@ -1333,49 +1852,92 @@ export default function NotesScreen() {
       division: note.division,
       categoria_id: note.categoria_id,
       relevancia: (note.relevancia || 'Baja') as 'Baja' | 'Media' | 'Alta',
+      puesto_id: note.puesto_id || currentMarca?.puesto?.id || 0,
     });
-    // Initialize refs with note values
     tituloRef.current = note.titulo;
     descriptionRef.current = note.description;
     setFirmaResponsableHash(note.firma_responsable || '');
     setFirmaManualResponsable(note.firma_manual_responsable || null);
-    setImages(Array.isArray(note.images) ? note.images : []);
-    // Ensure the note is expanded
+    // En edición solo se muestran/gestionan archivos nuevos.
+    // Los adjuntos ya existentes permanecen en la tarjeta y no se precargan en el formulario.
+    setImages([]);
+
     const newExpanded = new Set(expandedNotes);
     newExpanded.add(note.id);
     setExpandedNotes(newExpanded);
+
+    const tree = await fetchMainStructure();
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    const marca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+    const rn =
+      marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+
+    if (rn !== 'OPERATIVO' && tree.length) {
+      const pid = note.puesto_id != null ? Number(note.puesto_id) : NaN;
+      if (Number.isFinite(pid) && pid > 0) {
+        const byPuesto = findHierarchyByPuestoIn(tree, pid);
+        if (byPuesto) {
+          setFormEmpresaId(byPuesto.empresaId);
+          setFormClienteId(byPuesto.clienteId);
+          setFormDivisionId(byPuesto.divisionId);
+          setFormContratoId(byPuesto.contratoId);
+          setFormSucursalId(byPuesto.corpoId);
+          setFormPuestoId(byPuesto.puestoId);
+        } else {
+          setFormPuestoId(pid);
+        }
+      }
+    }
   };
 
   const cancelEditing = () => {
     setEditingNote(null);
+    clearFormHierarchy();
   };
 
   const startCreating = async () => {
+    await fetchMainStructure();
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    const currentMarcaData = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+    const rn =
+      currentMarcaData?.roleDivision?.role?.nombre ??
+      currentMarcaData?.role_division?.role?.nombre ??
+      null;
+    await applyCurrentMarcaToCreateFormHierarchy();
+    const initialPuestoId =
+      numOrNull(currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id) ?? 0;
+
     setIsCreating(true);
-    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: divisions[0] || null, categoria_id: null, relevancia: 'Baja' });
-    // Initialize refs
+    setNewNote({
+      id: null,
+      id_local: '',
+      titulo: '',
+      description: '',
+      division: divisions[0] || null,
+      categoria_id: null,
+      relevancia: 'Baja',
+      puesto_id: initialPuestoId,
+    });
     tituloRef.current = '';
     descriptionRef.current = '';
     setFirmaResponsableHash('');
     setFirmaManualResponsable(null);
     setImages([]);
 
-    // Initialize selected puestos based on role
-    const currentMarca = await AsyncStorage.getItem('current_marca');
-    if (currentMarca) {
-      const currentMarcaData = JSON.parse(currentMarca);
-      const isSupervisor = currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR';
-
-      if (isSupervisor) {
-        // For supervisor: start with current puesto selected
+    if (currentMarcaData) {
+      const isSupervisor =
+        currentMarcaData?.roleDivision?.role?.nombre === 'SUPERVISOR' ||
+        currentMarcaData?.role_division?.role?.nombre === 'SUPERVISOR';
+      if (isSupervisor && rn === 'OPERATIVO') {
         const currentPuestoId = currentMarcaData?.puesto?.id;
         if (currentPuestoId) {
           setSelectedPuestos([currentPuestoId]);
         } else {
           setSelectedPuestos([]);
         }
+      } else if (isSupervisor) {
+        setSelectedPuestos([]);
       } else {
-        // For non-supervisor: always use current puesto
         const currentPuestoId = currentMarcaData?.puesto?.id;
         if (currentPuestoId) {
           setSelectedPuestos([currentPuestoId]);
@@ -1390,7 +1952,8 @@ export default function NotesScreen() {
 
   const cancelCreating = () => {
     setIsCreating(false);
-    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja' });
+    setNewNote({ id: null, id_local: '', titulo: '', description: '', division: null, categoria_id: null, relevancia: 'Baja', puesto_id: 0 });
+    clearFormHierarchy();
     setSelectedPuestos([]);
     setFirmaResponsableHash('');
     setFirmaManualResponsable(null);
@@ -1461,6 +2024,70 @@ export default function NotesScreen() {
   });
 
   const isAdministrativo = currentMarca?.roleDivision?.role?.nombre === 'ADMINISTRATIVO';
+
+  const filterEmpresaOptions = useMemo(() => mainStructure ?? [], [mainStructure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = mainStructure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [mainStructure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+  const filterPuestoOptionsMemo = useMemo(() => {
+    const sucursal = filterSucursalOptionsMemo.find((s) => s.id === filterSucursalId);
+    return sucursal?.puestos ?? [];
+  }, [filterSucursalOptionsMemo, filterSucursalId]);
+
+  const formEmpresaNode = useMemo(() => {
+    if (formEmpresaId === null) return null;
+    return mainStructure.find((e) => e.id === formEmpresaId) ?? null;
+  }, [mainStructure, formEmpresaId]);
+  const formClienteOptions = useMemo(() => {
+    if (!formEmpresaNode) return [];
+    return (formEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formEmpresaNode]);
+  const formClienteNode = useMemo(() => {
+    if (!formEmpresaNode || formClienteId === null) return null;
+    return formEmpresaNode.clientes.find((c) => c.id === formClienteId) ?? null;
+  }, [formEmpresaNode, formClienteId]);
+  const formDivisionOptions = useMemo(() => {
+    if (!formClienteNode) return [];
+    return (formClienteNode.division || []).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [formClienteNode]);
+  const formDivisionNode = useMemo(() => {
+    if (!formClienteNode || formDivisionId === null) return null;
+    return (formClienteNode.division || []).find((d) => d.id === formDivisionId) ?? null;
+  }, [formClienteNode, formDivisionId]);
+  const formContratoOptions = useMemo(() => {
+    if (!formDivisionNode) return [];
+    return (formDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formDivisionNode]);
+  const formContratoNode = useMemo(() => {
+    if (!formDivisionNode || formContratoId === null) return null;
+    return (formDivisionNode.contratos || []).find((c) => c.id === formContratoId) ?? null;
+  }, [formDivisionNode, formContratoId]);
+  const formSucursalOptions = useMemo(() => {
+    if (!formContratoNode) return [];
+    return (formContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [formContratoNode]);
+  const formSucursalNode = useMemo(() => {
+    if (!formContratoNode || formSucursalId === null) return null;
+    return (formContratoNode.sucursales || []).find((s) => s.id === formSucursalId) ?? null;
+  }, [formContratoNode, formSucursalId]);
+  const formPuestoOptions = useMemo(() => {
+    if (!formSucursalNode) return [];
+    return (formSucursalNode.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre }));
+  }, [formSucursalNode]);
+
   const empresaOptions = mainStructure;
   const selectedEmpresa = empresaOptions.find((e) => e.id === sendEmpresaId) || null;
   const clienteOptions = selectedEmpresa?.clientes || [];
@@ -1519,6 +2146,9 @@ export default function NotesScreen() {
     setSelectedCategory('all');
     setSelectedRelevancia('all');
     setEmpleadoFilter('');
+    if (roleName != null && roleName !== 'OPERATIVO') {
+      void resetListFiltersFromCurrentMarca().then(() => fetchNotes());
+    }
   };
 
   const formatDateForDisplay = (date: Date) => {
@@ -1649,6 +2279,171 @@ export default function NotesScreen() {
               />
             </ThemedView>
 
+            {roleName != null && roleName !== 'OPERATIVO' ? (
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Ubicación del registro (empresa → puesto)</ThemedText>
+                {isStructureLoading ? (
+                  <ThemedView style={styles.loadingContainer}>
+                    <ActivityIndicator size="small" color="#007AFF" />
+                    <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                  </ThemedView>
+                ) : mainStructure.length === 0 ? (
+                  <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                ) : (
+                  <>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>Empresa</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={formEmpresaId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormEmpresaChange(next === 0 ? null : next);
+                            setEditingNote((prev) => (prev ? { ...prev, puesto_id: 0 } : null));
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                          {mainStructure.map((e) => (
+                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>Cliente</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          enabled={formEmpresaId != null && formClienteOptions.length > 0}
+                          selectedValue={formClienteId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            handleFormClienteChange(next === 0 ? null : next);
+                            setEditingNote((prev) => (prev ? { ...prev, puesto_id: 0 } : null));
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formClienteOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>División</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          enabled={formClienteId != null && formDivisionOptions.length > 0}
+                          selectedValue={formDivisionId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setFormDivisionId(next === 0 ? null : next);
+                            setFormContratoId(null);
+                            setFormSucursalId(null);
+                            setFormPuestoId(null);
+                            setEditingNote((prev) => (prev ? { ...prev, puesto_id: 0 } : null));
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formDivisionOptions.map((d) => (
+                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>Contrato</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          enabled={formDivisionId != null && formContratoOptions.length > 0}
+                          selectedValue={formContratoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setFormContratoId(next === 0 ? null : next);
+                            setFormSucursalId(null);
+                            setFormPuestoId(null);
+                            setEditingNote((prev) => (prev ? { ...prev, puesto_id: 0 } : null));
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formContratoOptions.map((c) => (
+                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>Sucursal</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          enabled={formContratoId != null && formSucursalOptions.length > 0}
+                          selectedValue={formSucursalId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            setFormSucursalId(next === 0 ? null : next);
+                            setFormPuestoId(null);
+                            setEditingNote((prev) => (prev ? { ...prev, puesto_id: 0 } : null));
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formSucursalOptions.map((s) => (
+                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                    <ThemedView style={styles.inputGroup}>
+                      <ThemedText style={styles.inputLabel}>Puesto</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          enabled={formSucursalId != null && formPuestoOptions.length > 0}
+                          selectedValue={formPuestoId ?? 0}
+                          onValueChange={(v) => {
+                            const next = Number(v) || 0;
+                            const pid = next === 0 ? null : next;
+                            setFormPuestoId(pid);
+                            setEditingNote((prev) =>
+                              prev ? { ...prev, puesto_id: pid ?? 0 } : null
+                            );
+                          }}
+                          style={styles.picker}
+                        >
+                          <Picker.Item
+                            label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                            value={0}
+                            color="#000000"
+                          />
+                          {formPuestoOptions.map((p) => (
+                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                    </ThemedView>
+                  </>
+                )}
+              </ThemedView>
+            ) : null}
+
             <ThemedView style={styles.inputGroup}>
               <ThemedText style={styles.inputLabel}>Categoría:</ThemedText>
               <ThemedView style={styles.pickerContainer}>
@@ -1752,7 +2547,7 @@ export default function NotesScreen() {
                     const uri = resolveNoteImageUri(
                       img,
                       editingNote?.id || null,
-                      currentMarca?.puesto?.id || null
+                      editingNote?.puesto_id || currentMarca?.puesto?.id || null
                     );
                     if (!uri) return null;
                     return (
@@ -1844,7 +2639,7 @@ export default function NotesScreen() {
                 </ThemedView>
 
                 {!!note.firma_responsable && (
-                  <ThemedView style={styles.lastChangeContainer}>
+                <ThemedView style={styles.lastChangeContainer}>
                     <ThemedText style={styles.lastChangeLabel}>Firma responsable:</ThemedText>
                     {(() => {
                       const info = decodeFirmaHash(note.firma_responsable);
@@ -1855,7 +2650,7 @@ export default function NotesScreen() {
                           <ThemedText style={styles.noteDate}>Empleado: {info.empleadoId}</ThemedText>
                           <ThemedText style={styles.noteDate}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
                           <ThemedText style={styles.noteDate}>Hora: { convertDateTimestampToLocalString( new Date(Number(info.timestamp)).toISOString() ) }</ThemedText>
-                        </ThemedView>
+                </ThemedView>
                       );
                     })()}
                   </ThemedView>
@@ -1878,15 +2673,25 @@ export default function NotesScreen() {
                       );
                       if (!sourceUri) return null;
                       return (
-                        <TouchableOpacity
-                          key={`${note.id}-img-${img.id || idx}`}
-                          onPress={() => {
-                            setSelectedImageUrl(sourceUri);
-                            setIsImagePreviewVisible(true);
-                          }}
-                        >
-                          <Image source={{ uri: sourceUri }} style={styles.noteImageThumb} />
-                        </TouchableOpacity>
+                        <View key={`${note.id}-img-${img.id || idx}`} style={styles.noteImageThumbContainer}>
+                          <TouchableOpacity
+                            onPress={() => {
+                              setSelectedImageUrl(sourceUri);
+                              setIsImagePreviewVisible(true);
+                            }}
+                          >
+                            <Image source={{ uri: sourceUri }} style={styles.noteImageThumb} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.noteImageDeleteIcon}
+                            onPress={(e: any) => {
+                              e?.stopPropagation?.();
+                              void removeImageFromNoteRecord(note, img as any);
+                            }}
+                          >
+                            <Ionicons name="trash" size={14} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
                       );
                     })}
                   </ThemedView>
@@ -1932,12 +2737,178 @@ export default function NotesScreen() {
   const renderNewNoteForm = () => {
     if (!isCreating) return null;
 
-    const isSupervisor = currentMarca?.roleDivision?.role?.nombre === 'SUPERVISOR';
+    const isSupervisorOperativo =
+      roleName === 'OPERATIVO' &&
+      (currentMarca?.roleDivision?.role?.nombre === 'SUPERVISOR' ||
+        currentMarca?.role_division?.role?.nombre === 'SUPERVISOR');
 
     return (
       <ThemedView style={[styles.noteCard, styles.newNoteCard]}>
         <ThemedView style={styles.editContainer}>
           <ThemedText style={styles.newNoteTitle}>Nueva Nota</ThemedText>
+
+          {roleName != null && roleName !== 'OPERATIVO' ? (
+            <ThemedView style={styles.inputGroup}>
+              <ThemedText style={styles.inputLabel}>Ubicación del registro (empresa → puesto)</ThemedText>
+              {isStructureLoading ? (
+                <ThemedView style={styles.loadingContainer}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                </ThemedView>
+              ) : mainStructure.length === 0 ? (
+                <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+              ) : (
+                <>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>Empresa</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        selectedValue={formEmpresaId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          handleFormEmpresaChange(next === 0 ? null : next);
+                          setNewNote((prev) => ({ ...prev, puesto_id: 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                        {mainStructure.map((e) => (
+                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>Cliente</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formEmpresaId != null && formClienteOptions.length > 0}
+                        selectedValue={formClienteId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          handleFormClienteChange(next === 0 ? null : next);
+                          setNewNote((prev) => ({ ...prev, puesto_id: 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item
+                          label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {formClienteOptions.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>División</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formClienteId != null && formDivisionOptions.length > 0}
+                        selectedValue={formDivisionId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setFormDivisionId(next === 0 ? null : next);
+                          setFormContratoId(null);
+                          setFormSucursalId(null);
+                          setFormPuestoId(null);
+                          setNewNote((prev) => ({ ...prev, puesto_id: 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item
+                          label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {formDivisionOptions.map((d) => (
+                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>Contrato</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formDivisionId != null && formContratoOptions.length > 0}
+                        selectedValue={formContratoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setFormContratoId(next === 0 ? null : next);
+                          setFormSucursalId(null);
+                          setFormPuestoId(null);
+                          setNewNote((prev) => ({ ...prev, puesto_id: 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item
+                          label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {formContratoOptions.map((c) => (
+                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>Sucursal</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formContratoId != null && formSucursalOptions.length > 0}
+                        selectedValue={formSucursalId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          setFormSucursalId(next === 0 ? null : next);
+                          setFormPuestoId(null);
+                          setNewNote((prev) => ({ ...prev, puesto_id: 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item
+                          label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {formSucursalOptions.map((s) => (
+                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                  <ThemedView style={styles.inputGroup}>
+                    <ThemedText style={styles.inputLabel}>Puesto</ThemedText>
+                    <ThemedView style={styles.pickerContainer}>
+                      <Picker
+                        enabled={formSucursalId != null && formPuestoOptions.length > 0}
+                        selectedValue={formPuestoId ?? 0}
+                        onValueChange={(v) => {
+                          const next = Number(v) || 0;
+                          const pid = next === 0 ? null : next;
+                          setFormPuestoId(pid);
+                          setNewNote((prev) => ({ ...prev, puesto_id: pid ?? 0 }));
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item
+                          label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                          value={0}
+                          color="#000000"
+                        />
+                        {formPuestoOptions.map((p) => (
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </ThemedView>
+                  </ThemedView>
+                </>
+              )}
+            </ThemedView>
+          ) : null}
 
           <ThemedView style={styles.inputGroup}>
             <ThemedText style={styles.inputLabel}>Título:</ThemedText>
@@ -2094,7 +3065,7 @@ export default function NotesScreen() {
                   const uri = resolveNoteImageUri(
                     img,
                     null,
-                    currentMarca?.puesto?.id || null
+                    newNote.puesto_id || currentMarca?.puesto?.id || null
                   );
                   if (!uri) return null;
                   return (
@@ -2114,8 +3085,8 @@ export default function NotesScreen() {
             )}
           </ThemedView>
 
-          {/* Puestos checkboxes - Solo para SUPERVISOR */}
-          {isSupervisor && (
+          {/* Puestos checkboxes - Solo OPERATIVO + SUPERVISOR */}
+          {isSupervisorOperativo && (
             <ThemedView style={styles.inputGroup}>
               <ThemedText style={styles.inputLabel}>Puestos:</ThemedText>
               {isLoadingPuestos ? (
@@ -2305,6 +3276,210 @@ export default function NotesScreen() {
             {/* Filter Content */}
             {isFiltersExpanded && (
               <ThemedView style={styles.filterContent}>
+                {hasCurrentMarca && roleName != null && roleName !== 'OPERATIVO' ? (
+                  <>
+                    <ThemedView style={styles.filterGroupSearch}>
+                      <ThemedText style={styles.filterLabel}>
+                        Ubicación del listado (empresa → puesto)
+                      </ThemedText>
+                    </ThemedView>
+                    {isStructureLoading ? (
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                      </ThemedView>
+                    ) : mainStructure.length === 0 ? (
+                      <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      </ThemedView>
+                    ) : (
+                      <>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterEmpresaId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterEmpresaId(next === 0 ? null : next);
+                                setFilterClienteId(null);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterPuestoIdRef.current = null;
+                                setFilterPuestoId(null);
+                                setNotes([]);
+                                setPuesto(null);
+                                setOfflineMessage(
+                                  'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+                                );
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                              {filterEmpresaOptions.map((e) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                              selectedValue={filterClienteId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterClienteId(next === 0 ? null : next);
+                                setFilterDivisionId(null);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterPuestoIdRef.current = null;
+                                setFilterPuestoId(null);
+                                setNotes([]);
+                                setPuesto(null);
+                                setOfflineMessage(
+                                  'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+                                );
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterClienteOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>División</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                              selectedValue={filterDivisionId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterDivisionId(next === 0 ? null : next);
+                                setFilterContratoId(null);
+                                setFilterSucursalId(null);
+                                filterPuestoIdRef.current = null;
+                                setFilterPuestoId(null);
+                                setNotes([]);
+                                setPuesto(null);
+                                setOfflineMessage(
+                                  'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+                                );
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterDivisionOptionsMemo.map((d) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                              selectedValue={filterContratoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterContratoId(next === 0 ? null : next);
+                                setFilterSucursalId(null);
+                                filterPuestoIdRef.current = null;
+                                setFilterPuestoId(null);
+                                setNotes([]);
+                                setPuesto(null);
+                                setOfflineMessage(
+                                  'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+                                );
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterContratoOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Sucursal</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                              selectedValue={filterSucursalId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterSucursalId(next === 0 ? null : next);
+                                filterPuestoIdRef.current = null;
+                                setFilterPuestoId(null);
+                                setNotes([]);
+                                setPuesto(null);
+                                setOfflineMessage(
+                                  'Seleccione un puesto en el filtro jerárquico para sincronizar o ver las notas guardadas en caché.'
+                                );
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterSucursalOptionsMemo.map((s) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.filterLabel}>Puesto (sincroniza listado)</ThemedText>
+                          <ThemedView style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterSucursalId != null && filterPuestoOptionsMemo.length > 0}
+                              selectedValue={filterPuestoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                const nextP = next === 0 ? null : next;
+                                filterPuestoIdRef.current = nextP;
+                                setFilterPuestoId(nextP);
+                                void fetchNotes();
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterPuestoOptionsMemo.map((p) => (
+                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </ThemedView>
+                        </ThemedView>
+                      </>
+                    )}
+                  </>
+                ) : null}
+
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Título o Descripción:</ThemedText>
                   <TextInput
@@ -2757,7 +3932,7 @@ export default function NotesScreen() {
                                       <ThemedView style={styles.changeDescriptionContainer}>
                                         <ThemedText style={styles.changeDescription}>
                                           <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
+                                </ThemedText>
                                       </ThemedView>
                                       {Object.entries(created).map(([k, v]) => {
                                         if (k === 'firma_responsable') {
@@ -3733,6 +4908,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#D6D6D6',
     backgroundColor: '#F3F3F3',
+  },
+  noteImageThumbContainer: {
+    position: 'relative',
+  },
+  noteImageDeleteIcon: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sendPreviewCard: {
     borderWidth: 1,

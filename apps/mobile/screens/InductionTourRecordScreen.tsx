@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   StyleSheet,
   ScrollView,
@@ -41,6 +41,7 @@ import {
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type InductionTourRecordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'InductionTourRecord'>;
 
@@ -66,6 +67,15 @@ interface InductionTourRecord {
   id: number | string;
   id_local: string;
   fecha: string | null;
+  /** Jerarquía persistida (API / caché) */
+  empresa_id?: number | null;
+  cliente_id?: number | null;
+  division_id?: number | null;
+  contrato_id?: number | null;
+  corpo_id?: number | null;
+  puesto_id?: number | null;
+  plaza_id?: number | null;
+  empleado_id?: number | null;
   division?: string | null;
   renglon_edificio: string | null;
   supervisor_cliente: string | null;
@@ -74,9 +84,12 @@ interface InductionTourRecord {
   aspectos_especificos: string | null;
   participantes: string | null;
   firma_supervisor: string | null;
+  firma_empleado?: string | null;
   firma_responsable?: string | null;
   created_at: string;
   synced?: boolean;
+  /** Filtro de listados: ocultar inactivos (GET servidor ya filtra; caché antigua puede no tener el campo) */
+  isActive?: boolean;
 }
 
 interface EditingInductionTourRecord {
@@ -175,13 +188,16 @@ function mergeEvaluationsCacheInductionTourForCorpo(
   );
 
   const unsyncedIds = new Set(unsyncedPending.map((r: any) => String(r.id || r.id_local || '')));
-  const filteredServer = (freshFromServer || []).filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
+  const filteredServer = (freshFromServer || [])
+    .filter((r) => (r as any).isActive !== false)
+    .filter((r) => !unsyncedIds.has(String(r.id || r.id_local || '')));
 
   const taggedServer = filteredServer.map((r) => ({
     ...r,
     type: 'induction_tour_record',
     corpo_id: (r as any).corpo_id != null ? Number((r as any).corpo_id) : cid,
     synced: true,
+    isActive: (r as any).isActive !== false,
   }));
 
   const rest = arr.filter((item: any) => {
@@ -270,6 +286,54 @@ function findHierarchyByEmpleadoYPlaza(
   return null;
 }
 
+/** Ruta en el árbol mergeado por puesto y sucursal (corpo); útil al editar si empleado/plaza no resuelven la ruta. */
+function findHierarchyByPuestoYCorpo(
+  structureArr: MainStructureEmpresa[],
+  puestoId: number | null,
+  corpoId: number | null
+): {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+  puestoId: number;
+} | null {
+  const pid = puestoId != null && Number.isFinite(Number(puestoId)) ? Number(puestoId) : null;
+  const sid = corpoId != null && Number.isFinite(Number(corpoId)) ? Number(corpoId) : null;
+  if (pid == null || sid == null || pid <= 0 || sid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of getDivisionesFromCliente(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) !== sid) continue;
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: Number(empresa.id),
+                  clienteId: Number(cliente.id),
+                  divisionId: Number(division.id),
+                  contratoId: Number(contrato.id),
+                  corpoId: Number(sucursal.id),
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function inductionTourRowVisibleInList(item: any): boolean {
+  if (item?.type !== 'induction_tour_record') return true;
+  if (item?.synced === false) return true;
+  return item?.isActive !== false;
+}
+
 export default function InductionTourRecordScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -296,6 +360,7 @@ export default function InductionTourRecordScreen() {
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const filterCorpoIdRef = useRef<number | null>(null);
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
   const hasFetchedStructureRef = useRef<boolean>(false);
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
@@ -934,42 +999,11 @@ export default function InductionTourRecordScreen() {
     setIsStructureLoading(true);
     setIsLoadingStructure(true);
     try {
-      const isConnected = await getConnectionStatus();
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged) && merged.length > 0) {
+        setStructure(merged as MainStructureEmpresa[]);
+        return;
       }
-
-      /*
-      if (isConnected) {
-        const structureRes = await authedFetch({
-          url: `${apiUrl}/api/main-structure`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (structureRes && structureRes.ok) {
-          const structureData = await structureRes.json();
-          if (structureData.status && Array.isArray(structureData.structure)) {
-            setStructure(structureData.structure as MainStructureEmpresa[]);
-            await AsyncStorage.setItem('main_structure_cache', JSON.stringify(structureData.structure));
-          } else {
-            setStructure([]);
-          }
-        } else {
-          const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-          if (structureCacheStr) setStructure(JSON.parse(structureCacheStr));
-          else setStructure([]);
-        }
-      } else {
-        
-      }
-      */
       const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (structureCacheStr) {
         try {
@@ -982,7 +1016,7 @@ export default function InductionTourRecordScreen() {
         setStructure([]);
       }
     } catch (error) {
-      console.error('Error fetching main structure:', error);
+      console.error('Error fetching main structure (InductionTour):', error);
       const structureCacheStr = await AsyncStorage.getItem('main_structure_cache');
       if (structureCacheStr) {
         try {
@@ -998,7 +1032,7 @@ export default function InductionTourRecordScreen() {
       setIsStructureLoading(false);
       setIsLoadingStructure(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   // Nodos computados para filtros jerárquicos
   const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -1043,6 +1077,10 @@ export default function InductionTourRecordScreen() {
     return contrato?.sucursales || [];
   }, [filterContratos, filterContratoId]);
 
+  useEffect(() => {
+    filterCorpoIdRef.current = filterCorpoId;
+  }, [filterCorpoId]);
+
   // Nodos computados para jerarquía del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
@@ -1053,7 +1091,7 @@ export default function InductionTourRecordScreen() {
 
   const formDivisiones = useMemo(() => {
     const cliente = formClientes.find((c: any) => c.id === formClienteId);
-    return cliente?.division || [];
+    return cliente ? getDivisionesFromCliente(cliente) : [];
   }, [formClientes, formClienteId]);
 
   const formContratos = useMemo(() => {
@@ -1112,7 +1150,7 @@ export default function InductionTourRecordScreen() {
           ? ctx.marcaCorpoId
           : listOpts && Object.prototype.hasOwnProperty.call(listOpts, 'corpoId')
             ? listOpts.corpoId
-            : filterCorpoId;
+            : numOrNull(filterCorpoIdRef.current) ?? filterCorpoId;
 
       // Solo listar cuando hay sucursal (corpo): OPERATIVO desde current_marca; resto desde filtro jerárquico al elegir "Sucursal".
       if (isOperativo) {
@@ -1141,7 +1179,8 @@ export default function InductionTourRecordScreen() {
       const localRecordsForCorpo = rawLocal.filter((r) => {
         const rc = (r as any).corpo_id;
         if (rc == null || rc === '') return false;
-        return Number(rc) === Number(corpoId);
+        if (Number(rc) !== Number(corpoId)) return false;
+        return inductionTourRowVisibleInList(r);
       });
 
       const sliceForUi = (merged: any[]) =>
@@ -1151,7 +1190,8 @@ export default function InductionTourRecordScreen() {
               item.type === 'induction_tour_record' &&
               item.corpo_id != null &&
               item.corpo_id !== '' &&
-              Number(item.corpo_id) === Number(corpoId)
+              Number(item.corpo_id) === Number(corpoId) &&
+              inductionTourRowVisibleInList(item)
           ) as InductionTourRecord[]
         );
 
@@ -1181,14 +1221,15 @@ export default function InductionTourRecordScreen() {
       setError('Error al cargar los registros de inducción y recorrido');
       try {
         const ctx = await loadMarcaContext();
-        const corpoId = ctx.isOperativo ? ctx.marcaCorpoId : filterCorpoId;
+        const corpoId = ctx.isOperativo ? ctx.marcaCorpoId : numOrNull(filterCorpoIdRef.current) ?? filterCorpoId;
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         if (cacheStr && corpoId) {
           const cache = JSON.parse(cacheStr);
           const recordsCache = sortInductionTourRecordsDesc(
             (cache as any[])
               .filter((item: any) => item.type === 'induction_tour_record')
-              .filter((item: any) => item.corpo_id != null && Number(item.corpo_id) === Number(corpoId)) as InductionTourRecord[]
+              .filter((item: any) => item.corpo_id != null && Number(item.corpo_id) === Number(corpoId))
+              .filter((item: any) => inductionTourRowVisibleInList(item)) as InductionTourRecord[]
           );
           setRecords(recordsCache);
         }
@@ -1369,26 +1410,40 @@ export default function InductionTourRecordScreen() {
       setFormPuestoId(path.puestoId);
       setFormPlazaId(path.plazaId);
     } else {
-      setFormEmpresaId(empresaIdRaw);
-      setFormClienteId(clienteIdRaw);
-      let divisionIdFound: number | null = null;
-      if (empresaIdRaw != null && clienteIdRaw != null && contratoIdRaw != null) {
-        const empresa = tree.find((e: any) => e.id === empresaIdRaw);
-        const cliente = empresa?.clientes?.find((c: any) => c.id === clienteIdRaw);
-        const divisiones = cliente ? getDivisionesFromCliente(cliente) : [];
-        for (const div of divisiones) {
-          const hasContrato = div.contratos?.some((c: any) => c.id === contratoIdRaw);
-          if (hasContrato) {
-            divisionIdFound = div.id;
-            break;
+      const byPuesto =
+        tree.length && puestoIdRaw != null && corpoIdRaw != null
+          ? findHierarchyByPuestoYCorpo(tree, puestoIdRaw, corpoIdRaw)
+          : null;
+      if (byPuesto) {
+        setFormEmpresaId(byPuesto.empresaId);
+        setFormClienteId(byPuesto.clienteId);
+        setFormDivisionId(byPuesto.divisionId);
+        setFormContratoId(byPuesto.contratoId);
+        setFormCorpoId(byPuesto.corpoId);
+        setFormPuestoId(byPuesto.puestoId);
+        setFormPlazaId(plazaIdRaw);
+      } else {
+        setFormEmpresaId(empresaIdRaw);
+        setFormClienteId(clienteIdRaw);
+        let divisionIdFound: number | null = null;
+        if (empresaIdRaw != null && clienteIdRaw != null && contratoIdRaw != null) {
+          const empresa = tree.find((e: any) => e.id === empresaIdRaw);
+          const cliente = empresa?.clientes?.find((c: any) => c.id === clienteIdRaw);
+          const divisiones = cliente ? getDivisionesFromCliente(cliente) : [];
+          for (const div of divisiones) {
+            const hasContrato = div.contratos?.some((c: any) => c.id === contratoIdRaw);
+            if (hasContrato) {
+              divisionIdFound = div.id;
+              break;
+            }
           }
         }
+        setFormDivisionId(divisionIdFound);
+        setFormContratoId(contratoIdRaw);
+        setFormCorpoId(corpoIdRaw);
+        setFormPuestoId(puestoIdRaw);
+        setFormPlazaId(plazaIdRaw);
       }
-      setFormDivisionId(divisionIdFound);
-      setFormContratoId(contratoIdRaw);
-      setFormCorpoId(corpoIdRaw);
-      setFormPuestoId(puestoIdRaw);
-      setFormPlazaId(plazaIdRaw);
     }
     setDivision(divisionName);
 
@@ -1646,6 +1701,9 @@ export default function InductionTourRecordScreen() {
   const validateSaveCreate = async (): Promise<string | null> => {
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (!currentMarca) return 'No se encontró la marca actual';
+    if (!formEmpresaId || !formClienteId || !formContratoId || !formCorpoId || !formPuestoId || !formPlazaId) {
+      return 'Seleccione empresa, cliente, contrato, sucursal, puesto y plaza';
+    }
     if (!formDivisionId) return 'División es obligatoria';
     if (!firmaResponsableHash || !firmaResponsableHash.trim()) return 'Firma responsable (QR/Generar) es obligatoria';
     if (!selectedEmpleadoId || !empleadoIdRef.current) return 'Empleado es obligatorio';
@@ -1682,6 +1740,7 @@ export default function InductionTourRecordScreen() {
         marca_id: currentMarcaData.id,
         empresa_id: formEmpresaId,
         cliente_id: formClienteId,
+        division_id: formDivisionId,
         contrato_id: formContratoId,
         corpo_id: formCorpoId,
         puesto_id: formPuestoId || null,
@@ -1718,6 +1777,26 @@ export default function InductionTourRecordScreen() {
         });
 
         if (result.status) {
+          try {
+            if (result.data && (result.data as any).corpo_id != null) {
+              const d = result.data as any;
+              const cid = Number(d.corpo_id);
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              const cache = cacheStr ? JSON.parse(cacheStr) : [];
+              const serverRow: InductionTourRecord = {
+                ...d,
+                id: d.id,
+                id_local: '',
+                type: 'induction_tour_record',
+                synced: true,
+                isActive: d.isActive !== false,
+              } as any;
+              const merged = mergeEvaluationsCacheInductionTourForCorpo(cache, [serverRow], cid);
+              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
+            }
+          } catch (e) {
+            console.warn('InductionTour cache merge after create:', e);
+          }
           Alert.alert('Éxito', result.message || 'Registro de inducción y recorrido guardado correctamente');
           setTimeout(() => {
             cancelCreating();
@@ -1780,6 +1859,7 @@ export default function InductionTourRecordScreen() {
         (newRecordCache as any).corpo_id = formCorpoId;
         (newRecordCache as any).puesto_id = formPuestoId;
         (newRecordCache as any).plaza_id = formPlazaId;
+        (newRecordCache as any).isActive = true;
 
         cache.push({ ...newRecordCache, type: 'induction_tour_record' });
         await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
@@ -1802,6 +1882,9 @@ export default function InductionTourRecordScreen() {
     if (!editingRecord) return 'No hay registro en edición';
     const recordId = editingRecord.id || editingRecord.id_local;
     if (!recordId) return 'ID de registro no encontrado para actualizar';
+    if (!formEmpresaId || !formClienteId || !formContratoId || !formCorpoId || !formPuestoId || !formPlazaId) {
+      return 'Seleccione empresa, cliente, contrato, sucursal, puesto y plaza';
+    }
     if (!formDivisionId) return 'División es obligatoria';
     if (!firmaResponsableHash || !firmaResponsableHash.trim()) return 'Firma responsable (QR/Generar) es obligatoria';
     if (!selectedEmpleadoId || !empleadoIdRef.current) return 'Empleado es obligatorio';
@@ -1837,6 +1920,7 @@ export default function InductionTourRecordScreen() {
       const requestData = {
         empresa_id: formEmpresaId,
         cliente_id: formClienteId,
+        division_id: formDivisionId,
         contrato_id: formContratoId,
         corpo_id: formCorpoId,
         puesto_id: formPuestoId || null,
@@ -1874,6 +1958,32 @@ export default function InductionTourRecordScreen() {
         });
 
         if (result.status) {
+          try {
+            if (result.data) {
+              const d = result.data as any;
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updated = cache.map((item: any) => {
+                  if (item.type !== 'induction_tour_record') return item;
+                  if (String(item.id) === String(recordId) || String(item.id_local) === String(recordId)) {
+                    return {
+                      ...item,
+                      ...d,
+                      id: d.id ?? item.id,
+                      type: 'induction_tour_record',
+                      synced: true,
+                      isActive: d.isActive !== false,
+                    };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updated));
+              }
+            }
+          } catch (e) {
+            console.warn('InductionTour cache after update:', e);
+          }
           Alert.alert('Éxito', result.message || 'Registro de inducción y recorrido actualizado correctamente');
           setTimeout(() => {
             cancelEditing();
@@ -2000,6 +2110,22 @@ export default function InductionTourRecordScreen() {
         });
 
         if (result.status) {
+          try {
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.filter(
+                (item: any) =>
+                  !(
+                    item.type === 'induction_tour_record' &&
+                    (String(item.id) === String(recordId) || String(item.id_local) === String(recordId))
+                  )
+              );
+              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            }
+          } catch (e) {
+            console.warn('InductionTour cache after delete:', e);
+          }
           Alert.alert('Éxito', 'Registro de inducción y recorrido eliminado correctamente');
           await fetchRecords();
         } else {

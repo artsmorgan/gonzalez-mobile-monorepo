@@ -10,6 +10,15 @@ const parseIntStrict = (value: unknown): number | null => {
   return Number.isNaN(n) ? null : n;
 };
 
+/** Acepta base64 puro o data URL (`data:*;base64,...`). */
+const stripDataUrlBase64 = (raw: string): string => {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const comma = s.indexOf(",");
+  if (s.toLowerCase().startsWith("data:") && comma >= 0) return s.slice(comma + 1).trim();
+  return s;
+};
+
 const parseDateInputToDate = (input: unknown): Date | null => {
   if (!input) return null;
   if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
@@ -128,9 +137,11 @@ export async function GET(req: NextRequest) {
     // 1) Solicitudes propias del empleado autenticado.
     // 2) Solicitudes donde el ejecutivo_cuenta coincide con supervisor_id del empleado.
     // Esto garantiza visibilidad cuando ejecutivo_cuenta === supervisor_id.
-    const where: any = mySupervisorId
+    const visibilityWhere: any = mySupervisorId
       ? { OR: [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: mySupervisorId }] }
       : { empleado_id: currentEmployeeId };
+
+    const where: any = { AND: [visibilityWhere, { isActive: true }] };
 
     const records = await callDynamicPrisma({
       req,
@@ -287,7 +298,7 @@ export async function POST(req: NextRequest) {
         type: String(f?.type || "file").trim() || "file",
         extension: String(f?.extension || "").replace(".", "").trim(),
         original_name: String(f?.original_name || "").trim(),
-        file_base64: String(f?.file_base64 || "").trim(),
+        file_base64: stripDataUrlBase64(String(f?.file_base64 || "").trim()),
         mimeType: String(f?.mimeType || "").trim() || undefined,
         is_main: Boolean(f?.is_main),
       }))
@@ -363,15 +374,26 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    const contratoIdFromSucursal = parseIntStrict((sucursal as any)?.contrato_id);
+    if (!contratoIdFromSucursal) {
+      return NextResponse.json(
+        { status: false, message: "La sucursal asociada no tiene un contrato válido" },
+        { status: 400 }
+      );
+    }
+
     const contrato = await callDynamicPrisma({
       req,
       data: {
         action: "GET",
         table: "e_estructura_contrato",
         operation: "findFirst",
-        where: { id: sucursalId },
+        where: { id: contratoIdFromSucursal },
       },
     });
+    if (!contrato) {
+      return NextResponse.json({ status: false, message: "No se encontró el contrato de la sucursal" }, { status: 400 });
+    }
 
     let nombre_cliente = "";
     if (contrato) {
@@ -405,6 +427,75 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const resolvedHierarchy = {
+      empresa_id: parseIntStrict((contrato as any)?.empresa_id),
+      cliente_id: parseIntStrict((contrato as any)?.cliente_id),
+      division_id: parseIntStrict((contrato as any)?.division_id),
+      contrato_id: contratoIdFromSucursal,
+      corpo_id: sucursalId,
+      puesto_id: plazaPuestoId,
+    };
+
+    const bodyHierarchy = {
+      empresa_id: parseIntStrict(body?.empresa_id),
+      cliente_id: parseIntStrict(body?.cliente_id),
+      division_id: parseIntStrict(body?.division_id),
+      contrato_id: parseIntStrict(body?.contrato_id),
+      corpo_id: parseIntStrict(body?.corpo_id),
+      puesto_id: parseIntStrict(body?.puesto_id),
+    };
+
+    const hierarchyKeys = ["empresa_id", "cliente_id", "division_id", "contrato_id", "corpo_id", "puesto_id"] as const;
+    const bodyHierarchyComplete = hierarchyKeys.every((k) => bodyHierarchy[k] != null);
+
+    if (bodyHierarchyComplete) {
+      for (const k of hierarchyKeys) {
+        if (
+          k === "division_id" &&
+          resolvedHierarchy.division_id == null &&
+          bodyHierarchy.division_id != null
+        ) {
+          const restKeys = hierarchyKeys.filter((x) => x !== "division_id");
+          const restOk = restKeys.every((rk) => Number(bodyHierarchy[rk]) === Number(resolvedHierarchy[rk]));
+          if (!restOk) {
+            return NextResponse.json(
+              {
+                status: false,
+                message:
+                  "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.",
+              },
+              { status: 400 }
+            );
+          }
+          continue;
+        }
+        if (Number(bodyHierarchy[k]) !== Number(resolvedHierarchy[k])) {
+          return NextResponse.json(
+            {
+              status: false,
+              message:
+                "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.",
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
+    const hierarchyForCreate = {
+      ...resolvedHierarchy,
+      division_id: resolvedHierarchy.division_id ?? bodyHierarchy.division_id,
+    };
+
+    for (const k of hierarchyKeys) {
+      if (hierarchyForCreate[k] == null) {
+        return NextResponse.json(
+          { status: false, message: `No se pudo resolver ${k} para guardar la solicitud` },
+          { status: 400 }
+        );
+      }
+    }
+
     const now = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
     const created = await callDynamicPrisma({
       req,
@@ -428,6 +519,13 @@ export async function POST(req: NextRequest) {
           firma_ejecutivo_cuenta_manual: null,
           created_at: now,
           created_by: currentEmployeeId,
+          empresa_id: hierarchyForCreate.empresa_id,
+          cliente_id: hierarchyForCreate.cliente_id,
+          division_id: hierarchyForCreate.division_id,
+          contrato_id: hierarchyForCreate.contrato_id,
+          corpo_id: hierarchyForCreate.corpo_id,
+          puesto_id: hierarchyForCreate.puesto_id,
+          isActive: true,
         },
       },
     });

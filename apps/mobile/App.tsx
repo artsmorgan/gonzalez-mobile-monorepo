@@ -14,14 +14,51 @@ import { AuthProvider } from './contexts/AuthContext';
 import { useColorScheme } from './hooks/useColorScheme';
 import saveLunchTime from './hooks/saveLunchTime';
 import { useAuth } from './contexts/AuthContext';
-import { createVehicle, updateVehicle, deleteVehicle } from './hooks/vehiclesFunctions';
+import { createVehicle, updateVehicle, deleteVehicle, deleteVehicleAttachment } from './hooks/vehiclesFunctions';
+import { getFile, deleteFile } from './hooks/fileStorage';
+import {
+  patchVehicleVisitasLocalCreateWithServerId,
+  stripVehicleVisitasAttachmentForRow,
+} from './hooks/vehiclesVisitasCacheHelpers';
 import { createNote, updateNote, deleteNote } from './hooks/notesFunctions';
 import { markNotificationsAsRead } from './hooks/notificationsFunctions';
-import { createSurvey as createSurveyAPI, updateSurvey as updateSurveyAPI, deleteSurvey as deleteSurveyAPI } from './hooks/surveysFunctions';
-import { createTraining, deleteTraining } from './hooks/trainingFunctions';
+import {
+  createSurvey as createSurveyAPI,
+  updateSurvey as updateSurveyAPI,
+  deleteSurvey as deleteSurveyAPI,
+  updateSurveySignature as updateSurveySignatureAPI,
+} from './hooks/surveysFunctions';
+import {
+  upsertSurveyCacheRowForPuesto,
+  buildSurveyCacheRowFromCreateRequest,
+} from './hooks/satisfactionSurveysCacheHelpers';
+import {
+  createTraining,
+  deleteTraining,
+  updateTraining,
+  deleteTrainingArchivo,
+} from './hooks/trainingFunctions';
+import { hydrateTrainingRequestDataForSync } from './hooks/trainingAttachmentsSync';
 import { createVoiceNote, deleteVoiceNote, updateVoiceNote } from './hooks/voiceNotesFunctions';
-import { createBitacoraVehiculoDetenido, deleteBitacoraVehiculoDetenido, updateBitacoraVehiculoDetenido } from './hooks/bitacoraVehiculoDetenidoFunctions';
+import { createBitacoraVehiculoDetenido } from './hooks/bitacoraVehiculoDetenidoFunctions';
 import { createLlave, deleteLlave, updateLlave } from './hooks/llavesFunctions';
+import {
+  readMainStructureTree,
+  writeMainStructureTree,
+  patchLlaveLocalKeyToServerIdInTree,
+  patchLlaveroLocalKeyToServerIdInTree,
+  patchMovimientoLlaveInTree,
+  patchShadowMovimientoLlaveFromLlaveroSync,
+  removeLlaveFromCorpoTreeAndStripLlaveroLinks,
+  removeLlaveroFromCorpoTree,
+  applyLlaveUpdatePayloadToTree,
+  applyLlaveroUpdatePayloadToTree,
+  patchAllLlaveroLinksLlaveIdLocalEverywhere,
+  findCorpoAndLlaveRowInTree,
+  findCorpoAndLlaveroRowInTree,
+  patchMovimientoLlaveroInTree,
+  stripLlaveMovimientosByIdLocal,
+} from './hooks/llavesMainStructureHelpers';
 import { createMovimientoLlave, deleteMovimientoLlave, updateMovimientoLlave } from './hooks/movimientosLlavesFunctions';
 import { createLlavero, deleteLlavero, updateLlavero } from './hooks/llaverosFunctions';
 import { createMovimientoLlavero, deleteMovimientoLlavero, updateMovimientoLlavero } from './hooks/movimientosLlaverosFunctions';
@@ -32,8 +69,25 @@ import {
   updateMovimientoArticuloMantenimiento,
 } from './hooks/movimientosArticulosMantenimientoFunctions';
 import { createDocumentoEntregado, deleteDocumentoEntregado, updateDocumentoEntregado } from './hooks/documentosEntregadosFunctions';
-import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, updateApreciacionVulnerabilidad } from './hooks/apreciacionVulnerabilidadFunctions';
+import {
+  buildDocumentoEntregadoCacheRowFromRequest,
+  getDocEntregadoCorpoId,
+  upsertDocumentoEntregadoInCache,
+} from './hooks/documentosEntregadosCacheHelpers';
+import { createApreciacionVulnerabilidad, deleteApreciacionVulnerabilidad, deleteApreciacionVulnerabilidadImage, updateApreciacionVulnerabilidad, updateApreciacionVulnerabilidadFirmaSolicitante } from './hooks/apreciacionVulnerabilidadFunctions';
 import { eventBus } from './hooks/eventBus';
+import {
+  patchSucursalPuestosUbicacionInFragments,
+  writePuestoUbicacionDispositivo,
+} from './hooks/mainStructureFragmentsStorage';
+import { clearPuestoArticulosList } from './hooks/mantenimientoEquipoPuestoArticulosCache';
+import {
+  applyActaEntregaCreateSyncFromServer,
+  applyActaEntregaUpdateSyncFromServer,
+  readActaEntregaProductosCache,
+  writeActaEntregaProductosCache,
+} from './hooks/actaEntregaProductosCache';
+import { replaceLocalVisitorIdInCache, syncVisitorsCacheFromNetwork } from './hooks/visitorsCacheHelpers';
 
 import HomeScreen from './screens/HomeScreen';
 import LoginScreen from './screens/LoginScreen';
@@ -119,6 +173,13 @@ import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime'
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult, appendJobManualPuestos } from './hooks/jobManualsFunctions';
+import { patchJobManualPuestosVinculadosInCache } from './hooks/jobManualsCacheHelpers';
+import {
+  applyJobManualCreateSuccess,
+  deleteJobManualLocalFileRefsFromJson,
+  hydrateJobManualCreateRequestData,
+  hydrateJobManualSignFiles,
+} from './hooks/jobManualsQueueUtils';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
 import LlavesScreen from './screens/LlavesScreen';
@@ -135,12 +196,33 @@ import {
   deleteStaffEvaluation,
   updateStaffEvaluationSignature,
 } from './hooks/staffEvaluationsFunctions';
+import { buildStaffEvaluacionForSubmit, deleteStaffEvalLocalImageFiles } from './hooks/staffEvaluationsMediaSync';
 import {
   runCorporateEvaluationsSync,
   CORPORATE_EVALUATION_TYPES,
   BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
 } from './hooks/corporateEvaluationsSync';
 import { CacheSyncActionsOverlay } from './components/CacheSyncActionsOverlay';
+
+/** Re-lee la cola en disco y aplica el mismo criterio que .filter, para no reintroducir acciones ya quitadas. */
+async function persistFilteredMantenimientoEquipoActionQueue(
+  storageKey: string,
+  keep: (a: any) => boolean
+): Promise<void> {
+  let cur: any[] = [];
+  try {
+    const raw = await AsyncStorage.getItem(storageKey);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) cur = p;
+    }
+  } catch {
+    /* no-op */
+  }
+  const next = cur.filter(keep);
+  if (next.length === 0) await AsyncStorage.removeItem(storageKey);
+  else await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+}
 
 export type RootStackParamList = {
   Home: undefined;
@@ -382,6 +464,10 @@ function AppContent() {
     });
   }, []);
 
+  /**
+   * Colas de sincronización. Bitácoras: `bitacora_vehiculo_detenido_cache` (`bySucursalId`). Checklists: misma forma en
+   * `checklist_supervision_cache` (`checklistSupervisionCacheStorage`). Jerarquía: `loadMainStructureTreeMerged` / fragmentos.
+   */
   const ACTION_STORAGE_KEYS = [
     'lunch_time_actions',
     'vehicles_actions',
@@ -391,6 +477,7 @@ function AppContent() {
     'llaveros_actions',
     'movimientos_llaveros_actions',
     'articulo_mantenimiento_actions',
+    'articulo_mantenimiento_delete_archivo_actions',
     'movimientos_articulos_mantenimiento_actions',
     'documentos_entregados_actions',
     'apreciacion_vulnerabilidad_actions',
@@ -455,8 +542,8 @@ function AppContent() {
       const appVersion = String(appVersionInfo?.version || '0.0.0');
       if (!connectivity.ok) {
         eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
-        return;
-      }
+      return;
+    }
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl || !appVersionInfo) {
@@ -521,20 +608,20 @@ function AppContent() {
 
         console.log('Conectado — sync cachés (única instancia)');
 
-        await Promise.all([
+      await Promise.all([
           updateServerTime(),
           checkMobileVersionAvailability(),
-        ]);
+      ]);
         await checkManualSignatureCache();
 
-        const hasPendingActions = await hasPendingActionsInStorage();
-        if (!hasPendingActions) return;
+      const hasPendingActions = await hasPendingActionsInStorage();
+      if (!hasPendingActions) return;
 
-        const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-        if (!validAccessToken) {
-          console.log('Sincronización cancelada: token inválido o expirado');
-          return;
-        }
+      const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      if (!validAccessToken) {
+        console.log('Sincronización cancelada: token inválido o expirado');
+        return;
+      }
 
         console.log(' -------------------------- sincronizando cachés');
         cacheSyncOverlayActiveRef.current = true;
@@ -551,39 +638,40 @@ function AppContent() {
         let actionsSyncError: unknown = null;
         try {
           await checkAttendanceActionsCache();
-          await Promise.all([
-            checkLunchTimeActionsCache(),
+          // Incidente debe existir en servidor antes que aportes (acciones con incidentLocalKey).
+          await checkIncidentsActionsCache();
+          await checkIncidentContributionsActionsCache();
+          await checkArticuloMantenimientoDeleteArchivoActionsCache();
+      await Promise.all([
+        checkLunchTimeActionsCache(),
             checkActivitiesActionsCache(),
             checkChecklistSupervisionActionsCache(),
-            checkVehiclesActionsCache(),
-            checkBitacoraVehiculoDetenidoActionsCache(),
-            checkArticuloMantenimientoActionsCache(),
-            checkMovimientosArticulosMantenimientoActionsCache(),
-            checkDocumentosEntregadosActionsCache(),
-            checkApreciacionVulnerabilidadActionsCache(),
-            checkNotificationsActionsCache(),
-            checkVisitorsActionsCache(),
-            checkNotesActionsCache(),
-            checkSurveysActionsCache(),
-            checkTrainingsActionsCache(),
-            checkIncidentsActionsCache(),
-            checkMutuosAcuerdosActionsCache(),
-            checkIncidentContributionsActionsCache(),
-            checkVoiceNotesActionsCache(),
-            checkStaffEvaluationsActionsCache(),
-            checkJobManualsActionsCache(),
-          ]);
+        checkVehiclesActionsCache(),
+        checkArticuloMantenimientoActionsCache(),
+        checkMovimientosArticulosMantenimientoActionsCache(),
+        checkDocumentosEntregadosActionsCache(),
+        checkApreciacionVulnerabilidadActionsCache(),
+        checkNotificationsActionsCache(),
+        checkVisitorsActionsCache(),
+        checkNotesActionsCache(),
+        checkSurveysActionsCache(),
+        checkTrainingsActionsCache(),
+        checkMutuosAcuerdosActionsCache(),
+        checkVoiceNotesActionsCache(),
+        checkStaffEvaluationsActionsCache(),
+        checkJobManualsActionsCache(),
+      ]);
           // Llaves → movimientos llave → llaveros → movimientos llavero (dependencias), luego evaluaciones/corporativos al final
           await checkLlavesActionsCache();
           await checkMovimientosLlavesActionsCache();
           await checkLlaverosActionsCache();
           await checkMovimientosLlaverosActionsCache();
           await checkEvaluationsActionsCache();
-          eventBus.emit('connectionRestored');
+      eventBus.emit('connectionRestored');
         } catch (e) {
           actionsSyncError = e;
           console.error('[syncCaches] Error sincronizando acciones en caché:', e);
-        } finally {
+    } finally {
           const finishOverlay = () => {
             if (cacheSyncOverlayActiveRef.current) {
               Animated.timing(cacheSyncFadeAnim.current, {
@@ -614,7 +702,7 @@ function AppContent() {
   // eventBus + foco de app + reconexión → intentar sincronizar cachés (con comprobación de red dentro)
   useEffect(() => {
     const onSyncRequested = () => {
-      syncPendingActionsIfOnline();
+    syncPendingActionsIfOnline();
     };
     eventBus.on(SYNC_CACHES_EVENT, onSyncRequested);
     // Al montar (inicio de sesión / arranque)
@@ -734,7 +822,7 @@ function AppContent() {
             refreshAccessToken,
             logout,
           });
-          if (data.status) {
+      if (data.status) {
             await removeAttendanceActionById(action.id);
             console.log('Salida offline sincronizada');
           }
@@ -777,7 +865,8 @@ function AppContent() {
     const actions = JSON.parse(actionsStr);
     if (!Array.isArray(actions) || actions.length === 0) return;
 
-    console.log('Sincronizando acciones de manuales de trabajo:', actions.length);
+    let work: any[] = actions.slice();
+    console.log('Sincronizando acciones de manuales de trabajo:', work.length);
 
     /** Quita de la cola en storage; siempre parte del estado actual (evita reinsertar acciones ya procesadas). */
     const removeJobManualActionsFromStorage = async (shouldRemove: (a: any) => boolean) => {
@@ -810,6 +899,9 @@ function AppContent() {
       if (!Array.isArray(q)) return false;
       return q.some((a: any) => {
         if (a.type !== action.type) return false;
+        if (action.type === 'sign' && (action as any).manualLocalId) {
+          return String((a as any).manualLocalId) === String((action as any).manualLocalId);
+        }
         if (action.type === 'create' || action.type === 'delete' || action.type === 'sign') {
           return String(a.id) === String(action.id);
         }
@@ -817,6 +909,12 @@ function AppContent() {
           return String(a.action_queue_id ?? a.id) === String(action.action_queue_id ?? action.id);
         }
         if (action.type === 'quiz_result') {
+          if ((action as any).manualLocalId) {
+            return (
+              String((a as any).manualLocalId) === String((action as any).manualLocalId) &&
+              Number(a.empleadoId) === Number(action.empleadoId)
+            );
+          }
           return (
             String(a.id) === String(action.id) && Number(a.empleadoId) === Number(action.empleadoId)
           );
@@ -825,8 +923,9 @@ function AppContent() {
       });
     };
 
-    // Procesar acciones una por una (la cola en storage se actualiza tras cada éxito; el for usa snapshot inicial)
-    for (const action of actions) {
+    // Reprocesa la cola tras un `create` (reasigna sign/quiz/append a id de servidor)
+    for (let i = 0; i < work.length; i++) {
+      const action = work[i];
       try {
         const horaAccion = await getHoraAccion();
         if (!horaAccion) {
@@ -837,8 +936,9 @@ function AppContent() {
         }
         if (action.type === 'create') {
           console.log('Creando manual de trabajo:', action.id);
+          const requestData = await hydrateJobManualCreateRequestData(action.requestData);
           const result = await createJobManual({
-            requestData: action.requestData,
+            requestData,
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
@@ -847,26 +947,16 @@ function AppContent() {
           if (result.status) {
             console.log('Manual de trabajo creado correctamente');
             const createId = String(action.id);
-            await removeJobManualActionsFromStorage(
-              (a: any) => a.type === 'create' && String(a.id) === createId
-            );
-
-            // Actualizar cache: reemplazar id_local por id real
-            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.map((item: any) => {
-                if (String(item.id_local) === createId) {
-                  return {
-                    ...item,
-                    id: result.manualIds ? result.manualIds[0] : item.id,
-                    synced: true,
-                  };
-                }
-                return item;
-              });
-              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
-            }
+            const serverId = Number(result.id ?? result.manualIds?.[0] ?? 0) || 0;
+            await applyJobManualCreateSuccess({
+              createId,
+              serverId,
+              requestData: action.requestData,
+              result,
+            });
+            const freshStr = await AsyncStorage.getItem('job_manuals_actions');
+            work = freshStr ? JSON.parse(freshStr) : [];
+            i = -1;
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando manual de trabajo:', action.id);
@@ -891,12 +981,22 @@ function AppContent() {
             }
           }
         } else if (action.type === 'sign') {
+          const signManualId = Number(action.id);
+          if (!Number.isFinite(signManualId) || signManualId <= 0) {
+            if ((action as any).manualLocalId) {
+              console.log('Firmar manual: pendiente reasignación de id de servidor, se reintentará luego');
+            } else {
+              console.warn('Firmar manual: acción con id inválido, se omite');
+            }
+            continue;
+          }
           console.log('Firmando manual de trabajo:', action.id);
+          const filesHydrated = await hydrateJobManualSignFiles(action.files ?? null);
           const result = await signJobManual({
-            id: action.id,
+            id: signManualId,
             firma: action.firma,
             quizAnswear: action.quizAnswear ?? null,
-            files: action.files ?? null,
+            files: filesHydrated,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -904,6 +1004,9 @@ function AppContent() {
 
           if (result.status) {
             const signId = String(action.id);
+            const visId =
+              Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
+            await deleteJobManualLocalFileRefsFromJson(action.files);
             await removeJobManualActionsFromStorage(
               (a: any) => a.type === 'sign' && String(a.id) === signId
             );
@@ -927,6 +1030,7 @@ function AppContent() {
                         name: f.original_name || `archivo.${f.extension || 'dat'}`,
                         original_name: f.original_name,
                         base64: f.file_base64,
+                        localFileName: f.localFileName,
                         mimeType: f.mimeType,
                         url: '',
                       }));
@@ -936,7 +1040,7 @@ function AppContent() {
                   }
 
                   const newVis = {
-                    id: Date.now(),
+                    id: visId,
                     empleado_id: employee?.id || 0,
                     manual_puesto_id: action.id,
                     nombre_empleado: employee?.name || 'Empleado',
@@ -969,6 +1073,18 @@ function AppContent() {
           });
 
           if (result.status) {
+            const puestosIds = Array.isArray(action.puestos_ids)
+              ? action.puestos_ids.map((n: any) => Number(n))
+              : [];
+            if (puestosIds.length > 0) {
+              await patchJobManualPuestosVinculadosInCache(
+                {
+                  manualServerId: Number(action.manualId),
+                  replaceAll: false,
+                },
+                puestosIds
+              );
+            }
             const actionQueueId = String(action.action_queue_id ?? action.id);
             await removeJobManualActionsFromStorage(
               (a: any) =>
@@ -977,9 +1093,18 @@ function AppContent() {
             );
           }
         } else if (action.type === 'quiz_result') {
+          const qMid = Number(action.id);
+          if (!Number.isFinite(qMid) || qMid <= 0) {
+            if ((action as any).manualLocalId) {
+              console.log('Quiz manual: pendiente reasignación de id, se reintenta luego');
+            } else {
+              console.warn('Quiz manual: acción con id de manual inválido, se omite');
+            }
+            continue;
+          }
           console.log('Actualizando resultado de quiz (manual):', action.id, action.empleadoId, action.approved);
           const result = await putJobManualQuizResult({
-            id: action.id,
+            id: qMid,
             marcaId: action.marcaId,
             empleadoId: action.empleadoId,
             approved: action.approved,
@@ -1073,6 +1198,31 @@ function AppContent() {
 
           if (result.status) {
             console.log('Visitante creado correctamente');
+            const r = result as { data?: { id?: number } };
+            const serverId = r.data?.id;
+            if (serverId != null && action.id != null) {
+              const corpo = Number((action as any).requestData?.corpo_id);
+              if (Number.isFinite(corpo) && corpo > 0) {
+                try {
+                  await replaceLocalVisitorIdInCache(String(action.id), Number(serverId), corpo);
+                } catch (e) {
+                  console.error('replaceLocalVisitorIdInCache', e);
+                }
+              }
+            }
+            const m = Number(
+              (action as any).marcaId != null
+                ? (action as any).marcaId
+                : (action as any).requestData?.marca_id
+            );
+            const c = Number((action as any).requestData?.corpo_id);
+            if (Number.isFinite(m) && m > 0 && Number.isFinite(c) && c > 0) {
+              try {
+                await syncVisitorsCacheFromNetwork({ marcaId: m, corpoId: c, refreshAccessToken, logout });
+              } catch (e) {
+                console.warn('syncVisitorsCacheFromNetwork after visitor create', e);
+              }
+            }
             // Eliminar acción del array
             const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
             await AsyncStorage.setItem('visitors_actions', JSON.stringify(updatedActions));
@@ -1089,6 +1239,17 @@ function AppContent() {
 
           if (result.status) {
             console.log('Visitante actualizado correctamente');
+            const m = Number((action as any).requestData?.marca_id);
+            const c = Number(
+              (action as any).requestData?.sucursal_sync_corpo_id ?? (action as any).requestData?.corpo_id
+            );
+            if (Number.isFinite(m) && m > 0 && Number.isFinite(c) && c > 0) {
+              try {
+                await syncVisitorsCacheFromNetwork({ marcaId: m, corpoId: c, refreshAccessToken, logout });
+              } catch (e) {
+                console.warn('syncVisitorsCacheFromNetwork after visitor update', e);
+              }
+            }
             // Eliminar acción del array
             const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
             await AsyncStorage.setItem('visitors_actions', JSON.stringify(updatedActions));
@@ -1131,12 +1292,19 @@ function AppContent() {
     if (!Array.isArray(raw) || raw.length === 0) return;
 
     const seenDeleteVehicle = new Set<number>();
+    const seenDeleteVehicleAttachment = new Set<number>();
     let actions = raw.filter((a: any) => {
       if (a?.type === 'delete' && a.id != null) {
         const vid = Number(a.id);
         if (!Number.isFinite(vid)) return true;
         if (seenDeleteVehicle.has(vid)) return false;
         seenDeleteVehicle.add(vid);
+      }
+      if (a?.type === 'delete_vehicle_attachment' && a.id != null) {
+        const vid = Number(a.id);
+        if (!Number.isFinite(vid)) return true;
+        if (seenDeleteVehicleAttachment.has(vid)) return false;
+        seenDeleteVehicleAttachment.add(vid);
       }
       return true;
     });
@@ -1156,8 +1324,17 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           console.log('Creando vehículo:', action.id);
+          let requestData = { ...(action.requestData || {}) };
+          if (action.attachmentLocalFileName) {
+            try {
+              const g = await getFile(String(action.attachmentLocalFileName));
+              requestData.file = g.base64;
+            } catch (e) {
+              console.warn('Sincronización vehículo (create): no se pudo leer adjunto local', e);
+            }
+          }
           const result = await createVehicle({
-            requestData: action.requestData,
+            requestData,
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
@@ -1165,14 +1342,35 @@ function AppContent() {
 
           if (result.status) {
             console.log('Vehículo creado correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            const sid = Number((result as { id?: number }).id);
+            if (Number.isFinite(sid) && sid > 0 && action.id != null) {
+              await patchVehicleVisitasLocalCreateWithServerId(String(action.id), sid);
+            }
+            if (action.attachmentLocalFileName) {
+              try {
+                await deleteFile(String(action.attachmentLocalFileName));
+              } catch {
+                /* idempotente */
+              }
+            }
+            const updatedActions = actions.filter(
+              (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
+            );
             await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
           }
         } else if (action.type === 'update') {
           console.log('Actualizando vehículo:', action.id);
+          let requestData = { ...(action.requestData || {}) };
+          if (action.attachmentLocalFileName) {
+            try {
+              const g = await getFile(String(action.attachmentLocalFileName));
+              requestData.file = g.base64;
+            } catch (e) {
+              console.warn('Sincronización vehículo (update): no se pudo leer adjunto local', e);
+            }
+          }
           const result = await updateVehicle({
-            requestData: action.requestData,
+            requestData,
             vehicleId: action.id,
             marcaId: action.requestData.marca_id,
             refreshAccessToken,
@@ -1181,8 +1379,32 @@ function AppContent() {
 
           if (result.status) {
             console.log('Vehículo actualizado correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
+            if (action.attachmentLocalFileName) {
+              try {
+                await deleteFile(String(action.attachmentLocalFileName));
+              } catch {
+                /* idempotente */
+              }
+            }
+            const updatedActions = actions.filter(
+              (a: any) => !(a.type === 'update' && Number(a.id) === Number(action.id))
+            );
+            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
+          }
+        } else if (action.type === 'delete_vehicle_attachment') {
+          console.log('Eliminando adjunto de vehículo:', action.id);
+          const result = await deleteVehicleAttachment({
+            vehicleId: Number(action.id),
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const vid = Number(action.id);
+            await stripVehicleVisitasAttachmentForRow(vid, '');
+            const updatedActions = actions.filter(
+              (a: any) => !(a.type === 'delete_vehicle_attachment' && Number(a.id) === vid)
+            );
             await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
           }
         } else if (action.type === 'delete') {
@@ -1200,7 +1422,8 @@ function AppContent() {
               (a: any) =>
                 !(
                   (a.type === 'delete' && Number(a.id) === vid) ||
-                  (a.type === 'update' && Number(a.id) === vid)
+                  (a.type === 'update' && Number(a.id) === vid) ||
+                  (a.type === 'delete_vehicle_attachment' && Number(a.id) === vid)
                 )
             );
             await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
@@ -1208,93 +1431,6 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de vehículo:', error);
-      }
-    }
-  }
-
-  const checkBitacoraVehiculoDetenidoActionsCache = async () => {
-    if (!employee) return;
-
-    try {
-      const legacyBitStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-      if (legacyBitStr) {
-        const legacy = JSON.parse(legacyBitStr);
-        if (Array.isArray(legacy)) {
-          const creates = legacy.filter((a: any) => a.type === 'create' && a.requestData);
-          if (creates.length > 0) {
-            const evStr0 = await AsyncStorage.getItem('evaluations_actions');
-            const ev0: any[] = evStr0 ? JSON.parse(evStr0) : [];
-            for (const c of creates) {
-              if (
-                !ev0.some(
-                  (e: any) =>
-                    e.id === c.id && e.action === 'create' && e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE
-                )
-              ) {
-                ev0.push({
-                  id: c.id,
-                  action: 'create',
-                  type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
-                  payload: c.requestData,
-                });
-              }
-            }
-            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(ev0));
-            const rest = legacy.filter((a: any) => a.type !== 'create');
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Migración bitácora (cola) → evaluations_actions:', e);
-    }
-
-    const actionsStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
-    if (!actionsStr) return;
-
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
-
-    console.log('Sincronizando acciones de bitácora de vehículos detenidos:', actions.length);
-
-    for (const action of actions) {
-      try {
-        if (action.type === 'create') {
-          // La creación offline se sincroniza en runCorporateEvaluationsSync (tras vehículo/uso corporativo).
-          continue;
-        } else if (action.type === 'update') {
-          const result = await updateBitacoraVehiculoDetenido({
-            id: action.id,
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
-          }
-        } else if (action.type === 'delete') {
-          const result = await deleteBitacoraVehiculoDetenido({
-            id: action.id,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(updatedActions));
-
-            const cacheStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((b: any) => b.id !== action.id);
-              await AsyncStorage.setItem('bitacora_vehiculo_detenido_cache', JSON.stringify(updatedCache));
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error procesando acción de bitácora vehículo detenido:', error);
       }
     }
   }
@@ -1365,9 +1501,99 @@ function AppContent() {
         })
         .filter((n: number) => Number.isFinite(n) && n > 0);
     }
+    const seen = new Set<number>();
+    const dedup: number[] = [];
+    for (const n of nums) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      dedup.push(n);
+    }
     delete out.llaves_refs;
-    out.llaves = nums;
+    out.llaves = dedup;
     return out;
+  };
+
+  /** Resuelve llave_id_local → id servidor con llaves_cache y el árbol (además del patch al crear cada llave). */
+  const enrichLlaveroRequestDataWithCachedLlaveIds = async (rd: any) => {
+    if (!rd || typeof rd !== 'object') return rd;
+    const out: any = { ...rd };
+    let cache: any[] = [];
+    try {
+      const cacheStr = await AsyncStorage.getItem('llaves_cache');
+      if (cacheStr) {
+        const parsed = JSON.parse(cacheStr);
+        if (Array.isArray(parsed)) cache = parsed;
+      }
+    } catch (_) {
+      /* ignore */
+    }
+    let tree: any[] = [];
+    try {
+      tree = await readMainStructureTree();
+    } catch (_) {
+      /* ignore */
+    }
+
+    const resolveLocal = (localKey: string): number | null => {
+      if (!localKey) return null;
+      const f = cache.find(
+        (it: any) => it?.id_local && String(it.id_local) === String(localKey) && it.id > 0
+      );
+      if (f) return Number(f.id);
+      try {
+        const hit = findCorpoAndLlaveRowInTree(tree, { id_local: String(localKey) });
+        if (hit?.row?.id && Number(hit.row.id) > 0) return Number(hit.row.id);
+      } catch (_) {
+        /* ignore */
+      }
+      return null;
+    };
+
+    if (Array.isArray(out.llaves_refs) && out.llaves_refs.length > 0) {
+      out.llaves_refs = out.llaves_refs.map((r: any) => {
+        if (!r || typeof r !== 'object') return r;
+        const n = r.llave_id != null ? Number(r.llave_id) : 0;
+        if (Number.isFinite(n) && n > 0) return { llave_id: n };
+        const loc = r.llave_id_local != null && String(r.llave_id_local).trim() !== '' ? String(r.llave_id_local) : '';
+        if (loc) {
+          const rid = resolveLocal(loc);
+          if (rid) return { llave_id: rid };
+        }
+        return r;
+      });
+      out.llaves = out.llaves_refs
+        .map((r: any) => Number(r.llave_id))
+        .filter((n: number) => Number.isFinite(n) && n > 0);
+    } else if (Array.isArray(out.llaves) && out.llaves.length > 0) {
+      out.llaves = out.llaves.map((x: any) => {
+        if (typeof x === 'number') {
+          if (x > 0) return x;
+          return x;
+        }
+        if (x && typeof x === 'object') {
+          const n = x.llave_id != null ? Number(x.llave_id) : 0;
+          if (Number.isFinite(n) && n > 0) return x;
+          const loc = x.llave_id_local != null && String(x.llave_id_local).trim() !== '' ? String(x.llave_id_local) : '';
+          if (loc) {
+            const rid = resolveLocal(loc);
+            if (rid) return { ...x, llave_id: rid, llave_id_local: undefined };
+          }
+        }
+        return x;
+      });
+    }
+    return out;
+  };
+
+  const llaveroRequestHasUnresolvedLocalRefs = (enriched: any) => {
+    const refs = Array.isArray(enriched?.llaves_refs) ? enriched.llaves_refs : [];
+    return refs.some(
+      (r: any) =>
+        r &&
+        r.llave_id_local != null &&
+        String(r.llave_id_local).trim() !== '' &&
+        (!Number.isFinite(Number(r.llave_id)) || Number(r.llave_id) <= 0)
+    );
   };
 
   const patchLlaverosAfterLlaveServerId = async (llaveLocalKey: string, serverLlaveId: number) => {
@@ -1381,8 +1607,10 @@ function AppContent() {
           }
           return r;
         });
-      }
-      if (Array.isArray(next.llaves)) {
+        next.llaves = next.llaves_refs
+          .map((r: any) => Number(r.llave_id))
+          .filter((n: number) => Number.isFinite(n) && n > 0);
+      } else if (Array.isArray(next.llaves)) {
         next.llaves = next.llaves.map((x: any) => {
           if (x && typeof x === 'object') {
             if (String(x.llave_id_local || '') === String(llaveLocalKey)) {
@@ -1421,8 +1649,8 @@ function AppContent() {
     }
 
     const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-    if (cacheStr) {
-      const cache = JSON.parse(cacheStr);
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
       if (Array.isArray(cache)) {
         const nextCache = cache.map((item: any) => {
           if (!Array.isArray(item.llaves)) return item;
@@ -1440,6 +1668,14 @@ function AppContent() {
         });
         await AsyncStorage.setItem('llaveros_cache', JSON.stringify(nextCache));
       }
+    }
+
+    try {
+      const tree = await readMainStructureTree();
+      const nextTree = patchAllLlaveroLinksLlaveIdLocalEverywhere(tree, llaveLocalKey, serverLlaveId);
+      await writeMainStructureTree(nextTree);
+    } catch (e) {
+      console.warn('[sync] main_structure patchLlaverosAfterLlaveServerId:', e);
     }
   };
 
@@ -1473,6 +1709,17 @@ function AppContent() {
               await patchMovimientosLlavesAfterLlaveServerId(localKey, serverId);
               await patchLlaverosAfterLlaveServerId(localKey, serverId);
 
+              const corpoId = Number(action.corpo_id) || Number(action.requestData?.corpo_id);
+              if (Number.isFinite(corpoId) && corpoId > 0) {
+                try {
+                  const treeMs = await readMainStructureTree();
+                  const nextMs = patchLlaveLocalKeyToServerIdInTree(treeMs, corpoId, localKey, serverId);
+                  await writeMainStructureTree(nextMs);
+                } catch (e) {
+                  console.warn('[sync] main_structure llave create id:', e);
+                }
+              }
+
               const llavesCacheStr = await AsyncStorage.getItem('llaves_cache');
               if (llavesCacheStr) {
                 const cache = JSON.parse(llavesCacheStr);
@@ -1497,6 +1744,13 @@ function AppContent() {
           if (result.status) {
             const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
             await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+            try {
+              const treeMs = await readMainStructureTree();
+              const nextMs = applyLlaveUpdatePayloadToTree(treeMs, Number(action.id), action.requestData || {});
+              await writeMainStructureTree(nextMs);
+            } catch (e) {
+              console.warn('[sync] main_structure llave update:', e);
+            }
           }
         } else if (action.type === 'delete') {
           const result = await deleteLlave({
@@ -1515,6 +1769,17 @@ function AppContent() {
               const cache = JSON.parse(cacheStr);
               const updatedCache = cache.filter((it: any) => it.id !== action.id);
               await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+            }
+
+            try {
+              const treeMs = await readMainStructureTree();
+              const hit = findCorpoAndLlaveRowInTree(treeMs, { id: Number(action.id) });
+              if (hit) {
+                const nextMs = removeLlaveFromCorpoTreeAndStripLlaveroLinks(treeMs, hit.corpoId, { id: Number(action.id) });
+                await writeMainStructureTree(nextMs);
+              }
+            } catch (e) {
+              console.warn('[sync] main_structure llave delete:', e);
             }
           }
         }
@@ -1557,6 +1822,13 @@ function AppContent() {
             if (found?.id && found.id !== 0) llaveId = found.id;
           }
         }
+        if ((!llaveId || llaveId === 0) && action.llaveLocalId) {
+          try {
+            const tree = await readMainStructureTree();
+            const hit = findCorpoAndLlaveRowInTree(tree, { id_local: String(action.llaveLocalId) });
+            if (hit?.row?.id && Number(hit.row.id) > 0) llaveId = Number(hit.row.id);
+          } catch (_) {}
+        }
 
         // Si aún no hay llaveId real, posponer
         if (!llaveId || llaveId === 0) continue;
@@ -1595,6 +1867,13 @@ function AppContent() {
                   return { ...it, movimientos: nextMovs };
                 });
                 await AsyncStorage.setItem('llaves_cache', JSON.stringify(updatedCache));
+              }
+              try {
+                const treeMs = await readMainStructureTree();
+                const nextMs = patchMovimientoLlaveInTree(treeMs, llaveId, String(action.id), newId);
+                await writeMainStructureTree(nextMs);
+              } catch (e) {
+                console.warn('[sync] main_structure mov llave create:', e);
               }
             }
           } else if (result.message) {
@@ -1656,25 +1935,49 @@ function AppContent() {
   const checkLlaverosActionsCache = async () => {
     if (!employee) return;
 
-    const actionsStr = await AsyncStorage.getItem('llaveros_actions');
-    if (!actionsStr) return;
+    const countStr0 = await AsyncStorage.getItem('llaveros_actions');
+    const n0 = countStr0 ? sortLlavesLikeActions(JSON.parse(countStr0)).length : 0;
+    if (n0 > 0) {
+      console.log('Sincronizando acciones de llaveros:', n0);
+    }
 
-    const actions = sortLlavesLikeActions(JSON.parse(actionsStr));
-    if (!actions || actions.length === 0) return;
+    let rotateStreak = 0;
+    for (let iter = 0; iter < 300; iter++) {
+      const actionsStr = await AsyncStorage.getItem('llaveros_actions');
+      if (!actionsStr) return;
+      const list = sortLlavesLikeActions(JSON.parse(actionsStr));
+      if (!list.length) return;
+      const action = list[0];
+      const qLen = list.length;
 
-    console.log('Sincronizando acciones de llaveros:', actions.length);
-
-    for (const action of actions) {
       try {
         if (action.type === 'create') {
+          const enriched = await enrichLlaveroRequestDataWithCachedLlaveIds({ ...(action.requestData || {}) });
+          if (llaveroRequestHasUnresolvedLocalRefs(enriched)) {
+            if (qLen === 1) {
+              return;
+            }
+            const tail = list.slice(1);
+            if (!tail.length) return;
+            await AsyncStorage.setItem('llaveros_actions', JSON.stringify([...tail, list[0]]));
+            rotateStreak += 1;
+            if (rotateStreak >= qLen) {
+              return;
+            }
+            continue;
+          }
+          rotateStreak = 0;
           const result = await createLlavero({
-            requestData: normalizeLlaveroRequestForApi(action.requestData),
+            requestData: normalizeLlaveroRequestForApi(enriched),
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            const cur = sortLlavesLikeActions(JSON.parse((await AsyncStorage.getItem('llaveros_actions')) || '[]'));
+            const updatedActions = cur.filter(
+              (a: any) => !(String(a.id) === String(action.id) && a.type === 'create')
+            );
             await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
 
             const serverId = Number(result.id);
@@ -1682,11 +1985,22 @@ function AppContent() {
               const localKey = String(action.id);
               await patchMovimientosLlaverosAfterLlaveroServerId(localKey, serverId);
 
+              const corpoId = Number(action.corpo_id) || Number(action.requestData?.corpo_id);
+              if (Number.isFinite(corpoId) && corpoId > 0) {
+                try {
+                  const treeMs = await readMainStructureTree();
+                  const nextMs = patchLlaveroLocalKeyToServerIdInTree(treeMs, corpoId, localKey, serverId);
+                  await writeMainStructureTree(nextMs);
+                } catch (e) {
+                  console.warn('[sync] main_structure llavero create id:', e);
+                }
+              }
+
               const cacheStr = await AsyncStorage.getItem('llaveros_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((it: any) => {
-                  if (it.id_local && it.id_local === action.id) {
+                  if (it.id_local && String(it.id_local) === String(action.id)) {
                     const nextLlaves = Array.isArray(it.llaves)
                       ? it.llaves.map((l: any) =>
                           l && typeof l === 'object' && (!l.llavero_id || l.llavero_id === 0)
@@ -1701,20 +2015,40 @@ function AppContent() {
                 await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
               }
             }
+          } else {
+            return;
           }
         } else if (action.type === 'update') {
+          rotateStreak = 0;
+          const rd0 = action.requestData || {};
+          const enriched = await enrichLlaveroRequestDataWithCachedLlaveIds({ ...rd0 });
           const result = await updateLlavero({
             id: action.id,
-            requestData: normalizeLlaveroRequestForApi(action.requestData),
+            requestData: normalizeLlaveroRequestForApi(enriched),
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            const cur = sortLlavesLikeActions(JSON.parse((await AsyncStorage.getItem('llaveros_actions')) || '[]'));
+            const updatedActions = cur.filter(
+              (a: any) => !(String(a.id) === String(action.id) && a.type === 'update')
+            );
             await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
+            try {
+              const rd = normalizeLlaveroRequestForApi({ ...enriched });
+              const nums = Array.isArray(rd.llaves) ? rd.llaves : null;
+              const treeMs = await readMainStructureTree();
+              const nextMs = applyLlaveroUpdatePayloadToTree(treeMs, Number(action.id), { ...rd0, ...rd }, nums);
+              await writeMainStructureTree(nextMs);
+            } catch (e) {
+              console.warn('[sync] main_structure llavero update:', e);
+            }
+          } else {
+            return;
           }
         } else if (action.type === 'delete') {
+          rotateStreak = 0;
           const result = await deleteLlavero({
             id: action.id,
             marcaId: action.marcaId,
@@ -1723,7 +2057,10 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            const cur = sortLlavesLikeActions(JSON.parse((await AsyncStorage.getItem('llaveros_actions')) || '[]'));
+            const updatedActions = cur.filter(
+              (a: any) => !(String(a.id) === String(action.id) && a.type === 'delete')
+            );
             await AsyncStorage.setItem('llaveros_actions', JSON.stringify(updatedActions));
 
             const cacheStr = await AsyncStorage.getItem('llaveros_cache');
@@ -1732,10 +2069,24 @@ function AppContent() {
               const updatedCache = cache.filter((it: any) => it.id !== action.id);
               await AsyncStorage.setItem('llaveros_cache', JSON.stringify(updatedCache));
             }
+
+            try {
+              const treeMs = await readMainStructureTree();
+              const hit = findCorpoAndLlaveroRowInTree(treeMs, { id: Number(action.id) });
+              if (hit) {
+                const nextMs = removeLlaveroFromCorpoTree(treeMs, hit.corpoId, { id: Number(action.id) });
+                await writeMainStructureTree(nextMs);
+              }
+            } catch (e) {
+              console.warn('[sync] main_structure llavero delete:', e);
+            }
+          } else {
+            return;
           }
         }
       } catch (error) {
         console.error('Error procesando acción de llaveros:', error);
+        return;
       }
     }
   }
@@ -1772,6 +2123,13 @@ function AppContent() {
             );
             if (found?.id && found.id !== 0) llaveroId = found.id;
           }
+        }
+        if ((!llaveroId || llaveroId === 0) && action.llaveroLocalId) {
+          try {
+            const tree = await readMainStructureTree();
+            const hit = findCorpoAndLlaveroRowInTree(tree, { id_local: String(action.llaveroLocalId) });
+            if (hit?.row?.id && Number(hit.row.id) > 0) llaveroId = Number(hit.row.id);
+          } catch (_) {}
         }
 
         // Si aún no hay llaveroId real, posponer
@@ -1851,6 +2209,32 @@ function AppContent() {
                 });
               }
               await AsyncStorage.setItem('llaves_cache', JSON.stringify(llavesCache));
+            }
+
+            try {
+              const actionLocalKey = String(action.id);
+              const rdMs = action.requestData || {};
+              const extrasMs = Array.isArray(result.llave_movements) ? result.llave_movements : [];
+              let treeMs = await readMainStructureTree();
+              if (Number.isFinite(newMovId) && newMovId > 0) {
+                treeMs = patchMovimientoLlaveroInTree(treeMs, llaveroId, actionLocalKey, newMovId);
+              }
+              if (extrasMs.length > 0) {
+                for (const e of extrasMs) {
+                  treeMs = patchShadowMovimientoLlaveFromLlaveroSync(
+                    treeMs,
+                    Number(e.llave_id),
+                    actionLocalKey,
+                    rdMs,
+                    Number(e.id)
+                  );
+                }
+              } else {
+                treeMs = stripLlaveMovimientosByIdLocal(treeMs, actionLocalKey);
+              }
+              await writeMainStructureTree(treeMs);
+            } catch (e) {
+              console.warn('[sync] main_structure mov llavero create:', e);
             }
           } else if (result.message) {
             console.warn('[sync] movimiento llavero create:', result.message);
@@ -1948,8 +2332,9 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_activos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'create')
+            );
 
             // Reemplazar id_local por id real en cache (dentro de movimientos del activo)
             if (result.id) {
@@ -1976,8 +2361,9 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_activos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'update')
+            );
           }
         } else if (action.type === 'delete') {
           const marcaId = action.marcaId;
@@ -1992,8 +2378,9 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('movimientos_activos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_activos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'delete')
+            );
 
             const cacheStr = await AsyncStorage.getItem(`movimientos_activo_${activoId}_cache`);
             if (cacheStr) {
@@ -2008,6 +2395,70 @@ function AppContent() {
       }
     }
   }
+
+  const checkArticuloMantenimientoDeleteArchivoActionsCache = async () => {
+    if (!employee) return;
+
+    const key = 'articulo_mantenimiento_delete_archivo_actions';
+    const actionsStr = await AsyncStorage.getItem(key);
+    if (!actionsStr) return;
+
+    const actions = JSON.parse(actionsStr);
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+
+    const still: any[] = [];
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      try {
+        if (action.type !== 'delete_archivo') {
+          still.push(action);
+          continue;
+        }
+        const mid = Number(action.activoMantenimientoId);
+        const aid = Number(action.archivoId);
+        if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(aid) || aid <= 0) {
+          continue;
+        }
+
+        const response = await authedFetchCb({
+          url: `${apiUrl}/api/articulo-mantenimiento/${mid}/archivos/${aid}`,
+          init: {
+            method: 'DELETE',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          },
+        });
+
+        if (!response) {
+          still.push(...actions.slice(i));
+          break;
+        }
+
+        const data = await response.json().catch(() => ({}));
+        if (response.ok && data?.status) {
+          const pid = action?.puestoId;
+          if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
+            await clearPuestoArticulosList(Number(pid));
+          }
+        } else {
+          still.push(action);
+        }
+      } catch (error) {
+        console.error('Error sincronizando eliminación de adjunto de mantenimiento de artículo:', error);
+        still.push(action);
+      }
+    }
+
+    if (still.length === 0) {
+      await AsyncStorage.removeItem(key);
+    } else {
+      await AsyncStorage.setItem(key, JSON.stringify(still));
+    }
+  };
 
   const checkArticuloMantenimientoActionsCache = async () => {
     if (!employee) return;
@@ -2075,23 +2526,25 @@ function AppContent() {
           const data = await response.json().catch(() => ({}));
           console.log('data', data);
           if (data.status) {
-            const updatedActions = actions.filter((a: any) => {
+            const pid = action?.meta?.puestoId;
+            if (pid != null && Number.isFinite(Number(pid)) && Number(pid) > 0) {
+              await clearPuestoArticulosList(Number(pid));
+            }
+            await persistFilteredMantenimientoEquipoActionQueue('articulo_mantenimiento_actions', (a: any) => {
               if (isCreate) {
                 return !(a.type === 'create' && a.id_local === action.id_local);
               }
               return !(a.id === action.id && a.type === 'update');
             });
-            await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(updatedActions));
           } else {
             // Si el servidor rechaza por ser una acción más antigua (updated_at más reciente),
             // eliminamos la acción local para evitar reintentos infinitos.
             const msg = String(data?.message || '');
             if (msg.toLowerCase().includes('más antiguo') || msg.toLowerCase().includes('updated_at')) {
-              const updatedActions = actions.filter((a: any) => {
+              await persistFilteredMantenimientoEquipoActionQueue('articulo_mantenimiento_actions', (a: any) => {
                 if (isCreate) return !(a.type === 'create' && a.id_local === action.id_local);
                 return !(a.id === action.id && a.type === 'update');
               });
-              await AsyncStorage.setItem('articulo_mantenimiento_actions', JSON.stringify(updatedActions));
             }
           }
         }
@@ -2125,8 +2578,9 @@ function AppContent() {
             logout,
           });
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_articulos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'create')
+            );
           }
         } else if (action.type === 'update') {
           const result = await updateMovimientoArticuloMantenimiento({
@@ -2137,8 +2591,9 @@ function AppContent() {
             logout,
           });
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_articulos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'update')
+            );
           }
         } else if (action.type === 'delete') {
           const marcaId = action.marcaId;
@@ -2152,8 +2607,9 @@ function AppContent() {
             logout,
           });
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('movimientos_articulos_mantenimiento_actions', JSON.stringify(updatedActions));
+            await persistFilteredMantenimientoEquipoActionQueue('movimientos_articulos_mantenimiento_actions', (a: any) =>
+              !(a.id === action.id && a.type === 'delete')
+            );
           }
         }
       } catch (error) {
@@ -2198,8 +2654,9 @@ function AppContent() {
           if (response.ok) {
             const data = await response.json().catch(() => ({}));
             if (data.status) {
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-              await AsyncStorage.setItem('activo_mantenimiento_actions', JSON.stringify(updatedActions));
+              await persistFilteredMantenimientoEquipoActionQueue('activo_mantenimiento_actions', (a: any) =>
+                !(a.id === action.id && a.type === 'update')
+              );
 
               // Actualizar cache si existe
               const reporteId = action.reporteId;
@@ -2225,15 +2682,28 @@ function AppContent() {
   const checkDocumentosEntregadosActionsCache = async () => {
     if (!employee) return;
 
-    const actionsStr = await AsyncStorage.getItem('documentos_entregados_actions');
-    if (!actionsStr) return;
+    const sameQueuedDocAction = (a: any, b: any) =>
+      a?.type === b?.type && String(a?.id ?? '') === String(b?.id ?? '');
 
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
+    const readDocActionsQueue = async () => {
+      const s = await AsyncStorage.getItem('documentos_entregados_actions');
+      if (!s) return [] as any[];
+      try {
+        const parsed = JSON.parse(s);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
 
-    console.log('Sincronizando acciones de documentos entregados:', actions.length);
+    let queue = await readDocActionsQueue();
+    if (queue.length === 0) return;
 
-    for (const action of actions) {
+    console.log('Sincronizando acciones de documentos entregados:', queue.length);
+
+    while (queue.length > 0) {
+      const action = queue[0];
+      let success = false;
       try {
         if (action.type === 'create') {
           const result = await createDocumentoEntregado({
@@ -2243,39 +2713,49 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
-
-            // Reemplazar id_local por id real en cache
+            success = true;
             if (result.id) {
               const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
               if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((it: any) => {
-                  if (it.id_local && it.id_local === action.id) {
-                    return { ...it, id: result.id, id_local: '' };
-                  }
-                  return it;
-                });
-                await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(updatedCache));
+                const cache = JSON.parse(cacheStr) as any[];
+                const serverId = Number(result.id);
+                const corpoId = getDocEntregadoCorpoId(action.requestData);
+                const pruned = cache.filter(
+                  (it: any) =>
+                    !(
+                      String(it?.id_local ?? '') === String(action.id) &&
+                      getDocEntregadoCorpoId(it) === corpoId
+                    )
+                );
+                const row = buildDocumentoEntregadoCacheRowFromRequest(action.requestData, serverId, '');
+                const next = upsertDocumentoEntregadoInCache(pruned, row);
+                await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
               }
             }
           }
         } else if (action.type === 'update') {
+          const updateId = Number(action.id);
           const result = await updateDocumentoEntregado({
-            id: action.id,
+            id: updateId,
             requestData: action.requestData,
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
+            success = true;
+            const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const row = buildDocumentoEntregadoCacheRowFromRequest(action.requestData, updateId, '');
+              const next = upsertDocumentoEntregadoInCache(cache, row);
+              await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(next));
+            }
           }
         } else if (action.type === 'delete') {
+          const delId = Number(action.id);
           const result = await deleteDocumentoEntregado({
-            id: action.id,
+            id: delId,
             corpoId: action.corpoId,
             clienteId: action.clienteId,
             refreshAccessToken,
@@ -2283,13 +2763,13 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(updatedActions));
-
+            success = true;
             const cacheStr = await AsyncStorage.getItem('documentos_entregados_cache');
             if (cacheStr) {
               const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              const updatedCache = cache.filter(
+                (it: any) => String(it?.id ?? '') !== String(delId)
+              );
               await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(updatedCache));
             }
           }
@@ -2297,96 +2777,238 @@ function AppContent() {
       } catch (error) {
         console.error('Error procesando acción de documentos entregados:', error);
       }
+
+      if (!success) break;
+
+      const remaining = queue.filter((a: any) => !sameQueuedDocAction(a, action));
+      await AsyncStorage.setItem('documentos_entregados_actions', JSON.stringify(remaining));
+      queue = remaining;
     }
   }
 
   const checkApreciacionVulnerabilidadActionsCache = async () => {
     if (!employee) return;
+    const saveActions = async (next: any[]) => {
+      if (next.length === 0) {
+        await AsyncStorage.removeItem('apreciacion_vulnerabilidad_actions');
+      } else {
+        await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(next));
+      }
+    };
 
-    const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
-    if (!actionsStr) return;
+    const loadActions = async (): Promise<any[]> => {
+      const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+      if (!actionsStr) return [];
+      try {
+        const parsed = JSON.parse(actionsStr);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    };
 
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
-
+    let actions = await loadActions();
+    if (actions.length === 0) return;
     console.log('Sincronizando acciones de apreciación de vulnerabilidad:', actions.length);
 
-    for (const action of actions) {
+    let i = 0;
+    while (i < actions.length) {
+      const action = actions[i];
       try {
         if (action.type === 'create') {
+          const payload = { ...(action.requestData || {}) };
+          if (Array.isArray(action?.requestData?.apreciacion_images_meta)) {
+            const { buildApreciacionImagenesJsonForUpload } = await import('@/hooks/apreciacionVulnerabilidadFilesSync');
+            payload.imagenes = await buildApreciacionImagenesJsonForUpload({
+              meta: action.requestData.apreciacion_images_meta,
+            });
+          }
           const result = await createApreciacionVulnerabilidad({
-            requestData: action.requestData,
+            requestData: payload,
             refreshAccessToken,
             logout,
           });
-
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+            const serverId = Number((result as any).id ?? (result as any).data?.id ?? 0);
+            actions = actions
+              .filter((a: any) => !(a.type === 'create' && String(a.id) === String(action.id)))
+              .map((a: any) => {
+                if (
+                  serverId > 0 &&
+                  String(a.id) === String(action.id) &&
+                  (a.type === 'update' || a.type === 'delete_file' || a.type === 'update_solicitante_firma')
+                ) {
+                  return { ...a, id: serverId };
+                }
+                return a;
+              });
+            await saveActions(actions);
 
-            if (result.id) {
-              const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((it: any) => {
-                  if (it.id_local && it.id_local === action.id) {
-                    return { ...it, id: result.id, id_local: '' };
-                  }
-                  return it;
-                });
-                await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
-              }
+            const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+            if (cacheStr && serverId > 0) {
+              const cache = JSON.parse(String(cacheStr));
+              const updatedCache = Array.isArray(cache)
+                ? cache.map((it: any) => (String(it?.id_local || '') === String(action.id) ? { ...it, id: serverId, id_local: '' } : it))
+                : [];
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
             }
+            if (Array.isArray(action?.requestData?.apreciacion_images_meta)) {
+              const { deleteApreciacionLocalFilesFromMeta } = await import('@/hooks/apreciacionVulnerabilidadFilesSync');
+              await deleteApreciacionLocalFilesFromMeta(action.requestData.apreciacion_images_meta);
+            }
+            i = 0;
+            continue;
           }
         } else if (action.type === 'update') {
-          const result = await updateApreciacionVulnerabilidad({
-            id: action.id,
-            requestData: action.requestData,
-            refreshAccessToken,
-            logout,
-          });
-
-          if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+          const payload = { ...(action.requestData || {}) };
+          if (Array.isArray(action?.requestData?.apreciacion_images_meta)) {
+            const { buildApreciacionImagenesJsonForUpload } = await import('@/hooks/apreciacionVulnerabilidadFilesSync');
+            payload.imagenes = await buildApreciacionImagenesJsonForUpload({
+              meta: action.requestData.apreciacion_images_meta,
+            });
           }
-        } else if (action.type === 'delete') {
-          const result = await deleteApreciacionVulnerabilidad({
-            id: action.id,
+          const result = await updateApreciacionVulnerabilidad({
+            id: Number(action.id),
+            requestData: payload,
             refreshAccessToken,
             logout,
           });
-
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.type === 'update' && Number(a.id) === Number(action.id)));
+            await saveActions(actions);
 
             const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
             if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((it: any) => it.id !== action.id);
+              const cache = JSON.parse(String(cacheStr));
+              const rid = Number(action.id);
+              const updatedCache = (Array.isArray(cache) ? cache : []).map((row: any) =>
+                Number(row.id) === rid ? { ...row, ...action.requestData, id: rid } : row
+              );
               await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
+            }
+            if (Array.isArray(action?.requestData?.apreciacion_images_meta)) {
+              const { deleteApreciacionLocalFilesFromMeta } = await import('@/hooks/apreciacionVulnerabilidadFilesSync');
+              await deleteApreciacionLocalFilesFromMeta(action.requestData.apreciacion_images_meta);
+            }
+            i = 0;
+            continue;
+          }
+        } else if (action.type === 'delete') {
+          const result = await deleteApreciacionVulnerabilidad({
+            id: Number(action.id),
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            actions = actions.filter((a: any) => !(a.type === 'delete' && Number(a.id) === Number(action.id)));
+            await saveActions(actions);
+            const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(String(cacheStr));
+              const updatedCache = (Array.isArray(cache) ? cache : []).filter((it: any) => Number(it.id) !== Number(action.id));
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
+            }
+            i = 0;
+            continue;
+          }
+        } else if (action.type === 'delete_file') {
+          const boletaId = Number(action.id);
+          const fileId = Number(action.fileId);
+          if (boletaId > 0 && fileId > 0) {
+            const result = await deleteApreciacionVulnerabilidadImage({
+              boletaId,
+              imageId: fileId,
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              actions = actions.filter((a: any) => !(a.type === 'delete_file' && Number(a.id) === boletaId && Number(a.fileId) === fileId));
+              await saveActions(actions);
+              i = 0;
+              continue;
+            }
+          }
+        } else if (action.type === 'update_solicitante_firma') {
+          const recordId = Number(action.id);
+          if (recordId > 0 && typeof action.firma_solicitante === 'string' && action.firma_solicitante.trim() !== '') {
+            const result = await updateApreciacionVulnerabilidadFirmaSolicitante({
+              id: recordId,
+              firma_solicitante: String(action.firma_solicitante),
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              actions = actions.filter(
+                (a: any) => !(a.type === 'update_solicitante_firma' && Number(a.id) === recordId)
+              );
+              await saveActions(actions);
+              const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(String(cacheStr));
+                const updatedCache = (Array.isArray(cache) ? cache : []).map((row: any) =>
+                  Number(row.id) === recordId ? { ...row, firma_solicitante: String(action.firma_solicitante) } : row
+                );
+                await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(updatedCache));
+              }
+              i = 0;
+              continue;
             }
           }
         }
       } catch (error) {
         console.error('Error procesando acción de apreciación de vulnerabilidad:', error);
       }
+      i += 1;
     }
   }
 
   const checkChecklistSupervisionActionsCache = async () => {
     if (!employee) return;
 
-    const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
-    if (!actionsStr) return;
+    const storageKey = 'checklist_supervision_actions';
 
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
+    const queueAfterSuccess = (queue: any[], action: any): any[] => {
+      if (action.type === 'create') {
+        const il = String(action?.id_local ?? '');
+        return queue.filter(
+          (a: any) => !(a.type === 'create' && String(a?.id_local ?? '') === il)
+        );
+      }
+      if (action.type === 'update') {
+        const aid = Number(action.id);
+        return queue.filter((a: any) => !(a.type === 'update' && Number(a.id) === aid));
+      }
+      if (action.type === 'update_supervisor_firma') {
+        const aid = Number(action.id);
+        return queue.filter(
+          (a: any) => !(a.type === 'update_supervisor_firma' && Number(a.id) === aid)
+        );
+      }
+      if (action.type === 'delete') {
+        const aid = Number(action.id);
+        return queue.filter((a: any) => !(a.type === 'delete' && Number(a.id) === aid));
+      }
+      return queue;
+    };
 
-    console.log('Sincronizando acciones de checklist de supervisión:', actions.length);
+    const persistQueue = async (next: any[]) => {
+      if (!Array.isArray(next) || next.length === 0) {
+        await AsyncStorage.removeItem(storageKey);
+      } else {
+        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+      }
+    };
 
-    for (const action of actions) {
+    while (true) {
+      const actionsStr = await AsyncStorage.getItem(storageKey);
+      if (!actionsStr) return;
+
+      const queue = JSON.parse(actionsStr);
+      if (!Array.isArray(queue) || queue.length === 0) return;
+
+      const action = queue[0];
+      let success = false;
+
       try {
         if (action.type === 'create') {
           const { createChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
@@ -2397,36 +3019,108 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id_local === action.id_local && a.type === 'create'));
-            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
-
-            // Actualizar cache: reemplazar item temporal (id_local) por el id real si lo devuelve
-            if (result.id) {
-              const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((it: any) => {
-                  if (it.id_local && it.id_local === action.id_local) {
-                    return { ...it, id: result.id, id_local: '' };
-                  }
-                  return it;
-                });
-                await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updatedCache));
-              }
+            const newId = Number((result as any).id ?? (result as any).data?.id ?? 0);
+            const serverPayload = (result as any).data;
+            if (newId > 0) {
+              const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+                '@/hooks/checklistSupervisionCacheStorage'
+              );
+              const flat = await loadChecklistSupervisionCacheFlat();
+              const idl = String(action?.id_local ?? '');
+              const updatedCache = flat.map((it: any) => {
+                if (it.id_local != null && String(it.id_local) === idl) {
+                  const { id_local: _r1, id: _i1, ...restServer } =
+                    serverPayload && typeof serverPayload === 'object' ? serverPayload : {};
+                  return {
+                    ...it,
+                    ...restServer,
+                    id: newId,
+                    id_local: '',
+                    images: serverPayload?.images ?? it.images,
+                  };
+                }
+                return it;
+              });
+              await saveChecklistSupervisionCacheFlat(updatedCache);
             }
+            success = true;
           }
         } else if (action.type === 'update') {
           const { updateChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
+          let resolvedId: any = action.id;
+          try {
+            const { loadChecklistSupervisionCacheFlat } = await import('@/hooks/checklistSupervisionCacheStorage');
+            const flatPre = await loadChecklistSupervisionCacheFlat();
+            const idl = String(action?.id_local ?? '');
+            const found = flatPre.find(
+              (x: any) =>
+                String(x.id_local || '') === idl && x.id && Number(x.id) > 0
+            );
+            if (found?.id) resolvedId = found.id;
+          } catch {
+            /* ignore */
+          }
           const result = await updateChecklistSupervision({
-            id: action.id,
+            id: resolvedId,
             requestData: action.requestData,
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
+            const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+              '@/hooks/checklistSupervisionCacheStorage'
+            );
+            const flat = await loadChecklistSupervisionCacheFlat();
+            const aid = Number(resolvedId);
+            const serverData = (result as any).data;
+            const updatedCache = flat.map((it: any) => {
+              const sameServer = Number(it.id) === aid || Number(it.id) === Number(action.id);
+              const sameLocal =
+                action.id_local != null &&
+                String(action.id_local).trim() !== '' &&
+                String(it.id_local || '') === String(action.id_local);
+              if (!sameServer && !sameLocal) return it;
+              const { id_local: _removed, ...restIt } = it;
+              return {
+                ...restIt,
+                ...(serverData && typeof serverData === 'object' ? serverData : {}),
+                id: serverData?.id ?? aid ?? it.id,
+                id_local: '',
+                images: serverData?.images ?? it.images,
+              };
+            });
+            await saveChecklistSupervisionCacheFlat(updatedCache);
+            success = true;
+          }
+        } else if (action.type === 'update_supervisor_firma') {
+          const { updateChecklistSupervisionFirmaSupervisor } = await import('@/hooks/checklistSupervisionFunctions');
+          const result = await updateChecklistSupervisionFirmaSupervisor({
+            id: Number(action.id),
+            firma_supervisor: action.firma_supervisor,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const serverData = (result as any).data;
+            if (serverData && typeof serverData === 'object') {
+              const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+                '@/hooks/checklistSupervisionCacheStorage'
+              );
+              const flat = await loadChecklistSupervisionCacheFlat();
+              const updatedCache = flat.map((it: any) =>
+                Number(it.id) === Number(action.id)
+                  ? {
+                      ...it,
+                      ...serverData,
+                      firma_supervisor: serverData.firma_supervisor ?? it.firma_supervisor,
+                    }
+                  : it
+              );
+              await saveChecklistSupervisionCacheFlat(updatedCache);
+            }
+            success = true;
           }
         } else if (action.type === 'delete') {
           const { deleteChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
@@ -2437,20 +3131,27 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
-
-            const cacheStr = await AsyncStorage.getItem('checklist_supervision_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((it: any) => it.id !== action.id && it.id_local !== action.id_local);
-              await AsyncStorage.setItem('checklist_supervision_cache', JSON.stringify(updatedCache));
-            }
+            const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+              '@/hooks/checklistSupervisionCacheStorage'
+            );
+            const flat = await loadChecklistSupervisionCacheFlat();
+            const updatedCache = flat.filter(
+              (it: any) =>
+                Number(it.id) !== Number(action.id) && String(it.id_local || '') !== String(action.id_local || '')
+            );
+            await saveChecklistSupervisionCacheFlat(updatedCache);
+            success = true;
           }
         }
       } catch (error) {
         console.error('Error procesando acción de checklist de supervisión:', error);
+        return;
       }
+
+      if (!success) return;
+
+      const next = queueAfterSuccess(queue, action);
+      await persistQueue(next);
     }
   }
 
@@ -2536,18 +3237,30 @@ function AppContent() {
     const actionsStr = await AsyncStorage.getItem('notes_actions');
     if (!actionsStr) return;
 
-    const actions = JSON.parse(actionsStr);
+    let actions = JSON.parse(actionsStr);
     if (!actions || actions.length === 0) return;
 
     console.log('Sincronizando acciones de notas:', actions.length);
 
     // Procesar acciones una por una
-    for (const action of actions) {
+    const saveActions = async (next: any[]) => {
+      actions = next;
+      await AsyncStorage.setItem('notes_actions', JSON.stringify(next));
+    };
+
+    let i = 0;
+    while (i < actions.length) {
+      const action = actions[i];
       try {
         if (action.type === 'create') {
           console.log('Creando nota:', action.id);
+          let payload = { ...(action.requestData || {}) };
+          if (Array.isArray(action.notes_images_meta) && action.notes_images_meta.length > 0) {
+            const { buildNotesImagenesJsonForUpload } = await import('@/hooks/notesFilesSync');
+            payload.imagenes = await buildNotesImagenesJsonForUpload({ meta: action.notes_images_meta });
+          }
           const result = await createNote({
-            requestData: action.requestData,
+            requestData: payload,
             marcaId: action.marcaId,
             puestoId: action.puestoId,
             refreshAccessToken,
@@ -2556,14 +3269,50 @@ function AppContent() {
 
           if (result.status) {
             console.log('Nota creada correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
-            await AsyncStorage.setItem('notes_actions', JSON.stringify(updatedActions));
+            const serverId = Number((result as any).id ?? (result as any)?.data?.id ?? 0);
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            const nextActions = updatedActions.map((a: any) => {
+              if (serverId > 0 && String(a?.id) === String(action.id) && a.type === 'update') {
+                return { ...a, id: serverId };
+              }
+              if (serverId > 0 && String(a?.id) === String(action.id) && a.type === 'delete_file') {
+                return { ...a, id: serverId };
+              }
+              return a;
+            });
+            await saveActions(nextActions);
+
+            try {
+              const cacheStr = await AsyncStorage.getItem('notes_cache');
+              const parsed = cacheStr ? JSON.parse(String(cacheStr)) : { notas: [] };
+              if (Array.isArray(parsed?.notas)) {
+                parsed.notas = parsed.notas.map((n: any) =>
+                  String(n?.id_local) === String(action.id)
+                    ? { ...n, id: serverId > 0 ? serverId : n.id, id_local: '', synced: true }
+                    : n
+                );
+                await AsyncStorage.setItem('notes_cache', JSON.stringify(parsed));
+              }
+            } catch {
+              /* ignore */
+            }
+
+            if (Array.isArray(action.notes_images_meta) && action.notes_images_meta.length > 0) {
+              const { deleteNotesLocalFilesFromMeta } = await import('@/hooks/notesFilesSync');
+              await deleteNotesLocalFilesFromMeta(action.notes_images_meta);
+            }
+            i = 0;
+            continue;
           }
         } else if (action.type === 'update') {
           console.log('Actualizando nota:', action.id);
+          let payload = { ...(action.requestData || {}) };
+          if (Array.isArray(action.notes_images_meta) && action.notes_images_meta.length > 0) {
+            const { buildNotesImagenesJsonForUpload } = await import('@/hooks/notesFilesSync');
+            payload.imagenes = await buildNotesImagenesJsonForUpload({ meta: action.notes_images_meta });
+          }
           const result = await updateNote({
-            requestData: action.requestData,
+            requestData: payload,
             noteId: action.id,
             puestoId: action.puestoId,
             refreshAccessToken,
@@ -2572,9 +3321,14 @@ function AppContent() {
 
           if (result.status) {
             console.log('Nota actualizada correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
-            await AsyncStorage.setItem('notes_actions', JSON.stringify(updatedActions));
+            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await saveActions(updatedActions);
+            if (Array.isArray(action.notes_images_meta) && action.notes_images_meta.length > 0) {
+              const { deleteNotesLocalFilesFromMeta } = await import('@/hooks/notesFilesSync');
+              await deleteNotesLocalFilesFromMeta(action.notes_images_meta);
+            }
+            i = 0;
+            continue;
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando nota:', action.id);
@@ -2600,12 +3354,50 @@ function AppContent() {
           if (result.status) {
             console.log('Nota eliminada correctamente');
             const updatedActions = actions.filter((a: any) => !matchesDelete(a));
-            await AsyncStorage.setItem('notes_actions', JSON.stringify(updatedActions));
+            await saveActions(updatedActions);
+            i = 0;
+            continue;
+          }
+        } else if (action.type === 'delete_file') {
+          const noteId = Number(action.id || 0);
+          const puestoId = Number(action.puestoId || 0);
+          const fileId = Number(action.fileId || 0);
+          if (!noteId || !puestoId || !fileId) continue;
+          const { deleteNoteImage } = await import('@/hooks/notesFunctions');
+          const result = await deleteNoteImage({
+            noteId,
+            puestoId,
+            imageId: fileId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) => !(a.type === 'delete_file' && Number(a.id) === noteId && Number(a.fileId) === fileId)
+            );
+            await saveActions(updatedActions);
+            try {
+              const cacheStr = await AsyncStorage.getItem('notes_cache');
+              const parsed = cacheStr ? JSON.parse(String(cacheStr)) : null;
+              if (parsed && Array.isArray(parsed.notas)) {
+                parsed.notas = parsed.notas.map((n: any) => {
+                  if (Number(n?.id) !== noteId) return n;
+                  const imgs = Array.isArray(n?.images) ? n.images.filter((im: any) => Number(im?.id) !== fileId) : [];
+                  return { ...n, images: imgs };
+                });
+                await AsyncStorage.setItem('notes_cache', JSON.stringify(parsed));
+              }
+            } catch {
+              /* ignore */
+            }
+            i = 0;
+            continue;
           }
         }
       } catch (error) {
         console.error('Error procesando acción de nota:', error);
       }
+      i += 1;
     }
   }
 
@@ -2617,6 +3409,50 @@ function AppContent() {
 
     let actions: any[] = JSON.parse(actionsStr);
     if (!Array.isArray(actions) || actions.length === 0) return;
+
+    const patchActivityMarkInCache = async (activityId: number, marked: boolean) => {
+      try {
+        const cacheStr = await AsyncStorage.getItem('activities_cache');
+        if (!cacheStr) return;
+        const parsed = JSON.parse(cacheStr);
+        if (!Array.isArray(parsed)) return;
+        const next = parsed.map((row: any) =>
+          Number(row?.id) === Number(activityId) ? { ...row, is_marcada: marked } : row
+        );
+        await AsyncStorage.setItem('activities_cache', JSON.stringify(next));
+      } catch (e) {
+        console.warn('patchActivityMarkInCache', e);
+      }
+    };
+
+    const refreshActivitiesCacheFromServer = async () => {
+      try {
+        const cmStr = await AsyncStorage.getItem('current_marca');
+        if (!cmStr) return;
+        const cm = JSON.parse(cmStr);
+        const marcaId = Number(cm?.id);
+        if (!Number.isFinite(marcaId) || marcaId <= 0) return;
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return;
+        const response = await authedFetch({
+          url: `${apiUrl}/api/activities/marca/${marcaId}`,
+          init: {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!response?.ok) return;
+        const data = await response.json();
+        if (!data?.status || !Array.isArray(data?.actividades)) return;
+        const activeRows = data.actividades.filter((r: any) => r?.isActive !== false);
+        // Limpieza + actualización: reemplaza cache por estado de servidor vigente
+        await AsyncStorage.setItem('activities_cache', JSON.stringify(activeRows));
+      } catch (e) {
+        console.warn('refreshActivitiesCacheFromServer', e);
+      }
+    };
 
     console.log('Sincronizando acciones de actividades:', actions.length);
 
@@ -2663,6 +3499,19 @@ function AppContent() {
         }
 
         if (result && result.status) {
+          if (action.type === 'update') {
+            const estado = String(action?.requestData?.estado || '').toLowerCase();
+            await patchActivityMarkInCache(Number(action?.activity_id), estado === 'marcar');
+          }
+          try {
+            const { deleteFile } = await import('@/hooks/fileStorage');
+            const fn = action.requestData?.file_local_file_name;
+            if (typeof fn === 'string' && fn.trim()) {
+              await deleteFile(fn.trim());
+            }
+          } catch {
+            /* archivo ya borrado o sin ruta local */
+          }
           // Quitar solo la acción que acaba de sincronizarse (evita filtros ambiguos)
           actions.splice(i, 1);
           await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
@@ -2680,39 +3529,53 @@ function AppContent() {
       // Fallo o sin status: avanzar para no reprocesar en bucle infinito
       i++;
     }
+
+    await refreshActivitiesCacheFromServer();
   }
 
   const checkEvaluationsActionsCache = async () => {
     if (!employee) return;
 
-    // Bitácora (crear) pasó a evaluations_actions + corporateEvaluationsSync; migrar cola antigua.
+    // Bitácora pasó a evaluations_actions + corporateEvaluationsSync; migrar cola antigua (create/update/delete).
     try {
       const legacyBitStr = await AsyncStorage.getItem('bitacora_vehiculo_detenido_actions');
       if (legacyBitStr) {
         const legacy = JSON.parse(legacyBitStr);
         if (Array.isArray(legacy)) {
-          const creates = legacy.filter((a: any) => a.type === 'create' && a.requestData);
-          if (creates.length > 0) {
+          const legacyBitActions = legacy.filter(
+            (a: any) =>
+              (a?.type === 'create' || a?.type === 'update' || a?.type === 'delete') &&
+              a?.id != null
+          );
+          if (legacyBitActions.length > 0) {
             const evStr0 = await AsyncStorage.getItem('evaluations_actions');
             const ev0: any[] = evStr0 ? JSON.parse(evStr0) : [];
-            for (const c of creates) {
+            for (const a of legacyBitActions) {
+              const mappedAction = String(a.type);
+              const mappedPayload = mappedAction === 'delete' ? {} : a.requestData || {};
               if (
                 !ev0.some(
                   (e: any) =>
-                    e.id === c.id && e.action === 'create' && e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE
+                    String(e.id) === String(a.id) &&
+                    e.action === mappedAction &&
+                    e.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE
                 )
               ) {
                 ev0.push({
-                  id: c.id,
-                  action: 'create',
+                  id: a.id,
+                  action: mappedAction,
                   type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
-                  payload: c.requestData,
+                  payload: mappedPayload,
+                  synced: false,
                 });
               }
             }
             await AsyncStorage.setItem('evaluations_actions', JSON.stringify(ev0));
-            const rest = legacy.filter((a: any) => a.type !== 'create');
-            await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
+            const rest = legacy.filter(
+              (a: any) => !(a?.type === 'create' || a?.type === 'update' || a?.type === 'delete')
+            );
+            if (rest.length === 0) await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
+            else await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
           }
         }
       }
@@ -2720,10 +3583,12 @@ function AppContent() {
       console.error('Migración bitácora → evaluations_actions:', e);
     }
 
-    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-    if (!actionsStr) return;
+    const actionsStr0 = await AsyncStorage.getItem('evaluations_actions');
+    if (!actionsStr0) return;
 
-    const actions = JSON.parse(actionsStr);
+    // `let` + reasignación tras cada éxito: si se usa un array fijo, cada `filter` vuelve a incluir
+    // acciones ya eliminadas en el turno y se re-escriben en AsyncStorage (doble envío y duplicados).
+    let actions: any[] = JSON.parse(actionsStr0);
     if (!actions || actions.length === 0) return;
 
     console.log('Sincronizando acciones de evaluaciones:', actions.length);
@@ -2735,6 +3600,138 @@ function AppContent() {
           continue;
         }
         if (action.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE) {
+          continue;
+        }
+        if (action.type === 'attendance_control_delete_image' && action.action === 'delete') {
+          const { deleteAttendanceControlImage } = await import('@/hooks/evaluationFunctions');
+          const controlId = action.payload?.controlId;
+          const imageId = Number(action.payload?.imageId);
+          if (controlId == null || !Number.isFinite(imageId) || imageId <= 0) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  String(a.id) === String(action.id) &&
+                  a.type === 'attendance_control_delete_image' &&
+                  a.action === 'delete'
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+            continue;
+          }
+          const result = await deleteAttendanceControlImage({
+            controlId,
+            imageId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  String(a.id) === String(action.id) &&
+                  a.type === 'attendance_control_delete_image' &&
+                  a.action === 'delete'
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'attendance_control') return item;
+                  const same =
+                    String(item.id) === String(controlId) ||
+                    String(item.id_local) === String(controlId);
+                  if (!same) return item;
+                  const imgs = Array.isArray(item.images) ? item.images : [];
+                  return {
+                    ...item,
+                    images: imgs.filter((im: any) => Number(im?.id) !== Number(imageId)),
+                  };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            } catch {
+              // ignore
+            }
+          }
+          continue;
+        }
+        if (action.type === 'opening_closing_position' && action.action === 'delete_file') {
+          const { deleteOpeningClosingPositionImage } = await import('@/hooks/evaluationFunctions');
+          let openingClosingId: any = action.id;
+          try {
+            const cacheStrOcp = await AsyncStorage.getItem('evaluations_cache');
+            if (cacheStrOcp) {
+              const cacheOcp = JSON.parse(cacheStrOcp);
+              const foundOcp = cacheOcp.find(
+                (it: any) =>
+                  it.type === 'opening_closing_position' &&
+                  String(it.id_local) === String(action.id) &&
+                  it.id
+              );
+              if (foundOcp?.id) openingClosingId = String(foundOcp.id);
+            }
+          } catch {
+            // ignore
+          }
+          const imageId = Number(action.payload?.imageId);
+          if (openingClosingId == null || !Number.isFinite(imageId) || imageId <= 0) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  String(a.id) === String(action.id) &&
+                  a.type === 'opening_closing_position' &&
+                  a.action === 'delete_file'
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+            continue;
+          }
+          const result = await deleteOpeningClosingPositionImage({
+            id: String(openingClosingId),
+            imageId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  String(a.id) === String(action.id) &&
+                  a.type === 'opening_closing_position' &&
+                  a.action === 'delete_file' &&
+                  Number(a?.payload?.imageId) === imageId
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const updatedCache = cache.map((item: any) => {
+                  if (item.type !== 'opening_closing_position') return item;
+                  const same =
+                    String(item.id) === String(openingClosingId) ||
+                    String(item.id_local) === String(openingClosingId);
+                  if (!same) return item;
+                  const imgs = Array.isArray(item.images) ? item.images : [];
+                  return {
+                    ...item,
+                    images: imgs.filter((im: any) => Number(im?.id) !== imageId),
+                  };
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+            } catch {
+              // ignore
+            }
+          }
           continue;
         }
         if (action.action === 'create') {
@@ -2752,6 +3749,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'mileage_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -2780,6 +3778,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'uniform_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -2807,6 +3806,7 @@ function AppContent() {
               console.log('Encuesta de satisfacción creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'employee_satisfaction'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2833,6 +3833,7 @@ function AppContent() {
               console.log('Planificación de mantenimiento creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'vehicle_maintenance'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2859,6 +3860,7 @@ function AppContent() {
               console.log('Producto no conforme creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2875,33 +3877,37 @@ function AppContent() {
           } else if (action.type === 'complaints_master') {
             console.log('Creando queja:', action.id);
             const { createComplaintsMaster } = await import('@/hooks/evaluationFunctions');
+            const {
+              clearComplaintsMasterPendingFilesFromArchivoList,
+              buildComplaintsMasterRequestDataForSync,
+            } = await import('@/hooks/complaintsMasterFilesSync');
+            const { requestData, rawArchivos, diskHydrationComplete } =
+              await buildComplaintsMasterRequestDataForSync({
+                action: 'create',
+                actionId: action.id,
+                payload: action.payload,
+              });
+            if (!diskHydrationComplete) {
+              console.warn(
+                '[complaints_master] Creación aplazada: no se pudieron leer adjuntos locales; no se envía ni se borran archivos.'
+              );
+                continue;
+              }
             const result = await createComplaintsMaster({
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Queja creada correctamente');
+              await clearComplaintsMasterPendingFilesFromArchivoList(rawArchivos);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'complaints_master'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && item.type === 'complaints_master') {
-                    return {
-                      ...item,
-                      synced: true,
-                      id: result.data?.id || item.id,
-                      files: result.data?.files || item.files || [],
-                    };
-                  }
-                  return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
+              const { applyComplaintsMasterSyncCreateResult } = await import('@/hooks/complaintsMasterCacheStorage');
+              await applyComplaintsMasterSyncCreateResult(String(action.id), result.data);
             }
           } else if (action.type === 'cleaners_control') {
             console.log('Creando control de aseadores:', action.id);
@@ -2916,6 +3922,7 @@ function AppContent() {
               console.log('Control de aseadores creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaners_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2942,13 +3949,26 @@ function AppContent() {
               console.log('Agenda minuta creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
+                const localKey = String(action.id ?? '').trim();
                 const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && (item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda')) {
-                    return { ...item, synced: true, id: result.data?.id || item.id, type: 'agenda_minuta' };
+                  if (
+                    (item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda') &&
+                    localKey.length > 0 &&
+                    String(item.id_local ?? '').trim() === localKey
+                  ) {
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id || item.id,
+                      id_local: '',
+                      type: 'agenda_minuta',
+                      isActive: true,
+                    };
                   }
                   return item;
                 });
@@ -2968,6 +3988,7 @@ function AppContent() {
               console.log('Plan de acción creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'action_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -2994,6 +4015,7 @@ function AppContent() {
               console.log('Rol de trabajo creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3020,6 +4042,7 @@ function AppContent() {
               console.log('Datos básicos de contrato creados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'contract_basic_data'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3046,6 +4069,7 @@ function AppContent() {
               console.log('Cronograma de entrega creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'delivery_schedule'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3072,6 +4096,7 @@ function AppContent() {
               console.log('Plan de gestión ambiental creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'environmental_management_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3098,6 +4123,7 @@ function AppContent() {
               console.log('Plan de trabajo - Personal Aseo y limpieza creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_work_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3124,6 +4150,7 @@ function AppContent() {
               console.log('Plan para la atención de situaciones especiales creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'special_situations_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3150,6 +4177,7 @@ function AppContent() {
               console.log('Registro de tareas o actividades de limpieza creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'cleaning_tasks_activities'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3176,6 +4204,7 @@ function AppContent() {
               console.log('Matriz de riesgos creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'risk_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3202,6 +4231,7 @@ function AppContent() {
               console.log('Matriz de oportunidades creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opportunity_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3228,6 +4258,7 @@ function AppContent() {
               console.log('Matriz de indicador de procesos creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'process_indicator_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3254,6 +4285,7 @@ function AppContent() {
               console.log('Rol de trabajo mensual creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'monthly_work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3285,6 +4317,7 @@ function AppContent() {
               console.log('Solicitud de permiso creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'permit_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3300,9 +4333,25 @@ function AppContent() {
             }
           } else if (action.type === 'acta_entrega_producto') {
             console.log('Creando acta de entrega de productos:', action.id);
+            const rawPayload = action.payload || {};
+            const { acta_entrega_images_meta, ...restPayload } = rawPayload as {
+              acta_entrega_images_meta?: import('@/hooks/actaEntregaProductosImagesSync').ActaEntregaImageSyncMeta[];
+            } & Record<string, unknown>;
+            const requestData: Record<string, unknown> = { ...restPayload };
+
+            if (Array.isArray(acta_entrega_images_meta) && acta_entrega_images_meta.length > 0) {
+              const { buildActaEntregaImagenesJsonForUpload } = await import('@/hooks/actaEntregaProductosImagesSync');
+              requestData.imagenes = await buildActaEntregaImagenesJsonForUpload({
+                meta: acta_entrega_images_meta,
+                actaIdForExistingServerImages: null,
+                refreshAccessToken,
+                logout,
+              });
+            }
+
             const { createActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
             const result = await createActaEntregaProducto({
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
@@ -3311,23 +4360,14 @@ function AppContent() {
               console.log('Acta creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'acta_entrega_producto'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && item.type === 'acta_entrega_producto') {
-                    return {
-                      ...item,
-                      synced: true,
-                      id: result.data?.id || item.id,
-                      images: result.data?.images || item.images || [],
-                    };
-                  }
-                  return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              if (Array.isArray(acta_entrega_images_meta) && acta_entrega_images_meta.length > 0) {
+                const { deleteActaEntregaLocalFilesFromMeta } = await import('@/hooks/actaEntregaProductosImagesSync');
+                await deleteActaEntregaLocalFilesFromMeta(acta_entrega_images_meta);
               }
+
+              await applyActaEntregaCreateSyncFromServer(action.id, result.data, restPayload);
             }
           } else if (action.type === 'attendance_control') {
             console.log('Creando control de asistencia:', action.id);
@@ -3342,13 +4382,21 @@ function AppContent() {
               console.log('Control de asistencia creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'attendance_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'attendance_control') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                    return {
+                      ...item,
+                      synced: true,
+                      id: result.data?.id ?? item.id,
+                      id_local: '',
+                      images: result.data?.images || item.images || [],
+                      images_local: [],
+                    };
                   }
                   return item;
                 });
@@ -3358,16 +4406,62 @@ function AppContent() {
           } else if (action.type === 'opening_closing_position') {
             console.log('Creando apertura-cierre de puesto:', action.id);
             const { createOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            const {
+              buildOpeningClosingImagenesJsonForUpload,
+              deleteOpeningClosingLocalFilesFromMeta,
+            } = await import('@/hooks/openingClosingPositionFilesSync');
+
+            const rawPayload = { ...(action.payload || {}) };
+            const metaAll = Array.isArray(rawPayload.imagenes_meta) ? rawPayload.imagenes_meta : [];
+            const deleteMeta = Array.isArray(rawPayload.delete_imagenes_meta) ? rawPayload.delete_imagenes_meta : [];
+            const deletedIds = new Set(
+              deleteMeta.map((d: any) => Number(d?.id)).filter((n: number) => Number.isFinite(n) && n > 0)
+            );
+            const deletedLocals = new Set(
+              deleteMeta.map((d: any) => String(d?.id_local || '')).filter((s: string) => s.length > 0)
+            );
+            const metaFiltered = metaAll.filter((m: any) => {
+              if (m?.id != null && deletedIds.has(Number(m.id))) return false;
+              if (m?.id_local != null && deletedLocals.has(String(m.id_local))) return false;
+              return true;
+            });
+            delete rawPayload.imagenes_meta;
+            delete rawPayload.delete_imagenes_meta;
+
+            const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: metaFiltered });
+            if (imagenesStr) {
+              rawPayload.imagenes = imagenesStr;
+            }
+
             const result = await createOpeningClosingPosition({
-              requestData: action.payload,
+              requestData: rawPayload,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Apertura-Cierre de Puesto creado correctamente');
+              await deleteOpeningClosingLocalFilesFromMeta(metaFiltered);
+
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'opening_closing_position'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+
+              const serverId = (result as any)?.data?.id;
+              if (serverId != null) {
+                const localKey = String(action.id);
+                const sid = String(serverId);
+                const remapActions = actions.map((a: any) => {
+                  if (a.type !== 'opening_closing_position') return a;
+                  if (a.action === 'create') return a;
+                  if (String(a.id) === localKey) {
+                    return { ...a, id: sid };
+                  }
+                  return a;
+                });
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(remapActions));
+                actions = remapActions;
+              }
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3378,8 +4472,10 @@ function AppContent() {
                       ...item,
                       synced: true,
                       id: result.data?.id || item.id,
+                      id_local: '',
                       images: result.data?.images || item.images || [],
                       images_local: [],
+                      isActive: (result.data as any)?.isActive !== false,
                     };
                   }
                   return item;
@@ -3406,13 +4502,22 @@ function AppContent() {
               console.log('Registro de inducción y recorrido creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'induction_tour_record'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
+              if (cacheStr && result.data) {
+                const d = result.data as Record<string, unknown>;
                 const cache = JSON.parse(cacheStr);
                 const updatedCache = cache.map((item: any) => {
                   if (item.id_local === action.id && item.type === 'induction_tour_record') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
+                    return {
+                      ...item,
+                      ...d,
+                      synced: true,
+                      id: (d as any).id ?? item.id,
+                      type: 'induction_tour_record',
+                      isActive: (d as any).isActive !== false,
+                    };
                   }
                   return item;
                 });
@@ -3434,17 +4539,16 @@ function AppContent() {
                 (a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_induction_register')
               );
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if (item.id_local === action.id && item.type === 'general_induction_register') {
-                    return { ...item, synced: true, id: result.data?.id || item.id };
-                  }
-                  return item;
+              if (result.data) {
+                const { upsertGeneralInductionRegisterFromServerData } = await import(
+                  '@/hooks/generalInductionRegisterCache'
+                );
+                await upsertGeneralInductionRegisterFromServerData({
+                  idLocal: String(action.id),
+                  serverRow: result.data,
                 });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
           } else if (action.type === 'supervision_report') {
@@ -3460,6 +4564,7 @@ function AppContent() {
               console.log('Informe de supervisión creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'supervision_report'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3486,6 +4591,7 @@ function AppContent() {
               console.log('Guía de uso de cepillo eléctrico creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'electric_brush_guide'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3512,6 +4618,7 @@ function AppContent() {
               console.log('Listado general de clientes creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'general_clients_list'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3538,6 +4645,7 @@ function AppContent() {
               console.log('Control de acciones de mejora creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'improvement_actions_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3564,6 +4672,7 @@ function AppContent() {
               console.log('Política de calidad creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'quality_policy'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3590,6 +4699,7 @@ function AppContent() {
               console.log('Objetivos empresariales de calidad creados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'business_quality_objectives'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3616,6 +4726,7 @@ function AppContent() {
               console.log('Matriz de análisis de partes interesadas creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'stakeholder_analysis_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3642,6 +4753,7 @@ function AppContent() {
               console.log('Plan de comunicación creado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'communication_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3668,6 +4780,7 @@ function AppContent() {
               console.log('Matriz de gestión del conocimiento creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'knowledge_management_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3694,6 +4807,7 @@ function AppContent() {
               console.log('Planificación de cambios del SGC creada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'change_planning'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -3721,6 +4835,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'routes_and_tours'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Actualizar cache para marcar como sincronizado
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -3750,6 +4865,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && (!a.type || (a.type !== 'mileage_control' && a.type !== 'uniform_request' && a.type !== 'routes_and_tours' && a.type !== 'employee_satisfaction' && a.type !== 'vehicle_maintenance' && a.type !== 'non_conforming_product' && a.type !== 'complaints_master' && a.type !== 'cleaners_control' && a.type !== 'physical_minute_agenda' && a.type !== 'agenda_minuta' && a.type !== 'action_plan' && a.type !== 'work_role' && a.type !== 'contract_basic_data' && a.type !== 'delivery_schedule' && a.type !== 'environmental_management_plan' && a.type !== 'cleaning_work_plan' && a.type !== 'special_situations_plan' && a.type !== 'cleaning_tasks_activities' && a.type !== 'risk_matrix' && a.type !== 'opportunity_matrix' && a.type !== 'process_indicator_matrix' && a.type !== 'monthly_work_role' && a.type !== 'permit_request' && a.type !== 'attendance_control' && a.type !== 'opening_closing_position' && a.type !== 'acta_entrega_producto' && a.type !== 'induction_tour_record' && a.type !== 'supervision_report' && a.type !== 'electric_brush_guide'))));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           }
         } else if (action.action === 'delete_file') {
@@ -3766,19 +4882,112 @@ function AppContent() {
             if (result.status) {
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete_file' && a.type === 'complaints_master' && a.payload?.fileId === action.payload?.fileId));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
+              const { patchComplaintsMasterFilesForRecord } = await import('@/hooks/complaintsMasterCacheStorage');
+              await patchComplaintsMasterFilesForRecord(action.id, Number(action.payload?.fileId));
+            }
+          } else if (action.type === 'general_induction_register') {
+            console.log('Eliminando adjunto registro inducción general:', action.id, action.payload?.imageId);
+            const { deleteGeneralInductionRegisterImage } = await import('@/hooks/evaluationFunctions');
+            const { removeImageFromGeneralInductionCache } = await import('@/hooks/generalInductionRegisterCache');
+            const imageId = Number(action.payload?.imageId);
+            const result = await deleteGeneralInductionRegisterImage({
+              registroId: String(action.id),
+              imageId,
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              const updatedActions = actions.filter(
+                (a: any) =>
+                  !(
+                    a.id === action.id &&
+                    a.action === 'delete_file' &&
+                    a.type === 'general_induction_register' &&
+                    Number(a.payload?.imageId) === imageId
+                  )
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+              await removeImageFromGeneralInductionCache(String(action.id), imageId);
+            }
+          } else if (action.type === 'acta_entrega_producto') {
+            const actaId = Number(action.id);
+            const imageId = Number(action.payload?.imageId);
+            if (!Number.isFinite(actaId) || actaId <= 0 || !Number.isFinite(imageId) || imageId <= 0) {
+              const updatedActions = actions.filter(
+                (a: any) =>
+                  !(
+                    a.type === 'acta_entrega_producto' &&
+                    a.action === 'delete_file' &&
+                    String(a.id) === String(action.id)
+                  )
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+            } else {
+              const { deleteActaEntregaProductoImage } = await import('@/hooks/evaluationFunctions');
+              const result = await deleteActaEntregaProductoImage({
+                id: actaId,
+                imageId,
+                refreshAccessToken,
+                logout,
+              });
+              if (result.status) {
+                const updatedActions = actions.filter(
+                  (a: any) =>
+                    !(
+                      a.type === 'acta_entrega_producto' &&
+                      a.action === 'delete_file' &&
+                      Number(a.id) === actaId &&
+                      Number(a.payload?.imageId) === imageId
+                    )
+                );
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                actions = updatedActions;
+
+                const cache = await readActaEntregaProductosCache();
                 const updatedCache = cache.map((item: any) => {
-                  if ((item.id === action.id || item.id_local === action.id) && item.type === 'complaints_master') {
-                    const currentFiles = Array.isArray(item.files) ? item.files : [];
-                    return { ...item, files: currentFiles.filter((f: any) => f.id !== action.payload?.fileId) };
-                  }
-                  return item;
+                  if (item?.type !== 'acta_entrega_producto' || Number(item?.id) !== actaId) return item;
+                  const imgs = Array.isArray(item.images)
+                    ? item.images.filter((im: any) => Number(im?.id) !== imageId)
+                    : [];
+                  return { ...item, images: imgs };
                 });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                await writeActaEntregaProductosCache(updatedCache);
               }
+            }
+          }
+        } else if (action.action === 'delete_archivo' && action.type === 'non_conforming_product') {
+          const productoId = Number(action.payload?.productoId);
+          const archivoId = Number(action.payload?.archivoId);
+          if (!Number.isFinite(productoId) || productoId <= 0 || !Number.isFinite(archivoId) || archivoId <= 0) {
+            const updatedActions = actions.filter((a: any) => a.id !== action.id);
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+          } else {
+            console.log('Eliminando adjunto de producto no conforme (cola):', productoId, archivoId);
+            const { deleteNonConformingProductArchivo } = await import('@/hooks/evaluationFunctions');
+            const result = await deleteNonConformingProductArchivo({
+              productoId,
+              archivoId,
+              refreshAccessToken,
+              logout,
+            });
+            if (result.status) {
+              const updatedActions = actions.filter(
+                (a: any) =>
+                  !(
+                    a.id === action.id &&
+                    a.action === 'delete_archivo' &&
+                    a.type === 'non_conforming_product' &&
+                    Number(a.payload?.productoId) === productoId &&
+                    Number(a.payload?.archivoId) === archivoId
+                  )
+              );
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           }
         } else if (action.action === 'update') {
@@ -3797,6 +5006,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'mileage_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'uniform_request') {
             console.log('Actualizando solicitud de uniforme:', action.id);
@@ -3813,6 +5023,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'uniform_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'employee_satisfaction') {
             console.log('Actualizando encuesta de satisfacción:', action.id);
@@ -3828,6 +5039,7 @@ function AppContent() {
               console.log('Encuesta de satisfacción actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'employee_satisfaction'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'employee_satisfaction') {
             console.log('Actualizando encuesta de satisfacción:', action.id);
@@ -3843,6 +5055,7 @@ function AppContent() {
               console.log('Encuesta de satisfacción actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'employee_satisfaction'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'vehicle_maintenance') {
             console.log('Actualizando planificación de mantenimiento:', action.id);
@@ -3858,6 +5071,7 @@ function AppContent() {
               console.log('Planificación de mantenimiento actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'vehicle_maintenance'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'non_conforming_product') {
             console.log('Actualizando producto no conforme:', action.id);
@@ -3873,21 +5087,60 @@ function AppContent() {
               console.log('Producto no conforme actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'complaints_master') {
             console.log('Actualizando queja:', action.id);
             const { updateComplaintsMaster } = await import('@/hooks/evaluationFunctions');
+            const {
+              clearComplaintsMasterPendingFilesFromArchivoList,
+              buildComplaintsMasterRequestDataForSync,
+            } = await import('@/hooks/complaintsMasterFilesSync');
+            const { requestData, rawArchivos, diskHydrationComplete } =
+              await buildComplaintsMasterRequestDataForSync({
+                action: 'update',
+                actionId: action.id,
+                payload: action.payload,
+              });
+            if (!diskHydrationComplete) {
+              console.warn(
+                '[complaints_master] Actualización aplazada: no se pudieron leer adjuntos locales; no se envía ni se borran archivos.'
+              );
+              continue;
+            }
             const result = await updateComplaintsMaster({
               id: action.id,
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Queja actualizada correctamente');
+              await clearComplaintsMasterPendingFilesFromArchivoList(rawArchivos);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'complaints_master'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+
+              const { patchComplaintsMasterRowByRecordId } = await import('@/hooks/complaintsMasterCacheStorage');
+              const { normalizeServerFilesForComplaintCache } = await import('@/hooks/complaintsMasterFilesSync');
+              const raw = (result as any).data;
+              const serverRow =
+                raw && typeof raw === 'object'
+                  ? (() => {
+                      const { c_anexos_quejas: _a, archivos: _ar, ...r } = raw as any;
+                      return r;
+                    })()
+                  : {};
+              await patchComplaintsMasterRowByRecordId(String(action.id), {
+                ...serverRow,
+                synced: true,
+                id_local: '',
+                type: 'complaints_master',
+                ...(Array.isArray((raw as any)?.files)
+                  ? { files: normalizeServerFilesForComplaintCache((raw as any).files) }
+                  : {}),
+              });
             }
           } else if (action.type === 'cleaners_control') {
             console.log('Actualizando control de aseadores:', action.id);
@@ -3903,6 +5156,7 @@ function AppContent() {
               console.log('Control de aseadores actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaners_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'puesto_ubicacion') {
             console.log('Actualizando ubicación del puesto:', action.puesto_id);
@@ -3936,6 +5190,7 @@ function AppContent() {
                   console.log('Ubicación del puesto actualizada correctamente');
                   const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'puesto_ubicacion'));
                   await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+                  actions = updatedActions;
 
                   // Actualizar cache
                   const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -3950,47 +5205,27 @@ function AppContent() {
                     await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
                   }
 
-                  // Mantener main_structure_cache sincronizado con las coordenadas nuevas del puesto
-                  const mainStructureCacheStr = await AsyncStorage.getItem('main_structure_cache');
-                  if (mainStructureCacheStr) {
-                    const mainStructure = JSON.parse(mainStructureCacheStr);
-                    const puestoId = Number(action?.puesto_id);
-                    const lat = String(action?.payload?.latitud ?? '');
-                    const lng = String(action?.payload?.longitud ?? '');
-                    if (puestoId > 0 && lat && lng && Array.isArray(mainStructure)) {
-                      const updatedMainStructure = mainStructure.map((empresa: any) => ({
-                        ...empresa,
-                        clientes: Array.isArray(empresa?.clientes)
-                          ? empresa.clientes.map((cliente: any) => ({
-                            ...cliente,
-                            division: Array.isArray(cliente?.division)
-                              ? cliente.division.map((division: any) => ({
-                                ...division,
-                                contratos: Array.isArray(division?.contratos)
-                                  ? division.contratos.map((contrato: any) => ({
-                                    ...contrato,
-                                    sucursales: Array.isArray(contrato?.sucursales)
-                                      ? contrato.sucursales.map((sucursal: any) => ({
-                                        ...sucursal,
-                                        puestos: Array.isArray(sucursal?.puestos)
-                                          ? sucursal.puestos.map((puesto: any) =>
-                                            Number(puesto?.id) === puestoId
-                                              ? { ...puesto, ubicacion: { lat, lng } }
-                                              : puesto
-                                          )
-                                          : [],
-                                      }))
-                                      : [],
-                                  }))
-                                  : [],
-                              }))
-                              : [],
-                          }))
-                          : [],
-                      }));
-                      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updatedMainStructure));
-                    }
+                  const puestoId = Number(action?.puesto_id);
+                  const rawLat = action?.payload?.latitud;
+                  const rawLng = action?.payload?.longitud;
+                  const clearingUbicacion = rawLat === null && rawLng === null;
+                  const lat = clearingUbicacion ? null : String(rawLat ?? '');
+                  const lng = clearingUbicacion ? null : String(rawLng ?? '');
+
+                  if (puestoId > 0 && (clearingUbicacion || (lat && lng))) {
+                    const sidHint =
+                      action?.sucursal_id != null && action?.sucursal_id !== ''
+                        ? Number(action.sucursal_id)
+                        : null;
+                    await writePuestoUbicacionDispositivo(puestoId, lat, lng);
+                    await patchSucursalPuestosUbicacionInFragments(
+                      puestoId,
+                      lat,
+                      lng,
+                      Number.isFinite(Number(sidHint)) && Number(sidHint) > 0 ? sidHint : null,
+                    );
                   }
+
                 }
               }
             } catch (error) {
@@ -4010,6 +5245,33 @@ function AppContent() {
               console.log('Agenda minuta actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const targetId = String(action.remote_id || action.id);
+                const actionLocalKey = String(action.id_local ?? '').trim();
+                const updatedCache = cache.map((item: any) => {
+                  const sameType = item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda';
+                  const sameRecord =
+                    String(item.id) === targetId ||
+                    String(item.id_local ?? '').trim() === String(action.id ?? '').trim() ||
+                    (actionLocalKey.length > 0 && String(item.id_local ?? '').trim() === actionLocalKey);
+                  if (sameType && sameRecord) {
+                    return {
+                      ...item,
+                      ...(action.payload || {}),
+                      ...(result.data || {}),
+                      type: 'agenda_minuta',
+                      synced: true,
+                      isActive: true,
+                    };
+                  }
+                  return item;
+                });
+                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
             }
           } else if (action.type === 'action_plan') {
             console.log('Actualizando plan de acción:', action.id);
@@ -4025,6 +5287,7 @@ function AppContent() {
               console.log('Plan de acción actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'action_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'work_role') {
             console.log('Actualizando rol de trabajo:', action.id);
@@ -4040,6 +5303,7 @@ function AppContent() {
               console.log('Rol de trabajo actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'contract_basic_data') {
             console.log('Actualizando datos básicos de contrato:', action.id);
@@ -4055,6 +5319,7 @@ function AppContent() {
               console.log('Datos básicos de contrato actualizados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'contract_basic_data'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'delivery_schedule') {
             console.log('Actualizando cronograma de entrega:', action.id);
@@ -4070,6 +5335,7 @@ function AppContent() {
               console.log('Cronograma de entrega actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'delivery_schedule'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'environmental_management_plan') {
             console.log('Actualizando plan de gestión ambiental:', action.id);
@@ -4085,6 +5351,7 @@ function AppContent() {
               console.log('Plan de gestión ambiental actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'environmental_management_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'cleaning_work_plan') {
             console.log('Actualizando plan de trabajo - Personal Aseo y limpieza:', action.id);
@@ -4100,6 +5367,7 @@ function AppContent() {
               console.log('Plan de trabajo - Personal Aseo y limpieza actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_work_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'special_situations_plan') {
             console.log('Actualizando plan para la atención de situaciones especiales:', action.id);
@@ -4115,6 +5383,7 @@ function AppContent() {
               console.log('Plan para la atención de situaciones especiales actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'special_situations_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'cleaning_tasks_activities') {
             console.log('Actualizando registro de tareas o actividades de limpieza:', action.id);
@@ -4130,6 +5399,7 @@ function AppContent() {
               console.log('Registro de tareas o actividades de limpieza actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'cleaning_tasks_activities'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'risk_matrix') {
             console.log('Actualizando matriz de riesgos:', action.id);
@@ -4145,6 +5415,7 @@ function AppContent() {
               console.log('Matriz de riesgos actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'risk_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'opportunity_matrix') {
             console.log('Actualizando matriz de oportunidades:', action.id);
@@ -4160,6 +5431,7 @@ function AppContent() {
               console.log('Matriz de oportunidades actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opportunity_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'process_indicator_matrix') {
             console.log('Actualizando matriz de indicador de procesos:', action.id);
@@ -4175,6 +5447,7 @@ function AppContent() {
               console.log('Matriz de indicador de procesos actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'process_indicator_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'monthly_work_role') {
             console.log('Actualizando rol de trabajo mensual:', action.id);
@@ -4190,6 +5463,7 @@ function AppContent() {
               console.log('Rol de trabajo mensual actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'monthly_work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'permit_request') {
             console.log('Actualizando solicitud de permiso:', action.id);
@@ -4209,13 +5483,30 @@ function AppContent() {
               console.log('Solicitud de permiso actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'permit_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'acta_entrega_producto') {
             console.log('Actualizando acta de entrega de productos:', action.id);
+            const rawPayload = action.payload || {};
+            const { acta_entrega_images_meta, ...restPayload } = rawPayload as {
+              acta_entrega_images_meta?: import('@/hooks/actaEntregaProductosImagesSync').ActaEntregaImageSyncMeta[];
+            } & Record<string, unknown>;
+            const requestData: Record<string, unknown> = { ...restPayload };
+
+            if (Array.isArray(acta_entrega_images_meta) && acta_entrega_images_meta.length > 0) {
+              const { buildActaEntregaImagenesJsonForUpload } = await import('@/hooks/actaEntregaProductosImagesSync');
+              requestData.imagenes = await buildActaEntregaImagenesJsonForUpload({
+                meta: acta_entrega_images_meta,
+                actaIdForExistingServerImages: Number(action.id),
+                refreshAccessToken,
+                logout,
+              });
+            }
+
             const { updateActaEntregaProducto } = await import('@/hooks/evaluationFunctions');
             const result = await updateActaEntregaProducto({
               id: action.id,
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
@@ -4224,12 +5515,37 @@ function AppContent() {
               console.log('Acta actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'acta_entrega_producto'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+
+              if (Array.isArray(acta_entrega_images_meta) && acta_entrega_images_meta.length > 0) {
+                const { deleteActaEntregaLocalFilesFromMeta } = await import('@/hooks/actaEntregaProductosImagesSync');
+                await deleteActaEntregaLocalFilesFromMeta(acta_entrega_images_meta);
+              }
+
+              try {
+                await applyActaEntregaUpdateSyncFromServer(action.id, result.data);
+              } catch {
+                // ignore
+              }
             }
           } else if (action.type === 'attendance_control') {
             console.log('Actualizando control de asistencia:', action.id);
             const { updateAttendanceControl } = await import('@/hooks/evaluationFunctions');
+            let resolvedId: any = action.id;
+            try {
+              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr);
+                const found = cache.find(
+                  (it: any) => it.type === 'attendance_control' && it.id_local === action.id && it.id
+                );
+                if (found?.id) resolvedId = String(found.id);
+              }
+            } catch {
+              // ignore
+            }
             const result = await updateAttendanceControl({
-              id: action.id,
+              id: resolvedId,
               requestData: action.payload,
               refreshAccessToken,
               logout,
@@ -4239,10 +5555,43 @@ function AppContent() {
               console.log('Control de asistencia actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'attendance_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+
+              try {
+                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const updatedCache = cache.map((item: any) => {
+                    if (
+                      (item.id === resolvedId ||
+                        String(item.id) === String(resolvedId) ||
+                        item.id_local === action.id) &&
+                      item.type === 'attendance_control'
+                    ) {
+                      return {
+                        ...item,
+                        synced: true,
+                        id: result.data?.id ?? resolvedId ?? item.id,
+                        id_local: '',
+                        images: result.data?.images || item.images || [],
+                        images_local: [],
+                      };
+                    }
+                    return item;
+                  });
+                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                }
+              } catch {
+                // ignore
+              }
             }
           } else if (action.type === 'opening_closing_position') {
             console.log('Actualizando apertura-cierre de puesto:', action.id);
             const { updateOpeningClosingPosition } = await import('@/hooks/evaluationFunctions');
+            const {
+              buildOpeningClosingImagenesJsonForUpload,
+              deleteOpeningClosingLocalFilesFromMeta,
+            } = await import('@/hooks/openingClosingPositionFilesSync');
             // Si el action.id es local, intentar resolver al ID real ya sincronizado
             let resolvedId: any = action.id;
             try {
@@ -4255,17 +5604,29 @@ function AppContent() {
             } catch {
               // ignore
             }
+
+            const rawUp = { ...(action.payload || {}) };
+            const metaUp = Array.isArray(rawUp.imagenes_meta) ? rawUp.imagenes_meta : [];
+            delete rawUp.imagenes_meta;
+            const imagenesStrUp = await buildOpeningClosingImagenesJsonForUpload({ meta: metaUp });
+            if (imagenesStrUp) {
+              rawUp.imagenes = imagenesStrUp;
+            }
+
             const result = await updateOpeningClosingPosition({
               id: resolvedId,
-              requestData: action.payload,
+              requestData: rawUp,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Apertura-Cierre de Puesto actualizado correctamente');
+              await deleteOpeningClosingLocalFilesFromMeta(metaUp);
+
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'opening_closing_position'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Marcar cache como sincronizado (y actualizar imágenes si vienen)
               try {
@@ -4279,6 +5640,7 @@ function AppContent() {
                         synced: true,
                         images: result.data?.images || item.images || [],
                         images_local: [],
+                        isActive: (result.data as any)?.isActive !== false,
                       };
                     }
                     return item;
@@ -4309,21 +5671,51 @@ function AppContent() {
               console.log('Registro de inducción y recorrido actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'induction_tour_record'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+              try {
+                if (result.data) {
+                  const d = result.data as Record<string, unknown>;
+                  const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                  if (cacheStr) {
+                    const cache = JSON.parse(cacheStr);
+                    const updatedCache = cache.map((item: any) => {
+                      if (item.type !== 'induction_tour_record') return item;
+                      if (String(item.id) === String(action.id) || String(item.id_local) === String(action.id)) {
+                        return {
+                          ...item,
+                          ...d,
+                          type: 'induction_tour_record',
+                          synced: true,
+                          isActive: (d as any).isActive !== false,
+                        };
+                      }
+                      return item;
+                    });
+                    await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                  }
+                }
+              } catch {
+                // ignore
+              }
             }
           } else if (action.type === 'general_induction_register') {
             console.log('Actualizando registro de inducción general:', action.id);
             const { updateGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
-            // Si el action.id es local, intentar resolver al ID real ya sincronizado
-            let resolvedId: any = action.id;
-            try {
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const found = cache.find((it: any) => it.type === 'general_induction_register' && it.id_local === action.id && it.id);
+            let resolvedId: string = String(action.id);
+            if (resolvedId.startsWith('local-')) {
+              try {
+                const { readAllGeneralInductionRegisterRecords } = await import('@/hooks/generalInductionRegisterCache');
+                const all = await readAllGeneralInductionRegisterRecords();
+                const found = all.find(
+                  (it: any) =>
+                    it.id_local === action.id &&
+                    it.id != null &&
+                    !String(it.id).startsWith('local-')
+                );
                 if (found?.id) resolvedId = String(found.id);
+              } catch {
+                // ignore
               }
-            } catch {
-              // ignore
             }
             const result = await updateGeneralInductionRegister({
               id: resolvedId,
@@ -4336,6 +5728,16 @@ function AppContent() {
               console.log('Registro de inducción general actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_induction_register'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
+              if (result.data) {
+                const { upsertGeneralInductionRegisterFromServerData } = await import(
+                  '@/hooks/generalInductionRegisterCache'
+                );
+                await upsertGeneralInductionRegisterFromServerData({
+                  idLocal: String(action.id),
+                  serverRow: result.data,
+                });
+              }
             }
           } else if (action.type === 'supervision_report') {
             console.log('Actualizando informe de supervisión:', action.id);
@@ -4351,6 +5753,7 @@ function AppContent() {
               console.log('Informe de supervisión actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'supervision_report'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'electric_brush_guide') {
             console.log('Actualizando guía de uso de cepillo eléctrico:', action.id);
@@ -4366,6 +5769,7 @@ function AppContent() {
               console.log('Guía de uso de cepillo eléctrico actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'electric_brush_guide'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'general_clients_list') {
             console.log('Actualizando listado general de clientes:', action.id);
@@ -4381,6 +5785,7 @@ function AppContent() {
               console.log('Listado general de clientes actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'general_clients_list'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'improvement_actions_control') {
             console.log('Actualizando control de acciones de mejora:', action.id);
@@ -4396,6 +5801,7 @@ function AppContent() {
               console.log('Control de acciones de mejora actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'improvement_actions_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'quality_policy') {
             console.log('Actualizando política de calidad:', action.id);
@@ -4411,6 +5817,7 @@ function AppContent() {
               console.log('Política de calidad actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'quality_policy'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'business_quality_objectives') {
             console.log('Actualizando objetivos empresariales de calidad:', action.id);
@@ -4426,6 +5833,7 @@ function AppContent() {
               console.log('Objetivos empresariales de calidad actualizados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'business_quality_objectives'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'stakeholder_analysis_matrix') {
             console.log('Actualizando matriz de análisis de partes interesadas:', action.id);
@@ -4441,6 +5849,7 @@ function AppContent() {
               console.log('Matriz de análisis de partes interesadas actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'stakeholder_analysis_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'communication_plan') {
             console.log('Actualizando plan de comunicación:', action.id);
@@ -4456,6 +5865,7 @@ function AppContent() {
               console.log('Plan de comunicación actualizado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'communication_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'knowledge_management_matrix') {
             console.log('Actualizando matriz de gestión del conocimiento:', action.id);
@@ -4471,6 +5881,7 @@ function AppContent() {
               console.log('Matriz de gestión del conocimiento actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'knowledge_management_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'change_planning') {
             console.log('Actualizando planificación de cambios del SGC:', action.id);
@@ -4486,6 +5897,7 @@ function AppContent() {
               console.log('Planificación de cambios del SGC actualizada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'change_planning'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           } else if (action.type === 'routes_and_tours') {
             console.log('Actualizando ruta o gira:', action.id);
@@ -4502,6 +5914,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'routes_and_tours'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
             }
           }
         } else if (action.action === 'delete') {
@@ -4519,12 +5932,21 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'mileage_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
+                const targetId = String(action.remote_id || action.id);
+                const updatedCache = cache.filter((item: any) => {
+                  const sameType = item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda';
+                  const sameRecord =
+                    String(item.id) === targetId ||
+                    String(item.id_local) === String(action.id) ||
+                    String(item.id_local) === String(action.id_local || '');
+                  return !(sameType && sameRecord);
+                });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
               }
             }
@@ -4542,6 +5964,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'uniform_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -4564,6 +5987,7 @@ function AppContent() {
               console.log('Encuesta de satisfacción eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'employee_satisfaction'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4585,6 +6009,7 @@ function AppContent() {
               console.log('Planificación de mantenimiento eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'vehicle_maintenance'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4606,6 +6031,7 @@ function AppContent() {
               console.log('Producto no conforme eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4627,13 +6053,10 @@ function AppContent() {
               console.log('Queja eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'complaints_master'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !(item.id === action.id || item.id_local === action.id));
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
+              const { removeComplaintsMasterRowByRecordId } = await import('@/hooks/complaintsMasterCacheStorage');
+              await removeComplaintsMasterRowByRecordId(action.id);
             }
           } else if (action.type === 'cleaners_control') {
             console.log('Eliminando control de aseadores:', action.id);
@@ -4648,6 +6071,7 @@ function AppContent() {
               console.log('Control de aseadores eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaners_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4669,6 +6093,7 @@ function AppContent() {
               console.log('Agenda minuta eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda')));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4690,6 +6115,7 @@ function AppContent() {
               console.log('Plan de acción eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'action_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4711,6 +6137,7 @@ function AppContent() {
               console.log('Rol de trabajo eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4732,6 +6159,7 @@ function AppContent() {
               console.log('Datos básicos de contrato eliminados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'contract_basic_data'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4753,6 +6181,7 @@ function AppContent() {
               console.log('Cronograma de entrega eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'delivery_schedule'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4774,6 +6203,7 @@ function AppContent() {
               console.log('Plan de gestión ambiental eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'environmental_management_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4795,6 +6225,7 @@ function AppContent() {
               console.log('Plan de trabajo - Personal Aseo y limpieza eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_work_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4816,6 +6247,7 @@ function AppContent() {
               console.log('Plan para la atención de situaciones especiales eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'special_situations_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4837,6 +6269,7 @@ function AppContent() {
               console.log('Registro de tareas o actividades de limpieza eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'cleaning_tasks_activities'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4858,6 +6291,7 @@ function AppContent() {
               console.log('Matriz de riesgos eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'risk_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4879,6 +6313,7 @@ function AppContent() {
               console.log('Matriz de oportunidades eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opportunity_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4900,6 +6335,7 @@ function AppContent() {
               console.log('Matriz de indicador de procesos eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'process_indicator_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4921,6 +6357,7 @@ function AppContent() {
               console.log('Rol de trabajo mensual eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'monthly_work_role'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4942,6 +6379,7 @@ function AppContent() {
               console.log('Solicitud de permiso eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'permit_request'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -4961,15 +6399,18 @@ function AppContent() {
 
             if (result.status) {
               console.log('Acta eliminada correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'acta_entrega_producto'));
+              const updatedActions = actions.filter((a: any) => !(
+                (a.id === action.id && a.action === 'delete' && a.type === 'acta_entrega_producto') ||
+                (a.type === 'acta_entrega_producto' && a.action === 'delete_file' && String(a.id) === String(action.id))
+              ));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'acta_entrega_producto'));
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
+              const cache = await readActaEntregaProductosCache();
+              const updatedCache = cache.filter(
+                (item: any) => !((item.id === action.id || item.id_local === action.id) && item.type === 'acta_entrega_producto'),
+              );
+              await writeActaEntregaProductosCache(updatedCache);
             }
           } else if (action.type === 'attendance_control') {
             console.log('Eliminando control de asistencia:', action.id);
@@ -4982,8 +6423,20 @@ function AppContent() {
 
             if (result.status) {
               console.log('Control de asistencia eliminado correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'attendance_control'));
+              const removedControlKey = String(action.id);
+              const updatedActions = actions.filter((a: any) => {
+                if (a.id === action.id && a.action === 'delete' && a.type === 'attendance_control') return false;
+                if (
+                  a.type === 'attendance_control_delete_image' &&
+                  a.action === 'delete' &&
+                  String(a.payload?.controlId ?? '') === removedControlKey
+                ) {
+                  return false;
+                }
+                return true;
+              });
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5015,8 +6468,19 @@ function AppContent() {
 
             if (result.status) {
               console.log('Apertura-Cierre de Puesto eliminado correctamente');
-              const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'opening_closing_position'));
+              const updatedActions = actions.filter((a: any) => {
+                if (a.type !== 'opening_closing_position') return true;
+                if (a.action === 'delete' && a.id === action.id) return false;
+                if (
+                  a.action === 'delete_file' &&
+                  (String(a.id) === String(resolvedId) || String(a.id) === String(action.id))
+                ) {
+                  return false;
+                }
+                return true;
+              });
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5038,6 +6502,7 @@ function AppContent() {
               console.log('Registro de inducción y recorrido eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'induction_tour_record'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5049,17 +6514,21 @@ function AppContent() {
           } else if (action.type === 'general_induction_register') {
             console.log('Eliminando registro de inducción general:', action.id);
             const { deleteGeneralInductionRegister } = await import('@/hooks/evaluationFunctions');
-            // Si el action.id es local, intentar resolver al ID real ya sincronizado
-            let resolvedId: any = action.id;
-            try {
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const found = cache.find((it: any) => it.type === 'general_induction_register' && it.id_local === action.id && it.id);
+            let resolvedId: string = String(action.id);
+            if (resolvedId.startsWith('local-')) {
+              try {
+                const { readAllGeneralInductionRegisterRecords } = await import('@/hooks/generalInductionRegisterCache');
+                const all = await readAllGeneralInductionRegisterRecords();
+                const found = all.find(
+                  (it: any) =>
+                    it.id_local === action.id &&
+                    it.id != null &&
+                    !String(it.id).startsWith('local-')
+                );
                 if (found?.id) resolvedId = String(found.id);
+              } catch {
+                // ignore
               }
-            } catch {
-              // ignore
             }
             const result = await deleteGeneralInductionRegister({
               id: resolvedId,
@@ -5071,13 +6540,12 @@ function AppContent() {
               console.log('Registro de inducción general eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_induction_register'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.filter((item: any) => !((item.id === resolvedId || String(item.id) === String(resolvedId) || item.id_local === action.id) && item.type === 'general_induction_register'));
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
+              const { removeGeneralInductionRegisterFromCacheByKeys } = await import(
+                '@/hooks/generalInductionRegisterCache'
+              );
+              await removeGeneralInductionRegisterFromCacheByKeys(String(resolvedId), action.id);
             }
           } else if (action.type === 'supervision_report') {
             console.log('Eliminando informe de supervisión:', action.id);
@@ -5092,6 +6560,7 @@ function AppContent() {
               console.log('Informe de supervisión eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'supervision_report'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5113,6 +6582,7 @@ function AppContent() {
               console.log('Guía de uso de cepillo eléctrico eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'electric_brush_guide'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5134,6 +6604,7 @@ function AppContent() {
               console.log('Listado general de clientes eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'general_clients_list'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5155,6 +6626,7 @@ function AppContent() {
               console.log('Control de acciones de mejora eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'improvement_actions_control'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5176,6 +6648,7 @@ function AppContent() {
               console.log('Política de calidad eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'quality_policy'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5197,6 +6670,7 @@ function AppContent() {
               console.log('Objetivos empresariales de calidad eliminados correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'business_quality_objectives'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5218,6 +6692,7 @@ function AppContent() {
               console.log('Matriz de análisis de partes interesadas eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'stakeholder_analysis_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5239,6 +6714,7 @@ function AppContent() {
               console.log('Plan de comunicación eliminado correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'communication_plan'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5260,6 +6736,7 @@ function AppContent() {
               console.log('Matriz de gestión del conocimiento eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'knowledge_management_matrix'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5281,6 +6758,7 @@ function AppContent() {
               console.log('Planificación de cambios del SGC eliminada correctamente');
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'change_planning'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
               if (cacheStr) {
@@ -5303,6 +6781,7 @@ function AppContent() {
               // Eliminar acción del array
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'delete' && a.type === 'routes_and_tours'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+              actions = updatedActions;
 
               // Eliminar del cache
               const cacheStr = await AsyncStorage.getItem('evaluations_cache');
@@ -5327,10 +6806,10 @@ function AppContent() {
 
     /* Procesar en orden: si la primera acción falla se detiene para reintentar tras la próxima reconexión. */
     while (true) {
-      const actionsStr = await AsyncStorage.getItem('surveys_actions');
+    const actionsStr = await AsyncStorage.getItem('surveys_actions');
       if (!actionsStr) break;
 
-      const actions = JSON.parse(actionsStr);
+    const actions = JSON.parse(actionsStr);
       if (!Array.isArray(actions) || actions.length === 0) break;
 
       const action = actions[0];
@@ -5347,11 +6826,24 @@ function AppContent() {
           });
 
           if (result.status) {
+            const newId = result.data?.id != null ? Number(result.data.id) : null;
             const cacheStr = await AsyncStorage.getItem('surveys_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((s: any) => s.id_local !== action.id);
-              await AsyncStorage.setItem('surveys_cache', JSON.stringify(updatedCache));
+            const list = cacheStr ? JSON.parse(cacheStr) : [];
+            const fullCache = Array.isArray(list) ? list : [];
+            const puestoId = Number(action.requestData?.puesto_id);
+            const withoutDraft = fullCache.filter(
+              (s: any) => String(s?.id_local ?? '') !== String(action.id)
+            );
+            if (newId != null && Number.isFinite(newId) && newId > 0 && Number.isFinite(puestoId) && puestoId > 0) {
+              const row = buildSurveyCacheRowFromCreateRequest(
+                action.requestData,
+                newId,
+                ''
+              );
+              const merged = upsertSurveyCacheRowForPuesto(withoutDraft, row, puestoId);
+              await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
+            } else {
+              await AsyncStorage.setItem('surveys_cache', JSON.stringify(withoutDraft));
             }
             done = true;
           }
@@ -5360,6 +6852,15 @@ function AppContent() {
           const result = await updateSurveyAPI({
             surveyId: action.surveyId,
             requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) done = true;
+        } else if (action.type === 'patchFirmaPersona' && action.surveyId) {
+          const result = await updateSurveySignatureAPI({
+            surveyId: Number(action.surveyId),
+            field: 'firma_persona_evaluada',
+            value: action.value != null ? String(action.value) : '',
             refreshAccessToken,
             logout,
           });
@@ -5393,6 +6894,7 @@ function AppContent() {
         } else {
           await AsyncStorage.setItem('surveys_actions', JSON.stringify(rest));
         }
+        eventBus.emit('surveysCacheUpdated');
       } else {
         break;
       }
@@ -5434,16 +6936,46 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           console.log('Creando capacitación:', action.id);
+          const requestData = await hydrateTrainingRequestDataForSync(action.requestData);
           const result = await createTraining({
-            requestData: action.requestData,
+            requestData,
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
-            console.log('Capacitación creada correctamente');
+            const newId = Number(
+              (result as { id?: number }).id ?? (result as { data?: { id?: number } }).data?.id
+            );
+            if (Number.isFinite(newId) && newId > 0 && action.id) {
+              const cacheStr = await AsyncStorage.getItem('trainings_cache');
+              if (cacheStr) {
+                const cache = JSON.parse(cacheStr) as any[];
+                const next = Array.isArray(cache)
+                  ? cache.map((t: any) => {
+                      if (t?.id === 0 && String(t?.id_local) === String(action.id)) {
+                        const { id_local, ...rest } = t;
+                        return { ...rest, id: newId };
+                      }
+                      return t;
+                    })
+                  : cache;
+                await AsyncStorage.setItem('trainings_cache', JSON.stringify(next));
+              }
+            }
           } else {
+            pending.push(action);
+          }
+        } else if (action.type === 'update' && action.trainingId != null) {
+          const requestData = await hydrateTrainingRequestDataForSync(action.requestData);
+          const result = await updateTraining({
+            trainingId: Number(action.trainingId),
+            requestData,
+            refreshAccessToken,
+            logout,
+          });
+          if (!result.status) {
             pending.push(action);
           }
         } else if (action.type === 'delete' && action.trainingId) {
@@ -5461,6 +6993,37 @@ function AppContent() {
                 (t: { id?: number }) => Number(t?.id) !== Number(action.trainingId)
               );
               await AsyncStorage.setItem('trainings_cache', JSON.stringify(updatedCache));
+            }
+          } else {
+            pending.push(action);
+          }
+        } else if (action.type === 'delete_file' && action.trainingId && action.fileName) {
+          const result = await deleteTrainingArchivo({
+            trainingId: Number(action.trainingId),
+            fileName: String(action.fileName),
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const cacheStr = await AsyncStorage.getItem('trainings_cache');
+            if (cacheStr) {
+              try {
+                const cache = JSON.parse(cacheStr) as any[];
+                const fn = String(action.fileName);
+                const next = Array.isArray(cache)
+                  ? cache.map((t: any) => {
+                      if (Number(t?.id) !== Number(action.trainingId)) return t;
+                      const arch = Array.isArray(t.archivos) ? t.archivos : [];
+                      return {
+                        ...t,
+                        archivos: arch.filter((x: any) => x && x.name !== fn),
+                      };
+                    })
+                  : cache;
+                await AsyncStorage.setItem('trainings_cache', JSON.stringify(next));
+              } catch {
+                /* ignore */
+              }
             }
           } else {
             pending.push(action);
@@ -5483,40 +7046,137 @@ function AppContent() {
   const checkStaffEvaluationsActionsCache = async () => {
     if (!employee) return;
 
-    const actionsStr = await AsyncStorage.getItem('evaluations_staff_actions');
-    if (!actionsStr) return;
+    const readActions = async (): Promise<any[]> => {
+      const s = await AsyncStorage.getItem('evaluations_staff_actions');
+      if (!s) return [];
+      const all = JSON.parse(s);
+      return Array.isArray(all) ? all : [];
+    };
 
-    const actions = JSON.parse(actionsStr);
-    if (!actions || actions.length === 0) return;
+    let actions = await readActions();
+    if (actions.length === 0) return;
 
     console.log('Sincronizando acciones de evaluaciones de personal:', actions.length);
+
+    const saveActions = async (next: any[]) => {
+      if (next.length === 0) {
+        await AsyncStorage.removeItem('evaluations_staff_actions');
+      } else {
+        await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(next));
+      }
+    };
+
+    const mergeFirmasIntoRequest = (req: any, a: any) => {
+      if (a?.field === 'firma_empleado') {
+        req.firma_empleado = a.value ?? null;
+      } else if (a?.field === 'firma_empleado_manual') {
+        req.firma_empleado_manual = a.value ?? null;
+      }
+    };
 
     for (const action of actions) {
       try {
         if (action.type === 'create') {
           console.log('Creando evaluación de personal:', action.id);
+          actions = await readActions();
+          const requestData = { ...action.requestData };
+          for (const u of actions) {
+            if (u.type === 'update' && u.id_local && String(u.id_local) === String(action.id)) {
+              mergeFirmasIntoRequest(requestData, u);
+            }
+          }
+          try {
+            const sections = JSON.parse(
+              typeof requestData.evaluacion === 'string' ? requestData.evaluacion : '[]',
+            );
+            const { evaluacion, fileSlots } = buildStaffEvaluacionForSubmit(sections);
+            requestData.evaluacion = evaluacion;
+            (requestData as any)._staffEvalFileSlots = fileSlots;
+          } catch {
+            /* noop */
+          }
+
           const result = await createStaffEvaluation({
-            requestData: action.requestData,
+            requestData,
             refreshAccessToken,
             logout,
           });
 
           if (result.status) {
             console.log('Evaluación de personal creada correctamente');
-            const updatedActions = actions.filter(
-              (a: any) => !(a.id === action.id && a.type === 'create')
-            );
-            await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(updatedActions));
-
-            // Limpiar del cache local por id_local si existe
-            const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
-            if (cacheStr) {
-              const cache = JSON.parse(cacheStr);
-              const updatedCache = cache.filter((e: any) => e.id_local !== action.id);
-              await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updatedCache));
+            const newId = result.evaluationId;
+            try {
+              const sec = JSON.parse(
+                typeof action.requestData?.evaluacion === 'string' ? action.requestData.evaluacion : '[]',
+              );
+              await deleteStaffEvalLocalImageFiles(sec);
+            } catch {
+              /* noop */
+            }
+            actions = await readActions();
+            const next = actions.filter((a: any) => {
+              if (a.id === action.id && a.type === 'create') return false;
+              if (a.type === 'update' && a.id_local && String(a.id_local) === String(action.id)) {
+                return false;
+              }
+              return true;
+            });
+            await saveActions(next);
+            if (newId) {
+              const d = (result as any).data;
+              const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
+              if (cacheStr) {
+                try {
+                  const cache = JSON.parse(cacheStr);
+                  if (Array.isArray(cache)) {
+                    const upd = cache.map((e: any) => {
+                      if (!e.id_local || String(e.id_local) !== String(action.id)) return e;
+                      const next: any = {
+                        ...e,
+                        id: newId,
+                        id_local: '',
+                        synced: true,
+                        isActive: true,
+                      };
+                      if (d && typeof d === 'object') {
+                        if (d.evaluacion != null) next.evaluacion = d.evaluacion;
+                        if (d.comentarios != null) next.comentarios = d.comentarios;
+                        if (d.firma_evaluador != null) next.firma_evaluador = d.firma_evaluador;
+                        if (d.firma_empleado !== undefined) next.firma_empleado = d.firma_empleado;
+                        if (d.firma_empleado_manual !== undefined) next.firma_empleado_manual = d.firma_empleado_manual;
+                        if (d.tipo != null) next.tipo = d.tipo;
+                        if (d.fecha_ingreso != null) next.fecha_ingreso = d.fecha_ingreso;
+                        if (d.fecha_evaluacion != null) next.fecha_evaluacion = d.fecha_evaluacion;
+                      }
+                      return next;
+                    });
+                    await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(upd));
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
             }
           }
-        } else if (action.type === 'update') {
+        }
+      } catch (error) {
+        console.error('Error procesando acción de evaluación de personal:', error);
+      }
+    }
+
+    actions = await readActions();
+    for (const action of actions) {
+      try {
+        if (action.type === 'update') {
+          if (!action.evaluationId || Number(action.evaluationId) === 0) {
+            if (action.id_local) {
+              const cur = await readActions();
+              if (cur.some((c: any) => c.type === 'create' && c.id && String(c.id) === String(action.id_local))) {
+                continue;
+              }
+            }
+            continue;
+          }
           console.log('Actualizando firma evaluación de personal:', action.evaluationId, action.field);
           const result = await updateStaffEvaluationSignature({
             evaluationId: Number(action.evaluationId),
@@ -5527,12 +7187,16 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(
-              a.type === 'update' &&
-              Number(a.evaluationId) === Number(action.evaluationId) &&
-              a.field === action.field
-            ));
-            await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(updatedActions));
+            actions = await readActions();
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  a.type === 'update' &&
+                  a.field === action.field &&
+                  Number(a.evaluationId) === Number(action.evaluationId)
+                ),
+            );
+            await saveActions(updatedActions);
 
             const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
             if (cacheStr) {
@@ -5544,7 +7208,9 @@ function AppContent() {
                       ? { firma_empleado: action.value ?? null }
                       : { firma_empleado_manual: action.value ?? null };
                   const updatedCache = cache.map((e: any) =>
-                    Number(e?.id) === Number(action.evaluationId) ? { ...e, ...patch } : e
+                    Number(e?.id) > 0 && Number(e?.id) === Number(action.evaluationId)
+                      ? { ...e, ...patch }
+                      : e,
                   );
                   await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(updatedCache));
                 }
@@ -5564,14 +7230,15 @@ function AppContent() {
           if (result.status) {
             console.log('Evaluación de personal eliminada correctamente');
             const deletedId = Number(action.id);
+            actions = await readActions();
             const updatedActions = actions.filter(
               (a: any) =>
                 !(
                   (a.type === 'delete' && Number(a.id) === deletedId) ||
                   (a.type === 'update' && Number(a.evaluationId) === deletedId)
-                )
+                ),
             );
-            await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(updatedActions));
+            await saveActions(updatedActions);
 
             const cacheStr = await AsyncStorage.getItem('evaluations_staff_cache');
             if (cacheStr) {
@@ -5636,6 +7303,25 @@ function AppContent() {
                 await AsyncStorage.setItem('incidents_cache', JSON.stringify(updatedCache));
               }
             }
+            if (result.incidentId) {
+              const cStr = await AsyncStorage.getItem('incident_contributions_actions');
+              if (cStr) {
+                try {
+                  const cList = JSON.parse(cStr);
+                  if (Array.isArray(cList) && cList.length > 0) {
+                    const nextC = cList.map((a: any) => {
+                      if (a.incidentLocalKey && String(a.incidentLocalKey) === String(action.id)) {
+                        return { ...a, incidentId: result.incidentId, incidentLocalKey: undefined };
+                      }
+                      return a;
+                    });
+                    await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(nextC));
+                  }
+                } catch {
+                  /* ignore */
+                }
+              }
+            }
           }
         } else if (action.type === 'update') {
           console.log('Actualizando incidente:', action.id);
@@ -5672,6 +7358,42 @@ function AppContent() {
               const cache = JSON.parse(cacheStr);
               const updatedCache = cache.filter((i: any) => i.id !== action.id);
               await AsyncStorage.setItem('incidents_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'delete_file') {
+          const { deleteIncidentFile } = await import('@/hooks/incidentsFunctions');
+          const result = await deleteIncidentFile({
+            incidentId: action.incidentId,
+            fileId: action.fileId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  a.type === 'delete_file' &&
+                  a.incidentId === action.incidentId &&
+                  a.fileId === action.fileId
+                )
+            );
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+
+            const cacheStrDf = await AsyncStorage.getItem('incidents_cache');
+            if (cacheStrDf) {
+              try {
+                const cache = JSON.parse(cacheStrDf);
+                if (Array.isArray(cache)) {
+                  const next = cache.map((row: any) => {
+                    if (Number(row?.id) !== Number(action.incidentId)) return row;
+                    const files = Array.isArray(row.files) ? row.files.filter((f: any) => Number(f?.id) !== Number(action.fileId)) : [];
+                    return { ...row, files };
+                  });
+                  await AsyncStorage.setItem('incidents_cache', JSON.stringify(next));
+                }
+              } catch {
+                /* ignore */
+              }
             }
           }
         }
@@ -5713,9 +7435,23 @@ function AppContent() {
     for (const action of actionsToProcess) {
       try {
         if (action.type === 'create') {
+          const incCacheStr = await AsyncStorage.getItem('incidents_cache');
+          const incCache = incCacheStr ? JSON.parse(incCacheStr) : [];
+          let incidentIdResolved = Number(action.incidentId);
+          if (!Number.isFinite(incidentIdResolved) || incidentIdResolved <= 0) {
+            if (action.incidentLocalKey) {
+              const row = (incCache as any[]).find(
+                (c) => c?.id_local && String(c.id_local) === String(action.incidentLocalKey)
+              );
+              if (row && row.id > 0) incidentIdResolved = row.id;
+            }
+          }
+          if (!incidentIdResolved || incidentIdResolved <= 0) {
+            continue;
+          }
           const { createIncidentContribution } = await import('@/hooks/incidentsFunctions');
           const result = await createIncidentContribution({
-            incidentId: action.incidentId,
+            incidentId: incidentIdResolved,
             requestData: action.requestData,
             refreshAccessToken,
             logout,
@@ -5725,14 +7461,18 @@ function AppContent() {
             actions = actions.filter((a: any) => !(a.type === 'create' && a.id === action.id));
             await AsyncStorage.setItem('incident_contributions_actions', JSON.stringify(actions));
 
-            // reemplazar id_local en incidents_cache -> incidente.aportes (si existe)
             if (result.contributionId) {
               const cacheStr = await AsyncStorage.getItem('incidents_cache');
               if (cacheStr) {
                 const cache = JSON.parse(cacheStr);
                 const updated = Array.isArray(cache)
                   ? cache.map((inc: any) => {
-                    if (inc?.id !== action.incidentId) return inc;
+                    const matchRow =
+                      inc?.id === incidentIdResolved ||
+                      (action.incidentLocalKey &&
+                        inc?.id_local &&
+                        String(inc.id_local) === String(action.incidentLocalKey));
+                    if (!matchRow) return inc;
                     const aportes = Array.isArray(inc?.aportes) ? inc.aportes : [];
                     const updatedAportes = aportes.map((a: any) => {
                       if (a?.id_local && a.id_local === action.id) {
@@ -5740,7 +7480,11 @@ function AppContent() {
                       }
                       return a;
                     });
-                    return { ...inc, aportes: updatedAportes };
+                    const nextRow =
+                      inc?.id > 0
+                        ? inc
+                        : { ...inc, id: incidentIdResolved, id_local: '' };
+                    return { ...nextRow, aportes: updatedAportes };
                   })
                   : cache;
                 await AsyncStorage.setItem('incidents_cache', JSON.stringify(updated));
@@ -5861,8 +7605,23 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           console.log('Creando nota de voz:', action.id);
+          const rawRd = { ...(action.requestData || {}) };
+          const localAudio =
+            rawRd.audio_local_file != null && String(rawRd.audio_local_file).trim() !== ''
+              ? String(rawRd.audio_local_file).trim()
+              : null;
+          if (localAudio) {
+            try {
+              const g = await getFile(localAudio);
+              rawRd.file_base64 = g.base64;
+            } catch (e) {
+              console.warn('Sincronización nota de voz (create): no se pudo leer audio local', e);
+              continue;
+            }
+            delete rawRd.audio_local_file;
+          }
           const result = await createVoiceNote({
-            requestData: action.requestData,
+            requestData: rawRd,
             marcaId: action.marcaId,
             refreshAccessToken,
             logout,
@@ -5870,8 +7629,40 @@ function AppContent() {
 
           if (result.status) {
             console.log('Nota de voz creada correctamente');
-            // Remove action from queue
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            const sid = Number(
+              (result as { id?: number }).id ??
+                (result as { data?: { id?: number } }).data?.id
+            );
+            if (Number.isFinite(sid) && sid > 0 && action.id != null) {
+              const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
+              let arr: any[] = cacheStr ? JSON.parse(cacheStr) : [];
+              if (!Array.isArray(arr)) arr = [];
+              const localKey = String(action.id);
+              arr = arr.map((v) => {
+                if (v != null && String(v.id_local) === localKey) {
+                  return {
+                    ...v,
+                    id: sid,
+                    id_local: '',
+                    file_base64: '',
+                    local_audio_file: undefined,
+                    isActive: true,
+                  };
+                }
+                return v;
+              });
+              await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(arr));
+            }
+            if (localAudio) {
+              try {
+                await deleteFile(localAudio);
+              } catch {
+                /* idempotente */
+              }
+            }
+            const updatedActions = actions.filter(
+              (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
+            );
             await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(updatedActions));
           }
         } else if (action.type === 'update') {
@@ -5979,6 +7770,21 @@ function AppContent() {
       console.log('Sin conexión, actualizando hora de acción...');
       await setDisconnectedTime();
     }
+
+    // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
+    // Se evita redirigir cuando ya estamos en esa pantalla.
+    try {
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (!currentMarca && navigationRef.current) {
+        const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
+        if (currentRoute !== 'MarcarIngresoSalida') {
+          navigationRef.current?.navigate('MarcarIngresoSalida');
+        }
+      }
+    } catch (e) {
+      console.error('Error verificando current_marca tras actualización de hora:', e);
+    }
+
     const horaAccion = await getHoraAccion();
     return horaAccion;
   }

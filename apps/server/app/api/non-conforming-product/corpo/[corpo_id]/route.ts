@@ -41,7 +41,7 @@ export async function GET(
                 action: "GET",
                 table: "c_producto_no_conforme",
                 operation: "findMany",
-                where: { corpo_id: corpoId },
+                where: { corpo_id: corpoId, isActive: true },
                 include: { e_archivos_producto_no_conforme: true },
                 orderBy: { created_at: 'desc' }
             },

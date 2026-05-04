@@ -4,6 +4,14 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 
+const stripDataUrlBase64 = (raw: string): string => {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const idx = s.indexOf("base64,");
+  if (s.toLowerCase().startsWith("data:") && idx >= 0) return s.slice(idx + "base64,".length).trim();
+  return s;
+};
+
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
   if (fecha instanceof Date) return fecha;
@@ -65,7 +73,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
-    const { division, fecha, temas_a_tratar, colaboradores, capacitadores, firma_responsable, imagenes } = await req.json();
+    const body = await req.json();
+    const {
+      division,
+      fecha,
+      temas_a_tratar,
+      colaboradores,
+      capacitadores,
+      firma_responsable,
+      imagenes,
+      empresa_id,
+      cliente_id,
+      corpo_id,
+      division_id,
+      contrato_id,
+      puesto_id,
+    } = body;
 
     const existing = await callDynamicPrisma({
       req,
@@ -80,6 +103,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     const existingObj = existing as any;
+    if (existingObj.isActive === false) {
+      return NextResponse.json({ status: false, message: "Registro no disponible" }, { status: 404 });
+    }
 
     const fechaParsed = parseFechaInput(fecha);
     if (fecha !== undefined && fecha !== null && !fechaParsed) {
@@ -88,6 +114,30 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const updateData: any = {};
     if (division !== undefined) updateData.division = String(division).trim();
+    if (empresa_id !== undefined) {
+      const n = parseInt(String(empresa_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.empresa_id = n;
+    }
+    if (cliente_id !== undefined) {
+      const n = parseInt(String(cliente_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.cliente_id = n;
+    }
+    if (corpo_id !== undefined) {
+      const n = parseInt(String(corpo_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.corpo_id = n;
+    }
+    if (division_id !== undefined) {
+      const n = parseInt(String(division_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.division_id = n;
+    }
+    if (contrato_id !== undefined) {
+      const n = parseInt(String(contrato_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.contrato_id = n;
+    }
+    if (puesto_id !== undefined) {
+      const n = parseInt(String(puesto_id), 10);
+      if (!Number.isNaN(n) && n > 0) updateData.puesto_id = n;
+    }
     if (fecha !== undefined) {
       if (fechaParsed) {
         updateData.fecha = fechaParsed.toISOString();
@@ -153,7 +203,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             type: "image",
             extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
             original_name: img.original_name,
-            file_base64: img.file_base64,
+            file_base64: stripDataUrlBase64(String(img.file_base64)),
           })),
       });
       const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];

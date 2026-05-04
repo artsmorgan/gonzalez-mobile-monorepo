@@ -40,6 +40,7 @@ export async function PUT(
         const {
             empresa_id,
             cliente_id,
+            division_id,
             contrato_id,
             corpo_id,
             puesto_id,
@@ -80,6 +81,7 @@ export async function PUT(
         const updateData: any = {};
         if (empresa_id !== undefined) updateData.empresa_id = Number(empresa_id);
         if (cliente_id !== undefined) updateData.cliente_id = Number(cliente_id);
+        if (division_id !== undefined) updateData.division_id = Number(division_id);
         if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id);
         if (corpo_id !== undefined) updateData.corpo_id = Number(corpo_id);
         if (puesto_id !== undefined) updateData.puesto_id = puesto_id !== null ? Number(puesto_id) : null;
@@ -234,6 +236,7 @@ export async function DELETE(
                             id: existingObj.id,
                             empresa_id: existingObj.empresa_id,
                             cliente_id: existingObj.cliente_id,
+                            division_id: existingObj.division_id,
                             contrato_id: existingObj.contrato_id,
                             corpo_id: existingObj.corpo_id,
                             puesto_id: existingObj.puesto_id,

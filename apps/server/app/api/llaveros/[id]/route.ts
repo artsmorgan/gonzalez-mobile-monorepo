@@ -4,6 +4,12 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 
+function parseId(v: unknown): number | null {
+  if (v === undefined || v === null || v === "") return null;
+  const n = parseInt(String(v), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -18,7 +24,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const body = await req.json();
-    const { marca_id, nombre_llavero, observaciones, firma_responsable, llaves } = body ?? {};
+    const {
+      marca_id,
+      nombre_llavero,
+      observaciones,
+      firma_responsable,
+      llaves,
+      empresa_id: bodyEmpresaId,
+      division_id: bodyDivisionId,
+      contrato_id: bodyContratoId,
+      cliente_id: bodyClienteId,
+      corpo_id: bodyCorpoId,
+      puesto_id: bodyPuestoId,
+    } = body ?? {};
     if (!marca_id) {
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
@@ -39,9 +57,47 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    // Ownership: solo se puede editar si pertenece al mismo cliente/corpo de la marca actual
-    if (existing.cliente_id !== marcaDia.cliente_id || existing.corpo_id !== marcaDia.corpo_id) {
+    if (existing.cliente_id !== marcaDia.cliente_id) {
       return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 200 });
+    }
+
+    const nextCliente =
+      bodyClienteId != null && String(bodyClienteId).trim() !== ""
+        ? parseInt(String(bodyClienteId), 10)
+        : existing.cliente_id;
+    const nextCorpo =
+      bodyCorpoId != null && String(bodyCorpoId).trim() !== ""
+        ? parseInt(String(bodyCorpoId), 10)
+        : existing.corpo_id;
+    const nextPuesto =
+      bodyPuestoId != null && String(bodyPuestoId).trim() !== ""
+        ? parseInt(String(bodyPuestoId), 10)
+        : existing.puesto_id;
+
+    if (nextCliente !== marcaDia.cliente_id) {
+      return NextResponse.json({ status: false, message: "Cliente destino no coincide con la marca" }, { status: 200 });
+    }
+
+    const nextEmpresa = parseId(bodyEmpresaId) ?? Number(existing.empresa_id);
+    const nextDivision = parseId(bodyDivisionId) ?? Number(existing.division_id);
+    const nextContrato = parseId(bodyContratoId) ?? Number(existing.contrato_id);
+    if (!Number.isFinite(nextEmpresa) || nextEmpresa <= 0 || !Number.isFinite(nextDivision) || nextDivision <= 0 || !Number.isFinite(nextContrato) || nextContrato <= 0) {
+      return NextResponse.json(
+        { status: false, message: "Indique empresa_id, division_id y contrato_id válidos" },
+        { status: 200 }
+      );
+    }
+
+    if (Number(nextCorpo) !== Number(existing.corpo_id)) {
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "DELETE",
+          table: "e_llave_en_llavero",
+          operation: "deleteMany",
+          where: { llavero_id: id },
+        },
+      });
     }
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -53,6 +109,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     const updateData: any = {
+      cliente_id: nextCliente,
+      corpo_id: nextCorpo,
+      puesto_id: nextPuesto,
+      empresa_id: nextEmpresa,
+      division_id: nextDivision,
+      contrato_id: nextContrato,
       nombre_llavero: typeof nombre_llavero === "string" ? nombre_llavero : existing.nombre_llavero,
       observaciones: typeof observaciones === "string" ? observaciones : existing.observaciones,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
@@ -123,7 +185,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             req,
             data: { action: "GET", table: "e_llave", operation: "findUnique", where: { id: llaveIdNum } }
           });
-          if (llave && llave.cliente_id === marcaDia.cliente_id && llave.corpo_id === marcaDia.corpo_id) {
+          if (llave && llave.cliente_id === nextCliente && llave.corpo_id === nextCorpo) {
             await callDynamicPrisma({
               req,
               data: {
@@ -160,7 +222,21 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    return NextResponse.json({ status: true, message: "Llavero actualizado correctamente" }, { status: 200 });
+    return NextResponse.json(
+      {
+        status: true,
+        message: "Llavero actualizado correctamente",
+        id,
+        empresa_id: nextEmpresa,
+        cliente_id: nextCliente,
+        division_id: nextDivision,
+        contrato_id: nextContrato,
+        corpo_id: nextCorpo,
+        sucursal_id: nextCorpo,
+        puesto_id: nextPuesto,
+      },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/llaveros/[id]:", errorMessage);
@@ -200,9 +276,19 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
-    if (existing.cliente_id !== marcaDia.cliente_id || existing.corpo_id !== marcaDia.corpo_id) {
+    if (existing.cliente_id !== marcaDia.cliente_id) {
       return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 200 });
     }
+
+    await callDynamicPrisma({
+      req,
+      data: {
+        action: "DELETE",
+        table: "e_llave_en_llavero",
+        operation: "deleteMany",
+        where: { llavero_id: id },
+      },
+    });
 
     // Registrar cambio de eliminación antes de eliminar
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;

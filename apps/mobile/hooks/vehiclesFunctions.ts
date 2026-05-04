@@ -23,6 +23,12 @@ interface DeleteVehicleParams {
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
 
+interface DeleteVehicleAttachmentParams {
+    vehicleId: number;
+    refreshAccessToken?: () => Promise<boolean>;
+    logout?: () => Promise<{ status: boolean; message: string }>;
+}
+
 export async function createVehicle({
     requestData,
     marcaId,
@@ -119,6 +125,49 @@ export async function updateVehicle({
     } catch (error) {
         console.error('Error updating vehicle:', error);
         return { status: false, message: 'Error al actualizar el vehículo' };
+    }
+}
+
+export async function deleteVehicleAttachment({
+    vehicleId,
+    refreshAccessToken,
+    logout,
+}: DeleteVehicleAttachmentParams) {
+    try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) {
+            throw new Error('Server URL not configured');
+        }
+
+        if (!refreshAccessToken || !logout) {
+            throw new Error('Auth handlers not provided');
+        }
+
+        const response = await authedFetch({
+            url: `${apiUrl}/api/vehicles/${vehicleId}/attachment`,
+            init: {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+            },
+            refreshAccessToken,
+            logout,
+        });
+
+        if (!response) {
+            return { status: false, message: 'Sesión expirada' };
+        }
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error deleting vehicle attachment:', error);
+        return { status: false, message: 'Error al eliminar el adjunto' };
     }
 }
 

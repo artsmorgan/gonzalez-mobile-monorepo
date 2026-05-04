@@ -11,6 +11,14 @@ type GeneralInductionImageInput = {
   original_name?: string;
 };
 
+const stripDataUrlBase64 = (raw: string): string => {
+  const s = String(raw || "").trim();
+  if (!s) return "";
+  const idx = s.indexOf("base64,");
+  if (s.toLowerCase().startsWith("data:") && idx >= 0) return s.slice(idx + "base64,".length).trim();
+  return s;
+};
+
 function safeParseJson<T>(value: any, fallback: T): T {
   try {
     if (typeof value === "string") {
@@ -187,13 +195,15 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
+    const whereActive = { ...where, isActive: true };
+
     const records = await callDynamicPrisma({
       req,
       data: {
         action: "GET",
         table: "c_registro_induccion_general",
         operation: "findMany",
-        where,
+        where: whereActive,
         orderBy: { created_at: "desc" },
         include: {
           c_imagenes_registro_induccion_general: true,
@@ -266,6 +276,9 @@ export async function POST(req: NextRequest) {
       empresa_id,
       cliente_id,
       corpo_id,
+      division_id,
+      contrato_id,
+      puesto_id,
       division,
       fecha,
       temas_a_tratar,
@@ -279,6 +292,9 @@ export async function POST(req: NextRequest) {
       ["empresa_id", empresa_id],
       ["cliente_id", cliente_id],
       ["corpo_id", corpo_id],
+      ["division_id", division_id],
+      ["contrato_id", contrato_id],
+      ["puesto_id", puesto_id],
       ["division", division],
       ["temas_a_tratar", temas_a_tratar],
       ["colaboradores", colaboradores],
@@ -294,8 +310,15 @@ export async function POST(req: NextRequest) {
     const empresaIdNum = parseInt(String(empresa_id), 10);
     const clienteIdNum = parseInt(String(cliente_id), 10);
     const corpoIdNum = parseInt(String(corpo_id), 10);
-    if ([empresaIdNum, clienteIdNum, corpoIdNum].some((n) => Number.isNaN(n) || n <= 0)) {
-      return NextResponse.json({ status: false, message: "IDs inválidos" }, { status: 400 });
+    const divisionIdNum = parseInt(String(division_id), 10);
+    const contratoIdNum = parseInt(String(contrato_id), 10);
+    const puestoIdNum = parseInt(String(puesto_id), 10);
+    if (
+      [empresaIdNum, clienteIdNum, corpoIdNum, divisionIdNum, contratoIdNum, puestoIdNum].some(
+        (n) => Number.isNaN(n) || n <= 0
+      )
+    ) {
+      return NextResponse.json({ status: false, message: "IDs de jerarquía inválidos" }, { status: 400 });
     }
 
     const fechaParsed = parseFechaInput(fecha);
@@ -311,6 +334,10 @@ export async function POST(req: NextRequest) {
       empresa_id: empresaIdNum,
       cliente_id: clienteIdNum,
       corpo_id: corpoIdNum,
+      division_id: divisionIdNum,
+      contrato_id: contratoIdNum,
+      puesto_id: puestoIdNum,
+      isActive: true,
       division: String(division).trim(),
       temas_a_tratar: ensureStringJson(temas_a_tratar, "[]"),
       colaboradores: ensureStringJson(colaboradores, "[]"),
@@ -353,7 +380,7 @@ export async function POST(req: NextRequest) {
             type: "image",
             extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
             original_name: img.original_name,
-            file_base64: img.file_base64,
+            file_base64: stripDataUrlBase64(String(img.file_base64)),
           })),
       });
 

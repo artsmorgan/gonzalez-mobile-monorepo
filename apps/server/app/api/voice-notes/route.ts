@@ -49,13 +49,18 @@ export async function GET(req: NextRequest) {
                 return NextResponse.json({ status: false, message: "El puesto no pertenece al corpo indicado" }, { status: 200 });
             }
             voiceNotesWhere = {
-                OR: [
-                    { corpo_id: corpoId, puesto_id: puestoId },
-                    { corpo_id: corpoId, puesto_id: null }
-                ]
+                AND: [
+                    { isActive: true },
+                    {
+                        OR: [
+                            { corpo_id: corpoId, puesto_id: puestoId },
+                            { corpo_id: corpoId, puesto_id: null }
+                        ],
+                    },
+                ],
             };
         } else {
-            voiceNotesWhere = { corpo_id: corpoId };
+            voiceNotesWhere = { corpo_id: corpoId, isActive: true };
         }
 
         const voiceNotes = await callDynamicPrisma({
@@ -63,7 +68,7 @@ export async function GET(req: NextRequest) {
             data: { action: "GET", table: "c_notas_voz", operation: "findMany", where: voiceNotesWhere }
         });
 
-        const voiceNotes_return: { id: number, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, corpo: { id: number, nombre: string }, puesto: { id: number, nombre: string } | null, titulo: string, descripcion: string, transcripcion: string, firma_responsable: string, nombre_firma: string, nombre_creator: string, id_local: string, file_base64: string, created_by: number, created_at: string }[] = [];
+        const voiceNotes_return: { id: number, isActive: boolean, empresa: { id: number, nombre: string }, cliente: { id: number, nombre: string }, corpo: { id: number, nombre: string }, puesto: { id: number, nombre: string } | null, titulo: string, descripcion: string, transcripcion: string, firma_responsable: string, nombre_firma: string, nombre_creator: string, id_local: string, file_base64: string, created_by: number, created_at: string }[] = [];
 
         for (const voiceNote of voiceNotes) {
 
@@ -141,8 +146,10 @@ export async function GET(req: NextRequest) {
                 }
             }
 
+            const vnAny = voiceNote as { isActive?: boolean; id: number };
             voiceNotes_return.push({
                 id: voiceNote.id,
+                isActive: vnAny.isActive !== false,
                 empresa: {
                     id: empresa.id,
                     nombre: empresa.nombre
@@ -188,6 +195,7 @@ export async function POST(req: NextRequest) {
             marca_id, setPuesto, titulo, descripcion, firma_responsable, file_base64, created_at,
             use_structure_from_hierarchy,
             structure_empresa_id, structure_cliente_id, structure_corpo_id, structure_puesto_id,
+            structure_division_id, structure_contrato_id,
         } = body;
 
         if (!marca_id || !titulo || !descripcion || !firma_responsable || !file_base64 || !created_at) {
@@ -206,6 +214,8 @@ export async function POST(req: NextRequest) {
         let clienteId = marca.cliente_id;
         let corpoId = marca.corpo_id;
         let puestoIdFinal: number | null = null;
+        let structureDivisionId: number | null = null;
+        let structureContratoId: number | null = null;
 
         if (use_structure_from_hierarchy === true) {
             const se = parseInt(String(structure_empresa_id), 10);
@@ -218,6 +228,14 @@ export async function POST(req: NextRequest) {
             clienteId = sc;
             corpoId = sco;
             puestoIdFinal = null;
+            if (structure_division_id != null && String(structure_division_id).trim() !== "") {
+                const sd = parseInt(String(structure_division_id), 10);
+                if (Number.isFinite(sd) && sd > 0) structureDivisionId = sd;
+            }
+            if (structure_contrato_id != null && String(structure_contrato_id).trim() !== "") {
+                const sct = parseInt(String(structure_contrato_id), 10);
+                if (Number.isFinite(sct) && sct > 0) structureContratoId = sct;
+            }
             if (structure_puesto_id !== undefined && structure_puesto_id !== null && String(structure_puesto_id).trim() !== "") {
                 const sp = parseInt(String(structure_puesto_id), 10);
                 if (!Number.isFinite(sp) || sp <= 0) {
@@ -275,6 +293,34 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
         }
 
+        let resolvedDivisionId: number;
+        let resolvedContratoId: number;
+        if (use_structure_from_hierarchy === true && structureDivisionId != null && structureDivisionId > 0 && structureContratoId != null && structureContratoId > 0) {
+            resolvedDivisionId = structureDivisionId;
+            resolvedContratoId = structureContratoId;
+        } else {
+            const cFromSuc = corpo.contrato_id != null ? Number(corpo.contrato_id) : NaN;
+            const cFromMarca = (marca as { contrato_id?: number | null }).contrato_id != null
+                ? Number((marca as { contrato_id?: number | null }).contrato_id)
+                : NaN;
+            const cTry = Number.isFinite(cFromSuc) && cFromSuc > 0 ? cFromSuc : cFromMarca;
+            if (!Number.isFinite(cTry) || cTry <= 0) {
+                return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (sucursal o marca)" }, { status: 200 });
+            }
+            const contrRow = await callDynamicPrisma({
+                req,
+                data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: cTry } }
+            });
+            const divFromContr = contrRow && (contrRow as { division_id?: number | null }).division_id != null
+                ? Number((contrRow as { division_id?: number | null }).division_id)
+                : NaN;
+            if (!Number.isFinite(divFromContr) || divFromContr <= 0) {
+                return NextResponse.json({ status: false, message: "No se pudo determinar la división del contrato" }, { status: 200 });
+            }
+            resolvedDivisionId = divFromContr;
+            resolvedContratoId = cTry;
+        }
+
         const newVoiceNote = await callDynamicPrisma({
             req,
             data: { action: "POST", table: "c_notas_voz", operation: "create", data: {
@@ -282,6 +328,8 @@ export async function POST(req: NextRequest) {
                 cliente_id: cliente.id,
                 corpo_id: corpo.id,
                 puesto_id: puestoIdFinal,
+                division_id: resolvedDivisionId,
+                contrato_id: resolvedContratoId,
                 titulo,
                 descripcion,
                 path: "-",
@@ -334,7 +382,14 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        return NextResponse.json({ status: true, message: "Nota de voz creada con éxito" }, { status: 200 });
+        if (!newVoiceNote || typeof (newVoiceNote as { id?: number }).id !== "number") {
+            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 200 });
+        }
+        const createdId = (newVoiceNote as { id: number }).id;
+        return NextResponse.json(
+            { status: true, message: "Nota de voz creada con éxito", id: createdId, data: { id: createdId } },
+            { status: 200 }
+        );
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

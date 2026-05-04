@@ -9,7 +9,20 @@ export async function POST(req: NextRequest) {
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { empleadoId, inicio, fin, pausas, es_manual, firma_empleado } = await req.json();
+        const {
+            empleadoId,
+            inicio,
+            fin,
+            pausas,
+            es_manual,
+            firma_empleado,
+            empresa_id: bodyEmpresaId,
+            cliente_id: bodyClienteId,
+            division_id: bodyDivisionId,
+            contrato_id: bodyContratoId,
+            corpo_id: bodyCorpoId,
+            puesto_id: bodyPuestoId,
+        } = await req.json();
 
         const decodedFirma = (() => {
             try {
@@ -37,6 +50,26 @@ export async function POST(req: NextRequest) {
         if (!empleadoIdToUse || !inicio || !fin || !firma_empleado) {
             console.log('Faltan datos requeridos', { empleadoIdToUse, inicio, fin, firma_empleado });
             return NextResponse.json({ status: false, message: "Faltan datos requeridos" }, { status: 400 });
+        }
+
+        const empresaId = parseInt(String(bodyEmpresaId), 10);
+        const clienteId = parseInt(String(bodyClienteId), 10);
+        const divisionId = parseInt(String(bodyDivisionId), 10);
+        const contratoId = parseInt(String(bodyContratoId), 10);
+        const corpoId = parseInt(String(bodyCorpoId), 10);
+        const puestoId = parseInt(String(bodyPuestoId), 10);
+        if (
+            !Number.isFinite(empresaId) || empresaId <= 0 ||
+            !Number.isFinite(clienteId) || clienteId <= 0 ||
+            !Number.isFinite(divisionId) || divisionId <= 0 ||
+            !Number.isFinite(contratoId) || contratoId <= 0 ||
+            !Number.isFinite(corpoId) || corpoId <= 0 ||
+            !Number.isFinite(puestoId) || puestoId <= 0
+        ) {
+            return NextResponse.json(
+                { status: false, message: "Faltan datos de jerarquía (empresa, cliente, división, contrato, sucursal o puesto). Verifique la marca actual." },
+                { status: 400 }
+            );
         }
 
         const empleado = await callDynamicPrisma({
@@ -102,6 +135,13 @@ export async function POST(req: NextRequest) {
                     fin: finDate.toISOString(),
                     pausas: String(pausas || "[]"),
                     es_manual: Boolean(es_manual),
+                    empresa_id: empresaId,
+                    cliente_id: clienteId,
+                    division_id: divisionId,
+                    contrato_id: contratoId,
+                    corpo_id: corpoId,
+                    puesto_id: puestoId,
+                    isActive: true,
                 },
                 returning: false
             }

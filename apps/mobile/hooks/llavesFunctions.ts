@@ -8,6 +8,10 @@ export type LlaveItem = {
   cliente_id: number;
   corpo_id: number;
   puesto_id: number;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  isActive?: boolean;
   lugar_abre: string;
   cantidad_copias: number;
   observaciones: string;

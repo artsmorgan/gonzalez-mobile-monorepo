@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, View, Image, Modal, Dimensions, Platform } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -24,6 +24,7 @@ import {
   readVisitorsCacheRaw,
   syncVisitorsCacheFromNetwork,
 } from '@/hooks/visitorsCacheHelpers';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
@@ -71,6 +72,13 @@ interface Visitor {
   id_local: string;
   /** Sucursal (`e_registro_personas.corpo_id`) para caché / listado */
   corpo_id?: number;
+  puesto_id?: number;
+  puesto_nombre?: string | null;
+  empresa_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  cliente_id?: number;
+  isActive?: boolean;
 }
 
 interface EditingVisitor {
@@ -106,6 +114,151 @@ interface EditingActivo {
 interface EditingDetalle {
   detalle: string;
   descripcion: string;
+}
+
+type MainStructureSucursalNode = { id: number; nombre: string; puestos?: { id: number; nombre: string }[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = {
+  id: number;
+  nombre: string;
+  /** Estructura plana; en caché mergeada a veces viene como `divisiones`. */
+  division?: MainStructureDivisionNode[];
+  divisiones?: MainStructureDivisionNode[];
+};
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type HierarchyCorpoIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+};
+
+type HierarchyFormIds = HierarchyCorpoIds & { puestoId: number };
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Alineado con estructura mergeada en caché: `division` o `divisiones` por cliente. */
+function getClienteDivisions(cliente: MainStructureClienteNode | null | undefined): MainStructureDivisionNode[] {
+  if (!cliente) return [];
+  const arr = cliente.division ?? cliente.divisiones;
+  return Array.isArray(arr) ? arr : [];
+}
+
+function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number): HierarchyCorpoIds | null {
+  const cid = Number(corpoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisions(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return {
+                empresaId: empresa.id,
+                clienteId: cliente.id,
+                divisionId: division.id,
+                contratoId: contrato.id,
+                corpoId: sucursal.id,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyFormIds | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisions(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function buildHierarchyRequestFieldsFromTree(
+  tree: MainStructureTree,
+  puestoId: number,
+  corpoId: number
+): {
+  empresa_id: number;
+  division_id: number;
+  contrato_id: number;
+  cliente_id: number;
+} | null {
+  const pid = Number(puestoId);
+  const sid = Number(corpoId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Number.isFinite(sid) || sid <= 0) return null;
+  const byP = findHierarchyByPuestoIn(tree, pid);
+  if (byP && Number(byP.corpoId) === sid) {
+    return {
+      empresa_id: byP.empresaId,
+      division_id: byP.divisionId,
+      contrato_id: byP.contratoId,
+      cliente_id: byP.clienteId,
+    };
+  }
+  return null;
+}
+
+function findPuestoNombreInStructure(structureArr: MainStructureTree, puestoId: number | null | undefined): string | null {
+  if (puestoId == null) return null;
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisions(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return puesto.nombre != null ? String(puesto.nombre) : null;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function stripQueuedVisitorUpdatesForVisitorId(actions: any[], visitorId: number): any[] {
@@ -168,6 +321,27 @@ export default function VisitorsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [roleName, setRoleName] = useState<string | null>(null);
+  const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
 
   // Editing state
   const [editingVisitor, setEditingVisitor] = useState<EditingVisitor | null>(null);
@@ -221,6 +395,7 @@ export default function VisitorsScreen() {
   const [filterDesde, setFilterDesde] = useState('');
   const [filterHasta, setFilterHasta] = useState('');
   const [filterNombreActivo, setFilterNombreActivo] = useState('');
+  const [filterPuestoNombre, setFilterPuestoNombre] = useState('');
   const [filterSinHoraSalida, setFilterSinHoraSalida] = useState(false);
   const [filterSinActivos, setFilterSinActivos] = useState(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
@@ -247,35 +422,8 @@ export default function VisitorsScreen() {
   const [cambiosItems, setCambiosItems] = useState<any[]>([]);
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [])
-  );
-
-  useEffect(() => {
-    const handler = () => {
-      loadData();
-    };
-
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-    };
-  }, []);
-
-  const loadData = async () => {
-    try {
-      // Ejecutar fetch de tipos de activos primero
-      await fetchTipoActivos();
-      // Luego fetch de visitantes
-      await fetchVisitors();
-    } catch (error) {
-      console.error('Error loading data:', error);
-    }
-  };
-
   const getConnectionStatus = async () => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable;
   };
@@ -459,55 +607,275 @@ export default function VisitorsScreen() {
     }
   };
 
-  const fetchVisitors = async () => {
+  type MarcaSnapshot = {
+    current: Record<string, any>;
+    roleName: string | null;
+    isOperativo: boolean;
+    marcaCorpoId: number | null;
+    filterEmpresaId: number | null;
+    filterClienteId: number | null;
+    filterDivisionId: number | null;
+    filterContratoId: number | null;
+    filterSucursalId: number | null;
+  };
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaCorpoId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const corpoId = numOrNull(corpoIdRaw);
+        setMarcaCorpoId(corpoId);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? role : null;
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaCorpoId: corpoId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        setMarcaCorpoId(null);
+        setRoleName(null);
+        return null;
+      }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+      setFilterSucursalId(fs);
+      filterSucursalIdRef.current = fs;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (Visitors):', e);
+    }
+  }, []);
+
+  const applyCurrentMarcaToCreateFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      if (rn === 'OPERATIVO') return;
+
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setFormPuestoId(
+        marca.puesto?.id != null
+          ? Number(marca.puesto.id)
+          : marca.puesto_id != null
+            ? Number(marca.puesto_id)
+            : null
+      );
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateFormHierarchy:', e);
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    setIsStructureLoading(true);
+    try {
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged) && merged.length > 0) {
+        setStructure(merged);
+        return merged;
+      }
+      setStructure([]);
+      return [];
+    } catch (e) {
+      console.error('Error loading main structure (Visitors):', e);
+      setStructure([]);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = structure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [structure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return getClienteDivisions(cliente);
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const formEmpresaNode = useMemo(() => {
+    if (formEmpresaId === null) return null;
+    return structure.find((e) => e.id === formEmpresaId) ?? null;
+  }, [structure, formEmpresaId]);
+  const formClienteOptions = useMemo(() => {
+    if (!formEmpresaNode) return [];
+    return (formEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formEmpresaNode]);
+  const formClienteNode = useMemo(() => {
+    if (!formEmpresaNode || formClienteId === null) return null;
+    return formEmpresaNode.clientes.find((c) => c.id === formClienteId) ?? null;
+  }, [formEmpresaNode, formClienteId]);
+  const formDivisionOptions = useMemo(() => {
+    if (!formClienteNode) return [];
+    return getClienteDivisions(formClienteNode).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [formClienteNode]);
+  const formDivisionNode = useMemo(() => {
+    if (!formClienteNode || formDivisionId === null) return null;
+    return getClienteDivisions(formClienteNode).find((d) => d.id === formDivisionId) ?? null;
+  }, [formClienteNode, formDivisionId]);
+  const formContratoOptions = useMemo(() => {
+    if (!formDivisionNode) return [];
+    return (formDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formDivisionNode]);
+  const formContratoNode = useMemo(() => {
+    if (!formDivisionNode || formContratoId === null) return null;
+    return (formDivisionNode.contratos || []).find((c) => c.id === formContratoId) ?? null;
+  }, [formDivisionNode, formContratoId]);
+  const formSucursalOptions = useMemo(() => {
+    if (!formContratoNode) return [];
+    return (formContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [formContratoNode]);
+  const formSucursalNode = useMemo(() => {
+    if (!formContratoNode || formSucursalId === null) return null;
+    return (formContratoNode.sucursales || []).find((s) => s.id === formSucursalId) ?? null;
+  }, [formContratoNode, formSucursalId]);
+  const formPuestoOptions = useMemo(() => {
+    if (!formSucursalNode) return [];
+    return (formSucursalNode.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre }));
+  }, [formSucursalNode]);
+
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setFormEmpresaId(empresaId);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setFormClienteId(clienteId);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const runFetchVisitors = useCallback(
+    async (snap: MarcaSnapshot) => {
     try {
       setIsLoading(true);
       setError(null);
-      setOfflineMessage(null);
+        setOfflineMessage(null);
 
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
-        setIsLoading(false);
+        await fetchMainStructure();
+
+        const marcaId = numOrNull(snap.current?.id);
+        const corpoId = snap.isOperativo
+          ? numOrNull(snap.marcaCorpoId)
+          : numOrNull(filterSucursalIdRef.current) ?? numOrNull(snap.filterSucursalId);
+
+        if (!marcaId || marcaId <= 0) {
+          setVisitors([]);
+          setOfflineMessage('Marca no válida.');
         return;
       }
 
-      const currentMarcaData = JSON.parse(currentMarca);
-      const marcaId = Number(currentMarcaData?.id);
-      const corpoIdRaw =
-        currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
-      const corpoId =
-        corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
+        if (!corpoId || corpoId <= 0) {
+          setVisitors([]);
+          setError(
+            snap.isOperativo
+              ? 'No se encontró la sucursal (corpo) en la marca actual.'
+              : 'Seleccione sucursal en el filtro para cargar o sincronizar visitantes.'
+          );
+          return;
+        }
 
-      setHasCurrentMarca(true);
-
-      if (
-        !Number.isFinite(marcaId) ||
-        marcaId <= 0 ||
-        !Number.isFinite(corpoId) ||
-        corpoId <= 0
-      ) {
-        setVisitors([]);
-        setOfflineMessage(
-          'No hay sucursal válida en la marca actual; no se puede cargar el listado.'
-        );
-        setIsLoading(false);
-        return;
-      }
+        const applyFilteredCache = async (hint: string | null) => {
+          const cached = await readVisitorsCacheRaw();
+          const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
+          setVisitors(filtered as Visitor[]);
+          if (hint) setOfflineMessage(hint);
+        };
 
       const isConnected = await getConnectionStatus();
 
-      const applyFilteredCache = async (hint: string | null) => {
-        const cached = await readVisitorsCacheRaw();
-        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
-        setVisitors(filtered as Visitor[]);
-        if (hint) setOfflineMessage(hint);
-      };
-
-      if (isConnected) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
+        if (!isConnected) {
+          const cached = await readVisitorsCacheRaw();
+          const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
+          setVisitors(filtered as Visitor[]);
+          setOfflineMessage(
+            filtered.length > 0
+              ? 'Modo Offline: mostrando visitas guardadas para esta sucursal.'
+              : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
+          );
+          return;
         }
 
         const syncResult = await syncVisitorsCacheFromNetwork({
@@ -525,60 +893,126 @@ export default function VisitorsScreen() {
           );
           if (syncResult.message) {
             setError(syncResult.message);
-          }
         }
-      } else {
-        const cached = await readVisitorsCacheRaw();
-        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
-        setVisitors(filtered as Visitor[]);
-        setOfflineMessage(
-          filtered.length > 0
-            ? 'Modo Offline: mostrando visitas guardadas para esta sucursal.'
-            : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
-        );
       }
     } catch (err) {
       console.error('Error fetching visitors:', err);
-      try {
-        const currentMarca = await AsyncStorage.getItem('current_marca');
-        if (!currentMarca) {
-          setVisitors([]);
-          return;
-        }
-        const currentMarcaData = JSON.parse(currentMarca);
-        const corpoIdRaw =
-          currentMarcaData?.corpo?.id ?? currentMarcaData?.corpo_id;
-        const corpoId =
-          corpoIdRaw != null && corpoIdRaw !== '' ? Number(corpoIdRaw) : NaN;
-        if (!Number.isFinite(corpoId) || corpoId <= 0) {
-          setVisitors([]);
-          return;
-        }
-        const cached = await readVisitorsCacheRaw();
-        const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoId);
-        if (filtered.length > 0) {
-          setVisitors(filtered as Visitor[]);
-          setOfflineMessage(
-            'Error de conexión. Mostrando visitas guardadas para esta sucursal.'
-          );
-        } else if (isProbablyNetworkError(err)) {
-          setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
-          setVisitors([]);
+        try {
+          const snap2 = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          const marcaId2 = numOrNull(snap2?.current?.id);
+          const corpoErr = snap2?.isOperativo
+            ? numOrNull(snap2.marcaCorpoId)
+            : numOrNull(filterSucursalIdRef.current) ?? numOrNull(snap2?.filterSucursalId);
+          if (!marcaId2 || !corpoErr || corpoErr <= 0) {
+            setVisitors([]);
+            return;
+          }
+          const cached = await readVisitorsCacheRaw();
+          const filtered = filterVisitorsCacheForCorpo(cached as Visitor[], corpoErr);
+          if (filtered.length > 0) {
+            setVisitors(filtered as Visitor[]);
+            setOfflineMessage(
+              'Error de conexión. Mostrando visitas guardadas para esta sucursal.'
+            );
+          } else if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setVisitors([]);
         } else {
           setError('Error al cargar las visitas');
-        }
-      } catch {
-        if (isProbablyNetworkError(err)) {
-          setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
-          setVisitors([]);
-        } else {
-          setError('Error al cargar las visitas');
-        }
+          }
+        } catch {
+          if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setVisitors([]);
+          } else {
+        setError('Error al cargar las visitas');
+          }
       }
     } finally {
       setIsLoading(false);
     }
-  };
+    },
+    [fetchMainStructure, refreshAccessToken, logout, syncMarcaFromStorage]
+  );
+
+  const fetchVisitors = useCallback(async () => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap) return;
+    await runFetchVisitors({
+      ...snap,
+      filterSucursalId: filterSucursalIdRef.current,
+    });
+  }, [syncMarcaFromStorage, runFetchVisitors]);
+
+  const runFetchVisitorsRef = useRef(runFetchVisitors);
+  const fetchVisitorsRef = useRef(fetchVisitors);
+  useEffect(() => {
+    runFetchVisitorsRef.current = runFetchVisitors;
+  }, [runFetchVisitors]);
+  useEffect(() => {
+    fetchVisitorsRef.current = fetchVisitors;
+  }, [fetchVisitors]);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
+  const loadData = useCallback(async () => {
+    try {
+      await fetchTipoActivos();
+      await fetchVisitors();
+    } catch (error) {
+      console.error('Error loading data:', error);
+    }
+  }, [fetchVisitors]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        await fetchTipoActivos();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+          if (cancelled) return;
+          if (snap) await runFetchVisitorsRef.current(snap);
+          else await fetchVisitorsRef.current();
+        } else {
+          await fetchVisitorsRef.current();
+        }
+      })();
+      const handler = () => {
+        void loadData();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, loadData])
+  );
+
+  const resolveCorpoIdForSave = useCallback(async (): Promise<number | null> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn === 'OPERATIVO') {
+      return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+    }
+    return numOrNull(formSucursalId) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+  }, [formSucursalId]);
+
+  const resolvePuestoIdForSave = useCallback(async (): Promise<number | null> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+    if (rn === 'OPERATIVO') {
+      return numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
+    }
+    return numOrNull(formPuestoId);
+  }, [formPuestoId]);
 
   const normalizeDateToYMD = (value: string) => {
     const raw = String(value || '').trim().split('T')[0];
@@ -700,6 +1134,8 @@ export default function VisitorsScreen() {
 
   const startCreating = () => {
     setIsCreating(true);
+    void fetchMainStructure();
+    void applyCurrentMarcaToCreateFormHierarchy();
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
@@ -742,6 +1178,12 @@ export default function VisitorsScreen() {
   const cancelCreating = () => {
     if (isSubmittingForm) return;
     setIsCreating(false);
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
@@ -770,6 +1212,73 @@ export default function VisitorsScreen() {
 
   const startEditing = async (visitor: Visitor) => {
     try {
+      const tree = await fetchMainStructure();
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      const marca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+      const rn =
+        marca?.roleDivision?.role?.nombre ??
+        marca?.role_division?.role?.nombre ??
+        null;
+      if (rn !== 'OPERATIVO' && tree.length) {
+        const pid = visitor.puesto_id != null ? Number(visitor.puesto_id) : NaN;
+        if (Number.isFinite(pid) && pid > 0) {
+          const byPuesto = findHierarchyByPuestoIn(tree, pid);
+          if (byPuesto) {
+            setFormEmpresaId(byPuesto.empresaId);
+            setFormClienteId(byPuesto.clienteId);
+            setFormDivisionId(byPuesto.divisionId);
+            setFormContratoId(byPuesto.contratoId);
+            setFormSucursalId(byPuesto.corpoId);
+            setFormPuestoId(byPuesto.puestoId);
+          } else {
+            const cid = visitor.corpo_id != null ? Number(visitor.corpo_id) : NaN;
+            if (Number.isFinite(cid) && cid > 0) {
+              const h = findHierarchyByCorpoIn(tree, cid);
+              if (h) {
+                setFormEmpresaId(h.empresaId);
+                setFormClienteId(h.clienteId);
+                setFormDivisionId(h.divisionId);
+                setFormContratoId(h.contratoId);
+                setFormSucursalId(h.corpoId);
+              } else {
+                setFormEmpresaId(null);
+                setFormClienteId(null);
+                setFormDivisionId(null);
+                setFormContratoId(null);
+                setFormSucursalId(numOrNull(visitor.corpo_id));
+              }
+            }
+            setFormPuestoId(numOrNull(visitor.puesto_id));
+          }
+        } else {
+          const cid = visitor.corpo_id != null ? Number(visitor.corpo_id) : NaN;
+          if (Number.isFinite(cid) && cid > 0) {
+            const h = findHierarchyByCorpoIn(tree, cid);
+            if (h) {
+              setFormEmpresaId(h.empresaId);
+              setFormClienteId(h.clienteId);
+              setFormDivisionId(h.divisionId);
+              setFormContratoId(h.contratoId);
+              setFormSucursalId(h.corpoId);
+            } else {
+              setFormEmpresaId(null);
+              setFormClienteId(null);
+              setFormDivisionId(null);
+              setFormContratoId(null);
+              setFormSucursalId(numOrNull(visitor.corpo_id));
+            }
+          }
+          setFormPuestoId(null);
+        }
+      } else {
+        setFormEmpresaId(null);
+        setFormClienteId(null);
+        setFormDivisionId(null);
+        setFormContratoId(null);
+        setFormSucursalId(null);
+        setFormPuestoId(null);
+      }
+
       const horaEntrada = parseHoraFromString(visitor.hora_entrada);
       const horaSalida = visitor.hora_salida ? parseHoraFromString(visitor.hora_salida) : { hour: '', minute: '' };
       const fechaEntrada = parseFechaFromString(visitor.hora_entrada);
@@ -889,6 +1398,12 @@ export default function VisitorsScreen() {
 
   const cancelEditing = () => {
     if (isSubmittingForm) return;
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
@@ -990,8 +1505,45 @@ export default function VisitorsScreen() {
                 return;
               }
 
+              const rnSave =
+                currentMarcaData?.roleDivision?.role?.nombre ??
+                currentMarcaData?.role_division?.role?.nombre ??
+                null;
+              if (rnSave !== 'OPERATIVO') {
+                const fs = numOrNull(formSucursalId);
+                const fp = numOrNull(formPuestoId);
+                if (!fs || fs <= 0) {
+                  Alert.alert('Error', 'Seleccione sucursal en la jerarquía');
+                  return;
+                }
+                if (!fp || fp <= 0) {
+                  Alert.alert('Error', 'Seleccione puesto en la jerarquía');
+                  return;
+                }
+              }
+
+              const corpoForCreate = await resolveCorpoIdForSave();
+              if (!corpoForCreate || corpoForCreate <= 0) {
+                Alert.alert('Error', 'No se pudo determinar la sucursal del registro');
+                return;
+              }
+
+              const puestoForCreate = await resolvePuestoIdForSave();
+              if (!puestoForCreate || puestoForCreate <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto del registro');
+                return;
+              }
+
+              const hierarchyFields = buildHierarchyRequestFieldsFromTree(
+                structure,
+                puestoForCreate,
+                corpoForCreate
+              );
               const requestBody = {
                 marca_id: currentMarcaData.id,
+                corpo_id: corpoForCreate,
+                puesto_id: puestoForCreate,
+                ...(hierarchyFields ?? {}),
                 nombre: nombreRef.current,
                 cedula: cedulaRef.current,
                 hora_entrada: converted_hora_entrada,
@@ -1025,6 +1577,19 @@ export default function VisitorsScreen() {
                 });
 
                 if (data.status) {
+                  const mId = numOrNull(currentMarcaData.id);
+                  if (mId && corpoForCreate > 0) {
+                    try {
+                      await syncVisitorsCacheFromNetwork({
+                        marcaId: mId,
+                        corpoId: corpoForCreate,
+                        refreshAccessToken,
+                        logout,
+                      });
+                    } catch (e) {
+                      console.warn('syncVisitorsCacheFromNetwork after create', e);
+                    }
+                  }
                   Alert.alert('Éxito', 'Visitante creado correctamente');
                   cancelCreating();
                   fetchVisitors();
@@ -1056,12 +1621,8 @@ export default function VisitorsScreen() {
                 const cacheStr = await AsyncStorage.getItem('visitors_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-                const corpoOffline =
-                  currentMarcaData?.corpo?.id != null
-                    ? Number(currentMarcaData.corpo.id)
-                    : currentMarcaData?.corpo_id != null
-                      ? Number(currentMarcaData.corpo_id)
-                      : NaN;
+                const corpoOffline = Number(corpoForCreate);
+                const puestoOffline = Number(puestoForCreate);
                 const newVisitorCache: Visitor = {
                   id: 0,
                   nombre: nombreRef.current,
@@ -1088,9 +1649,21 @@ export default function VisitorsScreen() {
                   })),
                   updated_at: new Date(horaAccion).toISOString(),
                   id_local: localId,
-                  ...(Number.isFinite(corpoOffline) && corpoOffline > 0
-                    ? { corpo_id: corpoOffline }
+                  corpo_id: corpoOffline,
+                  puesto_id: puestoOffline,
+                  puesto_nombre:
+                    puestoOffline > 0
+                      ? findPuestoNombreInStructure(structure, puestoOffline)
+                      : null,
+                  ...(hierarchyFields
+                    ? {
+                        empresa_id: hierarchyFields.empresa_id,
+                        division_id: hierarchyFields.division_id,
+                        contrato_id: hierarchyFields.contrato_id,
+                        cliente_id: hierarchyFields.cliente_id,
+                      }
                     : {}),
+                  isActive: true,
                 };
 
                 cache.push(newVisitorCache);
@@ -1209,6 +1782,34 @@ export default function VisitorsScreen() {
                 return;
               }
 
+              const rnEdit =
+                currentMarcaData?.roleDivision?.role?.nombre ??
+                currentMarcaData?.role_division?.role?.nombre ??
+                null;
+              let corpoUpdate: number | undefined;
+              let puestoUpdate: number | undefined;
+              if (rnEdit !== 'OPERATIVO') {
+                const fs = numOrNull(formSucursalId);
+                const fp = numOrNull(formPuestoId);
+                if (!fs || fs <= 0) {
+                  Alert.alert('Error', 'Seleccione sucursal en la jerarquía');
+                  return;
+                }
+                if (!fp || fp <= 0) {
+                  Alert.alert('Error', 'Seleccione puesto en la jerarquía');
+                  return;
+                }
+                corpoUpdate = fs;
+                puestoUpdate = fp;
+              }
+
+              const corpoForHierarchy = corpoUpdate ?? (await resolveCorpoIdForSave());
+              const puestoForHierarchy = puestoUpdate ?? (await resolvePuestoIdForSave());
+              const editHierarchy =
+                corpoForHierarchy && corpoForHierarchy > 0 && puestoForHierarchy && puestoForHierarchy > 0
+                  ? buildHierarchyRequestFieldsFromTree(structure, puestoForHierarchy, corpoForHierarchy)
+                  : null;
+
               const requestBody = {
                 nombre: nombreRef.current,
                 cedula: cedulaRef.current,
@@ -1228,6 +1829,12 @@ export default function VisitorsScreen() {
                   numero_id: activo.numero_id,
                   numero_activo: activo.numero_activo,
                 })),
+                ...(editHierarchy ?? {}),
+                /** Campos no usados por el API PUT: facilitan `syncVisitorsCacheFromNetwork` en la cola. */
+                marca_id: currentMarcaData.id,
+                sucursal_sync_corpo_id: corpoForHierarchy,
+                ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
+                ...(puestoUpdate != null && puestoUpdate > 0 ? { puesto_id: puestoUpdate } : {}),
               };
 
               // Verificar conectividad
@@ -1243,6 +1850,20 @@ export default function VisitorsScreen() {
                 });
 
                 if (data.status) {
+                  const mId = numOrNull(currentMarcaData.id);
+                  const cSync = corpoForHierarchy;
+                  if (mId && cSync && cSync > 0) {
+                    try {
+                      await syncVisitorsCacheFromNetwork({
+                        marcaId: mId,
+                        corpoId: cSync,
+                        refreshAccessToken,
+                        logout,
+                      });
+                    } catch (e) {
+                      console.warn('syncVisitorsCacheFromNetwork after update', e);
+                    }
+                  }
                   Alert.alert('Éxito', 'Visitante actualizado correctamente');
                   cancelEditing();
                   fetchVisitors();
@@ -1284,6 +1905,9 @@ export default function VisitorsScreen() {
                         numero_id: activo.numero_id,
                         numero_activo: activo.numero_activo,
                       })),
+                      ...(editHierarchy ?? {}),
+                      ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
+                      ...(puestoUpdate != null && puestoUpdate > 0 ? { puesto_id: puestoUpdate } : {}),
                     };
 
                     // Solo actualizar foto_cedula si hay nueva imagen
@@ -1294,8 +1918,8 @@ export default function VisitorsScreen() {
                     actions[createActionIndex].requestData = updatedRequestData;
                     if (actions[createActionIndex].marcaId == null && currentMarcaData.id != null) {
                       actions[createActionIndex].marcaId = currentMarcaData.id;
-                    }
-                  } else {
+                  }
+                } else {
                     const fotoCedula =
                       editingVisitor.foto_cedula_nueva ||
                       editingVisitor.foto_cedula ||
@@ -1320,6 +1944,9 @@ export default function VisitorsScreen() {
                         numero_id: activo.numero_id,
                         numero_activo: activo.numero_activo,
                       })),
+                      ...(editHierarchy ?? {}),
+                      ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
+                      ...(puestoUpdate != null && puestoUpdate > 0 ? { puesto_id: puestoUpdate } : {}),
                     };
                     actions.push({
                       requestData: newCreateBody,
@@ -1330,13 +1957,13 @@ export default function VisitorsScreen() {
                   }
 
                   await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
-                } else {
+                  } else {
                   const vid = Number(editingVisitor.id);
                   actions = stripQueuedVisitorUpdatesForVisitorId(actions, vid);
                   actions.push({
-                    requestData: requestBody,
+                      requestData: requestBody,
                     id: vid,
-                    type: 'update',
+                      type: 'update',
                   });
 
                   await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
@@ -1372,6 +1999,24 @@ export default function VisitorsScreen() {
                       numero_id: activo.numero_id,
                       numero_activo: activo.numero_activo,
                     })),
+                    ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
+                    ...(puestoUpdate != null && puestoUpdate > 0
+                      ? {
+                          puesto_id: puestoUpdate,
+                          puesto_nombre:
+                            findPuestoNombreInStructure(structure, puestoUpdate) ??
+                            cache[visitorIndex].puesto_nombre ??
+                            null,
+                        }
+                      : {}),
+                    ...(editHierarchy
+                      ? {
+                          empresa_id: editHierarchy.empresa_id,
+                          division_id: editHierarchy.division_id,
+                          contrato_id: editHierarchy.contrato_id,
+                          cliente_id: editHierarchy.cliente_id,
+                        }
+                      : {}),
                   };
                   await AsyncStorage.setItem('visitors_cache', JSON.stringify(cache));
                 }
@@ -1409,55 +2054,71 @@ export default function VisitorsScreen() {
             const key = getVisitorRowKey(visitor.id, visitor.id_local);
             void (async () => {
               setDeletingVisitorKey(key);
-              try {
-                const isConnected = await getConnectionStatus();
+            try {
+              const isConnected = await getConnectionStatus();
 
-                if (isConnected) {
-                  const data = await deleteVisitorAPI({
-                    visitorId: visitor.id,
-                    refreshAccessToken,
-                    logout,
-                  });
+              if (isConnected) {
+                const data = await deleteVisitorAPI({
+                  visitorId: visitor.id,
+                  refreshAccessToken,
+                  logout,
+                });
 
-                  if (data.status) {
-                    Alert.alert('Éxito', 'Visitante eliminado correctamente');
-                    fetchVisitors();
-                  } else {
-                    Alert.alert('Error', data.message || 'Error al eliminar visitante');
+                if (data.status) {
+                  const cm = await AsyncStorage.getItem('current_marca');
+                  const mParsed = cm ? JSON.parse(cm) : null;
+                  const mId = numOrNull(mParsed?.id);
+                  const cDel = numOrNull(visitor.corpo_id) ?? numOrNull(mParsed?.corpo?.id ?? mParsed?.corpo_id);
+                  if (mId && cDel && cDel > 0) {
+                    try {
+                      await syncVisitorsCacheFromNetwork({
+                        marcaId: mId,
+                        corpoId: cDel,
+                        refreshAccessToken,
+                        logout,
+                      });
+                    } catch (e) {
+                      console.warn('syncVisitorsCacheFromNetwork after delete', e);
+                    }
                   }
+                  Alert.alert('Éxito', 'Visitante eliminado correctamente');
+                  fetchVisitors();
                 } else {
-                  const actionsStr = await AsyncStorage.getItem('visitors_actions');
+                  Alert.alert('Error', data.message || 'Error al eliminar visitante');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('visitors_actions');
                   let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
                   if (!Array.isArray(actions)) actions = [];
 
-                  if (visitor.id_local !== '') {
+                if (visitor.id_local !== '') {
                     const filteredActions = actions.filter(
                       (a: any) =>
                         !(a?.type === 'create' && String(a?.id) === String(visitor.id_local))
                     );
-                    await AsyncStorage.setItem('visitors_actions', JSON.stringify(filteredActions));
-                  } else {
+                  await AsyncStorage.setItem('visitors_actions', JSON.stringify(filteredActions));
+                } else {
                     actions = appendOfflineVisitorDelete(actions, visitor.id);
-                    await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
-                  }
-
-                  const cacheStr = await AsyncStorage.getItem('visitors_cache');
-                  const cache = cacheStr ? JSON.parse(cacheStr) : [];
-
-                  const filteredCache = cache.filter((v: Visitor) =>
-                    visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
-                  );
-                  await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
-
-                  Alert.alert('Modo Offline', 'Visitante eliminado localmente. Se sincronizará cuando haya conexión.');
-                  fetchVisitors();
+                  await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
                 }
-              } catch (err) {
-                console.error('Error deleting visitor:', err);
-                Alert.alert('Error', 'No se pudo eliminar el visitante');
+
+                const cacheStr = await AsyncStorage.getItem('visitors_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                const filteredCache = cache.filter((v: Visitor) =>
+                  visitor.id_local !== '' ? v.id_local !== visitor.id_local : v.id !== visitor.id
+                );
+                await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
+
+                Alert.alert('Modo Offline', 'Visitante eliminado localmente. Se sincronizará cuando haya conexión.');
+                fetchVisitors();
+              }
+            } catch (err) {
+              console.error('Error deleting visitor:', err);
+              Alert.alert('Error', 'No se pudo eliminar el visitante');
               } finally {
                 setDeletingVisitorKey(null);
-              }
+            }
             })();
           },
         },
@@ -1471,8 +2132,13 @@ export default function VisitorsScreen() {
     setFilterDesde('');
     setFilterHasta('');
     setFilterNombreActivo('');
+    setFilterPuestoNombre('');
     setFilterSinHoraSalida(false);
     setFilterSinActivos(false);
+    if (roleName != null && roleName !== 'OPERATIVO') {
+      void resetListFiltersFromCurrentMarca();
+      void fetchVisitors();
+    }
   };
 
   const toggleVisitorDetails = (visitorId: number) => {
@@ -1734,6 +2400,7 @@ export default function VisitorsScreen() {
 
   // Filtrado de visitantes
   const filteredVisitors = visitors.filter(visitor => {
+    if (visitor.isActive === false) return false;
     const matchesSearch =
       visitor.nombre.toLowerCase().includes(searchText.toLowerCase()) ||
       visitor.cedula.toLowerCase().includes(searchText.toLowerCase()) ||
@@ -1769,7 +2436,21 @@ export default function VisitorsScreen() {
           (!hastaYmd || d <= hastaYmd)
         );
 
-    return matchesSearch && matchesTipoVisitante && matchesNombreActivo && matchesSinHoraSalida && matchesSinActivos && matchesDateRange;
+    const puestoNombreTrim = (filterPuestoNombre || '').trim().toLowerCase();
+    const matchesPuestoNombre =
+      !puestoNombreTrim ||
+      (visitor.puesto_nombre != null &&
+        String(visitor.puesto_nombre).trim().toLowerCase().includes(puestoNombreTrim));
+
+    return (
+      matchesSearch &&
+      matchesTipoVisitante &&
+      matchesNombreActivo &&
+      matchesSinHoraSalida &&
+      matchesSinActivos &&
+      matchesDateRange &&
+      matchesPuestoNombre
+    );
   });
 
   const renderVisitorForm = (visitor: EditingVisitor, isEditing: boolean) => {
@@ -1830,6 +2511,164 @@ export default function VisitorsScreen() {
         <ThemedText style={styles.formTitle}>
           {isEditing ? 'Editar Visitante' : 'Nuevo Visitante'}
         </ThemedText>
+
+        {roleName != null && roleName !== 'OPERATIVO' ? (
+          <ThemedView style={styles.formHierarchySection}>
+            <ThemedText style={styles.formHierarchyHint}>
+              Ubicación del registro (empresa → puesto)
+            </ThemedText>
+            {isStructureLoading ? (
+              <ThemedView style={styles.inlineLoading}>
+                <ActivityIndicator size="small" color="#007AFF" />
+                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+              </ThemedView>
+            ) : structure.length === 0 ? (
+              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            ) : (
+              <>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Empresa</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={formEmpresaId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        handleFormEmpresaChange(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                      {structure.map((e) => (
+                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Cliente</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formEmpresaId != null && formClienteOptions.length > 0}
+                      selectedValue={formClienteId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        handleFormClienteChange(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formClienteOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>División</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formClienteId != null && formDivisionOptions.length > 0}
+                      selectedValue={formDivisionId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormDivisionId(next === 0 ? null : next);
+                        setFormContratoId(null);
+                        setFormSucursalId(null);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formDivisionOptions.map((d) => (
+                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Contrato</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formDivisionId != null && formContratoOptions.length > 0}
+                      selectedValue={formContratoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormContratoId(next === 0 ? null : next);
+                        setFormSucursalId(null);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formContratoOptions.map((c) => (
+                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Sucursal *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formContratoId != null && formSucursalOptions.length > 0}
+                      selectedValue={formSucursalId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormSucursalId(next === 0 ? null : next);
+                        setFormPuestoId(null);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formSucursalOptions.map((s) => (
+                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+                <ThemedView style={styles.formGroup}>
+                  <ThemedText style={styles.label}>Puesto *</ThemedText>
+                  <View style={styles.pickerContainer}>
+                    <Picker
+                      enabled={formSucursalId != null && formPuestoOptions.length > 0}
+                      selectedValue={formPuestoId ?? 0}
+                      onValueChange={(v) => {
+                        const next = Number(v) || 0;
+                        setFormPuestoId(next === 0 ? null : next);
+                      }}
+                      style={styles.picker}
+                    >
+                      <Picker.Item
+                        label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                        value={0}
+                        color="#000000"
+                      />
+                      {formPuestoOptions.map((p) => (
+                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                      ))}
+                    </Picker>
+                  </View>
+                </ThemedView>
+              </>
+            )}
+          </ThemedView>
+        ) : null}
 
         {/* Nombre */}
         <ThemedView style={styles.formGroup}>
@@ -2285,6 +3124,18 @@ export default function VisitorsScreen() {
           <ThemedText style={styles.visitorValueMain}>{visitor.responsable.nombre}</ThemedText>
         </ThemedView>
 
+        {(visitor.puesto_nombre != null && String(visitor.puesto_nombre).trim() !== '') ? (
+          <ThemedView style={styles.visitorDetailMain}>
+            <ThemedText style={styles.visitorLabelMain}>Puesto:</ThemedText>
+            <ThemedText style={styles.visitorValueMain}>{visitor.puesto_nombre}</ThemedText>
+          </ThemedView>
+        ) : visitor.puesto_id != null && Number(visitor.puesto_id) > 0 ? (
+          <ThemedView style={styles.visitorDetailMain}>
+            <ThemedText style={styles.visitorLabelMain}>Puesto:</ThemedText>
+            <ThemedText style={styles.visitorValueMain}>#{visitor.puesto_id}</ThemedText>
+          </ThemedView>
+        ) : null}
+
         <ThemedView style={styles.visitorDetailMain}>
           <ThemedText style={styles.visitorLabelMain}>Tipo:</ThemedText>
           <ThemedText style={styles.visitorValueMain}>
@@ -2440,9 +3291,9 @@ export default function VisitorsScreen() {
               {isDeletingThis ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <ThemedText style={styles.deleteButtonText}>
-                  <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
-                </ThemedText>
+              <ThemedText style={styles.deleteButtonText}>
+                <Ionicons name="trash-outline" size={20} color="#FFFFFF" />
+              </ThemedText>
               )}
             </TouchableOpacity>
           </ThemedView>
@@ -2535,6 +3386,162 @@ export default function VisitorsScreen() {
               {/* Filter Content */}
               {isFiltersExpanded ? (
                 <ThemedView style={styles.filtersContent}>
+                  {hasCurrentMarca && roleName != null && roleName !== 'OPERATIVO' ? (
+                    <>
+                  <ThemedView style={styles.filterGroupSearch}>
+                        <ThemedText style={styles.filterLabel}>
+                          Ubicación del listado (empresa → sucursal)
+                        </ThemedText>
+                      </ThemedView>
+                      {isStructureLoading ? (
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedView style={styles.inlineLoading}>
+                            <ActivityIndicator size="small" color="#007AFF" />
+                            <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                          </ThemedView>
+                        </ThemedView>
+                      ) : structure.length === 0 ? (
+                        <ThemedView style={styles.filterGroupSearch}>
+                          <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                        </ThemedView>
+                      ) : (
+                        <>
+                          <ThemedView style={styles.filterGroupSearch}>
+                            <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                              <View style={styles.pickerContainer}>
+                                <Picker
+                                  selectedValue={filterEmpresaId ?? 0}
+                                  onValueChange={(v) => {
+                                    const next = Number(v) || 0;
+                                    setFilterEmpresaId(next === 0 ? null : next);
+                                    setFilterClienteId(null);
+                                    setFilterDivisionId(null);
+                                    setFilterContratoId(null);
+                                    setFilterSucursalId(null);
+                                    filterSucursalIdRef.current = null;
+                                  }}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                                  {filterEmpresaOptions.map((e) => (
+                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                              <View style={styles.pickerContainer}>
+                                <Picker
+                                  enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                                  selectedValue={filterClienteId ?? 0}
+                                  onValueChange={(v) => {
+                                    const next = Number(v) || 0;
+                                    setFilterClienteId(next === 0 ? null : next);
+                                    setFilterDivisionId(null);
+                                    setFilterContratoId(null);
+                                    setFilterSucursalId(null);
+                                    filterSucursalIdRef.current = null;
+                                  }}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item
+                                    label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                    value={0}
+                                    color="#000000"
+                                  />
+                                  {filterClienteOptionsMemo.map((c) => (
+                                    <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>División</ThemedText>
+                              <View style={styles.pickerContainer}>
+                                <Picker
+                                  enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                                  selectedValue={filterDivisionId ?? 0}
+                                  onValueChange={(v) => {
+                                    const next = Number(v) || 0;
+                                    setFilterDivisionId(next === 0 ? null : next);
+                                    setFilterContratoId(null);
+                                    setFilterSucursalId(null);
+                                    filterSucursalIdRef.current = null;
+                                  }}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item
+                                    label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                    value={0}
+                                    color="#000000"
+                                  />
+                                  {filterDivisionOptionsMemo.map((d) => (
+                                    <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                              <View style={styles.pickerContainer}>
+                                <Picker
+                                  enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                                  selectedValue={filterContratoId ?? 0}
+                                  onValueChange={(v) => {
+                                    const next = Number(v) || 0;
+                                    setFilterContratoId(next === 0 ? null : next);
+                                    setFilterSucursalId(null);
+                                    filterSucursalIdRef.current = null;
+                                  }}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item
+                                    label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                    value={0}
+                                    color="#000000"
+                                  />
+                                  {filterContratoOptionsMemo.map((c) => (
+                                    <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+
+                            <ThemedView style={styles.filterGroupSearch}>
+                              <ThemedText style={styles.filterLabel}>Sucursal (sincroniza listado)</ThemedText>
+                              <View style={styles.pickerContainer}>
+                                <Picker
+                                  enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                                  selectedValue={filterSucursalId ?? 0}
+                                  onValueChange={(v) => {
+                                    const next = Number(v) || 0;
+                                    const nextSuc = next === 0 ? null : next;
+                                    filterSucursalIdRef.current = nextSuc;
+                                    setFilterSucursalId(nextSuc);
+                                    void fetchVisitors();
+                                  }}
+                                  style={styles.picker}
+                                >
+                                  <Picker.Item
+                                    label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                    value={0}
+                                    color="#000000"
+                                  />
+                                  {filterSucursalOptionsMemo.map((s) => (
+                                    <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                                  ))}
+                                </Picker>
+                              </View>
+                            </ThemedView>
+                        </>
+                      )}
+                    </>
+                  ) : null}
+
                   <ThemedView style={styles.filterGroupSearch}>
                     <ThemedText style={styles.filterLabel}>Buscar por nombre, cédula, razón, persona que autoriza u observaciones:</ThemedText>
                     <TextInput
@@ -2590,6 +3597,17 @@ export default function VisitorsScreen() {
                       value={filterNombreActivo}
                       onChangeText={setFilterNombreActivo}
                       placeholder="Nombre del activo..."
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.filterLabel}>Buscar por nombre de puesto:</ThemedText>
+                    <TextInput
+                      style={styles.searchInput}
+                      value={filterPuestoNombre}
+                      onChangeText={setFilterPuestoNombre}
+                      placeholder="Nombre del puesto..."
                       placeholderTextColor="#999"
                     />
                   </ThemedView>
@@ -2919,6 +3937,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E0E0E0',
     overflow: 'hidden',
+  },
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  inlineLoadingText: {
+    color: '#666666',
+  },
+  formHierarchySection: {
+    marginBottom: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  formHierarchyHint: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 8,
   },
   filtersHeader: {
     flexDirection: 'row',

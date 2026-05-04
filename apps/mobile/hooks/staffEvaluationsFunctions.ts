@@ -27,7 +27,9 @@ interface UpdateStaffEvaluationSignatureParams {
 interface ApiResponse {
   status: boolean;
   message: string;
-  data?: any;
+  data?: { id?: number } | any;
+  /** Id del registro en servidor tras POST /api/evaluation */
+  evaluationId?: number;
 }
 
 export const createStaffEvaluation = async ({
@@ -41,15 +43,36 @@ export const createStaffEvaluation = async ({
       throw new Error('Server URL not configured');
     }
 
+    const { _staffEvalFileSlots, ...rest } = requestData as any;
+    const slots = _staffEvalFileSlots as
+      | { index: number; uri: string; name: string; type: string }[]
+      | undefined;
+    const useMultipart = Array.isArray(slots) && slots.length > 0;
+
+    const init: RequestInit = useMultipart
+      ? (() => {
+          const formData = new FormData();
+          formData.append('metadata', JSON.stringify(rest));
+          for (const s of slots!) {
+            formData.append(`file_${s.index}`, {
+              uri: s.uri,
+              name: s.name || `image_${s.index}.jpg`,
+              type: s.type || 'image/jpeg',
+            } as any);
+          }
+          return { method: 'POST' as const, body: formData };
+        })()
+      : {
+          method: 'POST' as const,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(rest),
+        };
+
     const response = await authedFetch({
       url: `${apiUrl}/api/evaluation`,
-      init: {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestData),
-      },
+      init,
       refreshAccessToken,
       logout,
     });
@@ -64,6 +87,10 @@ export const createStaffEvaluation = async ({
     }
 
     const data: ApiResponse = await response.json();
+    const id = data?.data?.id;
+    if (id != null && Number.isFinite(Number(id))) {
+      data.evaluationId = Number(id);
+    }
     return data;
   } catch (error) {
     console.error('Error creating staff evaluation:', error);

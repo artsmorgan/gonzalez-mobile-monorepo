@@ -4,6 +4,8 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { mapChecklistSupervisionPublicRow } from "../mapPublicRow";
+import { processChecklistSupervisionArticulosMantenimiento } from "../articulosMantenimiento";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -117,36 +119,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    const baseUrl = req.nextUrl.origin;
-    const images =
-      Array.isArray((row as any).c_imagenes_checklist_supervision)
-        ? (row as any).c_imagenes_checklist_supervision.map((img: any) => ({
-            id: img.id,
-            name: img.name,
-            original_name: img.original_name,
-            url: baseUrl ? `${baseUrl}/api/checklist-supervision/${row.id}/get-image/${encodeURIComponent(img.name)}` : "",
-          }))
-        : [];
+    if ((row as any).isActive === false) {
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+    }
 
-    const mapped = {
-      id: row.id,
-      cliente_id: row.cliente_id,
-      division_id: row.division_id,
-      corpo_id: row.corpo_id,
-      puesto_id: row.puesto_id,
-      fecha: row.fecha,
-      ejecutivo_cuenta: row.ejecutivo_cuenta,
-      evaluacion: row.evaluacion,
-      articulos_puesto: (row as any).articulos_puesto || null,
-      firma_supervisor: row.firma_supervisor,
-      firma_responsable: row.firma_responsable,
-      created_by: row.created_by,
-      created_at: row.created_at,
-      cliente: row.e_estructura_cliente,
-      corpo: row.e_estructura_sucursal,
-      puesto: row.e_estructura_puesto,
-      images,
-    };
+    const mapped = mapChecklistSupervisionPublicRow(row, req.nextUrl.origin);
 
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
@@ -169,8 +146,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const body = await req.json();
     const {
+      empresa_id,
       cliente_id,
       division_id,
+      contrato_id,
       corpo_id,
       puesto_id,
       fecha,
@@ -179,6 +158,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       articulos_puesto,
       firma_supervisor,
       firma_responsable,
+      created_at,
+      hora_accion,
     } = body ?? {};
 
     const existing = await callDynamicPrisma({
@@ -201,12 +182,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
     const updateData: any = {};
+    if (empresa_id !== undefined) updateData.empresa_id = parseInt(String(empresa_id));
     if (cliente_id !== undefined) updateData.cliente_id = parseInt(String(cliente_id));
     if (division_id !== undefined) updateData.division_id = parseInt(String(division_id));
+    if (contrato_id !== undefined) updateData.contrato_id = parseInt(String(contrato_id));
     if (corpo_id !== undefined) updateData.corpo_id = parseInt(String(corpo_id));
     if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id));
     if (fecha !== undefined) updateData.fecha = fecha instanceof Date ? fecha : new Date(fecha);
-    if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = updateData.ejecutivo_cuenta;
+    if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = String(ejecutivo_cuenta);
     if (articulos_puesto !== undefined) updateData.articulos_puesto = articulos_puesto ? String(articulos_puesto) : '';
     if (firma_supervisor !== undefined) {
       updateData.firma_supervisor =
@@ -266,6 +249,41 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     });
 
+    if (articulos_puesto !== undefined) {
+      const corpoIdNum =
+        corpo_id !== undefined ? parseInt(String(corpo_id), 10) : Number((existing as any).corpo_id);
+      const puestoIdNum =
+        puesto_id !== undefined ? parseInt(String(puesto_id), 10) : Number((existing as any).puesto_id);
+      if (
+        Number.isFinite(corpoIdNum) &&
+        Number.isFinite(puestoIdNum) &&
+        corpoIdNum > 0 &&
+        puestoIdNum > 0
+      ) {
+        const accionAt =
+          hora_accion != null && String(hora_accion).trim()
+            ? new Date(hora_accion)
+            : created_at != null && String(created_at).trim()
+              ? new Date(created_at)
+              : new Date();
+        const existingCreatedBy = Number((existing as any).created_by);
+        const curUser = parseInt(String((payload as any)?.id ?? 0), 10) || 0;
+        const notifySenderIds =
+          existingCreatedBy > 0 ? [existingCreatedBy] : curUser > 0 ? [curUser] : [];
+        await processChecklistSupervisionArticulosMantenimiento({
+          req,
+          articulos_puesto,
+          accionAt,
+          corpo_id: corpoIdNum,
+          puesto_id: puestoIdNum,
+          payload,
+          notifySenderIds,
+          fechaNotificacion: accionAt,
+          isUpdate: true,
+        });
+      }
+    }
+
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
@@ -286,7 +304,28 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    return NextResponse.json({ status: true, message: "Checklist actualizado correctamente" }, { status: 200 });
+    const fullRow = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_checklist_supervision",
+        operation: "findUnique",
+        where: { id },
+        include: {
+          e_estructura_cliente: { select: { id: true, nombre: true } },
+          e_estructura_sucursal: { select: { id: true, nombre: true } },
+          e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+          c_imagenes_checklist_supervision: { select: { id: true, name: true, original_name: true } },
+        },
+      },
+    });
+
+    const mapped = fullRow ? mapChecklistSupervisionPublicRow(fullRow, req.nextUrl.origin) : { id };
+
+    return NextResponse.json(
+      { status: true, message: "Checklist actualizado correctamente", data: mapped },
+      { status: 200 }
+    );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/checklist-supervision/[id]:", errorMessage);

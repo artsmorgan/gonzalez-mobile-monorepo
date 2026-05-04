@@ -64,6 +64,12 @@ export async function POST(
             );
         }
         const manualObj = manual as any;
+        if (manualObj.isActive === false) {
+            return NextResponse.json(
+                { status: false, message: "El manual no está disponible" },
+                { status: 200 }
+            );
+        }
 
         const { firma_empleado, marca_id, quiz_answear, files } = await req.json();
         if (!firma_empleado || !marca_id) {
@@ -179,7 +185,7 @@ export async function POST(
                 operation: "findFirst",
                 where: {
                     empleado_id: empleadoId,
-                    manual_puesto_id: id
+                    manual_puesto_id: id,
                 }
             },
         });
@@ -309,7 +315,12 @@ export async function POST(
         }
 
         return NextResponse.json(
-            { status: true, message: "Manual firmado correctamente", visualizacion_id: createdVisObj.id },
+            {
+                status: true,
+                message: "Manual firmado correctamente",
+                id: createdVisObj.id,
+                visualizacion_id: createdVisObj.id,
+            },
             { status: 200 }
         );
     } catch (error: unknown) {

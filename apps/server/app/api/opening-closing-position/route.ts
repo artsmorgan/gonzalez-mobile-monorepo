@@ -38,6 +38,8 @@ export async function POST(req: NextRequest) {
             corpo_id,
             puesto_id,
             division_id,
+            empresa_id,
+            contrato_id,
             fecha,
             tipo,
             nombre_representante_cliente,
@@ -108,6 +110,9 @@ export async function POST(req: NextRequest) {
                     corpo_id: parseInt(String(corpo_id), 10),
                     puesto_id: parseInt(String(puesto_id), 10),
                     division_id: parseInt(String(division_id), 10),
+                    empresa_id: empresa_id != null ? parseInt(String(empresa_id), 10) : 0,
+                    contrato_id: contrato_id != null ? parseInt(String(contrato_id), 10) : 0,
+                    isActive: true,
                     fecha: fechaDate.toISOString(),
                     tipo: String(tipo),
                     nombre_representante_cliente: String(nombre_representante_cliente),
@@ -156,6 +161,8 @@ export async function POST(req: NextRequest) {
                             corpo_id: newRecordObj.corpo_id,
                             puesto_id: newRecordObj.puesto_id,
                             division_id: newRecordObj.division_id,
+                            empresa_id: newRecordObj.empresa_id,
+                            contrato_id: newRecordObj.contrato_id,
                             fecha: fechaDate.toISOString(),
                             tipo: newRecordObj.tipo,
                             nombre_representante_cliente: newRecordObj.nombre_representante_cliente,
@@ -287,6 +294,43 @@ export async function POST(req: NextRequest) {
         const baseUrl = req.nextUrl.origin;
         const recordToSend: any = fullRecord ?? newRecordObj;
 
+        let empresaNombre: string | null = null;
+        let contratoNombre: string | null = null;
+        const empId = Number((recordToSend as any)?.empresa_id);
+        const conId = Number((recordToSend as any)?.contrato_id);
+        if (Number.isFinite(empId) && empId > 0) {
+            try {
+                const emp = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_empresa",
+                        operation: "findUnique",
+                        where: { id: empId },
+                    },
+                });
+                empresaNombre = emp && typeof (emp as any).nombre === "string" ? String((emp as any).nombre) : null;
+            } catch {
+                empresaNombre = null;
+            }
+        }
+        if (Number.isFinite(conId) && conId > 0) {
+            try {
+                const con = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_contrato",
+                        operation: "findUnique",
+                        where: { id: conId },
+                    },
+                });
+                contratoNombre = con && typeof (con as any).nombre === "string" ? String((con as any).nombre) : null;
+            } catch {
+                contratoNombre = null;
+            }
+        }
+
         return NextResponse.json(
             {
                 status: true,
@@ -294,7 +338,9 @@ export async function POST(req: NextRequest) {
                 data: {
                     ...recordToSend,
                     id_local: "",
+                    empresa_nombre: empresaNombre,
                     cliente_nombre: recordToSend?.e_estructura_cliente?.nombre || null,
+                    contrato_nombre: contratoNombre,
                     corpo_nombre: recordToSend?.e_estructura_sucursal?.nombre || null,
                     puesto_nombre: recordToSend?.e_estructura_puesto?.nombre || null,
                     division_nombre: recordToSend?.n_division?.nombre || null,

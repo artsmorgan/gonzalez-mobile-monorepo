@@ -351,7 +351,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    // Archivos adjuntos
+    // Archivos adjuntos: solo se crean nuevos; no se borra el resto. Excepción: al subir de nuevo `arma_foto_antes` / `arma_foto_despues` se reemplaza ese adjunto.
     if (files) {
       let filesParsed: Array<{ type: string; extension: string; original_name?: string; file_base64: string }> = [];
       try {

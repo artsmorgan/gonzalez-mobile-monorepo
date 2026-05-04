@@ -370,6 +370,7 @@ export default function HomeScreen() {
       'movimientos_llaveros_actions': 'Movimientos de Llaveros',
       'movimientos_activos_mantenimiento_actions': 'Movimientos Activos Mantenimiento',
       'articulo_mantenimiento_actions': 'Artículo Mantenimiento',
+      'articulo_mantenimiento_delete_archivo_actions': 'Eliminar adjuntos mantenimiento',
       'movimientos_articulos_mantenimiento_actions': 'Movimientos Artículos Mantenimiento',
       'activo_mantenimiento_actions': 'Activo Mantenimiento',
       'documentos_entregados_actions': 'Documentos Entregados',
@@ -621,7 +622,7 @@ export default function HomeScreen() {
           <ThemedText style={styles.appVersionText}>
             Versión:{' '}
             <ThemedText style={styles.appVersionStrong}>
-              {currentAppVersion}
+              {currentAppVersion} (04-Mayo-2026)
             </ThemedText>
           </ThemedText>
         </TouchableOpacity>

@@ -8,42 +8,51 @@ const config = getDefaultConfig(projectRoot);
 // Explicitly set project root using absolute path
 config.projectRoot = projectRoot;
 
-// Check if monorepo root node_modules exists (for local dev)
+// Monorepo: npm/yarn suelen hoistear dependencias al root; Metro debe buscar ahí aunque
+// `apps/mobile/node_modules` no exista o esté casi vacío.
 const workspaceRoot = path.resolve(projectRoot, "../..");
 const rootNodeModules = path.resolve(workspaceRoot, "node_modules");
 const localNodeModules = path.resolve(projectRoot, "node_modules");
 
-// Configure watchFolders and nodeModulesPaths based on environment
-if (fs.existsSync(rootNodeModules) && fs.existsSync(localNodeModules)) {
-  // Local dev with monorepo - use both
+const nodeModulesPaths = [];
+if (fs.existsSync(localNodeModules)) {
+  nodeModulesPaths.push(localNodeModules);
+}
+if (fs.existsSync(rootNodeModules) && !nodeModulesPaths.includes(rootNodeModules)) {
+  nodeModulesPaths.push(rootNodeModules);
+}
+
+// Incluimos `rootNodeModules` en la lista solo si existe; eso marca entorno monorepo hoisteado.
+const isMonorepoDev = nodeModulesPaths.includes(rootNodeModules);
+
+if (isMonorepoDev) {
   config.watchFolders = [workspaceRoot];
   config.resolver = {
     ...config.resolver,
-    nodeModulesPaths: [
-      localNodeModules,
-      rootNodeModules,
-    ],
-    disableHierarchicalLookup: true,
+    nodeModulesPaths,
+    // Sin esto Metro puede ignorar el segundo path y no resolver paquetes hoisteados.
+    disableHierarchicalLookup: nodeModulesPaths.length > 1,
   };
-} else {
-  // Railway build context - only use local node_modules
-  // CRITICAL: Set watchFolders to empty array to prevent Metro from checking absolute root paths
-  // Metro's verifyRootExists checks watchFolders, and if any path resolves incorrectly, it fails
+} else if (nodeModulesPaths.length > 0) {
+  // Solo `apps/mobile/node_modules` (p. ej. build aislado / CI con install en la app)
   config.watchFolders = [];
-  
-  // Ensure resolver only uses local node_modules with absolute path
-  // Don't disable hierarchical lookup completely - it's needed for module resolution
+  config.resolver = {
+    ...config.resolver,
+    nodeModulesPaths,
+    disableHierarchicalLookup: false,
+    blockList: [/^\/node_modules\/.*/],
+  };
+  if (!config.cacheStores) {
+    config.cacheStores = [];
+  }
+} else {
+  config.watchFolders = [];
   config.resolver = {
     ...config.resolver,
     nodeModulesPaths: [localNodeModules],
-    disableHierarchicalLookup: false, // Allow hierarchical lookup for proper module resolution
-    // Block any attempts to resolve from absolute root (but allow relative lookups)
-    blockList: [
-      /^\/node_modules\/.*/, // Block absolute root /node_modules
-    ],
+    disableHierarchicalLookup: false,
+    blockList: [/^\/node_modules\/.*/],
   };
-  
-  // Set cache to use project-relative paths only
   if (!config.cacheStores) {
     config.cacheStores = [];
   }

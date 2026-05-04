@@ -106,18 +106,23 @@ export async function PUT(
                 reemplazo_id: repl ?? null,
             };
         });
+        
+        const nowIso = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
 
         for (const turno of turnosUpdated) {
-            if (!turno.id || !turno.reemplazo_id) continue;
-            const reemplazo = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: turno.reemplazo_id } },
-            });
-            if (!reemplazo) continue;
-            await callDynamicPrisma({
-                req,
-                data: { action: "UPDATE", table: "c_marca_dia", operation: "update", where: { id: turno.id }, data: { empleadoReemplaza_id: turno.reemplazo_id } },
-            });
+            if (!turno.id) continue;
+
+            if (turno.reemplazo_id) {
+                const reemplazo = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: turno.reemplazo_id } },
+                });
+                if (!reemplazo) continue;
+                await callDynamicPrisma({
+                    req,
+                    data: { action: "UPDATE", table: "c_marca_dia", operation: "update", where: { id: turno.id }, data: { empleadoReemplaza_id: turno.reemplazo_id } },
+                });
+            }
 
             // Crear un permiso con goce o sin goce dependiendo del tipo de permiso
 
@@ -148,10 +153,34 @@ export async function PUT(
                     break;
             }
 
-            await createAccionPersonal(req, turno.id, tipoAccionId, permisoId, 0, 0, null, 3);
+            let usuario_insercion = empleado.cedula ? (empleado.cedula + " - MonitoreApp") : "MonitoreApp";
+            let empleado_ausente = "Desconocido";
+            if (existing.empleado_id) {
+                const ausente = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: existing.empleado_id } },
+                });
+                if (ausente) {
+                    empleado_ausente = (ausente.nombre ?? "") + " " + (ausente.primer_apellido ?? "") + " " + (ausente.segundo_apellido ?? "");
+                }
+            }
+            let ejecutivo_nombre = "Desconocido";
+            if (currentEmployeeId) {
+                const ejecutivo = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
+                });
+                if (ejecutivo) {
+                    ejecutivo_nombre = (ejecutivo.nombre ?? "") + " " + (ejecutivo.primer_apellido ?? "") + " " + (ejecutivo.segundo_apellido ?? "");
+                }
+            }
+
+            let dateTime_comments = (nowIso.split("T")[0]) + " a las " + (nowIso.split("T")[1].split(".")[0]);
+            
+            let comentarios = `Permiso solicitado por ${empleado_ausente} y aprobado por ${ejecutivo_nombre} el día ${dateTime_comments} en el sistema MonitoreApp`;
+            await createAccionPersonal(req, turno.id, tipoAccionId, permisoId, 0, 0, comentarios, 3, usuario_insercion);
         }
 
-        const nowIso = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
         const updatedRecord = await callDynamicPrisma({
             req,
             data: {

@@ -84,7 +84,7 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "c_incidente",
                 operation: "findMany",
-                where: { corpo_id: corpoId },
+                where: { corpo_id: corpoId, isActive: true },
                 orderBy: { id: "desc" },
                 include: {
                     n_ejecutivo_cuenta: true,
@@ -108,6 +108,13 @@ export async function GET(req: NextRequest) {
             incidentsMapped.push({
                 id: i.id,
                 corpo_id: i.corpo_id,
+                sucursal_id: i.corpo_id,
+                empresa_id: i.empresa_id,
+                division_id: i.division_id,
+                contrato_id: i.contrato_id,
+                cliente_id: i.cliente_id,
+                puesto_id: i.puesto_id,
+                isActive: i.isActive !== false,
                 estado: Boolean(i.estado),
                 ejecutivo: {
                     id: i.n_ejecutivo_cuenta?.id ?? i.ejecutivo_cuenta,
@@ -172,6 +179,12 @@ export async function POST(req: NextRequest) {
             fecha_libro_novedades,
             nombre_responsable_atencion,
             archivos,
+            empresa_id: body_empresa_id,
+            division_id: body_division_id,
+            contrato_id: body_contrato_id,
+            cliente_id: body_cliente_id,
+            corpo_id: body_corpo_id,
+            puesto_id: body_puesto_id,
             // opcionales (permitimos que vengan aunque el formulario de creación los oculte)
             solucion,
             fecha_solucion,
@@ -201,6 +214,40 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
+        const corpoIdFinal =
+            body_corpo_id != null && !Number.isNaN(parseInt(String(body_corpo_id), 10))
+                ? parseInt(String(body_corpo_id), 10)
+                : marca.corpo_id;
+        const puestoIdFinal =
+            body_puesto_id != null && !Number.isNaN(parseInt(String(body_puesto_id), 10))
+                ? parseInt(String(body_puesto_id), 10)
+                : 0;
+        if (!puestoIdFinal) {
+            return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 200 });
+        }
+        const empresaIdFinal =
+            body_empresa_id != null && !Number.isNaN(parseInt(String(body_empresa_id), 10))
+                ? parseInt(String(body_empresa_id), 10)
+                : marca.empresa_id;
+        const clienteIdFinal =
+            body_cliente_id != null && !Number.isNaN(parseInt(String(body_cliente_id), 10))
+                ? parseInt(String(body_cliente_id), 10)
+                : marca.cliente_id;
+        const divisionIdFinal =
+            body_division_id != null && !Number.isNaN(parseInt(String(body_division_id), 10))
+                ? parseInt(String(body_division_id), 10)
+                : 0;
+        const contratoIdFinal =
+            body_contrato_id != null && !Number.isNaN(parseInt(String(body_contrato_id), 10))
+                ? parseInt(String(body_contrato_id), 10)
+                : 0;
+        if (!empresaIdFinal || !clienteIdFinal || !divisionIdFinal || !contratoIdFinal || !corpoIdFinal) {
+            return NextResponse.json(
+                { status: false, message: "Debe indicar jerarquía (empresa, cliente, división, contrato, sucursal, puesto)" },
+                { status: 200 }
+            );
+        }
+
         const invParsed = safeParseJson<any[]>(involucrados, []);
         const fechaLibroParsed = safeParseJson<any>(fecha_libro_novedades, { numero: "", fecha: "" });
 
@@ -213,7 +260,7 @@ export async function POST(req: NextRequest) {
 
         const sucursal = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: marca.corpo_id } }
+            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdFinal } }
         });
 
         if (!sucursal) {
@@ -226,7 +273,7 @@ export async function POST(req: NextRequest) {
                 action: "POST",
                 table: "c_incidente",
                 data: {
-                    corpo_id: marca.corpo_id,
+                    corpo_id: corpoIdFinal,
                     ejecutivo_cuenta: sucursal.ejecutivoCuenta_id ?? 0,
                     fecha_incidente: new Date(fecha_incidente).toISOString(),
                     fecha_reporte: new Date(fecha_reporte).toISOString(),
@@ -242,9 +289,13 @@ export async function POST(req: NextRequest) {
                     costo_asociado: (typeof costo_asociado === "string" && costo_asociado.trim().length > 0) ? costo_asociado : null,
                     consecutivo_informe: (typeof consecutivo_informe === "string" && consecutivo_informe.trim().length > 0) ? consecutivo_informe : null,
                     link_informe: (typeof link_informe === "string" && link_informe.trim().length > 0) ? link_informe : null,
-                    cliente_id: marca.cliente_id,
-                    empresa_id: marca.empresa_id,
+                    cliente_id: clienteIdFinal,
+                    empresa_id: empresaIdFinal,
+                    division_id: divisionIdFinal,
+                    contrato_id: contratoIdFinal,
+                    puesto_id: puestoIdFinal,
                     estado: true,
+                    isActive: true,
                     created_at: createdAt.toISOString(),
                     created_by: parseInt(String(payload?.id ?? "0")),
                 }
@@ -290,7 +341,7 @@ export async function POST(req: NextRequest) {
         });
         const cliente = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: marca.cliente_id } }
+            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: clienteIdFinal } }
         });
         if (clasificacion && sucursal && cliente) {
             const fecha_string = fecha_incidente.split("T")[0];
@@ -302,12 +353,12 @@ export async function POST(req: NextRequest) {
             });
             console.log("supervisors", supervisors.length);
             const supervisorIds = supervisors.map((s: any) => s.id);
-            await sendNotificationByRole(req, marca.corpo_id, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
-            await sendNotificationByEmployee(req, marca.corpo_id, [parseInt(String(payload?.id ?? "0"))], "Incidente reportado", description, supervisorIds);
+            await sendNotificationByRole(req, corpoIdFinal, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByEmployee(req, corpoIdFinal, [parseInt(String(payload?.id ?? "0"))], "Incidente reportado", description, supervisorIds);
         }
 
         return NextResponse.json(
-            { status: true, message: "Incidente creado con éxito", incidentId: incident.id },
+            { status: true, message: "Incidente creado con éxito", incidentId: incident.id, id: incident.id },
             { status: 200 }
         );
     } catch (error: unknown) {

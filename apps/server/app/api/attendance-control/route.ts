@@ -107,9 +107,12 @@ async function buildColaboradoresFromMarcas(req: NextRequest, params: { fecha: D
 
 function normalizeRecord(record: any, baseUrl: string, sucursalNombreMap?: Record<number, string>) {
   const corpoId = Number(record?.corpo_id || 0);
+  const { c_imagenes_control_asistencia: _imgs, ...rest } = record || {};
   return {
-    ...record,
+    ...rest,
     id_local: "",
+    puesto_id: record?.puesto_id != null ? Number(record.puesto_id) : 0,
+    isActive: record?.isActive !== false,
     cliente: record?.nombre_cliente || null,
     sucursal_nombre: (corpoId && sucursalNombreMap ? sucursalNombreMap[corpoId] : null) || null,
     total_presentes: record?.total_presentes !== null && record?.total_presentes !== undefined ? String(record.total_presentes) : null,
@@ -140,6 +143,8 @@ export async function GET(req: NextRequest) {
     else if (clienteIdStr) where.cliente_id = parseInt(clienteIdStr, 10);
     else if (empresaIdStr) where.empresa_id = parseInt(empresaIdStr, 10);
     else return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+
+    where.isActive = true;
 
     const records = await callDynamicPrisma({
       req,
@@ -176,7 +181,9 @@ export async function GET(req: NextRequest) {
     }
 
     const baseUrl = req.nextUrl.origin;
-    const normalized = recordsArray.map((r: any) => normalizeRecord(r, baseUrl, sucursalNombreMap));
+    const normalized = recordsArray
+      .filter((r: any) => r && r.isActive !== false)
+      .map((r: any) => normalizeRecord(r, baseUrl, sucursalNombreMap));
     return NextResponse.json({ status: true, message: "Controles de asistencia obtenidos correctamente", data: normalized }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -195,6 +202,7 @@ export async function POST(req: NextRequest) {
     const division_id = parseInt(String(body?.division_id || 0), 10);
     const contrato_id = parseInt(String(body?.contrato_id || 0), 10);
     const corpo_id = parseInt(String(body?.corpo_id || 0), 10);
+    const puesto_id = parseInt(String(body?.puesto_id ?? 0), 10);
     const fechaDate = parseDateInput(body?.fecha);
     const turno = String(body?.turno || "").trim();
     const firma_responsable = String(body?.firma_responsable || "").trim();
@@ -202,6 +210,9 @@ export async function POST(req: NextRequest) {
 
     if (!empresa_id || !cliente_id || !division_id || !contrato_id || !corpo_id || !fechaDate || !turno || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Faltan campos obligatorios para crear el control de asistencia" }, { status: 400 });
+    }
+    if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+      return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
     }
 
     const { colaboradores, totalPresentes } = await buildColaboradoresFromMarcas(req, { fecha: fechaDate, corpo_id, turno });
@@ -227,6 +238,8 @@ export async function POST(req: NextRequest) {
           firma_responsable,
           created_at,
           created_by,
+          puesto_id,
+          isActive: true,
         },
       },
     });

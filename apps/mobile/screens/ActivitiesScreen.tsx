@@ -25,7 +25,20 @@ import { useQRScanner } from '@/hooks/useQRScanner';
 import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { loadPuestoArticulosForTable, rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
+
+const ACTIVITIES_MARK_PHOTO_PREFIX = 'activities_mark';
+
+/** Vista previa: nombre en documentos, data URL o file URI. */
+function resolveLocalMarkImageUri(ref: string | null | undefined): string | undefined {
+  if (!ref || !String(ref).trim()) return undefined;
+  const s = String(ref).trim();
+  if (s.startsWith('data:') || s.startsWith('file:')) return s;
+  return getLocalFileDisplayUri(s) || undefined;
+}
 
 type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Activities'>;
 
@@ -53,6 +66,7 @@ interface InventoryItemProps {
 // Activity Item Component
 interface ActivityItemProps {
   activity: Actividad;
+  inventoryRows: Inventario[];
   employee: any;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -70,6 +84,7 @@ interface ActivityItemProps {
 
 const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   activity,
+  inventoryRows,
   employee,
   refreshAccessToken,
   logout,
@@ -99,7 +114,14 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           a.type === 'update' &&
           a.activity_id === activityId
         );
-        return action?.requestData?.file || null;
+        const rd = action?.requestData;
+        if (!rd) return null;
+        const fn = rd.file_local_file_name;
+        if (typeof fn === 'string' && fn.trim()) {
+          const u = getLocalFileDisplayUri(fn.trim());
+          return u || null;
+        }
+        return rd.file || null;
       }
     } catch (error) {
       console.error('Error getting cached activity image:', error);
@@ -220,7 +242,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
           {activity.descripcion_actividad}
         </ThemedText>
 
-        {activity.is_revision_equipo && activity.inventario && activity.inventario.length > 0 && (
+        {activity.is_revision_equipo && inventoryRows.length > 0 && (
           <ThemedView style={styles.inventoryContainer}>
             <ThemedText style={styles.inventoryTitle}>Artículos</ThemedText>
             <TouchableOpacity style={styles.goEntregaButton} onPress={onGoToEntregaPuestos} activeOpacity={0.85}>
@@ -234,7 +256,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
                     <ThemedText style={styles.tableHeaderText}>Artículo</ThemedText>
                   </View>
                 </View>
-                {activity.inventario.map((articulo) => (
+                {inventoryRows.map((articulo) => (
                   <View key={articulo.id} style={styles.tableRowFixed}>
                     <View style={styles.tableCellFirst}>
                       <ThemedText style={styles.tableCellFirstText}>{articulo.nombre}</ThemedText>
@@ -263,7 +285,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
                       <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
                     </View>
                   </View>
-                  {activity.inventario.map((inventory) => (
+                  {inventoryRows.map((inventory) => (
                     <InventoryItemComponent
                       key={inventory.id}
                       activity={activity}
@@ -295,7 +317,8 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
               const imageToShow = serverActivityImageBase64 || cachedActivityImage;
               if (!imageToShow) return null;
 
-              const imageUri = imageToShow.startsWith('data:')
+              const imageUri =
+                imageToShow.startsWith('data:') || imageToShow.startsWith('file:')
                 ? imageToShow
                 : `data:image/jpeg;base64,${imageToShow}`;
 
@@ -361,22 +384,8 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
     setArticleFormState(activity.id, inventory, { observaciones: text });
   };
 
-  // Function to get cached image from offline actions
+  // Las acciones offline `update-equipo` fueron removidas.
   const getCachedImage = async () => {
-    try {
-      const actionsStr = await AsyncStorage.getItem('activities_actions');
-      if (actionsStr) {
-        const actions = JSON.parse(actionsStr);
-        const action = actions.find((a: any) =>
-          a.type === 'update-equipo' &&
-          a.revisionEquipo_id === inventory.revision_equipo?.id &&
-          a.inventory_id === inventory.id
-        );
-        return action?.requestData?.file || null;
-      }
-    } catch (error) {
-      console.error('Error getting cached image:', error);
-    }
     return null;
   };
 
@@ -523,7 +532,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
         {inventoryImages[inventory.id] && (
           <ThemedView style={styles.imagePreviewContainer}>
             <Image
-              source={{ uri: inventoryImages[inventory.id].startsWith('data:') ? inventoryImages[inventory.id] : `data:image/jpeg;base64,${inventoryImages[inventory.id]}` }}
+              source={{ uri: resolveLocalMarkImageUri(inventoryImages[inventory.id]) || '' }}
               style={styles.imagePreview}
               resizeMode="contain"
             />
@@ -534,7 +543,10 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
             {(() => {
               const imageToShow = serverImageBase64 || cachedImage;
               if (!imageToShow) return null;
-              const imageUri = imageToShow.startsWith('data:') ? imageToShow : `data:image/jpeg;base64,${imageToShow}`;
+              const imageUri =
+                imageToShow.startsWith('data:') || imageToShow.startsWith('file:')
+                  ? imageToShow
+                  : `data:image/jpeg;base64,${imageToShow}`;
               return <Image source={{ uri: imageUri }} style={styles.imagePreview} resizeMode="contain" />;
             })()}
           </ThemedView>
@@ -586,21 +598,14 @@ function normalizeCantidadNecesaria(value: any): number {
   return Math.max(1, Math.floor(n));
 }
 
-function generateRandomMaintenanceId(): number {
-  const ts = Date.now();
-  const rand = Math.floor(Math.random() * 1000000);
-  return Number(`${ts}${rand}`);
-}
-
-/** Alineado con servidor/API: Plan vs Asignado (evita fallar con "Plan de puesto", etc.) */
-function isPlanTipo(formTipo: any, artTipo: any): boolean {
-  const s = String(formTipo ?? artTipo ?? '').trim();
-  if (!s) return false;
-  const lower = s.toLowerCase();
-  if (lower === 'plan' || lower.includes('plan de')) return true;
-  if (lower === 'asignado' || lower.includes('asignado')) return false;
-  return lower === 'plan';
-}
+type ActivityArticleFormRow = {
+  id: number;
+  tipo?: string;
+  cantidad_requerida: number;
+  cantidad_real: number;
+  estado: EstadoArticulo;
+  observaciones: string;
+};
 
 interface EmpleadoOption {
   nombre: string;
@@ -791,7 +796,8 @@ export default function ActivitiesScreen() {
   const [isBitacoraModalVisible, setIsBitacoraModalVisible] = useState(false);
   const [bitacoraText, setBitacoraText] = useState('');
   const [selectedActivity, setSelectedActivity] = useState<Actividad | null>(null);
-  const [activityImageBase64, setActivityImageBase64] = useState<string | null>(null);
+  /** Nombre de archivo en `Paths.document` (saveFile) para la foto opcional al marcar. */
+  const [activityImageLocalFileName, setActivityImageLocalFileName] = useState<string | null>(null);
 
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -799,6 +805,7 @@ export default function ActivitiesScreen() {
   const cameraRef = useRef<CameraView | null>(null);
   const [cameraTarget, setCameraTarget] = useState<'activity' | 'inventory'>('activity');
   const [targetInventoryId, setTargetInventoryId] = useState<number | null>(null);
+  /** Por id de artículo: nombre de archivo local (no base64 en memoria). */
   const [inventoryImages, setInventoryImages] = useState<{ [key: number]: string }>({});
   const [articleFormState, setArticleFormState] = useState<Record<string, ArticleFormState>>({});
   const getArticleFormState = useCallback((activityId: number, inventory: Inventario) => {
@@ -870,7 +877,7 @@ export default function ActivitiesScreen() {
   const [updPAssignedResponsables, setUpdPAssignedResponsables] = useState<AssignedResponsable[]>([]);
   const [updPIsSelectedPuestosExpanded, setUpdPIsSelectedPuestosExpanded] = useState(false);
 
-  // Jerarquía desde cache (sin endpoint)
+  /** Jerarquía: mismo árbol que PhysicalMinuteAgenda (`loadMainStructureTreeMerged` → encadenar nodos). */
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [assignToAllDivision, setAssignToAllDivision] = useState(false);
@@ -882,6 +889,7 @@ export default function ActivitiesScreen() {
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
   const [selectedPuestoFilterId, setSelectedPuestoFilterId] = useState<number | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [puestoInventorySource, setPuestoInventorySource] = useState<Inventario[]>([]);
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Modal: ver cambios de actividades creadas
@@ -891,36 +899,51 @@ export default function ActivitiesScreen() {
   const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
 
   /**
-   * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto actual
+   * Misma fuente que PhysicalMinuteAgendaScreen: `loadMainStructureTreeMerged` (fragmentos + caché legada si hace falta).
+   */
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+    setIsStructureLoading(true);
+    try {
+      const tree = await loadMainStructureTreeMerged();
+      const empresas = Array.isArray(tree) ? tree : [];
+      setStructure(empresas as MainStructureTree);
+      return empresas as MainStructureTree;
+    } catch (error) {
+      console.error('Error loading main structure:', error);
+      setStructure([]);
+      setCatalogError('No se pudo leer la jerarquía guardada.');
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  /**
+   * Actualiza la jerarquía principal (fragmentos `puesto_*_articulos` o caché legado) con el último mantenimiento de los artículos del puesto actual
    * usando el estado de los formularios de inventario de actividades de revisión de equipo.
    * @param activityOverride Si se pasa (p. ej. justo después de marcar), se usa como fuente principal
    *        para el mapa de artículos; evita depender de `activities` aún no refrescado tras el PUT.
    */
   const updateMainStructureCacheFromActivities = useCallback(async (activityOverride?: Actividad | null) => {
     try {
+      if (activityOverride && !activityOverride.is_revision_equipo) return;
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
-      const puestoId = currentMarca?.puesto?.id;
-      if (!puestoId) return;
-
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (!cacheStr) return;
-      const parsed: any = JSON.parse(cacheStr);
-      if (!Array.isArray(parsed)) return;
+      const puestoId = Number(currentMarca?.puesto?.id);
+      if (!Number.isFinite(puestoId) || puestoId <= 0) return;
 
       const horaAccionValue = await getHoraAccion();
-      const horaAccionIso = horaAccionValue ? new Date(horaAccionValue).toISOString() : new Date().toISOString();
+      const horaAccionMs = horaAccionValue ?? Date.now();
 
-      // Construir mapa de artículos (por id). Primero la actividad que se acaba de marcar (si aplica),
-      // luego el resto, para no perder estado si activities aún no se ha refrescado.
-      const articleMap = new Map<number, { tipo?: string; cantidad_requerida: number; cantidad_real: number; estado: EstadoArticulo; observaciones: string }>();
+      const articleMap = new Map<number, ActivityArticleFormRow>();
 
       const pushInventario = (act: Actividad) => {
         if (!act?.is_revision_equipo || !Array.isArray(act.inventario)) return;
         act.inventario.forEach((inv) => {
           const form = getArticleFormState(act.id, inv);
           articleMap.set(inv.id, {
+            id: inv.id,
             tipo: (inv as any)?.tipo,
             cantidad_requerida: normalizeCantidadNecesaria(
               inv.cantidad_requerida ?? (inv as any)?.cantidad_requerida
@@ -940,160 +963,15 @@ export default function ActivitiesScreen() {
         pushInventario(act);
       });
       if (articleMap.size === 0) return;
-
-      const updated = parsed.map((empresa: any) => {
-        if (!empresa?.clientes) return empresa;
-        return {
-          ...empresa,
-          clientes: empresa.clientes.map((cliente: any) => {
-            if (!cliente?.division) return cliente;
-            return {
-              ...cliente,
-              division: cliente.division.map((division: any) => {
-                if (!division?.contratos) return division;
-                return {
-                  ...division,
-                  contratos: division.contratos.map((contrato: any) => {
-                    if (!contrato?.sucursales) return contrato;
-                    return {
-                      ...contrato,
-                      sucursales: contrato.sucursales.map((sucursal: any) => {
-                        if (!sucursal?.puestos) return sucursal;
-                        return {
-                          ...sucursal,
-                          puestos: sucursal.puestos.map((puesto: any) => {
-                            if (!puesto || puesto.id !== puestoId || !Array.isArray(puesto.articulos)) {
-                              return puesto;
-                            }
-
-                            const updatedArticulos = puesto.articulos.map((art: any) => {
-                              const form = articleMap.get(Number(art.id));
-                              if (!form) return art;
-
-                              const existingUltimo =
-                                art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
-                                  ? { ...art.ultimo_mantenimiento }
-                                  : null;
-                              const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
-
-                              const isPlan = isPlanTipo(form.tipo, art.tipo);
-                              const articuloEstructuraId = Number(art.id || 0) || null;
-
-                              const estadoActual = form.estado;
-                              const lastEstado = String(existingUltimo?.estado || 'Bueno');
-                              const shouldCreate =
-                                estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
-                              const shouldUpdate =
-                                !shouldCreate &&
-                                existingUltimo != null &&
-                                ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || estadoActual !== lastEstado);
-
-                              const newBasic = {
-                                id: generateRandomMaintenanceId(),
-                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                                estado: estadoActual,
-                                cantidad_necesaria: normalizeCantidadNecesaria(form.cantidad_requerida),
-                                cantidad_real: Number(form.cantidad_real || 0),
-                                observaciones: form.observaciones || '',
-                                fecha_solucion: null,
-                                accion: null,
-                                fecha_inicio: null,
-                                numero_boleta_proveeduria: null,
-                                tipo: null,
-                                marca: null,
-                                modelo: null,
-                                serie_placa: null,
-                                marca_nuevo: null,
-                                modelo_nuevo: null,
-                                serie_placa_nuevo: null,
-                                categoria: null,
-                                tipo_mantenimiento_art: null,
-                                fecha_salida: null,
-                                fecha_entrada: null,
-                                kilometraje: null,
-                                mant_armas_form: null,
-                                categoria_mantenimiento: null,
-                                detalle: null,
-                                numero_fc: null,
-                                proveedor: null,
-                                costo_mo: null,
-                                costo_i: null,
-                                iva: null,
-                                costo_total: null,
-                                fecha_fin: null,
-                                reincidencia_treinta_dias: null,
-                                tipo_mant_art_reincid: null,
-                                c_archivos_adjuntos_articulo_mantenimiento: [],
-                                created_at: horaAccionIso,
-                                updated_at: horaAccionIso,
-                                /** Opcional: indica que el registro se creó/actualizó desde Actividades (revisión equipo) */
-                                evaluacion_mantenimiento_origen: 'activities' as const,
-                              };
-
-                              let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
-                              let nextMantenimientos: any[] = [...existingMaints];
-
-                              if (shouldCreate) {
-                                nextUltimo = { ...newBasic };
-                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                              } else {
-                                nextUltimo = {
-                                  ...(existingUltimo ?? newBasic),
-                                  articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                                  articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                                  estado: estadoActual,
-                                  cantidad_necesaria:
-                                    existingUltimo?.cantidad_necesaria != null
-                                      ? normalizeCantidadNecesaria(existingUltimo.cantidad_necesaria)
-                                      : normalizeCantidadNecesaria(form.cantidad_requerida),
-                                  cantidad_real: Number(form.cantidad_real || 0),
-                                  observaciones: form.observaciones || '',
-                                  fecha_solucion: estadoActual === 'Bueno' ? horaAccionIso : null,
-                                  updated_at: horaAccionIso,
-                                  evaluacion_mantenimiento_origen: 'activities' as const,
-                                };
-
-                                if (existingUltimo?.id) {
-                                  let replaced = false;
-                                  nextMantenimientos = nextMantenimientos.map((m: any) => {
-                                    if (Number(m?.id) !== Number(existingUltimo.id)) return m;
-                                    replaced = true;
-                                    return { ...m, ...nextUltimo };
-                                  });
-                                  if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                                } else {
-                                  nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                                }
-                              }
-
-                              const nuevoUltimo = { ...nextUltimo };
-
-                              return {
-                                ...art,
-                                mantenimientos: nextMantenimientos,
-                                ultimo_mantenimiento: nuevoUltimo,
-                                ultimo_registro_mantenimiento: nuevoUltimo,
-                              };
-                            });
-
-                            return {
-                              ...puesto,
-                              articulos: updatedArticulos,
-                            };
-                          }),
-                        };
-                      }),
-                    };
-                  }),
-                };
-              }),
-            };
-          }),
-        };
+      console.log('articleMap', articleMap);
+      await rewritePuestoArticulosInMainStructure({
+        puestoId,
+        formsById: articleMap,
+        horaAccionMs,
+        origin: 'activities',
       });
-
-      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged)) setStructure(merged as MainStructureTree);
     } catch (e) {
       console.error('Error updating main_structure_cache from activities:', e);
     }
@@ -1152,9 +1030,9 @@ export default function ActivitiesScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      //findCurrentMarca();
+      void loadMainStructureCache();
       fetchActivities();
-    }, [])
+    }, [loadMainStructureCache]),
   );
 
   // Etiquetas de repetición según **Fecha inicio** (día de semana / ordinal / mes), no el día actual del dispositivo
@@ -1221,6 +1099,155 @@ export default function ActivitiesScreen() {
     );
   };
 
+  const patchActivityWithCurrentFormState = useCallback((row: any, marked: boolean) => {
+    if (!row || typeof row !== 'object') return row;
+    if (!row?.is_revision_equipo || !Array.isArray(row?.inventario)) {
+      return { ...row, is_marcada: marked };
+    }
+    const inventario = row.inventario.map((inv: any) => {
+      const form = getArticleFormState(Number(row.id), inv as Inventario);
+      const estado = form.estado;
+      const observaciones = form.observaciones || '';
+      const rev = inv?.revision_equipo || {};
+      return {
+        ...inv,
+        cantidad_real: form.cantidadReal,
+        estado,
+        observaciones,
+        revision_equipo: {
+          ...rev,
+          es_correcto: estado === 'Bueno',
+          motivo_incorrecto: estado === 'Bueno' ? '-' : (observaciones || '-'),
+        },
+      };
+    });
+    return { ...row, is_marcada: marked, inventario };
+  }, [getArticleFormState]);
+
+  const loadInventorySourceFromPuesto = useCallback(async (puestoIdRaw: any): Promise<Inventario[]> => {
+    try {
+      const puestoId = Number(puestoIdRaw);
+      if (!Number.isFinite(puestoId) || puestoId <= 0) {
+        setPuestoInventorySource([]);
+        return [];
+      }
+      const sourceArticulos = await loadPuestoArticulosForTable(puestoId);
+      const normalized: Inventario[] = (Array.isArray(sourceArticulos) ? sourceArticulos : [])
+        .map((art: any) => {
+          const aid = Number(art?.id);
+          if (!Number.isFinite(aid) || aid <= 0) return null;
+          const ultimo = art?.ultimo_mantenimiento ?? art?.ultimo_registro_mantenimiento ?? null;
+          const estadoUltimo = ultimo?.estado;
+          const estado =
+            estadoUltimo === 'Bueno' || estadoUltimo === 'Malo' || estadoUltimo === 'No está'
+              ? (estadoUltimo as EstadoArticulo)
+              : ('Bueno' as EstadoArticulo);
+          const cantidadRealRaw =
+            typeof ultimo?.cantidad_real === 'number'
+              ? ultimo.cantidad_real
+              : typeof art?.cantidad_real === 'number'
+                ? art.cantidad_real
+                : typeof art?.cantidad === 'number'
+                  ? art.cantidad
+                  : Number(art?.cantidad) || 0;
+          const cantidad_real = estado === 'No está' ? 0 : Math.max(0, Number(cantidadRealRaw) || 0);
+          const observacionesUltimo =
+            ultimo?.observaciones != null && String(ultimo.observaciones).trim() !== ''
+              ? String(ultimo.observaciones)
+              : (art?.observaciones ? String(art.observaciones) : '');
+          return {
+            id: aid,
+            nombre: String(art?.nombre || 'Artículo'),
+            cantidad_requerida: normalizeCantidadNecesaria(art?.cantidad_plan ?? art?.cantidad ?? 1),
+            cantidad_real,
+            estado,
+            observaciones: observacionesUltimo,
+            reglas: [],
+            revision_equipo: {
+              id: Number(ultimo?.id ?? 0) || 0,
+              marcada: false,
+              es_correcto: estado === 'Bueno',
+              motivo_incorrecto: estado === 'Bueno' ? '-' : (observacionesUltimo || '-'),
+              imagen_adjunta: '',
+            },
+          } as Inventario;
+        })
+        .filter((x: Inventario | null): x is Inventario => x != null);
+      setPuestoInventorySource(normalized);
+      return normalized;
+    } catch (e) {
+      console.error('Error loading inventory source from puestoArticulosSync:', e);
+      setPuestoInventorySource([]);
+      return [];
+    }
+  }, []);
+
+  const getInventoryRowsForActivity = useCallback((activity: Actividad): Inventario[] => {
+    const baseRows = Array.isArray(activity?.inventario) ? activity.inventario : [];
+    if (!activity?.is_revision_equipo) return baseRows;
+    if (!Array.isArray(puestoInventorySource) || puestoInventorySource.length === 0) return baseRows;
+    const byId = new Map<number, Inventario>();
+    for (const row of baseRows) byId.set(Number(row.id), row);
+    return puestoInventorySource.map((src) => {
+      const prev = byId.get(Number(src.id));
+      if (!prev) return src;
+      return {
+        ...prev,
+        ...src,
+        id: Number(src.id),
+        nombre: src.nombre || prev.nombre,
+        cantidad_requerida: src.cantidad_requerida ?? prev.cantidad_requerida,
+        cantidad_real: src.cantidad_real,
+        estado: src.estado,
+        observaciones: src.observaciones,
+        revision_equipo: {
+          ...(prev.revision_equipo || {}),
+          ...(src.revision_equipo || {}),
+        },
+      } as Inventario;
+    });
+  }, [puestoInventorySource]);
+
+  const upsertMarkedActivityInCache = useCallback(async (activity: Actividad, marked: boolean) => {
+    try {
+      const cacheStr = await AsyncStorage.getItem('activities_cache');
+      const parsed = cacheStr ? JSON.parse(cacheStr) : [];
+      const list = Array.isArray(parsed) ? parsed : [];
+      const next = list.map((row: any) => {
+        if (Number(row?.id) !== Number(activity.id)) return row;
+        return patchActivityWithCurrentFormState(row, marked);
+      });
+      await AsyncStorage.setItem('activities_cache', JSON.stringify(next));
+    } catch (e) {
+      console.error('Error updating activities_cache mark state:', e);
+    }
+  }, [patchActivityWithCurrentFormState]);
+
+  const applyPendingActionsOverActivities = useCallback(async (rows: any[]): Promise<any[]> => {
+    const base = Array.isArray(rows) ? rows : [];
+    try {
+      const actionsStr = await AsyncStorage.getItem('activities_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      if (!Array.isArray(actions) || actions.length === 0) return base;
+      const markById = new Map<number, boolean>();
+      for (const a of actions) {
+        if (a?.type !== 'update') continue;
+        const activityId = Number(a?.activity_id);
+        if (!Number.isFinite(activityId) || activityId <= 0) continue;
+        const estado = String(a?.requestData?.estado || '').toLowerCase();
+        markById.set(activityId, estado === 'marcar');
+      }
+      if (markById.size === 0) return base;
+      return base.map((row: any) => {
+        const id = Number(row?.id);
+        if (!markById.has(id)) return row;
+        return patchActivityWithCurrentFormState(row, Boolean(markById.get(id)));
+      });
+    } catch {
+      return base;
+    }
+  }, [patchActivityWithCurrentFormState]);
+
   const fetchActivities = async () => {
     try {
       setIsLoading(true);
@@ -1237,6 +1264,7 @@ export default function ActivitiesScreen() {
 
       const currentMarcaData = JSON.parse(currentMarca);
       const marcaId = currentMarcaData.id;
+      await loadInventorySourceFromPuesto(currentMarcaData?.puesto?.id);
       setHasCurrentMarca(true);
 
       const isConnected = await getConnectionStatus();
@@ -1268,9 +1296,13 @@ export default function ActivitiesScreen() {
         const data: ActivitiesResponse = await response.json();
 
         if (data.status && data.actividades) {
-          setActivities(data.actividades);
-          // Cache the activities
-          await AsyncStorage.setItem('activities_cache', JSON.stringify(data.actividades));
+          const activeRows = (Array.isArray(data.actividades) ? data.actividades : []).filter(
+            (r: any) => r?.isActive !== false
+          );
+          const withPending = await applyPendingActionsOverActivities(activeRows);
+          setActivities(withPending);
+          // Reemplazo completo del cache con la respuesta más reciente (limpieza + actualización)
+          await AsyncStorage.setItem('activities_cache', JSON.stringify(withPending));
         } else {
           // Error real del servidor / lógica (sí cuenta como error)
           setError(data.message || 'Error al cargar las actividades');
@@ -1279,7 +1311,7 @@ export default function ActivitiesScreen() {
         // Offline: load from cache
         const cachedActivities = await AsyncStorage.getItem('activities_cache');
         if (cachedActivities) {
-          const parsedActivities = JSON.parse(cachedActivities);
+          const parsedActivities = await applyPendingActionsOverActivities(JSON.parse(cachedActivities));
           setActivities(parsedActivities);
           setOfflineMessage('Modo Offline: mostrando actividades guardadas. Los cambios se sincronizarán cuando recuperes la conexión.');
         } else {
@@ -1294,7 +1326,7 @@ export default function ActivitiesScreen() {
       // Try to load from cache if online fetch fails
       const cachedActivities = await AsyncStorage.getItem('activities_cache');
       if (cachedActivities) {
-        const parsedActivities = JSON.parse(cachedActivities);
+        const parsedActivities = await applyPendingActionsOverActivities(JSON.parse(cachedActivities));
         setActivities(parsedActivities);
         setOfflineMessage('Modo Offline: mostrando actividades guardadas debido a un error de conexión.');
       } else {
@@ -1390,30 +1422,15 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const loadMainStructureCache = async (): Promise<MainStructureTree> => {
-    try {
-      setIsStructureLoading(true);
-      const cache = await AsyncStorage.getItem('main_structure_cache');
-      const parsed = cache ? JSON.parse(cache) : [];
-      const empresas = Array.isArray(parsed) ? parsed : [];
-      setStructure(empresas);
-      return empresas;
-    } catch (error) {
-      console.error('Error loading main_structure_cache:', error);
-      setStructure([]);
-      setCatalogError('No se pudo leer la jerarquía guardada.');
-      return [];
-    } finally {
-      setIsStructureLoading(false);
-    }
-  };
-
   const preloadCreatedHierarchyFiltersFromMarca = useCallback(async (treeOverride?: MainStructureTree) => {
     try {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarcaData = JSON.parse(currentMarcaStr);
-      const tree = Array.isArray(treeOverride) ? treeOverride : structure;
+      let tree: MainStructureTree = Array.isArray(treeOverride) ? treeOverride : structure;
+      if (!Array.isArray(tree) || tree.length === 0) {
+        tree = await loadMainStructureCache();
+      }
       if (!Array.isArray(tree) || tree.length === 0) return;
 
       const empresaIdRaw = currentMarcaData?.empresa?.id ?? currentMarcaData?.empresa_id;
@@ -1438,7 +1455,7 @@ export default function ActivitiesScreen() {
     } catch (error) {
       console.error('Error preloading hierarchy from current_marca:', error);
     }
-  }, [structure]);
+  }, [structure, loadMainStructureCache]);
 
   const loadPuestosCatalog = async (corpoId: number, isConnected: boolean) => {
     const loadFromCache = async () => {
@@ -1785,7 +1802,6 @@ export default function ActivitiesScreen() {
     if (currentMarca) {
       const currentMarcaData = JSON.parse(currentMarca);
       setRole(currentMarcaData.roleDivision.role.nombre);
-      console.log('Role:', role);
     }
   };
 
@@ -2144,15 +2160,15 @@ export default function ActivitiesScreen() {
       return 'Debes ingresar la descripción de la actividad.';
     }
     if (!isEditingCreatedActivity) {
-      if (assignedResponsables.length === 0) {
-        return 'Debes asignar al menos un puesto o plaza responsable.';
-      }
-      if (assignedResponsables.some(r => !r.assignAll && r.plazas.length === 0)) {
-        return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
-      }
-      if (tipoActividad === 'Inventario') {
+    if (assignedResponsables.length === 0) {
+      return 'Debes asignar al menos un puesto o plaza responsable.';
+    }
+    if (assignedResponsables.some(r => !r.assignAll && r.plazas.length === 0)) {
+      return 'Las asignaciones por puesto deben incluir al menos una plaza o marcarse como puesto completo.';
+    }
+    if (tipoActividad === 'Inventario') {
         if (assignedInventoryArticleEntries.length === 0) {
-          return 'Los puestos seleccionados no tienen artículos de inventario en main_structure_cache.';
+          return 'Los puestos seleccionados no tienen artículos de inventario en la jerarquía cargada.';
         }
       }
     }
@@ -2237,20 +2253,20 @@ export default function ActivitiesScreen() {
             logout,
           })
         : await createActivity({
-            requestData,
-            refreshAccessToken,
-            logout,
-          });
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
 
-      if (response.status) {
+        if (response.status) {
         Alert.alert('Éxito', isEditingCreatedActivity ? 'La actividad se actualizó correctamente.' : 'La actividad se creó correctamente.');
-        closeRepetitionModal();
-        await fetchActivities();
+          closeRepetitionModal();
+          await fetchActivities();
         if (selectedPuestoFilterId) {
           await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
         }
-        eventBus.emit('activitiesUpdated');
-      } else {
+          eventBus.emit('activitiesUpdated');
+        } else {
         Alert.alert('Error', response.message || 'No se pudo guardar la actividad.');
       }
     } catch (error) {
@@ -2428,36 +2444,47 @@ export default function ActivitiesScreen() {
 
     try {
       const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
+        base64: false,
         quality: 0.7,
-        skipProcessing: false
+        skipProcessing: false,
       });
 
-      if (!photo) {
+      if (!photo?.uri) {
         Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
         setIsCameraVisible(false);
         return;
       }
 
-      if (!photo.base64) {
-        Alert.alert('Error', 'No se pudo procesar la imagen. Por favor intente nuevamente.');
         setIsCameraVisible(false);
+
+      let storedFileName: string;
+      try {
+        storedFileName = await saveFile({
+          uri: photo.uri,
+          originalName: 'foto',
+          extension: 'jpg',
+          type: 'image',
+          prefix: ACTIVITIES_MARK_PHOTO_PREFIX,
+        });
+      } catch (saveErr) {
+        console.error('[Activities] saveFile failed:', saveErr);
+        Alert.alert('Error', 'No se pudo guardar la foto en el dispositivo');
         return;
       }
 
-      setIsCameraVisible(false);
-
-      // Format base64 with data URI prefix
-      const formattedBase64 = `data:image/jpeg;base64,${photo.base64!}`;
-
       setTimeout(() => {
         if (cameraTarget === 'activity') {
-          setActivityImageBase64(formattedBase64);
+          setActivityImageLocalFileName((prev) => {
+            if (prev) void deleteFile(prev).catch(() => {});
+            return storedFileName;
+          });
         } else if (cameraTarget === 'inventory' && targetInventoryId !== null) {
-          setInventoryImages(prev => ({
-            ...prev,
-            [targetInventoryId]: formattedBase64
-          }));
+          const tid = targetInventoryId;
+          setInventoryImages((prev) => {
+            const old = prev[tid];
+            if (old) void deleteFile(old).catch(() => {});
+            return { ...prev, [tid]: storedFileName };
+          });
         }
       }, 100);
     } catch (error) {
@@ -2471,21 +2498,32 @@ export default function ActivitiesScreen() {
     if (activity.is_marcada) return;
     setSelectedActivity(activity);
     setBitacoraText('');
-    setActivityImageBase64(null);
+    setActivityImageLocalFileName((prev) => {
+      if (prev) void deleteFile(prev).catch(() => {});
+      return null;
+    });
     setIsBitacoraModalVisible(true);
   };
 
-  const executeToggleActivity = async (activity: Actividad, estado: 'marcar' | 'desmarcar', bitacora: string | null, imageBase64: string | null) => {
+  const executeToggleActivity = async (
+    activity: Actividad,
+    estado: 'marcar' | 'desmarcar',
+    bitacora: string | null,
+    activityLocalImageFileName: string | null,
+  ) => {
     if (!employee?.id) {
       Alert.alert('Error', 'No se encontró la información necesaria del empleado.');
       return;
     }
 
+    const invImgSnap = { ...inventoryImages };
+    const inventoryRows = getInventoryRowsForActivity(activity);
+
     const horaAccionNumber = await getHoraAccion();
     if (!horaAccionNumber) {
       Alert.alert('Error', 'No se pudo obtener la hora de acción');
-      return;
-    }
+          return;
+        }
     const horaAccionIso = new Date(horaAccionNumber).toISOString();
 
     const isConnected = await getConnectionStatus();
@@ -2498,8 +2536,8 @@ export default function ActivitiesScreen() {
     };
 
     // Para actividades de revisión de equipo, enviar también el estado actual de los artículos mostrado en la tabla
-    if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length) {
-      requestData.articles_state = activity.inventario.map((inv) => {
+    if (estado === 'marcar' && activity.is_revision_equipo && inventoryRows.length > 0) {
+      requestData.articles_state = inventoryRows.map((inv) => {
         const form = getArticleFormState(activity.id, inv);
         return {
           id: inv.id,
@@ -2510,9 +2548,8 @@ export default function ActivitiesScreen() {
       });
     }
 
-    // Add image if captured (already formatted as data:image/jpeg;base64,...)
-    if (imageBase64) {
-      requestData.file = imageBase64;
+    if (activityLocalImageFileName) {
+      requestData.file_local_file_name = activityLocalImageFileName;
     } else {
       requestData.file = null;
     }
@@ -2529,17 +2566,24 @@ export default function ActivitiesScreen() {
         });
 
         if (result.status) {
-          // Sincronizar main_structure_cache con la actividad marcada (fuente explícita; activities puede no estar refrescado aún)
-          await updateMainStructureCacheFromActivities(activity);
-          await updateActivitiesCacheFromActivities();
+          await upsertMarkedActivityInCache(activity, estado === 'marcar');
+          if (activityLocalImageFileName) {
+            await deleteFile(activityLocalImageFileName).catch(() => {});
+          }
 
-          if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length && employee?.id) {
+          // Sincronizar solo para actividades de inventario.
+          if (activity.is_revision_equipo) {
+            await updateMainStructureCacheFromActivities(activity);
+            await updateActivitiesCacheFromActivities();
+          }
+
+          if (estado === 'marcar' && activity.is_revision_equipo && inventoryRows.length > 0 && employee?.id) {
             const { updateRevisionEquipo } = await import('@/hooks/activitiesFunctions');
-            for (const inv of activity.inventario) {
+            for (const inv of inventoryRows) {
               const form = getArticleFormState(activity.id, inv);
               const revisionEquipoId = inv.revision_equipo?.id;
               if (!revisionEquipoId) continue;
-              const requestData: any = {
+              const revisionReq: any = {
                 e: parseInt(employee.id),
                 articulo_id: inv.id,
                 es_correcto: form.estado === 'Bueno',
@@ -2548,20 +2592,28 @@ export default function ActivitiesScreen() {
                 cantidad_real: form.cantidadReal,
                 hora_accion: horaAccionIso,
               };
-              const img = inventoryImages[inv.id];
-              requestData.file = img ?? null;
+              const imgLocal = invImgSnap[inv.id];
+              if (imgLocal) {
+                revisionReq.file_local_file_name = imgLocal;
+              } else {
+                revisionReq.file = null;
+              }
               try {
-                await updateRevisionEquipo({
-                  requestData,
+                const revResult = await updateRevisionEquipo({
+                  requestData: revisionReq,
                   revisionEquipoId,
                   refreshAccessToken,
                   logout,
                 });
+                if (revResult.status && imgLocal) {
+                  await deleteFile(imgLocal).catch(() => {});
+                }
               } catch (e) {
                 console.error('Error actualizando artículo revisión:', e);
               }
             }
           }
+          setInventoryImages({});
           Alert.alert('Éxito', result.message);
           await fetchActivities();
         } else {
@@ -2583,6 +2635,14 @@ export default function ActivitiesScreen() {
         );
 
         if (existingActionIndex !== -1) {
+          const prevFn = actions?.[existingActionIndex]?.requestData?.file_local_file_name;
+          if (
+            typeof prevFn === 'string' &&
+            prevFn.trim() &&
+            prevFn.trim() !== String(requestData?.file_local_file_name || '').trim()
+          ) {
+            await deleteFile(prevFn.trim()).catch(() => {});
+          }
           // Replace existing action with new one (including new bitacora and image)
           actions[existingActionIndex] = {
             type: 'update',
@@ -2602,70 +2662,19 @@ export default function ActivitiesScreen() {
           Alert.alert('Guardado offline', 'La acción se sincronizará cuando recuperes la conexión.');
         }
 
-        // Si es revisión de equipo, también encolar el estado de los artículos
-        if (estado === 'marcar' && activity.is_revision_equipo && activity.inventario?.length && employee?.id) {
-          for (const inv of activity.inventario) {
-            const form = getArticleFormState(activity.id, inv);
-            const revisionEquipoId = inv.revision_equipo?.id;
-            if (!revisionEquipoId) continue;
-
-            const req: any = {
-              e: parseInt(employee.id),
-              articulo_id: inv.id,
-              es_correcto: form.estado === 'Bueno',
-              motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
-              estado: form.estado,
-              cantidad_real: form.cantidadReal,
-              hora_accion: horaAccionIso,
-            };
-            const img = inventoryImages[inv.id];
-            req.file = img ?? null;
-
-            const existingEquipIndex = actions.findIndex(
-              (a: any) =>
-                a.type === 'update-equipo' &&
-                a.revisionEquipo_id === revisionEquipoId &&
-                a.inventory_id === inv.id
-            );
-
-            const newAction = {
-              type: 'update-equipo',
-              revisionEquipo_id: revisionEquipoId,
-              activity_id: activity.id,
-              inventory_id: inv.id,
-              requestData: req,
-              timestamp: horaAccionNumber,
-            };
-
-            if (existingEquipIndex !== -1) {
-              actions[existingEquipIndex] = newAction;
-            } else {
-              actions.push(newAction);
-            }
-          }
-        }
-
         await AsyncStorage.setItem('activities_actions', JSON.stringify(actions));
 
-        // Update cache
-        const cachedActivities = await AsyncStorage.getItem('activities_cache');
-        if (cachedActivities) {
-          let activities = JSON.parse(cachedActivities);
-          const activityIndex = activities.findIndex((a: Actividad) => a.id === activity.id);
+        // Update cache siempre (offline también)
+        await upsertMarkedActivityInCache(activity, estado === 'marcar');
 
-          if (activityIndex !== -1) {
-            // Apply the change (marcar o dejar marcada)
-            activities[activityIndex].is_marcada = estado === 'marcar';
-
-            await AsyncStorage.setItem('activities_cache', JSON.stringify(activities));
-          }
+        // Sincronizar solo para actividades de inventario (offline también)
+        if (activity.is_revision_equipo) {
+          await updateMainStructureCacheFromActivities(activity);
+          await updateActivitiesCacheFromActivities();
         }
 
-        // Sincronizar main_structure_cache con la actividad marcada (offline también)
-        await updateMainStructureCacheFromActivities(activity);
-        await updateActivitiesCacheFromActivities();
-
         // Reload activities list after offline update
+        setInventoryImages({});
         await fetchActivities();
       } catch (error) {
         console.error('Error en modo offline:', error);
@@ -2679,24 +2688,29 @@ export default function ActivitiesScreen() {
 
     setIsBitacoraModalVisible(false);
     const bitacora = bitacoraText.trim() || "-";
-    executeToggleActivity(selectedActivity, 'marcar', bitacora, activityImageBase64);
+    executeToggleActivity(selectedActivity, 'marcar', bitacora, activityImageLocalFileName);
     setSelectedActivity(null);
     setBitacoraText('');
-    setActivityImageBase64(null);
+    setActivityImageLocalFileName(null);
   };
 
   const handleBitacoraCancel = () => {
     setIsBitacoraModalVisible(false);
     setSelectedActivity(null);
     setBitacoraText('');
-    setActivityImageBase64(null);
+    setActivityImageLocalFileName((prev) => {
+      if (prev) void deleteFile(prev).catch(() => {});
+      return null;
+    });
   };
 
   const renderActivityItem = (activity: Actividad) => {
+    const inventoryRows = getInventoryRowsForActivity(activity);
     return (
       <ActivityItemComponent
         key={activity.id}
         activity={activity}
+        inventoryRows={inventoryRows}
         employee={employee}
         refreshAccessToken={refreshAccessToken}
         logout={logout}
@@ -2709,6 +2723,8 @@ export default function ActivitiesScreen() {
         onGoToEntregaPuestos={() => navigation.navigate('EntregaPuestos')}
         onClearInventoryImage={(inventoryId) => {
           setInventoryImages((prev: { [key: number]: string }) => {
+            const fn = prev[inventoryId];
+            if (fn) void deleteFile(fn).catch(() => {});
             const updated = { ...prev };
             delete updated[inventoryId];
             return updated;
@@ -2720,16 +2736,62 @@ export default function ActivitiesScreen() {
     );
   };
 
-  const empresasOptions = structure;
-  const selectedEmpresa = empresasOptions.find((e) => e.id === selectedEmpresaId) || null;
-  const clientesOptions = selectedEmpresa?.clientes || [];
-  const selectedCliente = clientesOptions.find((c) => c.id === selectedClienteId) || null;
-  const divisionesOptions = selectedCliente?.division || [];
-  const selectedDivision = divisionesOptions.find((d) => d.id === selectedDivisionId) || null;
-  const contratosOptions = selectedDivision?.contratos || [];
-  const selectedContrato = contratosOptions.find((c) => c.id === selectedContratoId) || null;
-  const sucursalesOptions = selectedContrato?.sucursales || [];
-  const selectedSucursal = sucursalesOptions.find((s) => s.id === selectedSucursalId) || null;
+  const empresasOptions = useMemo(
+    () => (Array.isArray(structure) ? structure : []),
+    [structure],
+  );
+
+  const selectedEmpresa = useMemo(
+    () => empresasOptions.find((e: any) => Number(e.id) === Number(selectedEmpresaId)) || null,
+    [empresasOptions, selectedEmpresaId],
+  );
+
+  const clientesOptions = useMemo(() => {
+    if (selectedEmpresaId == null) return [];
+    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  }, [empresasOptions, selectedEmpresaId]);
+
+  const selectedCliente = useMemo(
+    () => clientesOptions.find((c: any) => Number(c.id) === Number(selectedClienteId)) || null,
+    [clientesOptions, selectedClienteId],
+  );
+
+  const divisionesOptions = useMemo(() => {
+    if (selectedEmpresaId == null || selectedClienteId == null) return [];
+    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(selectedEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(selectedClienteId));
+    if (Array.isArray(cliente?.division)) return cliente.division;
+    return Array.isArray((cliente as any)?.divisiones) ? (cliente as any).divisiones : [];
+  }, [empresasOptions, selectedEmpresaId, selectedClienteId]);
+
+  const selectedDivision = useMemo(
+    () => divisionesOptions.find((d: any) => Number(d.id) === Number(selectedDivisionId)) || null,
+    [divisionesOptions, selectedDivisionId],
+  );
+
+  const contratosOptions = useMemo(() => {
+    if (selectedDivisionId == null) return [];
+    const division = divisionesOptions.find((d: any) => Number(d.id) === Number(selectedDivisionId));
+    return Array.isArray(division?.contratos) ? division.contratos : [];
+  }, [divisionesOptions, selectedDivisionId]);
+
+  const selectedContrato = useMemo(
+    () => contratosOptions.find((c: any) => Number(c.id) === Number(selectedContratoId)) || null,
+    [contratosOptions, selectedContratoId],
+  );
+
+  const sucursalesOptions = useMemo(() => {
+    if (selectedContratoId == null) return [];
+    const contrato = contratosOptions.find((c: any) => Number(c.id) === Number(selectedContratoId));
+    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
+  }, [contratosOptions, selectedContratoId]);
+
+  const selectedSucursal = useMemo(
+    () => sucursalesOptions.find((s: any) => Number(s.id) === Number(selectedSucursalId)) || null,
+    [sucursalesOptions, selectedSucursalId],
+  );
+
   const normalizeDivisionName = (name: string) =>
     String(name || '')
       .toLowerCase()
@@ -2747,45 +2809,33 @@ export default function ActivitiesScreen() {
     return Array.from(map.values());
   };
 
+  /** Puestos desde el árbol mergeado (incluye plazas/artículos enlazados por fragmentos). */
   const puestosOptionsFromHierarchy = useMemo<any[]>(() => {
-    if (!selectedEmpresaId) return [];
-    if (selectedSucursalId && selectedSucursal) {
-      return getUniquePuestos(selectedSucursal.puestos || []);
+    if (!selectedEmpresaId || !Array.isArray(structure) || structure.length === 0) return [];
+    const empresa = structure.find((x: any) => Number(x.id) === Number(selectedEmpresaId));
+    if (!empresa) return [];
+    const pool: any[] = [];
+    for (const c of empresa.clientes || []) {
+      if (selectedClienteId && Number(c.id) !== Number(selectedClienteId)) continue;
+      for (const d of c.division || []) {
+        if (selectedDivisionId && Number(d.id) !== Number(selectedDivisionId)) continue;
+        for (const ct of d.contratos || []) {
+          if (selectedContratoId && Number(ct.id) !== Number(selectedContratoId)) continue;
+          for (const s of ct.sucursales || []) {
+            if (selectedSucursalId && Number(s.id) !== Number(selectedSucursalId)) continue;
+            pool.push(...(s.puestos || []));
+          }
+        }
+      }
     }
-    if (selectedContratoId && selectedContrato) {
-      const puestos = (selectedContrato.sucursales || []).flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    if (selectedDivisionId && selectedDivision) {
-      const puestos = (selectedDivision.contratos || [])
-        .flatMap((contrato: any) => contrato?.sucursales || [])
-        .flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    if (selectedClienteId && selectedCliente) {
-      const puestos = (selectedCliente.division || [])
-        .flatMap((division: any) => division?.contratos || [])
-        .flatMap((contrato: any) => contrato?.sucursales || [])
-        .flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    const puestos = (selectedEmpresa?.clientes || [])
-      .flatMap((cliente: any) => cliente?.division || [])
-      .flatMap((division: any) => division?.contratos || [])
-      .flatMap((contrato: any) => contrato?.sucursales || [])
-      .flatMap((sucursal: any) => sucursal?.puestos || []);
-    return getUniquePuestos(puestos);
+    return getUniquePuestos(pool);
   }, [
+    structure,
     selectedEmpresaId,
-    selectedSucursalId,
-    selectedSucursal,
-    selectedContratoId,
-    selectedContrato,
-    selectedDivisionId,
-    selectedDivision,
     selectedClienteId,
-    selectedCliente,
-    selectedEmpresa,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
   ]);
 
   const divisionMassiveOptions = useMemo<Array<{ id: number; nombre: string }>>(() => {
@@ -2815,7 +2865,7 @@ export default function ActivitiesScreen() {
     ? puestosOptionsFromHierarchy.filter((p: any) => p.id === selectedPuestoFilterId)
     : puestosOptionsFromHierarchy;
 
-  // Igual que en JobManuals: recorre todo main_structure_cache y agrega
+  // Igual que en JobManuals: recorre el árbol mergeado y agrega
   // todos los puestos de contratos/sucursales de la división seleccionada.
   const getDivisionPuestos = useCallback((divisionId: number): any[] => {
     if (!structure || structure.length === 0) return [];
@@ -2847,56 +2897,77 @@ export default function ActivitiesScreen() {
     ? getDivisionPuestos(selectedDivisionForAll)
     : filteredPuestos;
 
-  const updPEmpresa = empresasOptions.find((e) => e.id === updPEmpresaId) || null;
-  const updPClientesOptions = updPEmpresa?.clientes || [];
-  const updPSelectedCliente = updPClientesOptions.find((c) => c.id === updPClienteId) || null;
-  const updPDivisionesOptions = updPSelectedCliente?.division || [];
-  const updPSelectedDivision = updPDivisionesOptions.find((d) => d.id === updPDivisionId) || null;
-  const updPContratosOptions = updPSelectedDivision?.contratos || [];
-  const updPSelectedContrato = updPContratosOptions.find((c) => c.id === updPContratoId) || null;
-  const updPSucursalesOptions = updPSelectedContrato?.sucursales || [];
-  const updPSelectedSucursal = updPSucursalesOptions.find((s) => s.id === updPSucursalId) || null;
+  const updPEmpresa = useMemo(
+    () => empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId)) || null,
+    [empresasOptions, updPEmpresaId],
+  );
+
+  const updPClientesOptions = useMemo(() => {
+    if (updPEmpresaId == null) return [];
+    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId));
+    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
+  }, [empresasOptions, updPEmpresaId]);
+
+  const updPSelectedCliente = useMemo(
+    () => updPClientesOptions.find((c: any) => Number(c.id) === Number(updPClienteId)) || null,
+    [updPClientesOptions, updPClienteId],
+  );
+
+  const updPDivisionesOptions = useMemo(() => {
+    if (updPEmpresaId == null || updPClienteId == null) return [];
+    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId));
+    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(updPClienteId));
+    if (Array.isArray(cliente?.division)) return cliente.division;
+    return Array.isArray((cliente as any)?.divisiones) ? (cliente as any).divisiones : [];
+  }, [empresasOptions, updPEmpresaId, updPClienteId]);
+
+  const updPSelectedDivision = useMemo(
+    () => updPDivisionesOptions.find((d: any) => Number(d.id) === Number(updPDivisionId)) || null,
+    [updPDivisionesOptions, updPDivisionId],
+  );
+
+  const updPContratosOptions = useMemo(() => {
+    if (updPDivisionId == null) return [];
+    const division = updPDivisionesOptions.find((d: any) => Number(d.id) === Number(updPDivisionId));
+    return Array.isArray(division?.contratos) ? division.contratos : [];
+  }, [updPDivisionesOptions, updPDivisionId]);
+
+  const updPSelectedContrato = useMemo(
+    () => updPContratosOptions.find((c: any) => Number(c.id) === Number(updPContratoId)) || null,
+    [updPContratosOptions, updPContratoId],
+  );
+
+  const updPSucursalesOptions = useMemo(() => {
+    if (updPContratoId == null) return [];
+    const contrato = updPContratosOptions.find((c: any) => Number(c.id) === Number(updPContratoId));
+    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
+  }, [updPContratosOptions, updPContratoId]);
+
+  const updPSelectedSucursal = useMemo(
+    () => updPSucursalesOptions.find((s: any) => Number(s.id) === Number(updPSucursalId)) || null,
+    [updPSucursalesOptions, updPSucursalId],
+  );
 
   const updPFilteredPuestos = useMemo(() => {
-    if (!updPEmpresaId) return [];
-    if (updPSucursalId && updPSelectedSucursal) {
-      return getUniquePuestos(updPSelectedSucursal.puestos || []);
+    if (!updPEmpresaId || !Array.isArray(structure) || structure.length === 0) return [];
+    const empresa = structure.find((x: any) => Number(x.id) === Number(updPEmpresaId));
+    if (!empresa) return [];
+    const pool: any[] = [];
+    for (const c of empresa.clientes || []) {
+      if (updPClienteId && Number(c.id) !== Number(updPClienteId)) continue;
+      for (const d of c.division || []) {
+        if (updPDivisionId && Number(d.id) !== Number(updPDivisionId)) continue;
+        for (const ct of d.contratos || []) {
+          if (updPContratoId && Number(ct.id) !== Number(updPContratoId)) continue;
+          for (const s of ct.sucursales || []) {
+            if (updPSucursalId && Number(s.id) !== Number(updPSucursalId)) continue;
+            pool.push(...(s.puestos || []));
+          }
+        }
+      }
     }
-    if (updPContratoId && updPSelectedContrato) {
-      const puestos = (updPSelectedContrato.sucursales || []).flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    if (updPDivisionId && updPSelectedDivision) {
-      const puestos = (updPSelectedDivision.contratos || [])
-        .flatMap((contrato: any) => contrato?.sucursales || [])
-        .flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    if (updPClienteId && updPSelectedCliente) {
-      const puestos = (updPSelectedCliente.division || [])
-        .flatMap((division: any) => division?.contratos || [])
-        .flatMap((contrato: any) => contrato?.sucursales || [])
-        .flatMap((sucursal: any) => sucursal?.puestos || []);
-      return getUniquePuestos(puestos);
-    }
-    const puestos = (updPEmpresa?.clientes || [])
-      .flatMap((cliente: any) => cliente?.division || [])
-      .flatMap((division: any) => division?.contratos || [])
-      .flatMap((contrato: any) => contrato?.sucursales || [])
-      .flatMap((sucursal: any) => sucursal?.puestos || []);
-    return getUniquePuestos(puestos);
-  }, [
-    updPEmpresaId,
-    updPSucursalId,
-    updPSelectedSucursal,
-    updPContratoId,
-    updPSelectedContrato,
-    updPDivisionId,
-    updPSelectedDivision,
-    updPClienteId,
-    updPSelectedCliente,
-    updPEmpresa,
-  ]);
+    return getUniquePuestos(pool);
+  }, [structure, updPEmpresaId, updPClienteId, updPDivisionId, updPContratoId, updPSucursalId]);
 
   const updPEffectivePuestos =
     updPAssignAllDivision && updPSelectedDivisionForAll
@@ -3708,7 +3779,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                            {clientesOptions.map((cliente) => (
+                            {clientesOptions.map((cliente: any) => (
                               <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -3726,7 +3797,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona división" value="" color="#000000" />
-                            {divisionesOptions.map((division) => (
+                            {divisionesOptions.map((division: any) => (
                               <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -3744,7 +3815,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                            {contratosOptions.map((contrato) => (
+                            {contratosOptions.map((contrato: any) => (
                               <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -3762,7 +3833,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                            {sucursalesOptions.map((sucursal) => (
+                            {sucursalesOptions.map((sucursal: any) => (
                               <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -3977,7 +4048,7 @@ export default function ActivitiesScreen() {
                                 style={styles.picker}
                               >
                                 <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                                {clientesOptions.map((cliente) => (
+                                {clientesOptions.map((cliente: any) => (
                                   <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
                                 ))}
                               </Picker>
@@ -3991,7 +4062,7 @@ export default function ActivitiesScreen() {
                                 style={styles.picker}
                               >
                                 <Picker.Item label="Selecciona división" value="" color="#000000" />
-                                {divisionesOptions.map((division) => (
+                                {divisionesOptions.map((division: any) => (
                                   <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                                 ))}
                               </Picker>
@@ -4005,7 +4076,7 @@ export default function ActivitiesScreen() {
                                 style={styles.picker}
                               >
                                 <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                                {contratosOptions.map((contrato) => (
+                                {contratosOptions.map((contrato: any) => (
                                   <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
                                 ))}
                               </Picker>
@@ -4019,7 +4090,7 @@ export default function ActivitiesScreen() {
                                 style={styles.picker}
                               >
                                 <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                                {sucursalesOptions.map((sucursal) => (
+                                {sucursalesOptions.map((sucursal: any) => (
                                   <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
                                 ))}
                               </Picker>
@@ -4033,20 +4104,20 @@ export default function ActivitiesScreen() {
                       </TouchableOpacity>
 
                       {!!selectedSucursalId && (
-                        <>
-                          <ThemedText style={styles.formLabel}>Puestos</ThemedText>
-                          <ThemedView style={styles.pickerContainer}>
-                            <Picker
-                              selectedValue={selectedPuestoId}
-                              onValueChange={handleSelectPuesto}
-                              style={styles.picker}
-                            >
+                    <>
+                      <ThemedText style={styles.formLabel}>Puestos</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={selectedPuestoId}
+                          onValueChange={handleSelectPuesto}
+                          style={styles.picker}
+                        >
                               <Picker.Item label="Selecciona un puesto" value="" color="#000000" />
                               {effectivePuestos.map((puesto: any) => (
                                 <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
+                          ))}
+                        </Picker>
+                      </ThemedView>
                         </>
                       )}
 
@@ -4153,33 +4224,33 @@ export default function ActivitiesScreen() {
 
                             {isSelectedPuestosExpanded &&
                               assignedResponsables.map((responsable) => (
-                                <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
-                                  <View style={styles.assignedHeader}>
-                                    <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
+                            <ThemedView key={responsable.puestoId} style={styles.assignedItem}>
+                              <View style={styles.assignedHeader}>
+                                <ThemedText style={styles.assignedTitle}>{responsable.puestoNombre}</ThemedText>
+                                <TouchableOpacity
+                                  style={styles.removeButton}
+                                  onPress={() => handleRemovePuesto(responsable.puestoId)}
+                                >
+                                  <Ionicons name="trash" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </View>
+                              {responsable.assignAll ? (
+                                <ThemedText style={styles.helperText}>
+                                  Actividad asignada a todo el puesto.
+                                </ThemedText>
+                              ) : (
+                                    responsable.plazas.map((plaza) => (
+                                  <View key={plaza.plazaId} style={styles.plazaChip}>
+                                    <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
                                     <TouchableOpacity
                                       style={styles.removeButton}
-                                      onPress={() => handleRemovePuesto(responsable.puestoId)}
+                                      onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
                                     >
-                                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
                                     </TouchableOpacity>
                                   </View>
-                                  {responsable.assignAll ? (
-                                    <ThemedText style={styles.helperText}>
-                                      Actividad asignada a todo el puesto.
-                                    </ThemedText>
-                                  ) : (
-                                    responsable.plazas.map((plaza) => (
-                                      <View key={plaza.plazaId} style={styles.plazaChip}>
-                                        <ThemedText style={styles.plazaChipText}>{plaza.plazaNombre}</ThemedText>
-                                        <TouchableOpacity
-                                          style={styles.removeButton}
-                                          onPress={() => handleRemovePlaza(responsable.puestoId, plaza.plazaId)}
-                                        >
-                                          <Ionicons name="close-circle" size={18} color="#FF3B30" />
-                                        </TouchableOpacity>
-                                      </View>
-                                    ))
-                                  )}
+                                ))
+                              )}
                                   {tipoActividad === 'Inventario' && (
                                     <ThemedView style={styles.reglasContainer}>
                                       <ThemedText style={styles.reglasTitle}>
@@ -4211,25 +4282,25 @@ export default function ActivitiesScreen() {
                                               • Cantidad: {Number(articulo.cantidad_plan ?? articulo.cantidad ?? 0)}
                                             </ThemedText>
                                           </View>
-                                        ))
-                                      )}
-                                      </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
                                     </ThemedView>
                                   )}
                                 </ThemedView>
                               ))}
-                          </>
-                        )}
-                      </ThemedView>
+                    </>
+                  )}
+                </ThemedView>
                     </>
                   )}
                 </ThemedView>
                 ) : (
-                <ThemedView style={styles.sectionCard}>
+                  <ThemedView style={styles.sectionCard}>
                   <ThemedText style={[styles.helperText, { textAlign: 'center' }]}>
                     Los puestos vinculados no se editan en este formulario. En la lista de actividades creadas, usa «Actualizar puestos» para añadir más puestos. Las asignaciones ya existentes no se eliminan.
-                  </ThemedText>
-                </ThemedView>
+                      </ThemedText>
+                  </ThemedView>
                 )}
 
                 <ThemedView style={styles.sectionCard}>
@@ -4553,21 +4624,26 @@ export default function ActivitiesScreen() {
               >
                 <Ionicons name="camera" size={20} color="#007AFF" />
                 <ThemedText style={styles.captureImageButtonText}>
-                  {activityImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
+                  {activityImageLocalFileName ? 'Cambiar imagen' : 'Capturar imagen'}
                 </ThemedText>
               </TouchableOpacity>
 
-              {activityImageBase64 && (
+              {activityImageLocalFileName && (
                 <ThemedView style={styles.imagePreviewContainer}>
                   <ThemedText style={styles.imagePreviewTitle}>Imagen capturada:</ThemedText>
                   <Image
-                    source={{ uri: activityImageBase64 }}
+                    source={{ uri: resolveLocalMarkImageUri(activityImageLocalFileName) || '' }}
                     style={styles.imagePreview}
                     resizeMode="contain"
                   />
                   <TouchableOpacity
                     style={styles.removeImageButton}
-                    onPress={() => setActivityImageBase64(null)}
+                    onPress={() =>
+                      setActivityImageLocalFileName((prev) => {
+                        if (prev) void deleteFile(prev).catch(() => {});
+                        return null;
+                      })
+                    }
                   >
                     <Ionicons name="trash" size={20} color="#FF3B30" />
                     <ThemedText style={styles.removeImageText}>Eliminar imagen</ThemedText>
@@ -4692,7 +4768,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                            {updPClientesOptions.map((cliente) => (
+                            {updPClientesOptions.map((cliente: any) => (
                               <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -4709,7 +4785,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona división" value="" color="#000000" />
-                            {updPDivisionesOptions.map((division) => (
+                            {updPDivisionesOptions.map((division: any) => (
                               <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -4726,7 +4802,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                            {updPContratosOptions.map((contrato) => (
+                            {updPContratosOptions.map((contrato: any) => (
                               <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -4742,7 +4818,7 @@ export default function ActivitiesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                            {updPSucursalesOptions.map((sucursal) => (
+                            {updPSucursalesOptions.map((sucursal: any) => (
                               <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
                             ))}
                           </Picker>
@@ -5844,7 +5920,7 @@ const styles = StyleSheet.create({
   deleteButtonOutlineText: {
     color: '#F44336',
     fontWeight: '600',
-    textAlign: 'center', 
+    textAlign: 'center',
   },
   assignedList: {
     marginTop: 12,

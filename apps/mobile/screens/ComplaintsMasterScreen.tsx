@@ -28,7 +28,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import * as DocumentPicker from 'expo-document-picker';
 import * as Location from 'expo-location';
 import { jwtDecode } from 'jwt-decode';
 import { useQRScanner } from '@/hooks/useQRScanner';
@@ -40,6 +39,66 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import {
+  complaintCacheCorpoId,
+  COMPLAINTS_MASTER_CACHE_TYPE,
+  mergeComplaintsMasterServerIntoCacheForCorpo,
+  loadComplaintsMasterRowsForCorpo,
+  appendComplaintsMasterToCache,
+  patchComplaintsMasterRowByRecordId,
+  removeComplaintsMasterRowByRecordId,
+  patchComplaintsMasterFilesForRecord,
+  upsertComplaintsMasterRowInCache,
+  complaintsMasterIsPendingLocal,
+} from '@/hooks/complaintsMasterCacheStorage';
+import {
+  buildArchivoStorageListFromLocalAttachments,
+  materializeComplaintLocalFilesForOffline,
+  resolveComplaintsMasterArchivosForApiRequest,
+  clearComplaintsMasterPendingFilesFromArchivoList,
+  parseComplaintsMasterArchivosFromPayload,
+  normalizeServerFilesForComplaintCache,
+  complaintCacheFilesFromArchivoEntries,
+  deleteComplaintsMasterLocalFileUri,
+  downloadComplaintsMasterServerFileToLocal,
+} from '@/hooks/complaintsMasterFilesSync';
+import { deleteFile, saveFile, getLocalFileDisplayUri, type StoredFileType } from '@/hooks/fileStorage';
+import * as DocumentPicker from 'expo-document-picker';
+
+const COMPLAINTS_MASTER_FILE_STORAGE_PREFIX = 'complaints_master';
+const COMPLAINTS_MASTER_DEBUG_LOG = '[ComplaintsMaster]';
+
+function complaintsMasterDocumentPickerTypes(type: 'image' | 'audio' | 'video' | 'document'): string | string[] {
+  switch (type) {
+    case 'image':
+      return ['image/*'];
+    case 'audio':
+      return ['audio/*'];
+    case 'video':
+      return ['video/*'];
+    default:
+      return [
+        'application/pdf',
+        'application/msword',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.ms-excel',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'text/plain',
+        'text/csv',
+      ];
+  }
+}
+
+function complaintsMasterArchivosLogPreview(list: Record<string, unknown>[]) {
+  return (list || []).map((a) => ({
+    type: a?.type,
+    original_name: a?.original_name,
+    local_file_uri: a?.local_file_uri,
+    stored_file_name: a?.stored_file_name,
+    has_file_base64: typeof a?.file_base64 === 'string' && String(a.file_base64).length > 0,
+  }));
+}
 
 type ComplaintsMasterScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'ComplaintsMaster'>;
 
@@ -71,6 +130,10 @@ interface Complaint {
   empresa_id?: number | null;
   cliente_id?: number | null;
   contrato_id?: number | null;
+  puesto_id?: number | null;
+  plaza_id?: number | null;
+  division_id?: number | null;
+  isActive?: boolean | null;
 }
 
 interface EditingComplaint {
@@ -103,6 +166,10 @@ type ComplaintFile = {
   original_name: string;
   type: 'image' | 'audio' | 'video' | 'document' | string;
   extension: string;
+  /** Ruta en documentDirectory (sin prefijo file://) para adjuntos offline / pre-sync. */
+  local_uri?: string;
+  /** Nombre bajo `Paths.document` (adjuntos locales / sincronización). */
+  stored_file_name?: string;
 };
 
 type LocalFile = {
@@ -110,9 +177,12 @@ type LocalFile = {
   type: 'image' | 'audio' | 'video' | 'document';
   name: string;
   extension: string;
-  base64: string;
+  /** Solo para vistas previas puntuales; persistencia = `uri` en disco (binario). */
+  base64?: string;
   uri?: string;
   mimeType?: string;
+  /** Nombre bajo `Paths.document` devuelto por `saveFile`. */
+  storedFileName?: string;
   server_file_id?: number; // para archivos existentes precargados (c_anexos_quejas.id)
 };
 
@@ -133,24 +203,47 @@ const buildComplaintFileUrl = (complaintId: string | number, file: ComplaintFile
   const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
   if (!apiUrl) return '';
   const idNum = typeof complaintId === 'number' ? complaintId : parseInt(String(complaintId), 10);
-  if (!idNum) return '';
+  if (!Number.isFinite(idNum) || idNum <= 0) return '';
+  const enc = encodeURIComponent(file.name);
   const appendTokenToUrl = (url: string) => {
     if (!accessToken || accessToken.trim().length === 0) return url;
     if (/[?&]token=/.test(url)) return url;
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
   };
-
-  if (file.type === 'image') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-image/${encodeURIComponent(file.name)}`);
-  if (file.type === 'audio') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-audio/${encodeURIComponent(file.name)}`);
-  if (file.type === 'video') return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-video/${encodeURIComponent(file.name)}`);
-  return appendTokenToUrl(`${apiUrl}/api/complaints-master/${idNum}/get-file/${encodeURIComponent(file.name)}`);
+  let base: string;
+  if (file.type === 'image') base = `${apiUrl}/api/complaints-master/${idNum}/get-image/${enc}`;
+  else if (file.type === 'audio') base = `${apiUrl}/api/complaints-master/${idNum}/get-audio/${enc}`;
+  else if (file.type === 'video') base = `${apiUrl}/api/complaints-master/${idNum}/get-video/${enc}`;
+  else base = `${apiUrl}/api/complaints-master/${idNum}/get-file/${enc}`;
+  const withToken = appendTokenToUrl(base);
+  const sep = withToken.includes('?') ? '&' : '?';
+  return `${withToken}${sep}t=${Date.now()}`;
 };
 
 const getComplaintFileDisplayName = (file: ComplaintFile) => {
   if (file.original_name && String(file.original_name).trim().length > 0) return String(file.original_name);
   return file.name;
 };
+
+function normalizeLocalMediaUri(pathOrUri: string): string {
+  const raw = String(pathOrUri || '').trim();
+  if (!raw) return '';
+  const without = raw.replace(/^file:\/\//, '');
+  return `file://${without}`;
+}
+
+function resolveComplaintFileMediaUri(
+  complaintId: string | number,
+  file: ComplaintFile,
+  accessToken?: string | null
+): string {
+  const loc = file.local_uri;
+  if (loc != null && String(loc).trim() !== '') {
+    return normalizeLocalMediaUri(String(loc));
+  }
+  return buildComplaintFileUrl(complaintId, file, accessToken);
+}
 
 type ComplaintsStructureTree = { id: number; codigo?: string; nombre: string; clientes?: any[] }[];
 
@@ -229,51 +322,50 @@ const resolveDivisionIdForComplaintPath = (
   return null;
 };
 
-const complaintCacheCorpoId = (item: any): number | null => {
-  const fromItem = item?.corpo_id;
-  if (fromItem != null && Number.isFinite(Number(fromItem))) return Number(fromItem);
-  const fromPayload = item?.payload?.corpo_id;
-  if (fromPayload != null && Number.isFinite(Number(fromPayload))) return Number(fromPayload);
-  return null;
-};
-
-const EVALUATIONS_CACHE_KEY = 'evaluations_cache';
-const COMPLAINTS_MASTER_CACHE_TYPE = 'complaints_master';
-
-function complaintsMasterIsPendingInCache(item: any): boolean {
-  if (item?.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
-  if (item.synced === false) return true;
-  if (item.id_local && String(item.id_local).startsWith('local-')) return true;
-  return false;
-}
-
-/**
- * Sustituye en evaluations_cache solo las filas complaints_master sincronizadas de esta sucursal;
- * conserva otros tipos, quejas de otras sucursales y borradores locales de esta sucursal.
- */
-async function mergeComplaintsMasterServerIntoEvaluationsCache(serverRecords: any[], corpoId: number): Promise<void> {
-  let cache: any[] = [];
-  try {
-    const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
-    const parsed = cacheStr ? JSON.parse(cacheStr) : [];
-    cache = Array.isArray(parsed) ? parsed : [];
-  } catch {
-    cache = [];
+function findSucursalNodeInFormPath(
+  tree: ComplaintsStructureTree,
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+  contratoId: number | null,
+  corpoId: number | null
+): { puestos?: { id: number; nombre: string; plazas?: { id: number; nombre: string }[] }[] } | null {
+  if (empresaId == null || clienteId == null || divisionId == null || contratoId == null || corpoId == null) {
+    return null;
   }
-
-  const preserved = cache.filter((item: any) => {
-    if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return true;
-    const c = complaintCacheCorpoId(item);
-    if (c == null || Number(c) !== Number(corpoId)) return true;
-    if (complaintsMasterIsPendingInCache(item)) return true;
-    return false;
-  });
-
-  await AsyncStorage.setItem(EVALUATIONS_CACHE_KEY, JSON.stringify([...preserved, ...serverRecords]));
+  const e = tree.find((x) => Number(x?.id) === Number(empresaId));
+  if (!e) return null;
+  const c = (e.clientes || []).find((x: any) => Number(x?.id) === Number(clienteId));
+  if (!c) return null;
+  const div = (c.division || []).find((x: any) => Number(x?.id) === Number(divisionId));
+  if (!div) return null;
+  const con = (div.contratos || []).find((x: any) => Number(x?.id) === Number(contratoId));
+  if (!con) return null;
+  return (con.sucursales || []).find((s: any) => Number(s?.id) === Number(corpoId)) || null;
 }
 
 export default function ComplaintsMasterScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const [queryAccessToken, setQueryAccessToken] = useState('');
+  const refreshQueryAccessToken = useCallback(async () => {
+    try {
+      const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+      setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
+    } catch {
+      setQueryAccessToken('');
+    }
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    void refreshQueryAccessToken();
+  }, [accessToken, refreshQueryAccessToken]);
+
+  const effectiveMediaToken = useMemo(() => {
+    const a = accessToken != null ? String(accessToken).trim() : '';
+    const q = queryAccessToken.trim();
+    return a || q || null;
+  }, [accessToken, queryAccessToken]);
+
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ComplaintsMasterScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -310,11 +402,64 @@ export default function ComplaintsMasterScreen() {
   const [resolucionQueja, setResolucionQueja] = useState('');
   const [estado, setEstado] = useState('');
   const [accionCorrectivaPreventiva, setAccionCorrectivaPreventiva] = useState('');
+  /** Solo archivos **nuevos** en el formulario (se muestran al usuario). */
   const [imageFiles, setImageFiles] = useState<LocalFile[]>([]);
   const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
   const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
   const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+  /** Al editar: adjuntos ya existentes, precargados para el PUT; no se listan en la UI. */
+  const [preservedImageFiles, setPreservedImageFiles] = useState<LocalFile[]>([]);
+  const [preservedAudioFiles, setPreservedAudioFiles] = useState<LocalFile[]>([]);
+  const [preservedVideoFiles, setPreservedVideoFiles] = useState<LocalFile[]>([]);
+  const [preservedDocumentFiles, setPreservedDocumentFiles] = useState<LocalFile[]>([]);
   const [isPreloadingEditFiles, setIsPreloadingEditFiles] = useState(false);
+
+  const allPickedFilesRef = useRef<LocalFile[]>([]);
+  useEffect(() => {
+    allPickedFilesRef.current = [...imageFiles, ...audioFiles, ...videoFiles, ...documentFiles];
+  }, [imageFiles, audioFiles, videoFiles, documentFiles]);
+
+  const discardQueuedPickedFilesWithSnapshot = (snapshot: LocalFile[]) => {
+    void (async () => {
+      
+    })();
+  };
+
+  const buildArchivosPersistList = (): Record<string, unknown>[] =>
+    buildArchivoStorageListFromLocalAttachments(imageFiles, audioFiles, videoFiles, documentFiles);
+
+  /** Incluye “preservados” (edición) + nuevos; el servidor sustituye todos los anexos. */
+  const buildArchivosPersistListForUpdate = (): Record<string, unknown>[] => {
+    const fromPreserved = buildArchivoStorageListFromLocalAttachments(
+      preservedImageFiles,
+      preservedAudioFiles,
+      preservedVideoFiles,
+      preservedDocumentFiles
+    );
+    const fromNew = buildArchivoStorageListFromLocalAttachments(
+      imageFiles,
+      audioFiles,
+      videoFiles,
+      documentFiles
+    );
+    return [...fromPreserved, ...fromNew];
+  };
+
+  const materializeArchivosForOfflineStorage = () =>
+    materializeComplaintLocalFilesForOffline(imageFiles, audioFiles, videoFiles, documentFiles);
+
+  const materializeArchivosForOfflineUpdate = () =>
+    materializeComplaintLocalFilesForOffline(
+      [...preservedImageFiles, ...imageFiles],
+      [...preservedAudioFiles, ...audioFiles],
+      [...preservedVideoFiles, ...videoFiles],
+      [...preservedDocumentFiles, ...documentFiles]
+    );
+
+  const localImagePreviewSource = (file: LocalFile) =>
+    file.uri
+      ? { uri: file.uri }
+      : { uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64 ?? ''}` };
 
   // Firma responsable (requerida por Prisma)
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
@@ -355,6 +500,8 @@ export default function ComplaintsMasterScreen() {
   const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formCorpoId, setFormCorpoId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+  const [formPlazaId, setFormPlazaId] = useState<number | null>(null);
 
   const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
 
@@ -362,8 +509,14 @@ export default function ComplaintsMasterScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
+    try {
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+      if (!networkState.isConnected) return false;
+      if (networkState.isInternetReachable === false) return false;
+      return true;
+    } catch {
+      return false;
+    }
   };
 
   const closeCambiosModal = () => {
@@ -450,20 +603,10 @@ export default function ComplaintsMasterScreen() {
   const fetchMainStructure = useCallback(async (): Promise<ComplaintsStructureTree> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) {
-            setStructure(parsed);
-            return parsed as ComplaintsStructureTree;
-          }
-          setStructure([]);
-          return [];
-        } catch {
-          setStructure([]);
-          return [];
-        }
+      const parsed = await loadMainStructureTreeMerged();
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setStructure(parsed as ComplaintsStructureTree);
+        return parsed as ComplaintsStructureTree;
       }
       setStructure([]);
       return [];
@@ -545,6 +688,34 @@ export default function ComplaintsMasterScreen() {
     return contrato?.sucursales || [];
   }, [formDivisiones, formDivisionId, formContratoId]);
 
+  const formSucursalNode = useMemo(
+    () =>
+      findSucursalNodeInFormPath(
+        structure,
+        formEmpresaId,
+        formClienteId,
+        formDivisionId,
+        formContratoId,
+        formCorpoId
+      ),
+    [structure, formEmpresaId, formClienteId, formDivisionId, formContratoId, formCorpoId]
+  );
+
+  const formPuestos = useMemo(
+    () => (Array.isArray((formSucursalNode as any)?.puestos) ? (formSucursalNode as any).puestos : []),
+    [formSucursalNode]
+  );
+
+  const formPuestoNode = useMemo(
+    () => formPuestos.find((p: any) => Number(p?.id) === Number(formPuestoId)) || null,
+    [formPuestos, formPuestoId]
+  );
+
+  const formPlazas = useMemo(
+    () => (Array.isArray((formPuestoNode as any)?.plazas) ? (formPuestoNode as any).plazas : []),
+    [formPuestoNode]
+  );
+
   useEffect(() => {
     if ((!isCreating && !editingRecord) || isOperativo) return;
     if (formEmpresaId == null) {
@@ -622,35 +793,30 @@ export default function ComplaintsMasterScreen() {
         });
 
         if (result.status && result.data) {
-          const serverRecords = (result.data as any[]).map((r) => ({
-            ...r,
-            id_local: r?.id_local || '',
-            synced: true,
-            type: COMPLAINTS_MASTER_CACHE_TYPE,
-            corpo_id: r.corpo_id ?? corpoId,
-            files: Array.isArray(r?.files) ? r.files : [],
-          }));
+          const serverRecords = (result.data as any[])
+            .filter((r) => r?.isActive !== false)
+            .map((r) => ({
+              ...r,
+              id_local: r?.id_local || '',
+              synced: true,
+              type: COMPLAINTS_MASTER_CACHE_TYPE,
+              corpo_id: r.corpo_id ?? corpoId,
+              files: Array.isArray(r?.files) ? r.files : [],
+            }));
 
-          setComplaints(serverRecords as any);
-          await mergeComplaintsMasterServerIntoEvaluationsCache(serverRecords, corpoId);
+          await mergeComplaintsMasterServerIntoCacheForCorpo(corpoId, serverRecords);
+          const merged = await loadComplaintsMasterRowsForCorpo(corpoId);
+          setComplaints((merged as any[]).filter((c) => c?.isActive !== false) as any);
         } else {
           setComplaints([]);
         }
       } else {
-        const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
-        if (cacheStr) {
-          try {
-            const cache = JSON.parse(cacheStr);
-            const complaintsCache = (Array.isArray(cache) ? cache : []).filter((item: any) => {
-              if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
-              const c = complaintCacheCorpoId(item);
-              return c != null && Number(c) === Number(corpoId);
-            });
-            setComplaints(complaintsCache);
-          } catch {
-            setComplaints([]);
-          }
-        } else {
+        try {
+          const complaintsCache = await loadComplaintsMasterRowsForCorpo(corpoId);
+          setComplaints(
+            (complaintsCache as any[]).filter((c) => c?.isActive !== false) as any
+          );
+        } catch {
           setComplaints([]);
         }
       }
@@ -658,16 +824,10 @@ export default function ComplaintsMasterScreen() {
       console.error('Error fetching complaints:', err);
       setError('Error al cargar las quejas');
       try {
-        const cacheStr = await AsyncStorage.getItem(EVALUATIONS_CACHE_KEY);
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const complaintsCache = (Array.isArray(cache) ? cache : []).filter((item: any) => {
-            if (item.type !== COMPLAINTS_MASTER_CACHE_TYPE) return false;
-            const c = complaintCacheCorpoId(item);
-            return c != null && Number(c) === Number(corpoId);
-          });
-          setComplaints(complaintsCache);
-        }
+        const complaintsCache = await loadComplaintsMasterRowsForCorpo(corpoId);
+        setComplaints(
+          (complaintsCache as any[]).filter((c) => c?.isActive !== false) as any
+        );
       } catch (cacheErr) {
         console.error('Error loading from cache:', cacheErr);
       }
@@ -817,30 +977,8 @@ export default function ComplaintsMasterScreen() {
 
   const handleAddFile = async (type: LocalFile['type']) => {
     try {
-      let pickerTypes: string | string[] | undefined;
-      switch (type) {
-        case 'image':
-          pickerTypes = ['image/*']; break;
-        case 'audio':
-          pickerTypes = ['audio/*']; break;
-        case 'video':
-          pickerTypes = ['video/*']; break;
-        case 'document':
-        default:
-          pickerTypes = [
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'text/plain',
-            'text/csv',
-          ];
-          break;
-      }
-
       const result = await DocumentPicker.getDocumentAsync({
-        type: pickerTypes,
+        type: complaintsMasterDocumentPickerTypes(type),
         multiple: false,
         copyToCacheDirectory: true,
       });
@@ -848,38 +986,50 @@ export default function ComplaintsMasterScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result;
-          if (typeof res === 'string') {
-            const parts = res.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else {
-            reject(new Error('No se pudo leer el archivo seleccionado'));
-          }
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-        reader.readAsDataURL(blob);
-      });
-
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const displayName = asset.name || `archivo.${extension || 'dat'}`;
+      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
+      const extNorm = String(extension || 'dat').replace(/^\./, '');
+
+      const storedType: StoredFileType = type === 'document' ? 'text' : type;
+
+      const storedFileName = await saveFile({
+        uri: asset.uri,
+        originalName: stem.trim() || 'archivo',
+        extension: extNorm,
+        type: storedType,
+        prefix: COMPLAINTS_MASTER_FILE_STORAGE_PREFIX,
+      });
+
+      const savedUri = getLocalFileDisplayUri(storedFileName) || '';
 
       const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const file: LocalFile = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
-        uri: asset.uri,
+        name: displayName,
+        extension: extNorm,
+        uri: savedUri,
         mimeType: asset.mimeType,
+        storedFileName,
       };
+
+      try {
+        console.log(COMPLAINTS_MASTER_DEBUG_LOG, '[ui:addFile] adjunto en disco (imagen/audio/video/documento)', {
+          type,
+          localStateId: file.id,
+          original_name: file.name,
+          extension: file.extension,
+          prefix: COMPLAINTS_MASTER_FILE_STORAGE_PREFIX,
+          stored_file_name: file.storedFileName,
+          local_file_uri: file.uri,
+        });
+      } catch {
+        /* noop */
+      }
 
       if (type === 'image') setImageFiles(prev => [...prev, file]);
       else if (type === 'audio') setAudioFiles(prev => [...prev, file]);
@@ -891,25 +1041,9 @@ export default function ComplaintsMasterScreen() {
     }
   };
 
-  const blobToBase64 = async (blob: Blob): Promise<string> => {
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const res = reader.result;
-        if (typeof res === 'string') {
-          const parts = res.split(',');
-          resolve(parts.length > 1 ? parts[1] : parts[0]);
-        } else {
-          reject(new Error('No se pudo leer el archivo'));
-        }
-      };
-      reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
-      reader.readAsDataURL(blob);
-    });
-  };
-
-  const preloadExistingFilesForEdit = async (record: Complaint) => {
+  const preloadExistingFilesForEdit = useCallback(async (record: Complaint) => {
     try {
+      if (complaintsMasterIsPendingLocal(record)) return;
       const complaintId = parseInt(String(record.id), 10);
       if (!complaintId) return;
       const existingFiles: ComplaintFile[] = Array.isArray(record.files) ? record.files : [];
@@ -922,22 +1056,34 @@ export default function ComplaintsMasterScreen() {
       const nextVideos: LocalFile[] = [];
       const nextDocs: LocalFile[] = [];
 
+      let token = effectiveMediaToken;
+      if (!token) {
+        const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+        token = t != null && String(t).trim() !== '' ? String(t).trim() : null;
+      }
+
       for (const f of existingFiles) {
-        const url = buildComplaintFileUrl(complaintId, f, accessToken);
+        const url = buildComplaintFileUrl(complaintId, f, token);
         if (!url) continue;
 
-        const resp = await fetch(url);
-        if (!resp.ok) continue;
-
-        const blob = await resp.blob();
-        const base64 = await blobToBase64(blob);
+        const fileType = ((f.type as any) || 'document') as LocalFile['type'];
+        const dl = await downloadComplaintsMasterServerFileToLocal({
+          url,
+          fileType,
+          suggestedName: f.original_name || f.name || `file.${f.extension || 'dat'}`,
+          extension: f.extension || (f.name.includes('.') ? (f.name.split('.').pop() || 'dat') : 'dat'),
+          refreshAccessToken,
+          logout,
+        });
+        if (!dl) continue;
 
         const lf: LocalFile = {
           id: `server_${f.id}`,
-          type: (f.type as any) || 'document',
+          type: fileType,
           name: f.original_name || f.name,
           extension: f.extension || (f.name.includes('.') ? (f.name.split('.').pop() || 'dat') : 'dat'),
-          base64,
+          uri: dl.uri,
+          storedFileName: dl.storedFileName,
           server_file_id: f.id,
         };
 
@@ -947,20 +1093,25 @@ export default function ComplaintsMasterScreen() {
         else nextDocs.push(lf);
       }
 
-      // Estos arrays representan “todos los adjuntos” que se reenviarán al PUT (replace)
-      setImageFiles(nextImages);
-      setAudioFiles(nextAudios);
-      setVideoFiles(nextVideos);
-      setDocumentFiles(nextDocs);
+      setPreservedImageFiles(nextImages);
+      setPreservedAudioFiles(nextAudios);
+      setPreservedVideoFiles(nextVideos);
+      setPreservedDocumentFiles(nextDocs);
     } catch (err) {
       console.error('Error preloading complaint files:', err);
       Alert.alert('Error', 'No se pudieron cargar los archivos adjuntos para edición');
     } finally {
       setIsPreloadingEditFiles(false);
     }
-  };
+  }, [effectiveMediaToken, refreshAccessToken, logout]);
 
-  const removeLocalFile = (type: LocalFile['type'], id: string) => {
+  const removeLocalFile = async (type: LocalFile['type'], file: LocalFile) => {
+    if (file.storedFileName != null && String(file.storedFileName).trim() !== '') {
+      await deleteFile(String(file.storedFileName).trim());
+    } else if (file.uri != null && String(file.uri).trim() !== '') {
+      await deleteComplaintsMasterLocalFileUri(file.uri);
+    }
+    const id = file.id;
     if (type === 'image') setImageFiles(prev => prev.filter(f => f.id !== id));
     else if (type === 'audio') setAudioFiles(prev => prev.filter(f => f.id !== id));
     else if (type === 'video') setVideoFiles(prev => prev.filter(f => f.id !== id));
@@ -1116,90 +1267,134 @@ export default function ComplaintsMasterScreen() {
     }
   };
 
-  const deleteAttachedFile = async (file: ComplaintFile) => {
-    if (!editingRecord) return;
-    const recordId = editingRecord.id || editingRecord.id_local;
+  const executeDeleteComplaintAttachment = async (record: Complaint, file: ComplaintFile) => {
+    const recordId = record.id || record.id_local;
     if (!recordId || !file?.id) return;
 
-    Alert.alert(
-      'Confirmar',
-      '¿Deseas eliminar este archivo adjunto?',
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Eliminar',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const isConnected = await getConnectionStatus();
+    const isOpenInForm =
+      editingRecord != null &&
+      String(editingRecord.id || editingRecord.id_local) === String(recordId);
 
-              // Online: borrar en server
-              if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
-                const res = await deleteComplaintsMasterFile({
-                  id: String(editingRecord.id),
-                  fileId: file.id,
-                  refreshAccessToken,
-                  logout,
-                });
-                if (!res.status) {
-                  Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
-                  return;
-                }
-              } else {
-                // Offline: encolar acción
-                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-                const actions = actionsStr ? JSON.parse(actionsStr) : [];
-                actions.push({
-                  id: recordId,
-                  action: 'delete_file',
-                  type: 'complaints_master',
-                  payload: { fileId: file.id },
-                  synced: false,
-                });
-                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-              }
+    try {
+      const isConnected = await getConnectionStatus();
+      const serverId = record.id;
+      const hasServerId =
+        serverId != null &&
+        String(serverId).trim() !== '' &&
+        !String(serverId).startsWith('local-');
 
-              // Importante: removerlo de los arrays locales (porque el PUT hará replace)
-              setImageFiles(prev => prev.filter(f => f.server_file_id !== file.id));
-              setAudioFiles(prev => prev.filter(f => f.server_file_id !== file.id));
-              setVideoFiles(prev => prev.filter(f => f.server_file_id !== file.id));
-              setDocumentFiles(prev => prev.filter(f => f.server_file_id !== file.id));
-
-              // Actualizar estado local (registro en edición)
-              const nextFiles = (editingRecord.files || []).filter(f => f.id !== file.id);
-              setEditingRecord(prev => prev ? ({ ...prev, files: nextFiles }) : prev);
-
-              // Actualizar lista visible (complaints)
-              setComplaints(prev => prev.map((c) => {
-                const cid = c.id || c.id_local;
-                if (String(cid) === String(recordId)) {
-                  const currentFiles = Array.isArray(c.files) ? c.files : [];
-                  return { ...c, files: currentFiles.filter((f2: any) => f2.id !== file.id) };
-                }
-                return c;
-              }));
-
-              // Actualizar cache
-              const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-              if (cacheStr) {
-                const cache = JSON.parse(cacheStr);
-                const updatedCache = cache.map((item: any) => {
-                  if ((String(item.id) === String(recordId) || String(item.id_local) === String(recordId)) && item.type === 'complaints_master') {
-                    const currentFiles = Array.isArray(item.files) ? item.files : [];
-                    return { ...item, files: currentFiles.filter((f: any) => f.id !== file.id) };
-                  }
-                  return item;
-                });
-                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-              }
-            } catch (err) {
-              console.error('Error deleting attached file:', err);
-              Alert.alert('Error', 'No se pudo eliminar el archivo');
+      if (isConnected && hasServerId) {
+        const res = await deleteComplaintsMasterFile({
+          id: String(serverId),
+          fileId: file.id,
+          refreshAccessToken,
+          logout,
+        });
+        if (!res.status) {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+          return;
+        }
+      } else if (
+        file.stored_file_name != null ||
+        (file.local_uri != null && String(file.local_uri).trim() !== '') ||
+        Number(file.id) < 0
+      ) {
+        if (file.stored_file_name != null && String(file.stored_file_name).trim() !== '') {
+          try {
+            await deleteFile(String(file.stored_file_name).trim());
+          } catch {
+            /* noop */
+          }
+        } else if (file.local_uri) {
+          await deleteComplaintsMasterLocalFileUri(String(file.local_uri));
+        }
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const rid = String(recordId);
+        const nextActions = actions.map((a: any) => {
+          if (a.type !== 'complaints_master' || String(a.id) !== rid) return a;
+          if (a.action !== 'create' && a.action !== 'update') return a;
+          const arch = parseComplaintsMasterArchivosFromPayload(a.payload?.archivos);
+          const filtered = arch.filter((entry: any) => {
+            const sn = entry?.stored_file_name;
+            const uri = entry?.local_file_uri || entry?.file_path;
+            if (
+              file.stored_file_name != null &&
+              sn != null &&
+              String(sn) === String(file.stored_file_name)
+            ) {
+              return false;
             }
-          },
-        },
-      ]
-    );
+            if (file.local_uri && uri) {
+              const a0 = String(uri).replace(/^file:\/\//, '');
+              const b0 = String(file.local_uri).replace(/^file:\/\//, '');
+              if (a0 === b0) return false;
+            }
+            return true;
+          });
+          return { ...a, payload: { ...a.payload, archivos: filtered } };
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(nextActions));
+      } else {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: recordId,
+          action: 'delete_file',
+          type: 'complaints_master',
+          payload: { fileId: file.id },
+          synced: false,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      }
+
+      if (isOpenInForm) {
+        const notRemovedLocal = (f: LocalFile) =>
+          f.server_file_id !== file.id &&
+          !(
+            file.stored_file_name != null &&
+            f.storedFileName != null &&
+            String(f.storedFileName) === String(file.stored_file_name)
+          );
+        setImageFiles(prev => prev.filter(notRemovedLocal));
+        setAudioFiles(prev => prev.filter(notRemovedLocal));
+        setVideoFiles(prev => prev.filter(notRemovedLocal));
+        setDocumentFiles(prev => prev.filter(notRemovedLocal));
+        setPreservedImageFiles(prev => prev.filter(notRemovedLocal));
+        setPreservedAudioFiles(prev => prev.filter(notRemovedLocal));
+        setPreservedVideoFiles(prev => prev.filter(notRemovedLocal));
+        setPreservedDocumentFiles(prev => prev.filter(notRemovedLocal));
+        const nextFiles = (record.files || []).filter(f => f.id !== file.id);
+        setEditingRecord(prev => (prev ? { ...prev, files: nextFiles } : prev));
+      }
+
+      setComplaints(prev =>
+        prev.map(c => {
+          const cid = c.id || c.id_local;
+          if (String(cid) === String(recordId)) {
+            const currentFiles = Array.isArray(c.files) ? c.files : [];
+            return { ...c, files: currentFiles.filter((f2: any) => f2.id !== file.id) };
+          }
+          return c;
+        })
+      );
+
+      await patchComplaintsMasterFilesForRecord(recordId, file.id);
+    } catch (err) {
+      console.error('Error deleting attached file:', err);
+      Alert.alert('Error', 'No se pudo eliminar el archivo');
+    }
+  };
+
+  const deleteAttachedFileForListRecord = (record: Complaint) => (file: ComplaintFile) => {
+    Alert.alert('Confirmar', '¿Deseas eliminar este archivo adjunto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => void executeDeleteComplaintAttachment(record, file),
+      },
+    ]);
   };
 
   const startCreating = async () => {
@@ -1234,6 +1429,10 @@ export default function ComplaintsMasterScreen() {
     setAudioFiles([]);
     setVideoFiles([]);
     setDocumentFiles([]);
+    setPreservedImageFiles([]);
+    setPreservedAudioFiles([]);
+    setPreservedVideoFiles([]);
+    setPreservedDocumentFiles([]);
     setFirmaResponsable(null);
 
     const current = await loadMarcaContext();
@@ -1257,12 +1456,18 @@ export default function ComplaintsMasterScreen() {
       setFormDivisionId(divisionId);
       setFormContratoId(contratoId);
       setFormCorpoId(corpoId);
+      const pMarca = current?.puesto?.id ?? current?.puesto_id;
+      const plMarca = current?.plaza?.id ?? current?.plaza_id;
+      if (pMarca != null && Number(pMarca) > 0) setFormPuestoId(Number(pMarca));
+      if (plMarca != null && Number(plMarca) > 0) setFormPlazaId(Number(plMarca));
     } else {
       setFormEmpresaId(null);
       setFormClienteId(null);
       setFormDivisionId(null);
       setFormContratoId(null);
       setFormCorpoId(null);
+      setFormPuestoId(null);
+      setFormPlazaId(null);
       const en = current?.empresa?.nombre;
       if (en != null && String(en).trim()) setSociedad(String(en).trim());
       const cn = current?.cliente?.nombre;
@@ -1271,11 +1476,22 @@ export default function ComplaintsMasterScreen() {
   };
 
   const cancelCreating = () => {
+    discardQueuedPickedFilesWithSnapshot([...allPickedFilesRef.current]);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
+    setPreservedImageFiles([]);
+    setPreservedAudioFiles([]);
+    setPreservedVideoFiles([]);
+    setPreservedDocumentFiles([]);
     setFormEmpresaId(null);
     setFormClienteId(null);
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
+    setFormPuestoId(null);
+    setFormPlazaId(null);
     setIsCreating(false);
   };
 
@@ -1286,6 +1502,10 @@ export default function ComplaintsMasterScreen() {
     setAudioFiles([]);
     setVideoFiles([]);
     setDocumentFiles([]);
+    setPreservedImageFiles([]);
+    setPreservedAudioFiles([]);
+    setPreservedVideoFiles([]);
+    setPreservedDocumentFiles([]);
     setFirmaResponsable(null);
 
     setEditingRecord({
@@ -1345,31 +1565,88 @@ export default function ComplaintsMasterScreen() {
       setFormDivisionId(did);
       setFormContratoId(ctid);
       setFormCorpoId(coid);
+      if (record.puesto_id != null && Number(record.puesto_id) > 0) {
+        setFormPuestoId(Number(record.puesto_id));
+      } else {
+        setFormPuestoId(null);
+      }
+      if (record.plaza_id != null && Number(record.plaza_id) > 0) {
+        setFormPlazaId(Number(record.plaza_id));
+      } else {
+        setFormPlazaId(null);
+      }
     } else {
       setFormEmpresaId(null);
       setFormClienteId(null);
       setFormDivisionId(null);
       setFormContratoId(null);
       setFormCorpoId(null);
+      setFormPuestoId(null);
+      setFormPlazaId(null);
     }
 
     // Si ya existe firma guardada, mostrarla en el UI
     setFirmaFromHashIfPossible(record.firma_responsable || null);
 
-    // Precargar adjuntos existentes como si se hubiesen “adjuntado” para reenviarlos al PUT
-    // (requerimiento: en update se borran y se vuelven a cargar).
-    if (record.id && !String(record.id).startsWith('local-')) {
-      preloadExistingFilesForEdit(record);
+    // Precargar en arrays internos (no visibles) para reenviarlos al PUT sin listarlos en el formulario.
+    if (record.id && !String(record.id).startsWith('local-') && !complaintsMasterIsPendingLocal(record)) {
+      void preloadExistingFilesForEdit(record);
+    } else if (complaintsMasterIsPendingLocal(record) && Array.isArray(record.files) && record.files.length > 0) {
+      const nextImages: LocalFile[] = [];
+      const nextAudios: LocalFile[] = [];
+      const nextVideos: LocalFile[] = [];
+      const nextDocs: LocalFile[] = [];
+      for (const f of record.files) {
+        const hasStored = f.stored_file_name != null && String(f.stored_file_name).trim() !== '';
+        const hasUri = f.local_uri != null && String(f.local_uri).trim() !== '';
+        if (!hasStored && !hasUri) continue;
+        const t = f.type as LocalFile['type'];
+        const lfType: LocalFile['type'] =
+          t === 'image' || t === 'audio' || t === 'video' || t === 'document' ? t : 'document';
+        const fromDisk =
+          hasStored && f.stored_file_name ? getLocalFileDisplayUri(String(f.stored_file_name).trim()) : '';
+        const uriNorm =
+          fromDisk && fromDisk.length > 0
+            ? fromDisk
+            : normalizeLocalMediaUri(String(f.local_uri || ''));
+        const lf: LocalFile = {
+          id: `hydrated_${f.stored_file_name ?? f.id}_${f.extension}`,
+          type: lfType,
+          name: f.original_name || f.name,
+          extension: f.extension || 'dat',
+          uri: uriNorm,
+          storedFileName: hasStored && f.stored_file_name ? String(f.stored_file_name).trim() : undefined,
+        };
+        if (lfType === 'image') nextImages.push(lf);
+        else if (lfType === 'audio') nextAudios.push(lf);
+        else if (lfType === 'video') nextVideos.push(lf);
+        else nextDocs.push(lf);
+      }
+      setPreservedImageFiles(nextImages);
+      setPreservedAudioFiles(nextAudios);
+      setPreservedVideoFiles(nextVideos);
+      setPreservedDocumentFiles(nextDocs);
     }
   };
 
   const cancelEditing = () => {
+    discardQueuedPickedFilesWithSnapshot([...allPickedFilesRef.current]);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    setDocumentFiles([]);
+    setPreservedImageFiles([]);
+    setPreservedAudioFiles([]);
+    setPreservedVideoFiles([]);
+    setPreservedDocumentFiles([]);
     setEditingRecord(null);
     setFormEmpresaId(null);
     setFormClienteId(null);
     setFormDivisionId(null);
     setFormContratoId(null);
     setFormCorpoId(null);
+    setFormPuestoId(null);
+    setFormPlazaId(null);
   };
 
   const handleDateChangeQueja = (event: any, selectedDate?: Date) => {
@@ -1409,16 +1686,16 @@ export default function ComplaintsMasterScreen() {
     corpo_id: number;
     puesto_id: number;
     plaza_id: number;
+    division_id: number;
   } | null => {
-    const puestoRaw = currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id;
-    const plazaRaw = currentMarcaData?.plaza?.id ?? currentMarcaData?.plaza_id;
-    const puesto_id = puestoRaw != null ? Number(puestoRaw) : NaN;
-    const plaza_id = plazaRaw != null ? Number(plazaRaw) : NaN;
-    if (!Number.isFinite(puesto_id) || puesto_id <= 0 || !Number.isFinite(plaza_id) || plaza_id <= 0) {
-      return null;
-    }
-
     if (isOperativo) {
+      const puestoRaw = currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id;
+      const plazaRaw = currentMarcaData?.plaza?.id ?? currentMarcaData?.plaza_id;
+      const puesto_id = puestoRaw != null ? Number(puestoRaw) : NaN;
+      const plaza_id = plazaRaw != null ? Number(plazaRaw) : NaN;
+      if (!Number.isFinite(puesto_id) || puesto_id <= 0 || !Number.isFinite(plaza_id) || plaza_id <= 0) {
+        return null;
+      }
       const empresa_id = Number(currentMarcaData?.empresa?.id ?? currentMarcaData?.empresa_id);
       const cliente_id = Number(currentMarcaData?.cliente?.id ?? currentMarcaData?.cliente_id);
       let contrato_id = Number(currentMarcaData?.contrato?.id ?? currentMarcaData?.contrato_id);
@@ -1429,7 +1706,15 @@ export default function ComplaintsMasterScreen() {
         if (resolved == null) return null;
         contrato_id = resolved;
       }
-      return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id };
+      const division_id = resolveDivisionIdForComplaintPath(
+        tree,
+        empresa_id,
+        cliente_id,
+        contrato_id,
+        corpo_id
+      );
+      if (division_id == null) return null;
+      return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id, division_id };
     }
 
     if (
@@ -1445,9 +1730,32 @@ export default function ComplaintsMasterScreen() {
     const cliente_id = Number(formClienteId);
     const contrato_id = Number(formContratoId);
     const corpo_id = Number(formCorpoId);
-    if (![empresa_id, cliente_id, contrato_id, corpo_id].every((n) => Number.isFinite(n) && n > 0)) return null;
+    let puesto_id = formPuestoId != null ? Number(formPuestoId) : NaN;
+    if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+      const p = currentMarcaData?.puesto?.id ?? currentMarcaData?.puesto_id;
+      if (p != null && Number(p) > 0) puesto_id = Number(p);
+    }
+    let plaza_id = formPlazaId != null ? Number(formPlazaId) : NaN;
+    if (!Number.isFinite(plaza_id) || plaza_id <= 0) {
+      const z = currentMarcaData?.plaza?.id ?? currentMarcaData?.plaza_id;
+      if (z != null && Number(z) > 0) plaza_id = Number(z);
+    }
+    const division_id = Number(formDivisionId);
+    if (
+      ![
+        empresa_id,
+        cliente_id,
+        contrato_id,
+        corpo_id,
+        puesto_id,
+        plaza_id,
+        division_id,
+      ].every((n) => Number.isFinite(n) && n > 0)
+    ) {
+      return null;
+    }
 
-    return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id };
+    return { empresa_id, cliente_id, contrato_id, corpo_id, puesto_id, plaza_id, division_id };
   };
 
   const saveComplaint = () => {
@@ -1483,7 +1791,7 @@ export default function ComplaintsMasterScreen() {
           'Error',
           isOperativo
             ? 'No se pudieron obtener empresa, cliente, contrato, corpo, puesto o plaza desde la marca actual.'
-            : 'Seleccione la jerarquía completa hasta Sucursal y verifique puesto y plaza en la marca actual.'
+            : 'Seleccione la jerarquía completa hasta Sucursal, luego puesto y plaza.'
         );
         setIsSubmitting(false);
         return;
@@ -1511,30 +1819,62 @@ export default function ComplaintsMasterScreen() {
         firma_responsable: firmaResponsable
           ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
           : '',
-        archivos: [
-          ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-        ],
+        archivos: buildArchivosPersistList(),
         empresa_id: fk.empresa_id,
         cliente_id: fk.cliente_id,
         contrato_id: fk.contrato_id,
         corpo_id: fk.corpo_id,
         puesto_id: fk.puesto_id,
         plaza_id: fk.plaza_id,
+        division_id: fk.division_id,
       };
 
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
+        const archivosPersist = buildArchivosPersistList();
+        try {
+          console.log(
+            COMPLAINTS_MASTER_DEBUG_LOG,
+            '[ui:save create online] lista persist → resolveComplaintsMasterArchivosForApiRequest (lee disco por local_file_uri / cola)',
+            { count: archivosPersist.length, archivos: complaintsMasterArchivosLogPreview(archivosPersist) }
+          );
+        } catch {
+          /* noop */
+        }
+        const resolvedArchivos = await resolveComplaintsMasterArchivosForApiRequest(archivosPersist);
+        if (!resolvedArchivos.diskHydrationComplete) {
+          Alert.alert(
+            'Error',
+            'No se pudieron leer uno o más archivos adjuntos en el dispositivo. Comprueba que existan y vuelve a intentar.'
+          );
+          setIsSubmitting(false);
+          return;
+        }
+        const requestDataApi = {
+          ...requestData,
+          archivos: resolvedArchivos.archivos,
+        };
         const result = await createComplaintsMaster({
-          requestData,
+          requestData: requestDataApi,
           refreshAccessToken,
           logout,
         });
 
         if (result.status) {
+          // No borrar adjuntos locales aquí: solo tras sincronizar la cola en App.tsx (éxito API desde evaluations_actions).
+          const d = result.data as any;
+          if (d) {
+            const nid = d.id ?? (result as any).id;
+            await upsertComplaintsMasterRowInCache({
+              ...d,
+              id: nid,
+              id_local: '',
+              synced: true,
+              corpo_id: fk.corpo_id,
+              files: normalizeServerFilesForComplaintCache(d.files),
+            });
+          }
           Alert.alert('Éxito', result.message || 'Queja guardada correctamente');
           setTimeout(() => {
             cancelCreating();
@@ -1546,19 +1886,29 @@ export default function ComplaintsMasterScreen() {
       } else {
         const localId = generateRandomId();
 
+        const archivosForStorage = await materializeArchivosForOfflineStorage();
+        try {
+          console.log(
+            COMPLAINTS_MASTER_DEBUG_LOG,
+            '[ui:save create offline] archivos materializados → AsyncStorage evaluations_actions (sync leerá estas rutas)',
+            {
+              actionLocalId: localId,
+              archivos: complaintsMasterArchivosLogPreview(archivosForStorage as Record<string, unknown>[]),
+            }
+          );
+        } catch {
+          /* noop */
+        }
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
         actions.push({
           id: localId,
           action: 'create',
           type: 'complaints_master',
-          payload: requestData,
+          payload: { ...requestData, archivos: archivosForStorage },
           synced: false,
         });
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
         const horaAccion = await getHoraAccion();
         if (!horaAccion) {
@@ -1567,10 +1917,13 @@ export default function ComplaintsMasterScreen() {
           return;
         }
 
+        const cacheFiles = complaintCacheFilesFromArchivoEntries(
+          archivosForStorage as Record<string, unknown>[]
+        ) as ComplaintFile[];
         const newRecordCache: Complaint = {
           id: '',
           id_local: localId,
-          files: [],
+          files: cacheFiles,
           sociedad: sociedad.trim() || null,
           nombre_realiza_queja: nombreRealizaQueja.trim() || null,
           cliente: cliente.trim() || null,
@@ -1595,10 +1948,12 @@ export default function ComplaintsMasterScreen() {
           empresa_id: fk.empresa_id,
           cliente_id: fk.cliente_id,
           contrato_id: fk.contrato_id,
+          puesto_id: fk.puesto_id,
+          plaza_id: fk.plaza_id,
+          division_id: fk.division_id,
         };
 
-        cache.push({ ...newRecordCache, type: 'complaints_master' });
-        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+        await appendComplaintsMasterToCache({ ...newRecordCache, type: COMPLAINTS_MASTER_CACHE_TYPE });
 
         Alert.alert('Éxito', 'Queja registrada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
@@ -1649,7 +2004,7 @@ export default function ComplaintsMasterScreen() {
           'Error',
           isOperativo
             ? 'No se pudieron obtener empresa, cliente, contrato, corpo, puesto o plaza desde la marca actual.'
-            : 'Seleccione empresa, cliente, división, contrato y sucursal, y verifique puesto/plaza en la marca actual.'
+            : 'Seleccione empresa, cliente, división, contrato, sucursal, puesto y plaza.'
         );
         setIsSubmitting(false);
         return;
@@ -1676,32 +2031,74 @@ export default function ComplaintsMasterScreen() {
         firma_responsable: firmaResponsable
           ? btoa(`${firmaResponsable.sessionId}:${firmaResponsable.empleadoId}:${firmaResponsable.latitud}:${firmaResponsable.longitud}:${firmaResponsable.timestamp}`)
           : (editingRecord.firma_responsable || ''),
-        archivos: [
-          ...imageFiles.map(f => ({ type: 'image', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...audioFiles.map(f => ({ type: 'audio', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...videoFiles.map(f => ({ type: 'video', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-          ...documentFiles.map(f => ({ type: 'document', extension: f.extension, original_name: f.name, file_base64: f.base64 })),
-        ],
+        archivos: buildArchivosPersistListForUpdate(),
         empresa_id: fk.empresa_id,
         cliente_id: fk.cliente_id,
         contrato_id: fk.contrato_id,
         corpo_id: fk.corpo_id,
         puesto_id: fk.puesto_id,
         plaza_id: fk.plaza_id,
+        division_id: fk.division_id,
       };
 
       const isConnected = await getConnectionStatus();
       const recordId = editingRecord.id || editingRecord.id_local;
 
       if (isConnected && editingRecord.id && !String(editingRecord.id).startsWith('local-')) {
+        const archivosPersistUpdate = buildArchivosPersistListForUpdate();
+        try {
+          console.log(
+            COMPLAINTS_MASTER_DEBUG_LOG,
+            '[ui:save update online] lista persist → resolveComplaintsMasterArchivosForApiRequest',
+            {
+              serverRecordId: String(editingRecord.id),
+              count: archivosPersistUpdate.length,
+              archivos: complaintsMasterArchivosLogPreview(archivosPersistUpdate),
+            }
+          );
+        } catch {
+          /* noop */
+        }
+        const resolvedUpdate = await resolveComplaintsMasterArchivosForApiRequest(archivosPersistUpdate);
+        if (!resolvedUpdate.diskHydrationComplete) {
+          Alert.alert(
+            'Error',
+            'No se pudieron leer uno o más archivos adjuntos en el dispositivo. Comprueba que existan y vuelve a intentar.'
+          );
+          setIsSubmitting(false);
+          return;
+        }
+        const requestDataApi = {
+          ...requestData,
+          archivos: resolvedUpdate.archivos,
+        };
         const result = await updateComplaintsMaster({
           id: String(editingRecord.id),
-          requestData,
+          requestData: requestDataApi,
           refreshAccessToken,
           logout,
         });
 
         if (result.status) {
+          // No borrar adjuntos locales aquí: solo tras sincronizar la cola en App.tsx.
+          const d = result.data as any;
+          const clean =
+            d && typeof d === 'object'
+              ? (() => {
+                  const { c_anexos_quejas: _a, archivos: _ar, ...r } = d;
+                  return r;
+                })()
+              : {};
+          const { archivos: _arch2, ...cachePatch } = requestData as any;
+          await patchComplaintsMasterRowByRecordId(String(editingRecord.id), {
+            ...cachePatch,
+            ...clean,
+            synced: true,
+            id_local: '',
+            ...(Array.isArray(d?.files)
+              ? { files: normalizeServerFilesForComplaintCache(d.files) }
+              : {}),
+          });
           Alert.alert('Éxito', result.message || 'Queja actualizada correctamente');
           setTimeout(() => {
             cancelEditing();
@@ -1711,6 +2108,9 @@ export default function ComplaintsMasterScreen() {
           Alert.alert('Error', result.message || 'Error al actualizar la queja');
         }
       } else {
+        const archivosForStorage = await materializeArchivosForOfflineUpdate();
+        const offlineRequest = { ...requestData, archivos: archivosForStorage };
+
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
         const eid = editingRecord.id;
@@ -1718,6 +2118,22 @@ export default function ComplaintsMasterScreen() {
           eid == null ||
           (typeof eid === 'string' && eid.trim() === '') ||
           String(eid).startsWith('local-');
+
+        try {
+          console.log(
+            COMPLAINTS_MASTER_DEBUG_LOG,
+            '[ui:save update offline] materializado → evaluations_actions',
+            {
+              recordId,
+              editingId: eid,
+              id_local: editingRecord.id_local,
+              isLocalOnly,
+              archivos: complaintsMasterArchivosLogPreview(archivosForStorage as Record<string, unknown>[]),
+            }
+          );
+        } catch {
+          /* noop */
+        }
 
         if (isLocalOnly && editingRecord.id_local) {
           const lid = String(editingRecord.id_local);
@@ -1738,7 +2154,7 @@ export default function ComplaintsMasterScreen() {
               ...actions[createIdx],
               payload: {
                 ...actions[createIdx].payload,
-                ...requestData,
+                ...offlineRequest,
                 marca_id: currentMarcaData.id,
               },
             };
@@ -1747,28 +2163,34 @@ export default function ComplaintsMasterScreen() {
               id: editingRecord.id_local,
               action: 'create',
               type: 'complaints_master',
-              payload: { marca_id: currentMarcaData.id, ...requestData },
+              payload: { marca_id: currentMarcaData.id, ...offlineRequest },
               synced: false,
             });
           }
         } else {
-          actions.push({
-            id: recordId,
-            action: 'update',
-            type: 'complaints_master',
-            payload: requestData,
-            synced: false,
-          });
+        actions.push({
+          id: recordId,
+          action: 'update',
+          type: 'complaints_master',
+            payload: offlineRequest,
+          synced: false,
+        });
         }
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        try {
+          console.log(COMPLAINTS_MASTER_DEBUG_LOG, '[ui:save update offline] evaluations_actions persistido', {
+            recordId,
+            totalActions: actions.length,
+          });
+        } catch {
+          /* noop */
+        }
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
-          const updatedCache = cache.map((item: any) => {
-            if ((item.id === recordId || item.id_local === recordId) && item.type === 'complaints_master') {
-              return {
-                ...item,
+        const offlineListFiles = complaintCacheFilesFromArchivoEntries(
+          archivosForStorage as Record<string, unknown>[]
+        ) as ComplaintFile[];
+        await patchComplaintsMasterRowByRecordId(recordId, {
+          synced: false,
                 sociedad: sociedad.trim() || null,
                 nombre_realiza_queja: nombreRealizaQueja.trim() || null,
                 cliente: cliente.trim() || null,
@@ -1786,17 +2208,16 @@ export default function ComplaintsMasterScreen() {
                 resolucion_queja: resolucionQueja.trim() || null,
                 estado: estado.trim() || null,
                 accion_correctiva_preventiva: accionCorrectivaPreventiva.trim() || null,
-                firma_responsable: requestData.firma_responsable || item.firma_responsable,
-                empresa_id: fk.empresa_id,
-                cliente_id: fk.cliente_id,
-                contrato_id: fk.contrato_id,
-                corpo_id: fk.corpo_id,
-              };
-            }
-            return item;
-          });
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-        }
+          firma_responsable: offlineRequest.firma_responsable,
+          empresa_id: fk.empresa_id,
+          cliente_id: fk.cliente_id,
+          contrato_id: fk.contrato_id,
+          corpo_id: fk.corpo_id,
+          puesto_id: fk.puesto_id,
+          plaza_id: fk.plaza_id,
+          division_id: fk.division_id,
+          files: offlineListFiles,
+        });
 
         Alert.alert('Éxito', 'Queja actualizada localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
@@ -1858,12 +2279,7 @@ export default function ComplaintsMasterScreen() {
                 });
                 await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter((item: any) => !(item.id === recordId || item.id_local === recordId));
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+                await removeComplaintsMasterRowByRecordId(recordId);
 
                 Alert.alert('Modo Offline', 'Queja eliminada localmente. Se sincronizará cuando haya conexión.');
                 void refetchComplaintsList();
@@ -1871,20 +2287,20 @@ export default function ComplaintsMasterScreen() {
                 const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 const lid = String(record.id_local);
+                const dropped = actions.filter(
+                  (a: any) => a.type === 'complaints_master' && String(a.id) === lid
+                );
+                for (const a of dropped) {
+                  await clearComplaintsMasterPendingFilesFromArchivoList(
+                    parseComplaintsMasterArchivosFromPayload(a.payload?.archivos)
+                  );
+                }
                 const filtered = actions.filter(
                   (a: any) => !(a.type === 'complaints_master' && String(a.id) === lid)
                 );
                 await AsyncStorage.setItem('evaluations_actions', JSON.stringify(filtered));
 
-                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                if (cacheStr) {
-                  const cache = JSON.parse(cacheStr);
-                  const updatedCache = cache.filter(
-                    (item: any) =>
-                      !(item.type === 'complaints_master' && String(item.id_local) === lid)
-                  );
-                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                }
+                await removeComplaintsMasterRowByRecordId(lid);
 
                 Alert.alert('Éxito', 'Queja pendiente eliminada (no requiere borrado en servidor).');
                 void refetchComplaintsList();
@@ -1934,6 +2350,8 @@ export default function ComplaintsMasterScreen() {
                         setFormDivisionId(null);
                         setFormContratoId(null);
                         setFormCorpoId(null);
+                        setFormPuestoId(null);
+                        setFormPlazaId(null);
                       }}
                       style={styles.picker}
                     >
@@ -1960,6 +2378,8 @@ export default function ComplaintsMasterScreen() {
                           setFormDivisionId(null);
                           setFormContratoId(null);
                           setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
                         }}
                         style={styles.picker}
                       >
@@ -1981,6 +2401,8 @@ export default function ComplaintsMasterScreen() {
                           setFormDivisionId(value && value !== '' ? Number(value) : null);
                           setFormContratoId(null);
                           setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
                         }}
                         style={styles.picker}
                       >
@@ -2001,6 +2423,8 @@ export default function ComplaintsMasterScreen() {
                         onValueChange={(value) => {
                           setFormContratoId(value && value !== '' ? Number(value) : null);
                           setFormCorpoId(null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
                         }}
                         style={styles.picker}
                       >
@@ -2018,7 +2442,11 @@ export default function ComplaintsMasterScreen() {
                     <View style={styles.pickerWrapper}>
                       <Picker
                         selectedValue={formCorpoId || ''}
-                        onValueChange={(value) => setFormCorpoId(value && value !== '' ? Number(value) : null)}
+                        onValueChange={(value) => {
+                          setFormCorpoId(value && value !== '' ? Number(value) : null);
+                          setFormPuestoId(null);
+                          setFormPlazaId(null);
+                        }}
                         style={styles.picker}
                       >
                         <Picker.Item label="Seleccionar..." value="" color="#000000" />
@@ -2029,6 +2457,45 @@ export default function ComplaintsMasterScreen() {
                             value={s.id}
                             color="#000000"
                           />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+                {!!formCorpoId && formPuestos.length > 0 && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Puesto *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formPuestoId || ''}
+                        onValueChange={(value) => {
+                          setFormPuestoId(value && value !== '' ? Number(value) : null);
+                          setFormPlazaId(null);
+                        }}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formPuestos.map((p: any) => (
+                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                  </ThemedView>
+                )}
+                {!!formPuestoId && formPlazas.length > 0 && (
+                  <ThemedView style={styles.formGroup}>
+                    <ThemedText style={styles.formLabel}>Plaza *</ThemedText>
+                    <View style={styles.pickerWrapper}>
+                      <Picker
+                        selectedValue={formPlazaId || ''}
+                        onValueChange={(value) =>
+                          setFormPlazaId(value && value !== '' ? Number(value) : null)
+                        }
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
+                        {formPlazas.map((z: any) => (
+                          <Picker.Item key={z.id} label={z.nombre} value={z.id} color="#000000" />
                         ))}
                       </Picker>
                     </View>
@@ -2301,18 +2768,16 @@ export default function ComplaintsMasterScreen() {
           />
         </ThemedView>
 
-        {/* Archivos adjuntos (miniaturas en creación; visor en edición) */}
-        {isEditing && editingRecord?.files && (editingRecord.files.length > 0) && (
-          <ComplaintFilesViewer
-            complaintId={editingRecord.id || editingRecord.id_local}
-            files={editingRecord.files}
-            onDeleteFile={deleteAttachedFile}
-            accessToken={accessToken}
-          />
-        )}
-
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.formLabel}>Agregar archivos</ThemedText>
+          <ThemedText style={styles.formLabel}>
+            {isEditing ? 'Añadir archivos nuevos' : 'Agregar archivos'}
+          </ThemedText>
+          {isEditing ? (
+            <ThemedText style={styles.formHintText}>
+              Aquí solo ves los que vas a agregar en este guardado. Para ver o eliminar adjuntos ya
+              guardados, usa el listado principal.
+            </ThemedText>
+          ) : null}
 
           <ThemedView style={styles.fileIconButtonsRow}>
             <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
@@ -2334,12 +2799,12 @@ export default function ComplaintsMasterScreen() {
               {imageFiles.map(file => (
                 <ThemedView key={file.id} style={styles.fileRow}>
                   <Image
-                    source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                    source={localImagePreviewSource(file)}
                     style={styles.filePreviewImage}
                     resizeMode="cover"
                   />
                   <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                  <TouchableOpacity onPress={() => removeLocalFile('image', file.id)}>
+                  <TouchableOpacity onPress={() => void removeLocalFile('image', file)}>
                     <Ionicons name="trash" size={16} color="#FF3B30" />
                   </TouchableOpacity>
                 </ThemedView>
@@ -2349,7 +2814,7 @@ export default function ComplaintsMasterScreen() {
                 <ThemedView key={file.id} style={styles.fileRow}>
                   <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
                   <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                  <TouchableOpacity onPress={() => removeLocalFile('audio', file.id)}>
+                  <TouchableOpacity onPress={() => void removeLocalFile('audio', file)}>
                     <Ionicons name="trash" size={16} color="#FF3B30" />
                   </TouchableOpacity>
                 </ThemedView>
@@ -2359,7 +2824,7 @@ export default function ComplaintsMasterScreen() {
                 <ThemedView key={file.id} style={styles.fileRow}>
                   <Ionicons name="videocam-outline" size={16} color="#007AFF" />
                   <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                  <TouchableOpacity onPress={() => removeLocalFile('video', file.id)}>
+                  <TouchableOpacity onPress={() => void removeLocalFile('video', file)}>
                     <Ionicons name="trash" size={16} color="#FF3B30" />
                   </TouchableOpacity>
                 </ThemedView>
@@ -2369,7 +2834,7 @@ export default function ComplaintsMasterScreen() {
                 <ThemedView key={file.id} style={styles.fileRow}>
                   <Ionicons name="document-text-outline" size={16} color="#007AFF" />
                   <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                  <TouchableOpacity onPress={() => removeLocalFile('document', file.id)}>
+                  <TouchableOpacity onPress={() => void removeLocalFile('document', file)}>
                     <Ionicons name="trash" size={16} color="#FF3B30" />
                   </TouchableOpacity>
                 </ThemedView>
@@ -2502,16 +2967,25 @@ export default function ComplaintsMasterScreen() {
           const isDeletingThis = deletingRecordKey === recordId;
           const isExpanded = expandedRecordIds.includes(recordId);
           const isOffline = !record.synced || record.id_local;
+          const serverComplaintIdNum = parseInt(String(record.id), 10);
+          const hasFiles = Array.isArray(record.files) && record.files.length > 0;
+          const hasLocalMedia =
+            hasFiles && record.files!.some(f => f.local_uri && String(f.local_uri).trim() !== '');
+          const serverPlaybackOk =
+            !complaintsMasterIsPendingLocal(record) &&
+            Number.isFinite(serverComplaintIdNum) &&
+            serverComplaintIdNum > 0;
+          const canShowListFilePlayback = hasFiles && (serverPlaybackOk || hasLocalMedia);
 
           return (
             <ThemedView key={recordId} style={styles.listItem}>
-              <ThemedText style={styles.listItemTitle}>
-                {record.nombre_realiza_queja || 'Sin nombre'}
-              </ThemedText>
-              <ThemedText style={styles.listItemSubtitle}>
+                  <ThemedText style={styles.listItemTitle}>
+                    {record.nombre_realiza_queja || 'Sin nombre'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
                 <ThemedText style={styles.detailLabel}>Cliente: </ThemedText>
                 {record.cliente || 'Sin cliente'}
-              </ThemedText>
+                  </ThemedText>
               <ThemedText style={styles.listItemSubtitle}>
                 <ThemedText style={styles.detailLabel}>Tipo de queja: </ThemedText>
                 {record.tipo_queja || 'Sin tipo'}
@@ -2527,30 +3001,43 @@ export default function ComplaintsMasterScreen() {
                   : 'No especificado'}
               </ThemedText>
 
-              <ThemedView style={styles.listItemActions}>
-                {isOffline && (
-                  <ThemedView style={styles.offlineBadge}>
-                    <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
-                  </ThemedView>
-                )}
+              {canShowListFilePlayback && (
+                <ComplaintFilesViewer
+                  variant="list"
+                  complaintId={record.id || record.id_local}
+                  files={record.files!}
+                  accessToken={effectiveMediaToken}
+                  onDeleteFile={deleteAttachedFileForListRecord(record)}
+                />
+              )}
+
+                <ThemedView style={styles.listItemActions}>
+                  {isOffline && (
+                    <ThemedView style={styles.offlineBadge}>
+                      <ThemedText style={styles.offlineBadgeText}>Offline</ThemedText>
+                    </ThemedView>
+                  )}
               </ThemedView>
 
-              <TouchableOpacity
-                style={styles.collapseButton}
-                onPress={() => toggleExpanded(recordId)}
-              >
-                <ThemedText style={styles.collapseButtonText}>
-                  {isExpanded ? 'Ocultar detalles de la queja' : 'Ver detalles de la queja'}
-                </ThemedText>
-                <Ionicons
-                  name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                  size={20}
-                  color="#007AFF"
-                />
+              <ThemedView style={styles.collapsableSection}>
+                <TouchableOpacity
+                  style={styles.listCardFilesHeader}
+                  onPress={() => toggleExpanded(recordId)}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: isExpanded }}
+                >
+                  <ThemedText style={styles.collapsableHeaderText}>
+                    {isExpanded ? 'Ocultar detalles de la queja' : 'Ver detalles de la queja'}
+                  </ThemedText>
+                  <Ionicons
+                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color="#007AFF"
+                  />
               </TouchableOpacity>
 
-              {isExpanded && (
-                <ThemedView style={styles.listItemDetails}>
+                {isExpanded ? (
+                  <ThemedView style={styles.collapsableContent}>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Sociedad: </ThemedText>
                     {record.sociedad || 'No especificado'}
@@ -2587,15 +3074,15 @@ export default function ComplaintsMasterScreen() {
                   )}
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha de inicio: </ThemedText>
-                    {record.fecha_inicio
-                      ? convertDateTimestampToLocalString(new Date(record.fecha_inicio).toISOString(), false)
-                      : 'No especificado'}
+                      {record.fecha_inicio
+                        ? convertDateTimestampToLocalString(new Date(record.fecha_inicio).toISOString(), false)
+                        : 'No especificado'}
                   </ThemedText>
                   <ThemedText style={styles.detailText}>
                     <ThemedText style={styles.detailLabel}>Fecha de resolución: </ThemedText>
-                    {record.fecha_revision
-                      ? convertDateTimestampToLocalString(new Date(record.fecha_revision).toISOString(), false)
-                      : 'No especificado'}
+                      {record.fecha_revision
+                        ? convertDateTimestampToLocalString(new Date(record.fecha_revision).toISOString(), false)
+                        : 'No especificado'}
                   </ThemedText>
                   {record.resolucion_queja && (
                     <ThemedText style={styles.detailText}>
@@ -2610,44 +3097,38 @@ export default function ComplaintsMasterScreen() {
                     </ThemedText>
                   )}
 
-                  {Array.isArray(record.files) && record.files.length > 0 && (
-                    <ComplaintFilesViewer
-                      complaintId={record.id || record.id_local}
-                      files={record.files}
-                      accessToken={accessToken}
-                    />
-                  )}
                   <ThemedText style={styles.detailText}>
-                    <ThemedText style={styles.detailLabel}>Fecha de registro: </ThemedText>
+                      <ThemedText style={styles.detailLabel}>Fecha de registro: </ThemedText>
                     {new Date(record.created_at).toLocaleDateString('es-CR')}
                   </ThemedText>
-                </ThemedView>
-              )}
-              <ThemedView style={styles.listItemButtons}>
-                <TouchableOpacity
-                  style={[styles.listItemButton, styles.editButton]}
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+                  <ThemedView style={styles.listItemButtons}>
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.editButton]}
                   onPress={() => void startEditing(record)}
-                >
-                  <Ionicons name="pencil" size={20} color="#FFFFFF" />
-                  <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
-                </TouchableOpacity>
-                {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
-                  <TouchableOpacity
-                    style={[styles.listItemButton, styles.changesButton]}
-                    onPress={() => {
-                      setCambiosTitle(`Cambios - Queja #${record.id}`);
-                      fetchCambios('c_maestro_quejas', Number(record.id));
-                    }}
-                  >
-                    <Ionicons name="list-outline" size={20} color="#FFFFFF" />
-                    <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity
+                    >
+                      <Ionicons name="pencil" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+                    </TouchableOpacity>
+                    {!(record.id_local || String(record.id).startsWith('local-') || record.id === 0) && (
+                      <TouchableOpacity
+                        style={[styles.listItemButton, styles.changesButton]}
+                        onPress={() => {
+                          setCambiosTitle(`Cambios - Queja #${record.id}`);
+                          fetchCambios('c_maestro_quejas', Number(record.id));
+                        }}
+                      >
+                        <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                        <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
                   style={[styles.listItemButton, styles.deleteButton, isDeletingThis && styles.buttonDisabled]}
-                  onPress={() => deleteComplaintHandler(record)}
+                      onPress={() => deleteComplaintHandler(record)}
                   disabled={isDeletingThis}
-                >
+                    >
                   {isDeletingThis ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
@@ -2656,8 +3137,8 @@ export default function ComplaintsMasterScreen() {
                       <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
                     </>
                   )}
-                </TouchableOpacity>
-              </ThemedView>
+                    </TouchableOpacity>
+                  </ThemedView>
             </ThemedView>
           );
         })}
@@ -3240,30 +3721,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
   },
-  listItemDetails: {
-    borderTopWidth: 1,
-    borderTopColor: '#EEE',
-    paddingTop: 12,
-    marginTop: 8,
-  },
-  collapseButton: {
-    marginTop: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  collapseButtonText: {
-    color: '#007AFF',
-    fontWeight: '700',
-    fontSize: 14,
-    flex: 1,
-  },
   detailText: {
     fontSize: 14,
     color: '#000000',
@@ -3465,6 +3922,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#007AFF',
   },
+  listCardFilesHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F0F0F0',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
   collapsableContent: {
     padding: 12,
     backgroundColor: '#F9F9F9',
@@ -3614,11 +4081,14 @@ function ComplaintFilesViewer({
   files,
   accessToken,
   onDeleteFile,
+  variant = 'default',
 }: {
   complaintId: string | number;
   files: ComplaintFile[];
   accessToken?: string | null;
   onDeleteFile?: (file: ComplaintFile) => void;
+  /** `list`: encabezado de tarjeta en el listado; el contenido solo se monta al expandir (sin peticiones hasta entonces). */
+  variant?: 'default' | 'list';
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const list = Array.isArray(files) ? files : [];
@@ -3629,31 +4099,15 @@ function ComplaintFilesViewer({
   const videoFiles = list.filter(f => f.type === 'video');
   const documentFiles = list.filter(f => f.type === 'document' || (!f.type && f.extension));
 
-  return (
-    <ThemedView style={styles.collapsableSection}>
-      <TouchableOpacity
-        style={styles.collapsableHeader}
-        onPress={() => setIsExpanded(!isExpanded)}
-      >
-        <ThemedText style={styles.collapsableHeaderText}>
-          Archivos ({list.length})
-        </ThemedText>
-        <Ionicons
-          name={isExpanded ? "chevron-up" : "chevron-down"}
-          size={20}
-          color="#007AFF"
-        />
-      </TouchableOpacity>
-
-      {isExpanded && (
-        <ThemedView style={styles.collapsableContent}>
+  const filesBody = (
+    <>
           {imageFiles.length > 0 && (
             <ThemedView style={styles.viewerSection}>
               <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
               {imageFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintImageViewer
-                    imageUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
+                imageUrl={resolveComplaintFileMediaUri(complaintId, file, accessToken)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -3667,7 +4121,7 @@ function ComplaintFilesViewer({
               {audioFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintAudioPlayer
-                    sourceUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
+                sourceUrl={resolveComplaintFileMediaUri(complaintId, file, accessToken)}
                     label={getComplaintFileDisplayName(file)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
@@ -3682,7 +4136,7 @@ function ComplaintFilesViewer({
               {videoFiles.map(file => (
                 <ThemedView key={file.id} style={{ backgroundColor: 'transparent' }}>
                   <ComplaintVideoPlayer
-                    sourceUrl={buildComplaintFileUrl(complaintId, file, accessToken)}
+                sourceUrl={resolveComplaintFileMediaUri(complaintId, file, accessToken)}
                     onDeleteFile={onDeleteFile ? () => onDeleteFile(file) : undefined}
                   />
                 </ThemedView>
@@ -3698,7 +4152,7 @@ function ComplaintFilesViewer({
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                    const url = buildComplaintFileUrl(complaintId, file, accessToken);
+                const url = resolveComplaintFileMediaUri(complaintId, file, accessToken);
                     if (url) Linking.openURL(url);
                     else Alert.alert('Error', 'URL inválida para descargar el archivo');
                   }}
@@ -3717,8 +4171,32 @@ function ComplaintFilesViewer({
               ))}
             </ThemedView>
           )}
-        </ThemedView>
-      )}
+    </>
+  );
+
+  const headerStyle = variant === 'list' ? styles.listCardFilesHeader : styles.collapsableHeader;
+  const headerTitle =
+    variant === 'list' ? `Archivos adjuntos (${list.length})` : `Archivos (${list.length})`;
+
+  return (
+    <ThemedView style={[styles.collapsableSection, { marginBottom : 0 }]}>
+      <TouchableOpacity
+        style={[headerStyle, { marginBottom : 0 }]}
+        onPress={() => setIsExpanded((v) => !v)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: isExpanded }}
+      >
+        <ThemedText style={styles.collapsableHeaderText}>{headerTitle}</ThemedText>
+        <Ionicons
+          name={isExpanded ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color="#007AFF"
+        />
+      </TouchableOpacity>
+
+      {isExpanded ? (
+        <ThemedView style={styles.collapsableContent}>{filesBody}</ThemedView>
+      ) : null}
     </ThemedView>
   );
 }

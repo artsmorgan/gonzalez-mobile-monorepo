@@ -106,6 +106,12 @@ export const listJobManualsByPuesto = async ({
   }
 
   const data = await response.json();
+  if (data?.status && Array.isArray(data.manuals)) {
+    return {
+      ...data,
+      manuals: data.manuals.filter((m: { isActive?: boolean }) => m?.isActive !== false),
+    };
+  }
   return data;
 };
 

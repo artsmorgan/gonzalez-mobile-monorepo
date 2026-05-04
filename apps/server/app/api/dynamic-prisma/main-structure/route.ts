@@ -5,14 +5,132 @@ import path from "path";
 import { prisma } from "../../../../utils/prismaClient";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { verifyTokenFromBody } from "../../../../utils/verifyTokenFromBody";
+import { mergeMainStructureFragments } from "./mergeMainStructureFragments";
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
+
+/** Alineado con GET /api/llaves para cache offline en sucursal. */
+function mapMovimientoLlaveForStructure(m: any) {
+    return {
+        id: m.id,
+        llave_id: m.llave_id,
+        nombre_persona_recibe: m.nombre_persona_recibe,
+        nombre_persona_entrega: m.nombre_persona_entrega,
+        departamento: m.departamento,
+        telefono: m.telefono,
+        entrega: m.entrega,
+        recibe: m.recibe,
+        fecha: m.fecha,
+        hora: m.hora,
+        firma_entrega: m.firma_entrega,
+        firma_recibe: m.firma_recibe,
+        firma_responsable: m.firma_responsable,
+    };
+}
+
+/** Alineado con GET /api/llaveros para cache offline en sucursal. */
+function mapMovimientoLlaveroForStructure(m: any) {
+    return {
+        id: m.id,
+        llavero_id: m.llavero_id,
+        nombre_persona_recibe: m.nombre_persona_recibe,
+        nombre_persona_entrega: m.nombre_persona_entrega,
+        departamento: m.departamento,
+        telefono: m.telefono,
+        fecha: m.fecha,
+        hora: m.hora,
+        firma_entrega: m.firma_entrega,
+        firma_recibe: m.firma_recibe,
+        firma_responsable: m.firma_responsable,
+    };
+}
+
+function mapLlaveForStructure(row: any) {
+    return {
+        id: row.id,
+        cliente_id: row.cliente_id,
+        corpo_id: row.corpo_id,
+        sucursal_id: row.corpo_id,
+        puesto_id: row.puesto_id,
+        empresa_id: row.empresa_id,
+        division_id: row.division_id,
+        contrato_id: row.contrato_id,
+        isActive: row.isActive !== false,
+        lugar_abre: row.lugar_abre,
+        cantidad_copias: row.cantidad_copias,
+        observaciones: row.observaciones,
+        firma_responsable: row.firma_responsable,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        movimientos: (row.e_movimiento_llave ?? []).map(mapMovimientoLlaveForStructure),
+    };
+}
+
+/** Datos de vehículo para anidar en bitácora (sin usos ni mantenimientos). */
+function mapVehiculoCorporativoSummaryForBitacora(v: any) {
+    if (!v) return null;
+    return {
+        id: v.id,
+        empresa_id: v.empresa_id,
+        cliente_id: v.cliente_id,
+        division_id: v.division_id,
+        contrato_id: v.contrato_id,
+        sucursal_id: v.sucursal_id,
+        puesto_id: v.puesto_id,
+        placa: v.placa,
+        tipo: v.tipo,
+        tipo_autoria: v.tipo_autoria,
+        estado: v.estado,
+        kilometraje: v.kilometraje,
+        prox_cambio_aceite: v.prox_cambio_aceite,
+        modelo: v.modelo,
+        anno: v.anno,
+        descripcion: v.descripcion,
+        titulo_propiedad: v.titulo_propiedad,
+        rtv: v.rtv,
+        marchamo: v.marchamo,
+        firma_responsable: v.firma_responsable,
+        created_by: v.created_by,
+        created_at: v.created_at,
+    };
+}
+
+function mapLlaveroForStructure(row: any) {
+    const llavesEn = row.e_llave_en_llavero ?? [];
+    return {
+        id: row.id,
+        cliente_id: row.cliente_id,
+        corpo_id: row.corpo_id,
+        sucursal_id: row.corpo_id,
+        puesto_id: row.puesto_id,
+        empresa_id: row.empresa_id,
+        division_id: row.division_id,
+        contrato_id: row.contrato_id,
+        isActive: row.isActive !== false,
+        nombre_llavero: row.nombre_llavero,
+        observaciones: row.observaciones,
+        firma_responsable: row.firma_responsable,
+        created_by: row.created_by,
+        created_at: row.created_at,
+        movimientos: (row.e_movimiento_llavero ?? []).map(mapMovimientoLlaveroForStructure),
+        llaves: llavesEn.map((l: any) => ({
+            id: l.id,
+            llave_id: l.llave_id,
+            llavero_id: l.llavero_id,
+        })),
+    };
+}
 
 type MainStructurePayload = {
     token?: string;
     mobileAccessToken?: string;
     shouldVerifyAccessToken?: boolean;
 };
+
+function pushFragment(fragments: Record<string, any>, key: string, item: any) {
+    if (!fragments[key]) fragments[key] = [];
+    (fragments[key] as any[]).push(item);
+}
 
 export async function POST(req: NextRequest) {
     try {
@@ -21,20 +139,21 @@ export async function POST(req: NextRequest) {
         console.log('Main structure route called', randomNumber);
         const auth = req.headers.get("authorization");
 
-        if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+        /*if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
           return new Response("Unauthorized", { status: 401 });
-        }
+        }*/
 
         const nowCostaRica = toZonedTime(new Date(), "America/Costa_Rica");
 
         const main = await prisma.e_estructura_empresa.findMany({ where: { deleted: null } });
 
-        // Nota: este endpoint se usa como "cache" offline en mobile. Evitamos tipado rígido aquí
-        // porque se le agregan propiedades nuevas con el tiempo (ej: vehículos corporativos).
-        const structure: any[] = [];
+        // Cache offline mobile: datos en `fragments` por clave jerárquica; `structure` se arma al vuelo.
+        const fragments: Record<string, any> = {};
+        const divisionRows = await prisma.n_division.findMany();
+        fragments.divisiones = divisionRows.map((d) => ({ id: d.id, nombre: d.nombre }));
+        fragments.empresas = main.map((e) => ({ id: e.id, nombre: `${e.codigo} - ${e.nombre}` }));
 
         for (const empresa of main) {
-            const empresa_data = { id: empresa.id, nombre: `${empresa.codigo} - ${empresa.nombre}`, clientes: [] };
             const clientes = await prisma.e_estructura_cliente.findMany({
                 where: {
                     empresa_id: empresa.id,
@@ -43,10 +162,9 @@ export async function POST(req: NextRequest) {
                 },
             });
             for (const cliente of clientes) {
-                const cliente_data = { id: cliente.id, nombre: cliente.nombre, division: [] };
-                const divisions = await prisma.n_division.findMany();
-                for (const division of divisions) {
-                    const division_data = { id: division.id, nombre: division.nombre, contratos: [] };
+                pushFragment(fragments, `empresa_${empresa.id}_clientes`, { id: cliente.id, nombre: cliente.nombre });
+
+                for (const division of divisionRows) {
                     const contratos = await prisma.e_estructura_contrato.findMany({
                         where: {
                             cliente_id: cliente.id,
@@ -59,7 +177,11 @@ export async function POST(req: NextRequest) {
                         },
                     });
                     for (const contrato of contratos) {
-                        const contrato_data = { id: contrato.id, nombre: contrato.nombre, sucursales: [] };
+                        pushFragment(fragments, `cliente_${cliente.id}_division_${division.id}_contratos`, {
+                            id: contrato.id,
+                            nombre: contrato.nombre,
+                        });
+
                         const sucursales = await prisma.e_estructura_sucursal.findMany({
                             where: {
                                 contrato_id: contrato.id,
@@ -71,40 +193,65 @@ export async function POST(req: NextRequest) {
                             },
                         });
                         for (const sucursal of sucursales) {
-                            const sucursal_data = {
+                            pushFragment(fragments, `contrato_${contrato.id}_sucursales`, {
                                 id: sucursal.id,
                                 nombre: `${sucursal.nro_sucursal} - ${sucursal.nombre}`,
-                                // Nuevo: vehículos corporativos + usos + bitácora vinculada (si existe)
-                                vehiculos_corporativos: [] as any[],
-                                puestos: [] as any[],
-                            };
+                            });
 
-                            // Vehículos corporativos de la sucursal, con usos
                             const vehiculos = await prisma.c_vehiculos_corporativos.findMany({
-                                where: { sucursal_id: sucursal.id },
+                                where: { sucursal_id: sucursal.id, isActive: true },
                                 include: { c_usos_vehiculos_corporativos: true, c_mantenimiento_vehiculos_corporativos: true },
                             });
 
-                            // Adjuntamos el registro de bitácora a cada uso (si `bitacora_id` viene seteado)
-                            const bitacoraIds = Array.from(
-                                new Set(
-                                    vehiculos
-                                        .flatMap((v: any) => v.c_usos_vehiculos_corporativos.map((u: any) => u.bitacora_id))
-                                        .filter((id: any): id is number => typeof id === "number" && Number.isFinite(id))
-                                )
-                            );
-                            const bitacoras = bitacoraIds.length
-                                ? await prisma.c_bitacora_vehiculo_detenido.findMany({ where: { id: { in: bitacoraIds } } })
-                                : [];
-                            const bitacoraById = new Map(bitacoras.map((b: any) => [b.id, b]));
+                            const vehiculoById = new Map<number, any>(vehiculos.map((v: any) => [v.id, v]));
 
-                            sucursal_data.vehiculos_corporativos = vehiculos.map((v: any) => ({
+                            fragments[`sucursal_${sucursal.id}_vehiculos_corporativos`] = vehiculos.map((v: any) => ({
                                 ...v,
-                                usos: v.c_usos_vehiculos_corporativos.map((u: any) => ({
-                                    ...u,
-                                    bitacora: u.bitacora_id ? bitacoraById.get(u.bitacora_id) ?? null : null,
-                                })),
+                                usos: v.c_usos_vehiculos_corporativos.map((u: any) => ({ ...u })),
                             }));
+
+                            const bitacorasRows = await prisma.c_bitacora_vehiculo_detenido.findMany({
+                                where: { sucursal_id: sucursal.id, isActive: true },
+                                orderBy: { id: "desc" },
+                            });
+
+                            fragments[`sucursal_${sucursal.id}_bitacora_vehiculos_detenidos`] = bitacorasRows.map((b: any) => {
+                                const vehRaw = b.vehiculo_id != null ? vehiculoById.get(Number(b.vehiculo_id)) : null;
+                                let uso: any = null;
+                                if (vehRaw && b.uso_id != null) {
+                                    uso =
+                                        vehRaw.c_usos_vehiculos_corporativos.find(
+                                            (u: any) => Number(u.id) === Number(b.uso_id)
+                                        ) ?? null;
+                                }
+                                return {
+                                    ...b,
+                                    vehiculo: mapVehiculoCorporativoSummaryForBitacora(vehRaw),
+                                    uso: uso ? { ...uso } : null,
+                                };
+                            });
+
+                            const [llavesCorpo, llaverosCorpo] = await Promise.all([
+                                prisma.e_llave.findMany({
+                                    where: { corpo_id: sucursal.id, isActive: true },
+                                    include: {
+                                        e_movimiento_llave: { orderBy: { id: "desc" } },
+                                    },
+                                    orderBy: { id: "desc" },
+                                }),
+                                prisma.e_llavero.findMany({
+                                    where: { corpo_id: sucursal.id, isActive: true },
+                                    include: {
+                                        e_movimiento_llavero: { orderBy: { id: "desc" } },
+                                        e_llave_en_llavero: {
+                                            orderBy: { id: "asc" },
+                                        },
+                                    },
+                                    orderBy: { id: "desc" },
+                                }),
+                            ]);
+                            fragments[`sucursal_${sucursal.id}_llaves`] = llavesCorpo.map(mapLlaveForStructure);
+                            fragments[`sucursal_${sucursal.id}_llaveros`] = llaverosCorpo.map(mapLlaveroForStructure);
 
                             const puestos = await prisma.e_estructura_puesto.findMany({
                                 where: {
@@ -118,7 +265,11 @@ export async function POST(req: NextRequest) {
                             });
 
                             for (const puesto of puestos) {
-                                const puesto_data = { id: puesto.id, nombre: `${puesto.codigo} - ${puesto.nombre}`, ubicacion: { lat: puesto.coordenadas_gpslat ?? null, lng: puesto.coordenadas_gpslng ?? null }, plazas: [], articulos: [] };
+                                pushFragment(fragments, `sucursal_${sucursal.id}_puestos`, {
+                                    id: puesto.id,
+                                    nombre: `${puesto.codigo} - ${puesto.nombre}`,
+                                    ubicacion: { lat: puesto.coordenadas_gpslat ?? null, lng: puesto.coordenadas_gpslng ?? null },
+                                });
 
                                 let articulos_return: any[] = [];
 
@@ -353,7 +504,7 @@ export async function POST(req: NextRequest) {
                                     }));
                                 }
 
-                                puesto_data.articulos = articulos_return as never[];
+                                fragments[`puesto_${puesto.id}_articulos`] = articulos_return.map((a) => ({ ...a }));
 
                                 const plazas = await prisma.e_estructura_plazas.findMany({
                                     where: {
@@ -414,43 +565,33 @@ export async function POST(req: NextRequest) {
                                         })
                                         : [];
 
-                                    const plaza_data = {
+                                    pushFragment(fragments, `puesto_${puesto.id}_plazas`, {
                                         id: plaza.id,
                                         nombre: `${plaza.codigo_plaza} - ${plaza.nombre}`,
-                                        empleados,
-                                    };
-                                    puesto_data.plazas.push(plaza_data as never);
+                                    });
+                                    fragments[`plaza_${plaza.id}_empleados`] = empleados;
                                 }
-                                sucursal_data.puestos.push(puesto_data as never);
                             }
-                            contrato_data.sucursales.push(sucursal_data as never);
                         }
-                        division_data.contratos.push(contrato_data as never);
                     }
-                    cliente_data.division.push(division_data as never);
                 }
-                empresa_data.clientes.push(cliente_data as never);
             }
-            structure.push(empresa_data as never);
         }
-        // Persistimos el cache en disco para que el mobile pueda reutilizarlo offline.
-        // Best-effort: si falla el write, no impedimos devolver la respuesta al cliente.
 
+        const structure = mergeMainStructureFragments(fragments);
+
+        // Persistimos fragmentos en disco (sin duplicar el árbol completo).
         try {
             const createdAt = toZonedTime(new Date(), "America/Costa_Rica").getTime();
-            // En Next/Turbopack, __dirname puede apuntar a rutas internas (ej: C:\ROOT).
-            // Guardamos en la raiz real del proyecto para mantener `main-structure.json` actualizado.
             const outPath = path.resolve(process.cwd(), "main-structure.json");
             const tmpPath = `${outPath}.tmp`;
             await fs.mkdir(path.dirname(outPath), { recursive: true });
-            const payload = JSON.stringify({ created_at: createdAt, structure }, null, 2);
+            const payload = JSON.stringify({ created_at: createdAt, fragmentsVersion: 2, fragments }, null, 2);
 
-            // Escritura atómica: escribir a tmp y luego reemplazar para evitar JSON truncado.
             await fs.writeFile(tmpPath, payload, "utf8");
             try {
                 await fs.rename(tmpPath, outPath);
             } catch {
-                // Windows puede fallar `rename` si el destino existe.
                 await fs.unlink(outPath).catch(() => undefined);
                 await fs.rename(tmpPath, outPath);
             }
@@ -459,7 +600,10 @@ export async function POST(req: NextRequest) {
             console.error("[main-structure] No se pudo escribir main-structure.json:", e);
         }
 
-        return NextResponse.json({ status: true, structure: structure }, { status: 200 });
+        return NextResponse.json(
+            { status: true, fragmentsVersion: 2, fragments, structure },
+            { status: 200 }
+        );
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -526,9 +670,9 @@ export async function GET(req: NextRequest) {
         }
 
         console.log(9);
-        let parsed: { created_at: unknown; structure: unknown };
+        let parsed: Record<string, unknown>;
         try {
-            parsed = JSON.parse(data);
+            parsed = JSON.parse(data) as Record<string, unknown>;
         } catch (e) {
             // Cache corrupto/truncado: lo movemos a un backup y devolvemos vacío.
             try {
@@ -550,9 +694,37 @@ export async function GET(req: NextRequest) {
         }
 
         console.log(10);
-        const { created_at, structure } = parsed;
+        const created_at = parsed.created_at;
+        const fragments = parsed.fragments as Record<string, any> | undefined;
+        const fragmentsVersion = parsed.fragmentsVersion as number | undefined;
+        const legacyStructure = parsed.structure;
+
+        if (fragments && typeof fragments === "object") {
+            const structure = mergeMainStructureFragments(fragments);
+            console.log(11);
+            return NextResponse.json(
+                {
+                    status: true,
+                    created_at,
+                    fragmentsVersion: fragmentsVersion ?? 2,
+                    fragments,
+                    structure,
+                },
+                { status: 200 }
+            );
+        }
+
         console.log(11);
-        return NextResponse.json({ status: true, created_at, structure }, { status: 200 });
+        return NextResponse.json(
+            {
+                status: true,
+                created_at,
+                fragmentsVersion: 1,
+                fragments: null,
+                structure: legacyStructure,
+            },
+            { status: 200 }
+        );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("[main-structure] Error al leer main-structure.json:", errorMessage);

@@ -1,6 +1,6 @@
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
+import { mergeCurrentMarcaHierarchyIntoLunchRequest } from "./lunchTimeMarcaHierarchy";
 
 interface SaveLunchTimeParams {
     requestData: any;
@@ -28,6 +28,7 @@ export default async function saveLunchTime({
         if (requestData.empleadoId == 0 && employeeId) {
             requestData.empleadoId = employeeId;
         }
+        await mergeCurrentMarcaHierarchyIntoLunchRequest(requestData);
         const response = await authedFetch({
             url: `${apiUrl}/api/lunch-time`,
             init: {

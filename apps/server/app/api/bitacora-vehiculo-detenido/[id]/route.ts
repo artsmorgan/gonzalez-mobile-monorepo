@@ -39,7 +39,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       observaciones,
       firma_responsable,
       register_vehicle,
+      empresa_id,
+      cliente_id,
+      sucursal_id,
+      division_id,
+      contrato_id,
+      puesto_id,
+      isActive,
     } = body ?? {};
+
+    const oldUsoId = existing.uso_id != null ? Number(existing.uso_id) : null;
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
     const eq = (a: any, b: any) => {
@@ -119,6 +128,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
       created_at: existing.created_at ?? (toZonedTime(new Date(), "America/Costa_Rica") as Date),
       created_by: existing.created_by ?? (parseInt(String((payload as any)?.id ?? 0)) || 0),
+      empresa_id: empresa_id !== undefined ? Number(empresa_id) || existing.empresa_id : existing.empresa_id,
+      cliente_id: cliente_id !== undefined ? Number(cliente_id) || existing.cliente_id : existing.cliente_id,
+      sucursal_id: sucursal_id !== undefined ? Number(sucursal_id) || existing.sucursal_id : existing.sucursal_id,
+      division_id: division_id !== undefined ? Number(division_id) || existing.division_id : existing.division_id,
+      contrato_id: contrato_id !== undefined ? Number(contrato_id) || existing.contrato_id : existing.contrato_id,
+      puesto_id: puesto_id !== undefined ? Number(puesto_id) || existing.puesto_id : existing.puesto_id,
+      isActive: isActive !== undefined ? Boolean(isActive) : existing.isActive,
     };
 
     // Comparar cambios (excluir firma_responsable)
@@ -145,7 +161,24 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
-    const updated = await callDynamicPrisma({
+    const newUsoId = updateData.uso_id != null ? Number(updateData.uso_id) : null;
+    if (oldUsoId && oldUsoId !== newUsoId) {
+      try {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_usos_vehiculos_corporativos",
+            where: { id: oldUsoId },
+            data: { bitacora_id: null },
+          },
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    await callDynamicPrisma({
       req,
       data: {
         action: "UPDATE",
@@ -173,17 +206,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
-    // Si se setea `uso_id`, actualizamos el uso con `bitacora_id`
-    if (uso_id) {
+    if (newUsoId) {
       try {
         await callDynamicPrisma({
           req,
           data: {
             action: "UPDATE",
             table: "c_usos_vehiculos_corporativos",
-            where: { id: Number(uso_id) },
-            data: { bitacora_id: id }
-          }
+            where: { id: newUsoId },
+            data: { bitacora_id: id },
+          },
         });
       } catch {
         // ignore
@@ -215,6 +247,23 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     });
     if (!existing) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+    }
+
+    const usoOnRecord = existing.uso_id != null ? Number(existing.uso_id) : null;
+    if (usoOnRecord) {
+      try {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_usos_vehiculos_corporativos",
+            where: { id: usoOnRecord },
+            data: { bitacora_id: null },
+          },
+        });
+      } catch {
+        // ignore
+      }
     }
 
     await callDynamicPrisma({

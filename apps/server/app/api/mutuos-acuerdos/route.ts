@@ -61,16 +61,24 @@ export async function GET(req: NextRequest) {
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
 
     const where: any = {
-      OR: [
-        { empleadoReemplaza_id: currentEmployeeId },
-        { empleadoAusente_id: currentEmployeeId },
+      AND: [
+        { isActive: true },
+        {
+          OR: [
+            { empleadoReemplaza_id: currentEmployeeId },
+            { empleadoAusente_id: currentEmployeeId },
+            ...(myEjecutivoCuentaId
+              ? [
+                  {
+                    // Ejecutivo asignado: visibles aunque no sean partes
+                    ejecutivo_cuenta: myEjecutivoCuentaId,
+                  },
+                ]
+              : []),
+          ],
+        },
       ],
     };
-    if (myEjecutivoCuentaId) {
-      // Incluir también los registros del ejecutivo asignado (supervisor_id del empleado),
-      // sin condicionarlos al estado de aceptación para que siempre sean visibles.
-      where.OR.push({ ejecutivo_cuenta: myEjecutivoCuentaId });
-    }
 
     const records = await callDynamicPrisma({
       req,
@@ -265,6 +273,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "No se encontraron las marcas seleccionadas" }, { status: 404 });
     }
 
+    const bodyEmpresa = parseIntStrict((body as any)?.empresa_id);
+    const bodyDivision = parseIntStrict((body as any)?.division_id);
+    const bodyContrato = parseIntStrict((body as any)?.contrato_id);
+    const bodyPuesto = parseIntStrict((body as any)?.puesto_id);
+
+    let resolvedContratoId = bodyContrato != null && bodyContrato > 0 ? bodyContrato : parseIntStrict(marcaAusente.contrato_id);
+    if (!resolvedContratoId || resolvedContratoId <= 0) {
+      return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (marca o formulario)" }, { status: 400 });
+    }
+
+    const contrRow = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_estructura_contrato",
+        operation: "findUnique",
+        where: { id: resolvedContratoId },
+        select: { id: true, division_id: true },
+      },
+    });
+    const divisionFromContrato = parseIntStrict((contrRow as any)?.division_id);
+    const resolvedDivisionId =
+      bodyDivision != null && bodyDivision > 0 ? bodyDivision : divisionFromContrato;
+    if (!resolvedDivisionId || resolvedDivisionId <= 0) {
+      return NextResponse.json({ status: false, message: "No se pudo determinar la división" }, { status: 400 });
+    }
+
+    const resolvedEmpresaId =
+      bodyEmpresa != null && bodyEmpresa > 0 ? bodyEmpresa : parseIntStrict(marcaAusente.empresa_id);
+    const resolvedPuestoId =
+      bodyPuesto != null && bodyPuesto > 0 ? bodyPuesto : parseIntStrict(marcaAusente.puesto_id);
+    if (!resolvedEmpresaId || resolvedEmpresaId <= 0) {
+      return NextResponse.json({ status: false, message: "empresa_id requerido" }, { status: 400 });
+    }
+    if (!resolvedPuestoId || resolvedPuestoId <= 0) {
+      return NextResponse.json({ status: false, message: "puesto_id requerido" }, { status: 400 });
+    }
+
     if (!marcaAusente.empleadoFijo_id || !marcaReemplaza.empleadoFijo_id || !marcaAusente.plaza_id || !marcaReemplaza.plaza_id) {
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen empleado/plaza válidos" }, { status: 400 });
     }
@@ -299,9 +345,14 @@ export async function POST(req: NextRequest) {
         table: "e_mutuos_acuerdos",
         operation: "findFirst",
         where: {
-          OR: [
-            { marcaDiaAusente_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
-            { marcaDiaReemplaza_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
+          AND: [
+            { isActive: true },
+            {
+              OR: [
+                { marcaDiaAusente_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
+                { marcaDiaReemplaza_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
+              ],
+            },
           ],
         },
       },
@@ -321,6 +372,11 @@ export async function POST(req: NextRequest) {
         data: {
           cliente_id: Number(marcaAusente.cliente_id),
           corpo_id: Number(marcaAusente.corpo_id),
+          empresa_id: Number(resolvedEmpresaId),
+          division_id: Number(resolvedDivisionId),
+          contrato_id: Number(resolvedContratoId),
+          puesto_id: Number(resolvedPuestoId),
+          isActive: true,
           estado: "pendiente",
           ejecutivo_cuenta,
           empleadoReemplaza_id: Number(marcaReemplaza.empleadoFijo_id),

@@ -23,6 +23,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
         operation: "findMany",
         where: {
           corpo_id: corpoIdNum,
+          isActive: true,
         },
         orderBy: { created_at: "desc" },
         include: {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAccessTokenByApi } from '../../../../../utils/verifyAccessTokenByApi';
 import { callDynamicPrisma } from '../../../../../utils/callDynamicPrisma';
+import { mapActaEntregaImagesForClient } from '../../mapActaEntregaImagesForClient';
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
@@ -17,7 +18,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
         action: "GET",
         table: "c_acta_entre_producto",
         operation: "findMany",
-        where: { corpo_id: corpoId },
+        where: { corpo_id: corpoId, isActive: true },
         orderBy: { fecha: 'desc' },
         include: { c_imagenes_acta_entrega_producto: true },
       },
@@ -25,15 +26,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
 
     const recordsArray = Array.isArray(records) ? records : [];
     const baseUrl = req.nextUrl.origin;
-    const mapped = recordsArray.map((r: any) => ({
-      ...r,
-      id_local: '',
-      images: (r.c_imagenes_acta_entrega_producto || []).map((img: any) => ({
-        id: img.id,
-        name: img.name,
-        url: baseUrl ? `${baseUrl}/api/acta-entrega-productos/${r.id}/get-image/${img.name}` : '',
-      })),
-    }));
+    const mapped = recordsArray.map((r: any) => {
+      const { c_imagenes_acta_entrega_producto: _img, ...rest } = r;
+      return {
+        ...rest,
+        id_local: '',
+        images: mapActaEntregaImagesForClient(Number(r.id), r.c_imagenes_acta_entrega_producto, baseUrl),
+      };
+    });
 
     return NextResponse.json({ status: true, message: 'Actas obtenidas correctamente', data: mapped }, { status: 200 });
   } catch (error: unknown) {

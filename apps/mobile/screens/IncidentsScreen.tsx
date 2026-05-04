@@ -25,9 +25,20 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
-import type { ExecutiveOption, Incident, IncidentClassificationOption, IncidentContribution, IncidentContributionFileInput, IncidentFileInput } from '@/hooks/incidentsTypes';
-import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
-import { filterIncidentsByCorpo, getCurrentMarcaCorpoId, getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, mergeIncidentsCacheForCorpo, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
+import type {
+  CreateIncidentRequest,
+  ExecutiveOption,
+  Incident,
+  IncidentClassificationOption,
+  IncidentContribution,
+  IncidentContributionFileInput,
+  IncidentFileInput,
+} from '@/hooks/incidentsTypes';
+import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, deleteIncidentFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncidentContribution } from '@/hooks/incidentsFunctions';
+import { deleteFile, getLocalFileDisplayUri, saveFile, type StoredFileType } from '@/hooks/fileStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { findHierarchyByPuestoIn } from '@/hooks/llavesMainStructureHelpers';
+import { filterIncidentsByCorpo, getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, mergeIncidentsCacheForCorpo, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
 
 type IncidentsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Incidents'>;
 
@@ -38,15 +49,48 @@ type ManualFileLocal = {
   type: 'image' | 'audio' | 'video' | 'document';
   name: string;
   extension: string;
-  base64: string; // base64 puro
+  /** Vacío si el archivo está solo en disco vía `localFileName` */
+  base64: string;
+  /** Nombre en `Paths.document` (expo-file-system) */
+  localFileName?: string;
   uri?: string;
   mimeType?: string;
 };
+
+const mapManualTypeToStored = (t: ManualFileLocal['type']): StoredFileType =>
+  t === 'document' ? 'text' : t;
 
 const APORTE_SIGNATURE_FILE_NAME = '__firma_aporte_tercero__.png';
 
 const incidentRowKey = (i: Incident) => String(i.id_local || (i.id ?? ''));
 const aporteRowKey = (a: IncidentContribution) => String(a.id_local || (a.id ?? ''));
+
+type MainStructureSucursalNode = {
+  id: number;
+  nombre: string;
+  puestos?: { id: number; nombre: string }[];
+};
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 type EditingIncident = {
   id: number | null;
@@ -193,7 +237,6 @@ export default function IncidentsScreen() {
   const [currentRoleName, setCurrentRoleName] = useState<string>('');
 
   const [isCreating, setIsCreating] = useState(false);
-  const [editingIncident, setEditingIncident] = useState<EditingIncident | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
@@ -252,14 +295,7 @@ export default function IncidentsScreen() {
   const descripcionRef = useRef<string>('');
   const nombreResponsableAtencionRef = useRef<string>('');
 
-  const solucionRef = useRef<string>('');
-  const fechaSolucionRef = useRef<string>('');
-  const fechaRealSolucionRef = useRef<string>('');
-  const costoAsociadoRef = useRef<string>('');
-  const consecutivoInformeRef = useRef<string>('');
-  const linkInformeRef = useRef<string>('');
-
-  // Local files (para crear/preview). En edición solo mostramos los existentes (server) por ahora.
+  // Local files (para crear / vista previa).
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
@@ -269,8 +305,6 @@ export default function IncidentsScreen() {
   const [showFechaIncidentePicker, setShowFechaIncidentePicker] = useState(false);
   const [showFechaReportePicker, setShowFechaReportePicker] = useState(false);
   const [showLibroFechaPicker, setShowLibroFechaPicker] = useState(false);
-  const [showFechaSolucionPicker, setShowFechaSolucionPicker] = useState(false);
-  const [showFechaRealSolucionPicker, setShowFechaRealSolucionPicker] = useState(false);
   const [showFilterFechaIncidentePicker, setShowFilterFechaIncidentePicker] = useState(false);
   const [showFilterFechaReportePicker, setShowFilterFechaReportePicker] = useState(false);
 
@@ -281,20 +315,274 @@ export default function IncidentsScreen() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [codigoInvolucradoBusqueda, setCodigoInvolucradoBusqueda] = useState('');
 
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
+
+  const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+    return !!(networkState.isConnected && networkState.isInternetReachable);
   };
 
-  const loadFromCaches = async () => {
-    const [cachedIncidents, cachedClassifications, cachedExecutives, corpoId] = await Promise.all([
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
+  const syncMarcaFromStorage = useCallback(async (opts?: { applyFiltersFromMarca?: boolean }) => {
+    const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) {
+      if (applyFiltersFromMarca) {
+        setFilterEmpresaId(null);
+        setFilterClienteId(null);
+        setFilterDivisionId(null);
+        setFilterContratoId(null);
+        filterSucursalIdRef.current = null;
+        setFilterSucursalId(null);
+      }
+      return;
+    }
+    try {
+      const current = JSON.parse(currentMarcaStr);
+      if (!current) return;
+      const divFromMarca = getDivisionIdFromMarcaJson(current);
+      const fe = numOrNull(current?.empresa?.id);
+      const fc = numOrNull(current?.cliente?.id);
+      const fco = numOrNull(current?.contrato?.id);
+      const fs = numOrNull(current?.corpo?.id ?? current?.corpo_id);
+      if (applyFiltersFromMarca) {
+        setFilterEmpresaId(fe);
+        setFilterClienteId(fc);
+        setFilterDivisionId(divFromMarca);
+        setFilterContratoId(fco);
+        filterSucursalIdRef.current = fs;
+        setFilterSucursalId(fs);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : numOrNull(currentMarca.corpo_id);
+      filterSucursalIdRef.current = fs;
+      setFilterSucursalId(fs);
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (Incidents):', e);
+    }
+  }, []);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    setIsStructureLoading(true);
+    try {
+      const parsed = await loadMainStructureTreeMerged();
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setMainStructure(parsed);
+        return parsed;
+      }
+      setMainStructure([]);
+      return [];
+    } catch (e) {
+      console.error('Error loading main structure (Incidents):', e);
+      setMainStructure([]);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const applyCurrentMarcaToFormHierarchy = useCallback(
+    async (structureTree?: MainStructureTree) => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
+      const tree = Array.isArray(structureTree) && structureTree.length > 0 ? structureTree : mainStructure;
+      if (normalizeRoleName(String(rn || '')) === 'OPERATIVO') {
+        const pId = numOrNull(marca.puesto?.id ?? marca.puesto_id);
+        setFormPuestoId(pId);
+        if (pId && tree.length > 0) {
+          const h = findHierarchyByPuestoIn(tree, pId);
+          if (h) {
+            setFormEmpresaId(h.empresaId);
+            setFormClienteId(h.clienteId);
+            setFormDivisionId(h.divisionId);
+            setFormContratoId(h.contratoId);
+            setFormSucursalId(h.corpoId);
+            return;
+          }
+        }
+        setFormEmpresaId(null);
+        setFormClienteId(null);
+        setFormDivisionId(null);
+        setFormContratoId(null);
+        setFormSucursalId(null);
+        return;
+      }
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : numOrNull(marca.corpo_id));
+      setFormPuestoId(numOrNull(marca.puesto?.id ?? marca.puesto_id));
+    } catch (e) {
+      console.error('applyCurrentMarcaToFormHierarchy (Incidents):', e);
+    }
+  },
+  [mainStructure]
+  );
+
+  const handleFormEmpresaChange = (empresaId: number | null) => {
+    setFormEmpresaId(empresaId);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const handleFormClienteChange = (clienteId: number | null) => {
+    setFormClienteId(clienteId);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const handleFilterEmpresaChange = (empresaId: number | null) => {
+    setFilterEmpresaId(empresaId);
+    setFilterClienteId(null);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    filterSucursalIdRef.current = null;
+    setFilterSucursalId(null);
+  };
+
+  const handleFilterClienteChange = (clienteId: number | null) => {
+    setFilterClienteId(clienteId);
+    setFilterDivisionId(null);
+    setFilterContratoId(null);
+    filterSucursalIdRef.current = null;
+    setFilterSucursalId(null);
+  };
+
+  const clearFormHierarchy = () => {
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+  };
+
+  const getActiveListCorpoId = async (): Promise<number | null> => {
+    const marcaStr = await AsyncStorage.getItem('current_marca');
+    if (!marcaStr) return null;
+    try {
+      const marca = JSON.parse(marcaStr);
+      const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
+      const marcaCorpoId = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+      if (rn === 'OPERATIVO') return marcaCorpoId;
+      return numOrNull(filterSucursalIdRef.current);
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveCorpoIdForSave = async (): Promise<number | null> => {
+    const marcaStr = await AsyncStorage.getItem('current_marca');
+    if (!marcaStr) return null;
+    try {
+      const marca = JSON.parse(marcaStr);
+      const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
+      if (rn === 'OPERATIVO') {
+        return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+      }
+      return numOrNull(formSucursalId) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveCreateHierarchyIds = (): {
+    empresa_id: number;
+    division_id: number;
+    contrato_id: number;
+    cliente_id: number;
+    corpo_id: number;
+    puesto_id: number;
+  } | null => {
+    const pid = formPuestoId;
+    if (!pid || pid <= 0) return null;
+    const h = findHierarchyByPuestoIn(mainStructure, pid);
+    if (h) {
+      return {
+        empresa_id: h.empresaId,
+        division_id: h.divisionId,
+        contrato_id: h.contratoId,
+        cliente_id: h.clienteId,
+        corpo_id: h.corpoId,
+        puesto_id: h.puestoId,
+      };
+    }
+    if (
+      formEmpresaId &&
+      formClienteId &&
+      formDivisionId &&
+      formContratoId &&
+      formSucursalId &&
+      formPuestoId
+    ) {
+      return {
+        empresa_id: formEmpresaId,
+        division_id: formDivisionId,
+        contrato_id: formContratoId,
+        cliente_id: formClienteId,
+        corpo_id: formSucursalId,
+        puesto_id: formPuestoId,
+      };
+    }
+    return null;
+  };
+
+  const loadFromCaches = async (listCorpoId: number | null) => {
+    const [cachedIncidents, cachedClassifications, cachedExecutives] = await Promise.all([
       getIncidentsCache(),
       getIncidentsClassificationsCache(),
       getExecutivesCache(),
-      getCurrentMarcaCorpoId(),
     ]);
 
-    setIncidents(filterIncidentsByCorpo(cachedIncidents || [], corpoId));
+    if (listCorpoId) {
+      setIncidents(filterIncidentsByCorpo(cachedIncidents || [], listCorpoId));
+    } else {
+      setIncidents([]);
+    }
     setClassifications(cachedClassifications || []);
     setExecutives(cachedExecutives || []);
   };
@@ -307,7 +595,7 @@ export default function IncidentsScreen() {
         return;
       }
       const marca = JSON.parse(marcaStr);
-      const role = marca?.roleDivision?.role?.nombre || '';
+      const role = marca?.roleDivision?.role?.nombre || marca?.role_division?.role?.nombre || '';
       setCurrentRoleName(String(role || '').trim());
     } catch {
       setCurrentRoleName('');
@@ -320,49 +608,95 @@ export default function IncidentsScreen() {
       setError(null);
       await loadCurrentRoleFromMarca();
 
-      const corpoId = await getCurrentMarcaCorpoId();
-      if (!corpoId) {
+      const marcaStr = await AsyncStorage.getItem('current_marca');
+      if (!marcaStr) {
         setHasCurrentMarca(false);
         setIsLoading(false);
         return;
       }
-      setHasCurrentMarca(true);
 
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        await loadFromCaches();
-        Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+      let marca: any;
+      try {
+        marca = JSON.parse(marcaStr);
+      } catch {
+        setHasCurrentMarca(false);
+        setIsLoading(false);
         return;
       }
 
-      const [incidentsRes, classificationsRes, executivesRes] = await Promise.all([
-        listIncidentsByCorpo({ corpoId, refreshAccessToken, logout }),
-        listIncidentClassifications({ refreshAccessToken, logout }),
-        listExecutives({ refreshAccessToken, logout }),
-      ]);
+      setHasCurrentMarca(true);
+      const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
+      const isOperativo = rn === 'OPERATIVO';
+      const marcaCorpoId = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+      const listCorpoId = isOperativo ? marcaCorpoId : numOrNull(filterSucursalIdRef.current);
+
+      const isConnected = await getConnectionStatus();
+
+      const syncAuxCaches = async () => {
+        if (!isConnected) {
+          const [cachedClassifications, cachedExecutives] = await Promise.all([
+            getIncidentsClassificationsCache(),
+            getExecutivesCache(),
+          ]);
+          setClassifications(cachedClassifications || []);
+          setExecutives(cachedExecutives || []);
+          return;
+        }
+        const [classificationsRes, executivesRes] = await Promise.all([
+          listIncidentClassifications({ refreshAccessToken, logout }),
+          listExecutives({ refreshAccessToken, logout }),
+        ]);
+        if (classificationsRes.status && classificationsRes.classifications) {
+          setClassifications(classificationsRes.classifications);
+          await setIncidentsClassificationsCache(classificationsRes.classifications);
+        }
+        if (executivesRes.status && executivesRes.executives) {
+          setExecutives(executivesRes.executives);
+          await setExecutivesCache(executivesRes.executives);
+        }
+      };
+
+      if (!isConnected) {
+        await syncAuxCaches();
+        await loadFromCaches(listCorpoId);
+        if (listCorpoId) {
+          Alert.alert('Modo Offline', 'No hay conexión a internet. Mostrando datos guardados.');
+        } else if (!isOperativo) {
+          Alert.alert(
+            'Modo Offline',
+            'Seleccione sucursal (corpo) en el filtro para ver incidentes guardados en caché para esa ubicación.'
+          );
+        } else {
+          Alert.alert('Modo Offline', 'No se encontró la sucursal en la marca actual.');
+        }
+        return;
+      }
+
+      await syncAuxCaches();
+
+      if (!listCorpoId) {
+        setIncidents([]);
+        if (isOperativo) {
+          setError('No se encontró la sucursal (corpo) en la marca actual.');
+        }
+        return;
+      }
+
+      const incidentsRes = await listIncidentsByCorpo({ corpoId: listCorpoId, refreshAccessToken, logout });
 
       if (incidentsRes.status && incidentsRes.incidents) {
         const prev = (await getIncidentsCache()) || [];
-        const merged = mergeIncidentsCacheForCorpo(prev, incidentsRes.incidents, corpoId);
+        const merged = mergeIncidentsCacheForCorpo(prev, incidentsRes.incidents, listCorpoId);
         await setIncidentsCache(merged);
-        setIncidents(filterIncidentsByCorpo(merged, corpoId));
+        setIncidents(filterIncidentsByCorpo(merged, listCorpoId));
       } else if (!incidentsRes.status) {
         setError(incidentsRes.message || 'Error al cargar incidentes');
-      }
-
-      if (classificationsRes.status && classificationsRes.classifications) {
-        setClassifications(classificationsRes.classifications);
-        await setIncidentsClassificationsCache(classificationsRes.classifications);
-      }
-
-      if (executivesRes.status && executivesRes.executives) {
-        setExecutives(executivesRes.executives);
-        await setExecutivesCache(executivesRes.executives);
       }
     } catch (e: any) {
       console.error('Error fetching incidents:', e);
       setError('Error al cargar incidentes');
-      await loadFromCaches();
+      const fallbackCorpo = await getActiveListCorpoId();
+      await loadFromCaches(fallbackCorpo);
     } finally {
       setIsLoading(false);
     }
@@ -370,18 +704,87 @@ export default function IncidentsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchAll();
-    }, [])
+      let cancelled = false;
+      void (async () => {
+        await fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+        }
+        if (cancelled) return;
+        await fetchAll();
+      })();
+      const handler = () => {
+        void fetchAll();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [fetchMainStructure, syncMarcaFromStorage, refreshAccessToken, logout])
   );
 
-  useEffect(() => {
-    const handler = () => fetchAll();
-    eventBus.on('connectionRestored', handler);
-    return () => {
-      eventBus.off('connectionRestored', handler);
-      return;
-    };
-  }, []);
+  const isOperativoUser = useMemo(() => normalizeRoleName(currentRoleName) === 'OPERATIVO', [currentRoleName]);
+
+  const filterEmpresaOptions = useMemo(() => mainStructure ?? [], [mainStructure]);
+  const filterClienteOptionsMemo = useMemo(() => {
+    const empresa = mainStructure.find((e) => e.id === filterEmpresaId);
+    return empresa?.clientes ?? [];
+  }, [mainStructure, filterEmpresaId]);
+  const filterDivisionOptionsMemo = useMemo(() => {
+    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
+    return cliente?.division ?? [];
+  }, [filterClienteOptionsMemo, filterClienteId]);
+  const filterContratoOptionsMemo = useMemo(() => {
+    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
+    return division?.contratos ?? [];
+  }, [filterDivisionOptionsMemo, filterDivisionId]);
+  const filterSucursalOptionsMemo = useMemo(() => {
+    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
+    return contrato?.sucursales ?? [];
+  }, [filterContratoOptionsMemo, filterContratoId]);
+
+  const formEmpresaNode = useMemo(() => {
+    if (formEmpresaId === null) return null;
+    return mainStructure.find((e) => e.id === formEmpresaId) ?? null;
+  }, [mainStructure, formEmpresaId]);
+  const formClienteOptions = useMemo(() => {
+    if (!formEmpresaNode) return [];
+    return (formEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formEmpresaNode]);
+  const formClienteNode = useMemo(() => {
+    if (!formEmpresaNode || formClienteId === null) return null;
+    return formEmpresaNode.clientes.find((c) => c.id === formClienteId) ?? null;
+  }, [formEmpresaNode, formClienteId]);
+  const formDivisionOptions = useMemo(() => {
+    if (!formClienteNode) return [];
+    return (formClienteNode.division || []).map((d) => ({ id: d.id, nombre: d.nombre }));
+  }, [formClienteNode]);
+  const formDivisionNode = useMemo(() => {
+    if (!formClienteNode || formDivisionId === null) return null;
+    return (formClienteNode.division || []).find((d) => d.id === formDivisionId) ?? null;
+  }, [formClienteNode, formDivisionId]);
+  const formContratoOptions = useMemo(() => {
+    if (!formDivisionNode) return [];
+    return (formDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
+  }, [formDivisionNode]);
+  const formContratoNode = useMemo(() => {
+    if (!formDivisionNode || formContratoId === null) return null;
+    return (formDivisionNode.contratos || []).find((c) => c.id === formContratoId) ?? null;
+  }, [formDivisionNode, formContratoId]);
+  const formSucursalOptions = useMemo(() => {
+    if (!formContratoNode) return [];
+    return (formContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
+  }, [formContratoNode]);
+  const formSucursalNode = useMemo(() => {
+    if (!formContratoNode || formSucursalId === null) return null;
+    return (formContratoNode.sucursales || []).find((s: any) => Number(s.id) === Number(formSucursalId)) ?? null;
+  }, [formContratoNode, formSucursalId]);
+  const formPuestoOptions = useMemo(() => {
+    if (!formSucursalNode) return [];
+    return (formSucursalNode.puestos || []).map((p: any) => ({ id: p.id, nombre: p.nombre }));
+  }, [formSucursalNode]);
 
   const filteredIncidents = useMemo(() => {
     const s = searchText.trim().toLowerCase();
@@ -419,38 +822,14 @@ export default function IncidentsScreen() {
     }
   };
 
-  const resetRefs = (mode: 'create' | 'edit', incident?: EditingIncident) => {
-    if (mode === 'create') {
-      ejecutivoRef.current = null;
-      fechaIncidenteRef.current = '';
-      fechaReporteRef.current = '';
-      nombreResponsableRef.current = employee?.name || '';
-      clasificacionRef.current = null;
-      descripcionRef.current = '';
-      nombreResponsableAtencionRef.current = '';
-
-      solucionRef.current = '';
-      fechaSolucionRef.current = '';
-      fechaRealSolucionRef.current = '';
-      costoAsociadoRef.current = '';
-      consecutivoInformeRef.current = '';
-      linkInformeRef.current = '';
-    } else if (incident) {
-      ejecutivoRef.current = incident.ejecutivo_id;
-      fechaIncidenteRef.current = incident.fecha_incidente;
-      fechaReporteRef.current = incident.fecha_reporte;
-      nombreResponsableRef.current = incident.nombre_responsable;
-      clasificacionRef.current = incident.clasificacion_id;
-      descripcionRef.current = incident.descripcion;
-      nombreResponsableAtencionRef.current = incident.nombre_responsable_atencion;
-
-      solucionRef.current = incident.solucion;
-      fechaSolucionRef.current = incident.fecha_solucion;
-      fechaRealSolucionRef.current = incident.fecha_real_solucion;
-      costoAsociadoRef.current = incident.costo_asociado;
-      consecutivoInformeRef.current = incident.consecutivo_informe;
-      linkInformeRef.current = incident.link_informe;
-    }
+  const resetRefs = () => {
+    ejecutivoRef.current = null;
+    fechaIncidenteRef.current = '';
+    fechaReporteRef.current = '';
+    nombreResponsableRef.current = employee?.name || '';
+    clasificacionRef.current = null;
+    descripcionRef.current = '';
+    nombreResponsableAtencionRef.current = '';
   };
 
   const startCreating = async () => {
@@ -459,9 +838,10 @@ export default function IncidentsScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
+    const tree = await fetchMainStructure();
+    await applyCurrentMarcaToFormHierarchy(tree);
     const today = isoDateOnly(new Date(horaAccion));
     setIsCreating(true);
-    setEditingIncident(null);
     setTextFiles([]);
     setImageFiles([]);
     setAudioFiles([]);
@@ -489,7 +869,7 @@ export default function IncidentsScreen() {
       link_informe: '',
       owned: false,
     }));
-    resetRefs('create');
+    resetRefs();
     fechaIncidenteRef.current = today;
     fechaReporteRef.current = today;
     nombreResponsableRef.current = employee?.name || '';
@@ -497,70 +877,25 @@ export default function IncidentsScreen() {
 
   const cancelCreating = () => {
     setIsCreating(false);
+    clearFormHierarchy();
     setTextFiles([]);
     setImageFiles([]);
     setAudioFiles([]);
     setVideoFiles([]);
   };
-
-  const startEditing = (incident: Incident) => {
-    setIsCreating(false);
-    setTextFiles([]);
-    setImageFiles([]);
-    setAudioFiles([]);
-    setVideoFiles([]);
-
-    const libro = incident.fecha_libro_novedades || { numero: '', fecha: '' };
-
-    const edit: EditingIncident = {
-      id: incident.id,
-      id_local: incident.id_local || '',
-      estado: incident.estado,
-      ejecutivo_id: incident.ejecutivo?.id || null,
-      fecha_incidente: incident.fecha_incidente || '',
-      fecha_reporte: incident.fecha_reporte || '',
-      nombre_responsable: incident.nombre_responsable || '',
-      clasificacion_id: incident.clasificacion?.id || null,
-      descripcion: incident.descripcion || '',
-      involucrados: Array.isArray(incident.involucrados)
-        ? incident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre || '' }))
-        : [{ codigo: '', nombre: '' }],
-      libro_fecha: libro.fecha || '',
-      libro_numero: libro.numero || '',
-      nombre_responsable_atencion: incident.nombre_responsable_atencion || '',
-      solucion: incident.solucion || '',
-      fecha_solucion: incident.fecha_solucion || '',
-      fecha_real_solucion: incident.fecha_solucion_real || '',
-      costo_asociado: incident.costo_asociado || '',
-      consecutivo_informe: incident.consecutivo_informe || '',
-      link_informe: incident.link_informe || '',
-      owned: incident.owned,
-    };
-
-    setEditingIncident(edit);
-    resetRefs('edit', edit);
-  };
-
-  const cancelEditing = () => setEditingIncident(null);
 
   const handleAddInvolucrado = () => {
-    if (isCreating) {
-      setNewIncident(prev => ({ ...prev, involucrados: [...prev.involucrados, { codigo: '', nombre: '' }] }));
-    } else if (editingIncident) {
-      setEditingIncident(prev => prev ? ({ ...prev, involucrados: [...prev.involucrados, { codigo: '', nombre: '' }] }) : prev);
-    }
+    setNewIncident(prev => ({ ...prev, involucrados: [...prev.involucrados, { codigo: '', nombre: '' }] }));
   };
 
   const updateInvolucrado = (idx: number, field: 'codigo' | 'nombre', value: string) => {
     const update = (list: InvolucradoForm[]) => list.map((it, i) => (i === idx ? { ...it, [field]: value } : it));
-    if (isCreating) setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados) }));
-    else if (editingIncident) setEditingIncident(prev => (prev ? { ...prev, involucrados: update(prev.involucrados) } : prev));
+    setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados) }));
   };
 
   const removeInvolucrado = (idx: number) => {
     const update = (list: InvolucradoForm[]) => list.filter((_, i) => i !== idx);
-    if (isCreating) setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] }));
-    else if (editingIncident) setEditingIncident(prev => (prev ? { ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] } : prev));
+    setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] }));
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
@@ -596,11 +931,7 @@ export default function IncidentsScreen() {
       const nombre = empleado?.nombre_completo || empleado?.nombre || '';
       const cod = codigo;
       const nuevo = { codigo: cod, nombre: nombre || cod || codigo };
-      if (isCreating) {
-        setNewIncident(prev => ({ ...prev, involucrados: [...prev.involucrados, nuevo] }));
-      } else if (editingIncident) {
-        setEditingIncident(prev => prev ? ({ ...prev, involucrados: [...prev.involucrados, nuevo] }) : prev);
-      }
+      setNewIncident(prev => ({ ...prev, involucrados: [...prev.involucrados, nuevo] }));
       setCodigoInvolucradoBusqueda('');
     } catch (e: unknown) {
       Alert.alert('Error', (e as Error)?.message || 'No se pudo buscar el empleado por código');
@@ -640,35 +971,28 @@ export default function IncidentsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result;
-          if (typeof res === 'string') {
-            const parts = res.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else {
-            reject(new Error('No se pudo leer el archivo seleccionado'));
-          }
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-        reader.readAsDataURL(blob);
-      });
 
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const ext = extension || 'dat';
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || `archivo.${ext}`,
+        extension: ext,
+        type: mapManualTypeToStored(type),
+        prefix: 'incident',
+      });
 
       const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const file: ManualFileLocal = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
+        name: asset.name || `archivo.${ext}`,
+        extension: ext,
+        base64: '',
+        localFileName,
         uri: asset.uri,
         mimeType: asset.mimeType,
       };
@@ -684,10 +1008,19 @@ export default function IncidentsScreen() {
   };
 
   const removeLocalFile = (type: ManualFileLocal['type'], id: string) => {
-    if (type === 'image') setImageFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'audio') setAudioFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'video') setVideoFiles(prev => prev.filter(f => f.id !== id));
-    else setTextFiles(prev => prev.filter(f => f.id !== id));
+    const take = (prev: ManualFileLocal[]) => prev.find((f) => f.id === id);
+    let toDel: ManualFileLocal | undefined;
+    if (type === 'image') toDel = take(imageFiles);
+    else if (type === 'audio') toDel = take(audioFiles);
+    else if (type === 'video') toDel = take(videoFiles);
+    else toDel = take(textFiles);
+    if (toDel?.localFileName) {
+      void deleteFile(toDel.localFileName);
+    }
+    if (type === 'image') setImageFiles((prev) => prev.filter((f) => f.id !== id));
+    else if (type === 'audio') setAudioFiles((prev) => prev.filter((f) => f.id !== id));
+    else if (type === 'video') setVideoFiles((prev) => prev.filter((f) => f.id !== id));
+    else setTextFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
   const validateCreate = () => {
@@ -700,18 +1033,42 @@ export default function IncidentsScreen() {
     return null;
   };
 
-  const buildArchivosPayload = (): IncidentFileInput[] => {
+  /** Incluye `local_file_name` o base64; `createIncident` hidrata `local_file_name` antes del POST. */
+  const buildArchivosPayloadString = (): string => {
     const files = [...textFiles, ...imageFiles, ...audioFiles, ...videoFiles];
-    return files.map(f => ({
-      type: f.type,
-      extension: f.extension,
-      original_name: f.name,
-      file_base64: f.base64,
-      mimeType: f.mimeType,
-    }));
+    const items: IncidentFileInput[] = files.map((f) =>
+      f.localFileName
+        ? {
+            type: f.type,
+            extension: f.extension,
+            original_name: f.name,
+            file_base64: '',
+            mimeType: f.mimeType,
+            local_file_name: f.localFileName,
+          }
+        : {
+            type: f.type,
+            extension: f.extension,
+            original_name: f.name,
+            file_base64: f.base64,
+            mimeType: f.mimeType,
+          }
+    );
+    return JSON.stringify(items);
   };
 
-  const createLocalCacheIncident = async (localId: string, corpoId: number) => {
+  const createLocalCacheIncident = async (
+    localId: string,
+    corpoId: number,
+    hierarchy: {
+      empresa_id: number;
+      division_id: number;
+      contrato_id: number;
+      cliente_id: number;
+      corpo_id: number;
+      puesto_id: number;
+    }
+  ) => {
     const exec = executives.find(e => e.id === ejecutivoRef.current) || null;
     const clas = classifications.find(c => c.id === clasificacionRef.current) || null;
     const horaAccion = await getHoraAccion();
@@ -724,17 +1081,25 @@ export default function IncidentsScreen() {
       type: f.type,
       extension: f.extension,
       base64: f.base64,
+      local_file_name: f.localFileName,
       mimeType: f.mimeType,
     }));
 
     const libro = {
-      numero: isCreating ? newIncident.libro_numero : (editingIncident?.libro_numero || ''),
-      fecha: isCreating ? newIncident.libro_fecha : (editingIncident?.libro_fecha || ''),
+      numero: newIncident.libro_numero,
+      fecha: newIncident.libro_fecha,
     };
 
     const incidentCache: Incident = {
       id: 0,
       corpo_id: corpoId,
+      sucursal_id: corpoId,
+      empresa_id: hierarchy.empresa_id,
+      division_id: hierarchy.division_id,
+      contrato_id: hierarchy.contrato_id,
+      cliente_id: hierarchy.cliente_id,
+      puesto_id: hierarchy.puesto_id,
+      isActive: true,
       estado: true,
       ejecutivo: { id: ejecutivoRef.current || 0, name: exec?.nombre || '' },
       fecha_incidente: fechaIncidenteRef.current,
@@ -742,7 +1107,7 @@ export default function IncidentsScreen() {
       nombre_responsable: nombreResponsableRef.current,
       clasificacion: { id: clasificacionRef.current || 0, name: clas?.nombre || '' },
       descripcion: descripcionRef.current,
-      involucrados: (isCreating ? newIncident.involucrados : (editingIncident?.involucrados || [])).map(i => ({ codigo: i.codigo || '', nombre: i.nombre })),
+      involucrados: newIncident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre })),
       fecha_libro_novedades: libro,
       nombre_responsable_atencion: nombreResponsableAtencionRef.current,
       solucion: '',
@@ -779,8 +1144,26 @@ export default function IncidentsScreen() {
         return;
       }
 
-      const payload = {
+      const hierarchy = resolveCreateHierarchyIds();
+      if (!hierarchy) {
+        setSubmitResponse({
+          type: 'error',
+          message: 'Seleccione puesto en la jerarquía (empresa → sucursal → puesto) o verifique la marca y la estructura en caché.',
+        });
+        setIsSubmitting(false);
+        return;
+      }
+      const corpoResolved = hierarchy.corpo_id;
+
+      const payload: CreateIncidentRequest = {
         marca_id: marcaId,
+        empresa_id: hierarchy.empresa_id,
+        division_id: hierarchy.division_id,
+        contrato_id: hierarchy.contrato_id,
+        cliente_id: hierarchy.cliente_id,
+        corpo_id: corpoResolved,
+        sucursal_id: corpoResolved,
+        puesto_id: hierarchy.puesto_id,
         empleado_id: ejecutivoRef.current!,
         fecha_incidente: fechaIncidenteRef.current,
         fecha_reporte: fechaReporteRef.current,
@@ -790,16 +1173,75 @@ export default function IncidentsScreen() {
         involucrados: JSON.stringify(newIncident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre }))),
         fecha_libro_novedades: JSON.stringify({ numero: newIncident.libro_numero, fecha: newIncident.libro_fecha }),
         nombre_responsable_atencion: nombreResponsableAtencionRef.current,
-        archivos: JSON.stringify(buildArchivosPayload()),
+        archivos: buildArchivosPayloadString(),
       };
 
       const isConnected = await getConnectionStatus();
       if (isConnected) {
         const res = await createIncident({ requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          const newId = res.incidentId ?? res.id;
+          if (newId && corpoResolved) {
+            const exec = executives.find(e => e.id === ejecutivoRef.current) || null;
+            const clas = classifications.find(c => c.id === clasificacionRef.current) || null;
+            const filesForCache = [...textFiles, ...imageFiles, ...audioFiles, ...videoFiles].map(f => ({
+              id: newId * 1000 + Math.floor(Math.random() * 9999),
+              id_local: f.id,
+              name: f.name,
+              original_name: f.name,
+              type: f.type,
+              extension: f.extension,
+              base64: f.base64,
+              local_file_name: f.localFileName,
+              mimeType: f.mimeType,
+            }));
+            const newInc: Incident = {
+              id: newId,
+              corpo_id: corpoResolved,
+              sucursal_id: corpoResolved,
+              empresa_id: hierarchy.empresa_id,
+              division_id: hierarchy.division_id,
+              contrato_id: hierarchy.contrato_id,
+              cliente_id: hierarchy.cliente_id,
+              puesto_id: hierarchy.puesto_id,
+              isActive: true,
+              estado: true,
+              ejecutivo: { id: ejecutivoRef.current || 0, name: exec?.nombre || '' },
+              fecha_incidente: fechaIncidenteRef.current,
+              fecha_reporte: fechaReporteRef.current,
+              nombre_responsable: nombreResponsableRef.current,
+              clasificacion: { id: clasificacionRef.current || 0, name: clas?.nombre || '' },
+              descripcion: descripcionRef.current,
+              involucrados: newIncident.involucrados.map(i => ({ codigo: i.codigo || '', nombre: i.nombre })),
+              fecha_libro_novedades: { numero: newIncident.libro_numero, fecha: newIncident.libro_fecha },
+              nombre_responsable_atencion: nombreResponsableAtencionRef.current,
+              solucion: '',
+              fecha_solucion: '',
+              fecha_solucion_real: '',
+              costo_asociado: '',
+              consecutivo_informe: '',
+              link_informe: '',
+              files: filesForCache as any,
+              id_local: '',
+              owned: true,
+            };
+            const prev = (await getIncidentsCache()) || [];
+            const merged = mergeIncidentsCacheForCorpo(prev, [newInc], corpoResolved);
+            await setIncidentsCache(merged);
+          }
           setSubmitResponse({ type: 'success', message: res.message || 'Incidente creado correctamente' });
           setTimeout(async () => {
+            for (const f of [...textFiles, ...imageFiles, ...audioFiles, ...videoFiles]) {
+              if (f.localFileName) {
+                try {
+                  await deleteFile(f.localFileName);
+                } catch {
+                  /* ya subido a servidor; limpieza best-effort */
+                }
+              }
+            }
             setIsCreating(false);
+            clearFormHierarchy();
             setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
             await fetchAll();
           }, 2000);
@@ -810,9 +1252,9 @@ export default function IncidentsScreen() {
       }
 
       // Offline
-      const corpoIdOff = await getCurrentMarcaCorpoId();
+      const corpoIdOff = corpoResolved;
       if (!corpoIdOff) {
-        setSubmitResponse({ type: 'error', message: 'No se encontró la sucursal (corporación) actual' });
+        setSubmitResponse({ type: 'error', message: 'No se encontró la sucursal (corporación) para el registro.' });
         setIsSubmitting(false);
         return;
       }
@@ -829,11 +1271,12 @@ export default function IncidentsScreen() {
       });
       await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
 
-      await createLocalCacheIncident(localId, corpoIdOff);
+      await createLocalCacheIncident(localId, corpoIdOff, hierarchy);
 
       setSubmitResponse({ type: 'success', message: 'Incidente registrado localmente. Se sincronizará cuando haya conexión.' });
       setTimeout(() => {
         setIsCreating(false);
+        clearFormHierarchy();
         setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
       }, 2000);
     } catch (e) {
@@ -855,123 +1298,6 @@ export default function IncidentsScreen() {
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Aceptar', onPress: () => void handleCreate() },
     ]);
-  };
-
-  const handleUpdate = async (incidentId: number) => {
-    if (!editingIncident) return;
-
-    setIsSubmitting(true);
-    setSubmitResponse(null);
-
-    try {
-      const marcaId = await getCurrentMarcaId();
-      if (!marcaId) {
-        setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
-        setIsSubmitting(false);
-        return;
-      }
-
-      if (!solucionRef.current.trim() &&
-        !fechaSolucionRef.current &&
-        !fechaRealSolucionRef.current &&
-        !costoAsociadoRef.current.trim() &&
-        !consecutivoInformeRef.current.trim() &&
-        !linkInformeRef.current.trim()
-      ) {
-        setSubmitResponse({ type: 'error', message: 'Debes completar al menos un campo de la sección de solución/informe.' });
-        setIsSubmitting(false);
-        return;
-      }
-
-      const body = {
-        marca_id: marcaId,
-        solucion: solucionRef.current,
-        fecha_solucion: fechaSolucionRef.current || '',
-        fecha_real_solucion: fechaRealSolucionRef.current || '',
-        costo_asociado: costoAsociadoRef.current,
-        consecutivo_informe: consecutivoInformeRef.current,
-        link_informe: linkInformeRef.current,
-      };
-
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
-        const res = await updateIncident({ requestData: body, incidentId, refreshAccessToken, logout });
-        if (res.status) {
-          setSubmitResponse({ type: 'success', message: res.message || 'Incidente actualizado' });
-          setTimeout(async () => {
-            setEditingIncident(null);
-            await fetchAll();
-          }, 2000);
-        } else {
-          setSubmitResponse({ type: 'error', message: res.message || 'No se pudo actualizar' });
-        }
-        return;
-      }
-
-      // Offline
-      const actionsStr = await AsyncStorage.getItem('incidents_actions');
-      let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
-
-      if (editingIncident.id_local && editingIncident.id_local !== '') {
-        // No encolar "update" para borradores: fusionar en el "create" pendiente o limpiar updates huérfanos.
-        actions = actions.filter(
-          (a: any) => !(a.type === 'update' && String(a.id) === String(editingIncident.id_local))
-        );
-        const actionIndex = actions.findIndex((a: any) => a.id === editingIncident.id_local && a.type === 'create');
-        if (actionIndex !== -1) {
-          const prevRd = actions[actionIndex].requestData || {};
-          actions[actionIndex] = {
-            ...actions[actionIndex],
-            requestData: {
-              ...prevRd,
-              solucion: body.solucion,
-              fecha_solucion: body.fecha_solucion,
-              fecha_real_solucion: body.fecha_real_solucion,
-              costo_asociado: body.costo_asociado,
-              consecutivo_informe: body.consecutivo_informe,
-              link_informe: body.link_informe,
-            },
-          };
-        }
-        await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
-      } else {
-        const filtered = actions.filter((a: any) => !(a.type === 'update' && a.id === incidentId));
-        filtered.push({ requestData: body, id: incidentId, type: 'update' });
-        await AsyncStorage.setItem('incidents_actions', JSON.stringify(filtered));
-      }
-
-      // actualizar cache local (para reflejar UI offline)
-      const cache = (await getIncidentsCache()) || [];
-      const updated = cache.map(i => {
-        const matchLocal = !!editingIncident.id_local && i.id_local === editingIncident.id_local;
-        const matchServer = !editingIncident.id_local && i.id === incidentId;
-        if (matchLocal || matchServer) {
-          return {
-            ...i,
-            solucion: body.solucion,
-            fecha_solucion: body.fecha_solucion,
-            fecha_solucion_real: body.fecha_real_solucion,
-            costo_asociado: body.costo_asociado,
-            consecutivo_informe: body.consecutivo_informe,
-            link_informe: body.link_informe,
-          };
-        }
-        return i;
-      });
-      await setIncidentsCache(updated);
-      const corpoAfterUp = await getCurrentMarcaCorpoId();
-      setIncidents(filterIncidentsByCorpo(updated, corpoAfterUp));
-
-      setSubmitResponse({ type: 'success', message: 'Incidente actualizado localmente. Se sincronizará cuando haya conexión.' });
-      setTimeout(() => {
-        setEditingIncident(null);
-      }, 2000);
-    } catch (e) {
-      console.error('Error updating incident:', e);
-      setSubmitResponse({ type: 'error', message: 'No se pudo actualizar el incidente' });
-    } finally {
-      setIsSubmitting(false);
-    }
   };
 
   const executeDeleteIncident = async (incident: Incident) => {
@@ -1001,19 +1327,37 @@ export default function IncidentsScreen() {
               (a.type === 'create' || a.type === 'update')
             )
         );
+        const contribStr = await AsyncStorage.getItem(INCIDENT_CONTRIBUTIONS_ACTIONS_KEY);
+        if (contribStr) {
+          try {
+            const cList = JSON.parse(contribStr);
+            if (Array.isArray(cList)) {
+              const nextC = cList.filter(
+                (c: any) => String(c?.incidentLocalKey) !== String(incident.id_local)
+              );
+              await AsyncStorage.setItem(INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, JSON.stringify(nextC));
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         await AsyncStorage.setItem('incidents_actions', JSON.stringify(filteredActions));
         const cache = (await getIncidentsCache()) || [];
         const updated = cache.filter((i) => i.id_local !== incident.id_local);
         await setIncidentsCache(updated);
-        const corpoDel = await getCurrentMarcaCorpoId();
+        const corpoDel = await getActiveListCorpoId();
         setIncidents(filterIncidentsByCorpo(updated, corpoDel));
       } else {
-        actions.push({ id: incident.id, type: 'delete' });
-        await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
+        const filteredPre = actions.filter(
+          (a: any) =>
+            !(a.type === 'delete_file' && a.incidentId === incident.id)
+        );
+        filteredPre.push({ id: incident.id, type: 'delete' });
+        await AsyncStorage.setItem('incidents_actions', JSON.stringify(filteredPre));
         const cache = (await getIncidentsCache()) || [];
         const updated = cache.filter((i) => i.id !== incident.id);
         await setIncidentsCache(updated);
-        const corpoDel2 = await getCurrentMarcaCorpoId();
+        const corpoDel2 = await getActiveListCorpoId();
         setIncidents(filterIncidentsByCorpo(updated, corpoDel2));
       }
 
@@ -1037,6 +1381,116 @@ export default function IncidentsScreen() {
     ]);
   };
 
+  const patchIncidentFilesInCache = async (incidentId: number, fileId: number) => {
+    const cache = (await getIncidentsCache()) || [];
+    const next = cache.map((row) => {
+      if (row.id !== incidentId) return row;
+      const files = Array.isArray(row.files) ? row.files.filter((f: any) => f.id !== fileId) : [];
+      return { ...row, files };
+    });
+    await setIncidentsCache(next);
+    const corpo = await getActiveListCorpoId();
+    setIncidents(filterIncidentsByCorpo(next, corpo));
+  };
+
+  const executeDeleteIncidentFile = async (inc: Incident, file: any) => {
+    // Incidente creado solo en caché (id 0 + id_local): quitar archivo de caché, de la cola y del disco
+    if (inc.id === 0 && inc.id_local) {
+      try {
+        if (file?.local_file_name) {
+          try {
+            await deleteFile(String(file.local_file_name));
+          } catch {
+            /* */
+          }
+        }
+        const cache = (await getIncidentsCache()) || [];
+        const next = cache.map((row) => {
+          if (String(row.id_local) !== String(inc.id_local)) return row;
+          const files = Array.isArray(row.files)
+            ? row.files.filter((f: any) => {
+                if (file?.id_local && f?.id_local) return String(f.id_local) !== String(file.id_local);
+                return true;
+              })
+            : [];
+          return { ...row, files };
+        });
+        await setIncidentsCache(next);
+        const actionsStr = await AsyncStorage.getItem('incidents_actions');
+        const actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        const ai = actions.findIndex(
+          (a: any) => a.type === 'create' && String(a.id) === String(inc.id_local)
+        );
+        if (ai !== -1) {
+          const rd = { ...actions[ai].requestData };
+          let arch: any[] = [];
+          try {
+            arch = typeof rd.archivos === 'string' ? JSON.parse(rd.archivos) : rd.archivos || [];
+          } catch {
+            arch = [];
+          }
+          if (Array.isArray(arch)) {
+            const filtered = arch.filter((x: any) => {
+              if (file?.local_file_name && x.local_file_name === file.local_file_name) return false;
+              if (x.original_name && file?.original_name && x.original_name === file.original_name && x.type === file.type) {
+                return false;
+              }
+              return true;
+            });
+            rd.archivos = JSON.stringify(filtered);
+            actions[ai] = { ...actions[ai], requestData: rd };
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
+          }
+        }
+        const corpoD = await getActiveListCorpoId();
+        setIncidents(filterIncidentsByCorpo(next, corpoD));
+      } catch (e) {
+        console.error('delete draft incident file', e);
+        Alert.alert('Error', 'No se pudo eliminar el archivo del borrador');
+      }
+      return;
+    }
+
+    const fid = Number(file?.id);
+    if (!Number.isFinite(fid) || fid <= 0) return;
+    if (!inc.id || inc.id <= 0) {
+      Alert.alert('Aviso', 'Solo se pueden eliminar archivos de incidentes ya sincronizados.');
+      return;
+    }
+    if (file?.id_local) {
+      Alert.alert('Aviso', 'No se puede eliminar un archivo pendiente de subida de esta forma.');
+      return;
+    }
+    try {
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await deleteIncidentFile({ incidentId: inc.id, fileId: fid, refreshAccessToken, logout });
+        if (res.status) {
+          await patchIncidentFilesInCache(inc.id, fid);
+        } else {
+          Alert.alert('Error', res.message || 'No se pudo eliminar el archivo');
+        }
+        return;
+      }
+      const actionsStr = await AsyncStorage.getItem('incidents_actions');
+      const actions = actionsStr ? JSON.parse(actionsStr) : [];
+      actions.push({ type: 'delete_file', incidentId: inc.id, fileId: fid });
+      await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
+      await patchIncidentFilesInCache(inc.id, fid);
+      Alert.alert('Modo Offline', 'Eliminación de archivo encolada. Se sincronizará con conexión.');
+    } catch (e) {
+      console.error('delete incident file', e);
+      Alert.alert('Error', 'No se pudo eliminar el archivo');
+    }
+  };
+
+  const handleRequestDeleteIncidentFile = (inc: Incident, file: any) => {
+    Alert.alert('Eliminar archivo', '¿Desea eliminar permanentemente este archivo?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => void executeDeleteIncidentFile(inc, file) },
+    ]);
+  };
+
   const readContributionActions = async (): Promise<any[]> => {
     const str = await AsyncStorage.getItem(INCIDENT_CONTRIBUTIONS_ACTIONS_KEY);
     if (!str) return [];
@@ -1052,10 +1506,15 @@ export default function IncidentsScreen() {
     await AsyncStorage.setItem(INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, JSON.stringify(actions));
   };
 
-  const updateIncidentAportesInIncidentsCache = async (incidentId: number, updater: (current: IncidentContribution[]) => IncidentContribution[]) => {
+  const updateIncidentAportesInIncidentsCache = async (
+    ref: { id?: number; id_local?: string },
+    updater: (current: IncidentContribution[]) => IncidentContribution[]
+  ) => {
     const cache = (await getIncidentsCache()) || [];
     const updatedCache = cache.map((inc) => {
-      if (inc.id === incidentId) {
+      const matchById = ref.id != null && ref.id > 0 && inc.id === ref.id;
+      const matchByLocal = ref.id_local && String(inc.id_local) === String(ref.id_local);
+      if (matchById || matchByLocal) {
         const currentAportes = Array.isArray((inc as any).aportes) ? (inc as any).aportes : [];
         return { ...inc, aportes: updater(currentAportes) };
       }
@@ -1063,7 +1522,7 @@ export default function IncidentsScreen() {
     });
     await setIncidentsCache(updatedCache);
 
-    const corpoAportes = await getCurrentMarcaCorpoId();
+    const corpoAportes = await getActiveListCorpoId();
     setIncidents(filterIncidentsByCorpo(updatedCache, corpoAportes));
   };
 
@@ -1074,28 +1533,37 @@ export default function IncidentsScreen() {
     return aportesArr;
   };
 
-  const fetchAportesForIncident = async (incidentId: number) => {
+  const getIncidentAportesFromCacheForRow = async (inc: Incident): Promise<IncidentContribution[]> => {
+    const cache = (await getIncidentsCache()) || [];
+    const found =
+      inc.id && inc.id > 0
+        ? cache.find((i) => i.id === inc.id)
+        : cache.find((i) => i.id_local && i.id_local === inc.id_local);
+    const aportesArr = Array.isArray((found as any)?.aportes) ? (found as any).aportes : [];
+    return aportesArr;
+  };
+
+  const fetchAportesForIncident = async (inc: Incident) => {
     try {
       setIsLoadingAportes(true);
       const isConnected = await getConnectionStatus();
 
-      if (!isConnected) {
-        // Requerimiento: offline lee aportes desde incidents_cache -> incidente.aportes
-        const offlineAportes = await getIncidentAportesFromCache(incidentId);
+      if (!isConnected || !inc.id || inc.id <= 0) {
+        const offlineAportes = await getIncidentAportesFromCacheForRow(inc);
         setAportes(offlineAportes);
         return;
       }
 
-      const res = await listIncidentContributions({ incidentId, refreshAccessToken, logout });
+      const res = await listIncidentContributions({ incidentId: inc.id, refreshAccessToken, logout });
       if (res.status && res.contributions) {
         // Requerimiento: al GET exitoso reescribir incidente.aportes en incidents_cache
         // pero manteniendo aportes locales pendientes (id_local != '')
-        const currentFromCache = await getIncidentAportesFromCache(incidentId);
+        const currentFromCache = await getIncidentAportesFromCache(inc.id);
         const pendingLocal = currentFromCache.filter((a: any) => a?.id_local && a.id_local !== '');
         const merged = [...pendingLocal, ...res.contributions];
 
         setAportes(merged);
-        await updateIncidentAportesInIncidentsCache(incidentId, () => merged);
+        await updateIncidentAportesInIncidentsCache({ id: inc.id, id_local: inc.id_local }, () => merged);
       } else {
         Alert.alert('Error', res.message || 'No se pudieron cargar los aportes');
       }
@@ -1119,9 +1587,7 @@ export default function IncidentsScreen() {
     setAporteAudioFiles([]);
     setAporteVideoFiles([]);
     await loadCurrentRoleFromMarca();
-    if (incident?.id) {
-      await fetchAportesForIncident(incident.id);
-    }
+    await fetchAportesForIncident(incident);
   };
 
   const closeAportesModal = () => {
@@ -1174,35 +1640,28 @@ export default function IncidentsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const res = reader.result;
-          if (typeof res === 'string') {
-            const parts = res.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else {
-            reject(new Error('No se pudo leer el archivo seleccionado'));
-          }
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo seleccionado'));
-        reader.readAsDataURL(blob);
-      });
 
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const ext = extension || 'dat';
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || `archivo.${ext}`,
+        extension: ext,
+        type: mapManualTypeToStored(type),
+        prefix: 'incident_aporte',
+      });
 
       const localId = `local_aporte_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const file: ManualFileLocal = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
+        name: asset.name || `archivo.${ext}`,
+        extension: ext,
+        base64: '',
+        localFileName,
         uri: asset.uri,
         mimeType: asset.mimeType,
       };
@@ -1218,21 +1677,41 @@ export default function IncidentsScreen() {
   };
 
   const removeAporteLocalFile = (type: ManualFileLocal['type'], id: string) => {
-    if (type === 'image') setAporteImageFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'audio') setAporteAudioFiles(prev => prev.filter(f => f.id !== id));
-    else if (type === 'video') setAporteVideoFiles(prev => prev.filter(f => f.id !== id));
-    else setAporteTextFiles(prev => prev.filter(f => f.id !== id));
+    const take = (prev: ManualFileLocal[]) => prev.find((f) => f.id === id);
+    let toDel: ManualFileLocal | undefined;
+    if (type === 'image') toDel = take(aporteImageFiles);
+    else if (type === 'audio') toDel = take(aporteAudioFiles);
+    else if (type === 'video') toDel = take(aporteVideoFiles);
+    else toDel = take(aporteTextFiles);
+    if (toDel?.localFileName) {
+      void deleteFile(toDel.localFileName);
+    }
+    if (type === 'image') setAporteImageFiles((prev) => prev.filter((f) => f.id !== id));
+    else if (type === 'audio') setAporteAudioFiles((prev) => prev.filter((f) => f.id !== id));
+    else if (type === 'video') setAporteVideoFiles((prev) => prev.filter((f) => f.id !== id));
+    else setAporteTextFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
   const buildAporteArchivosPayload = (): IncidentContributionFileInput[] => {
     const all = [...aporteTextFiles, ...aporteImageFiles, ...aporteAudioFiles, ...aporteVideoFiles];
-    return all.map((f) => ({
-      type: f.type,
-      extension: f.extension,
-      original_name: f.name,
-      file_base64: f.base64,
-      mimeType: f.mimeType,
-    }));
+    return all.map((f) =>
+      f.localFileName
+        ? {
+            type: f.type,
+            extension: f.extension,
+            original_name: f.name,
+            file_base64: '',
+            mimeType: f.mimeType,
+            local_file_name: f.localFileName,
+          }
+        : {
+            type: f.type,
+            extension: f.extension,
+            original_name: f.name,
+            file_base64: f.base64,
+            mimeType: f.mimeType,
+          }
+    ) as IncidentContributionFileInput[];
   };
 
   const buildAportePayloadWithSignature = (): IncidentContributionFileInput[] => {
@@ -1360,7 +1839,10 @@ export default function IncidentsScreen() {
           } as any;
         });
         setAportes(updated);
-        await updateIncidentAportesInIncidentsCache(incidentId, () => updated);
+        await updateIncidentAportesInIncidentsCache(
+          { id: selectedIncidentForAportes.id, id_local: selectedIncidentForAportes.id_local },
+          () => updated
+        );
 
         setEditingAporte(null);
         setShowAporteComposer(false);
@@ -1412,7 +1894,7 @@ export default function IncidentsScreen() {
             setAporteImageFiles([]);
             setAporteAudioFiles([]);
             setAporteVideoFiles([]);
-            await fetchAportesForIncident(incidentId);
+            if (selectedIncidentForAportes) await fetchAportesForIncident(selectedIncidentForAportes);
           } else {
             Alert.alert('Error', res.message || 'No se pudo actualizar el aporte');
           }
@@ -1439,7 +1921,10 @@ export default function IncidentsScreen() {
         // update cache + ui
         const updated = aportes.map((a) => (a.id === editingAporte.id ? { ...a, aporte: texto, nombre_aporte: nombreAporte || null } : a));
         setAportes(updated);
-        await updateIncidentAportesInIncidentsCache(incidentId, () => updated);
+        await updateIncidentAportesInIncidentsCache(
+          { id: selectedIncidentForAportes.id, id_local: selectedIncidentForAportes.id_local },
+          () => updated
+        );
 
         setEditingAporte(null);
         setShowAporteComposer(false);
@@ -1514,7 +1999,11 @@ export default function IncidentsScreen() {
       actions.push({
         type: 'create',
         id: localId,
-        incidentId,
+        incidentId: incidentId > 0 ? incidentId : 0,
+        incidentLocalKey:
+          !incidentId || incidentId <= 0
+            ? String(selectedIncidentForAportes?.id_local || '')
+            : undefined,
         requestData: {
           aporte: texto,
           nombre_aporte: nombreAporte || null,
@@ -1527,7 +2016,10 @@ export default function IncidentsScreen() {
 
       const next = [newLocal, ...aportes];
       setAportes(next);
-      await updateIncidentAportesInIncidentsCache(incidentId, (current) => [newLocal, ...(current || [])]);
+      await updateIncidentAportesInIncidentsCache(
+        { id: selectedIncidentForAportes.id, id_local: selectedIncidentForAportes.id_local },
+        (current) => [newLocal, ...(current || [])]
+      );
 
       setAporteText('');
       setAporteNombrePersonalizado('');
@@ -1592,7 +2084,7 @@ export default function IncidentsScreen() {
       if (isConnected && a.id && a.id_local === '') {
         const res = await deleteIncidentContribution({ incidentId, contributionId: a.id, refreshAccessToken, logout });
         if (res.status) {
-          await fetchAportesForIncident(incidentId);
+          await fetchAportesForIncident(selectedIncidentForAportes);
         } else {
           Alert.alert('Error', res.message || 'No se pudo eliminar');
         }
@@ -1613,7 +2105,10 @@ export default function IncidentsScreen() {
 
       const next = aportes.filter((x) => (a.id_local ? x.id_local !== a.id_local : x.id !== a.id));
       setAportes(next);
-      await updateIncidentAportesInIncidentsCache(incidentId, () => next);
+      await updateIncidentAportesInIncidentsCache(
+        { id: selectedIncidentForAportes.id, id_local: selectedIncidentForAportes.id_local },
+        () => next
+      );
 
       Alert.alert('Modo Offline', 'Aporte eliminado localmente. Se sincronizará cuando haya conexión.');
     } catch (e) {
@@ -1689,7 +2184,11 @@ export default function IncidentsScreen() {
             {imageFiles.map(file => (
               <ThemedView key={file.id} style={styles.fileRow}>
                 <Image
-                  source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                  source={{
+                    uri:
+                      (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : '') ||
+                      `data:image/${file.extension || 'jpeg'};base64,${file.base64}`,
+                  }}
                   style={styles.filePreviewImage}
                   resizeMode="cover"
                 />
@@ -1763,7 +2262,11 @@ export default function IncidentsScreen() {
             {aporteImageFiles.map(file => (
               <ThemedView key={file.id} style={styles.fileRow}>
                 <Image
-                  source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                  source={{
+                    uri:
+                      (file.localFileName ? getLocalFileDisplayUri(file.localFileName) : '') ||
+                      `data:image/${file.extension || 'jpeg'};base64,${file.base64}`,
+                  }}
                   style={styles.filePreviewImage}
                   resizeMode="cover"
                 />
@@ -1809,19 +2312,166 @@ export default function IncidentsScreen() {
     );
   };
 
-  const renderIncidentForm = (incident: EditingIncident, mode: 'create' | 'edit') => {
-    const isEdit = mode === 'edit';
-    const readOnly = isEdit; // campos de creación quedan bloqueados en edición
+  const renderIncidentForm = (incident: EditingIncident) => {
+    const formKey = incident.id_local || String(incident.id ?? 'new');
 
     return (
       <ThemedView style={[styles.card, styles.formCard]}>
-        <ThemedText style={styles.formTitle}>{isEdit ? 'Editar Incidente' : 'Nuevo Incidente'}</ThemedText>
+        <ThemedText style={styles.formTitle}>Nuevo Incidente</ThemedText>
+
+        {!isOperativoUser ? (
+          <ThemedView style={styles.formGroup}>
+            <ThemedText style={styles.formLabel}>Ubicación del registro (empresa → sucursal / corpo)</ThemedText>
+            {isStructureLoading ? (
+              <ThemedView style={styles.inlineLoadingRow}>
+                <ActivityIndicator size="small" color="#007AFF" />
+                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+              </ThemedView>
+            ) : (mainStructure ?? []).length === 0 ? (
+              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+            ) : (
+              <>
+                <ThemedText style={[styles.formLabel, { marginBottom: 4 }]}>Empresa</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    selectedValue={formEmpresaId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      handleFormEmpresaChange(next === 0 ? null : next);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                    {(mainStructure ?? []).map((e) => (
+                      <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Cliente</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={formEmpresaId != null && formClienteOptions.length > 0}
+                    selectedValue={formClienteId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      handleFormClienteChange(next === 0 ? null : next);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item
+                      label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                      value={0}
+                      color="#000000"
+                    />
+                    {formClienteOptions.map((c) => (
+                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>División</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={formClienteId != null && formDivisionOptions.length > 0}
+                    selectedValue={formDivisionId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      setFormDivisionId(next === 0 ? null : next);
+                      setFormContratoId(null);
+                      setFormSucursalId(null);
+                      setFormPuestoId(null);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item
+                      label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                      value={0}
+                      color="#000000"
+                    />
+                    {formDivisionOptions.map((d) => (
+                      <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Contrato</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={formDivisionId != null && formContratoOptions.length > 0}
+                    selectedValue={formContratoId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      setFormContratoId(next === 0 ? null : next);
+                      setFormSucursalId(null);
+                      setFormPuestoId(null);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item
+                      label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                      value={0}
+                      color="#000000"
+                    />
+                    {formContratoOptions.map((c) => (
+                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Sucursal (corpo) *</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={formContratoId != null && formSucursalOptions.length > 0}
+                    selectedValue={formSucursalId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      setFormSucursalId(next === 0 ? null : next);
+                      setFormPuestoId(null);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item
+                      label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                      value={0}
+                      color="#000000"
+                    />
+                    {formSucursalOptions.map((s) => (
+                      <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+
+                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Puesto *</ThemedText>
+                <ThemedView style={styles.pickerContainer}>
+                  <Picker
+                    enabled={formSucursalId != null && formPuestoOptions.length > 0}
+                    selectedValue={formPuestoId ?? 0}
+                    onValueChange={(v) => {
+                      const next = Number(v) || 0;
+                      setFormPuestoId(next === 0 ? null : next);
+                    }}
+                    style={styles.picker}
+                  >
+                    <Picker.Item
+                      label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
+                      value={0}
+                      color="#000000"
+                    />
+                    {formPuestoOptions.map((p) => (
+                      <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                    ))}
+                  </Picker>
+                </ThemedView>
+              </>
+            )}
+          </ThemedView>
+        ) : null}
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Fecha del incidente:</ThemedText>
           <TouchableOpacity
-            disabled={readOnly}
-            style={[styles.dateButton, readOnly && styles.disabledButton]}
+            style={styles.dateButton}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaIncidentePicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_incidente).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
@@ -1829,16 +2479,14 @@ export default function IncidentsScreen() {
           </TouchableOpacity>
           {renderDatePicker(showFechaIncidentePicker, () => setShowFechaIncidentePicker(false), (iso) => {
             fechaIncidenteRef.current = iso;
-            if (isCreating) setNewIncident(prev => ({ ...prev, fecha_incidente: iso }));
-            if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, fecha_incidente: iso }) : prev);
+            setNewIncident(prev => ({ ...prev, fecha_incidente: iso }));
           })}
         </ThemedView>
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Fecha del reporte:</ThemedText>
           <TouchableOpacity
-            disabled={readOnly}
-            style={[styles.dateButton, readOnly && styles.disabledButton]}
+            style={styles.dateButton}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaReportePicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_reporte).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
@@ -1846,21 +2494,19 @@ export default function IncidentsScreen() {
           </TouchableOpacity>
           {renderDatePicker(showFechaReportePicker, () => setShowFechaReportePicker(false), (iso) => {
             fechaReporteRef.current = iso;
-            if (isCreating) setNewIncident(prev => ({ ...prev, fecha_reporte: iso }));
-            if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, fecha_reporte: iso }) : prev);
+            setNewIncident(prev => ({ ...prev, fecha_reporte: iso }));
           })}
         </ThemedView>
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Nombre de quien reporta la incidencia:</ThemedText>
           <TextInput
-            style={[styles.formInput, readOnly && styles.disabledInput]}
-            editable={!readOnly}
+            style={styles.formInput}
             defaultValue={incident.nombre_responsable}
             onChangeText={(t) => { nombreResponsableRef.current = t; }}
             placeholder="Nombre completo"
             placeholderTextColor="#999"
-            key={`nr-${mode}-${incident.id_local || incident.id}`}
+            key={`nr-create-${formKey}`}
           />
         </ThemedView>
 
@@ -1868,13 +2514,11 @@ export default function IncidentsScreen() {
           <ThemedText style={styles.formLabel}>Clasificación:</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              enabled={!readOnly}
               selectedValue={incident.clasificacion_id ?? 0}
               onValueChange={(val) => {
                 const id = Number(val) || null;
                 clasificacionRef.current = id;
-                if (isCreating) setNewIncident(prev => ({ ...prev, clasificacion_id: id }));
-                if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, clasificacion_id: id }) : prev);
+                setNewIncident(prev => ({ ...prev, clasificacion_id: id }));
               }}
               style={styles.picker}
             >
@@ -1889,196 +2533,94 @@ export default function IncidentsScreen() {
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Descripción del incidente:</ThemedText>
           <TextInput
-            style={[styles.formInput, styles.textArea, readOnly && styles.disabledInput]}
-            editable={!readOnly}
+            style={[styles.formInput, styles.textArea]}
             defaultValue={incident.descripcion}
             onChangeText={(t) => { descripcionRef.current = t; }}
             placeholder="Describe el incidente..."
             placeholderTextColor="#999"
             multiline
             numberOfLines={4}
-            key={`desc-${mode}-${incident.id_local || incident.id}`}
+            key={`desc-create-${formKey}`}
           />
         </ThemedView>
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Involucrados:</ThemedText>
-          {!readOnly && (
-            <View style={styles.codeRow}>
+          <View style={styles.codeRow}>
+            <TextInput
+              style={styles.codeInput}
+              value={codigoInvolucradoBusqueda}
+              onChangeText={setCodigoInvolucradoBusqueda}
+              placeholder="Buscar empleado por código"
+              placeholderTextColor="#999"
+            />
+            <TouchableOpacity style={styles.codeActionButton} onPress={handleSearchInvolucradoByCode} activeOpacity={0.85}>
+              <ThemedText style={styles.codeActionButtonText}>Buscar</ThemedText>
+            </TouchableOpacity>
+          </View>
+          {newIncident.involucrados.map((inv, idx) => (
+            <ThemedView key={`create-inv-${idx}`} style={styles.involucradoRow}>
               <TextInput
-                style={styles.codeInput}
-                value={codigoInvolucradoBusqueda}
-                onChangeText={setCodigoInvolucradoBusqueda}
-                placeholder="Buscar empleado por código"
-                placeholderTextColor="#999"
-              />
-              <TouchableOpacity style={styles.codeActionButton} onPress={handleSearchInvolucradoByCode} activeOpacity={0.85}>
-                <ThemedText style={styles.codeActionButtonText}>Buscar</ThemedText>
-              </TouchableOpacity>
-            </View>
-          )}
-          {(isCreating ? newIncident.involucrados : (editingIncident?.involucrados || [])).map((inv, idx) => (
-            <ThemedView key={`${mode}-inv-${idx}`} style={styles.involucradoRow}>
-              <TextInput
-                style={[styles.formInput, styles.smallInput, readOnly && styles.disabledInput]}
-                editable={!readOnly}
+                style={[styles.formInput, styles.smallInput]}
                 defaultValue={inv.codigo}
                 onChangeText={(t) => updateInvolucrado(idx, 'codigo', t)}
                 placeholder="Código (opcional)"
                 placeholderTextColor="#999"
               />
               <TextInput
-                style={[styles.formInput, styles.flexInput, readOnly && styles.disabledInput]}
-                editable={!readOnly}
+                style={[styles.formInput, styles.flexInput]}
                 defaultValue={inv.nombre}
                 onChangeText={(t) => updateInvolucrado(idx, 'nombre', t)}
                 placeholder="Nombre completo"
                 placeholderTextColor="#999"
               />
-              {!readOnly && (
-                <TouchableOpacity onPress={() => removeInvolucrado(idx)}>
-                  <Ionicons name="close-circle" size={20} color="#FF3B30" />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity onPress={() => removeInvolucrado(idx)}>
+                <Ionicons name="close-circle" size={20} color="#FF3B30" />
+              </TouchableOpacity>
             </ThemedView>
           ))}
-          {!readOnly && (
-            <TouchableOpacity style={styles.addSmallButton} onPress={handleAddInvolucrado}>
-              <Ionicons name="add" size={18} color="#007AFF" />
-              <ThemedText style={styles.addSmallButtonText}>Agregar involucrado</ThemedText>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity style={styles.addSmallButton} onPress={handleAddInvolucrado}>
+            <Ionicons name="add" size={18} color="#007AFF" />
+            <ThemedText style={styles.addSmallButtonText}>Agregar involucrado</ThemedText>
+          </TouchableOpacity>
         </ThemedView>
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Fecha de libro de novedades y número de folio:</ThemedText>
           <TouchableOpacity
-            disabled={readOnly}
-            style={[styles.dateButton, readOnly && styles.disabledButton]}
+            style={styles.dateButton}
             onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowLibroFechaPicker(true); }}
           >
             <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.libro_fecha).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
             <Ionicons name="calendar" size={18} color="#007AFF" />
           </TouchableOpacity>
           {renderDatePicker(showLibroFechaPicker, () => setShowLibroFechaPicker(false), (iso) => {
-            if (isCreating) setNewIncident(prev => ({ ...prev, libro_fecha: iso }));
-            if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, libro_fecha: iso }) : prev);
+            setNewIncident(prev => ({ ...prev, libro_fecha: iso }));
           })}
           <TextInput
-            style={[styles.formInput, readOnly && styles.disabledInput]}
-            editable={!readOnly}
+            style={styles.formInput}
             defaultValue={incident.libro_numero}
             onChangeText={(t) => {
-              if (isCreating) setNewIncident(prev => ({ ...prev, libro_numero: t }));
-              if (editingIncident) setEditingIncident(prev => prev ? ({ ...prev, libro_numero: t }) : prev);
+              setNewIncident(prev => ({ ...prev, libro_numero: t }));
             }}
             placeholder="Número de folio"
             placeholderTextColor="#999"
           />
         </ThemedView>
 
-        {!isEdit && renderFilesSection()}
+        {renderFilesSection()}
 
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Nombre del responsable de atención:</ThemedText>
           <TextInput
-            style={[styles.formInput, readOnly && styles.disabledInput]}
-            editable={!readOnly}
+            style={styles.formInput}
             defaultValue={incident.nombre_responsable_atencion}
             onChangeText={(t) => { nombreResponsableAtencionRef.current = t; }}
             placeholder="Nombre completo"
             placeholderTextColor="#999"
-            key={`nra-${mode}-${incident.id_local || incident.id}`}
+            key={`nra-create-${formKey}`}
           />
         </ThemedView>
-
-        {/* Edit-only fields */}
-        {isEdit && (
-          <>
-            <ThemedView style={styles.separator} />
-            <ThemedText style={styles.sectionTitle}>Solución / Informe</ThemedText>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Solución Propuesta:</ThemedText>
-              <TextInput
-                style={[styles.formInput, styles.textArea]}
-                defaultValue={incident.solucion}
-                onChangeText={(t) => { solucionRef.current = t; }}
-                placeholder="Describe la solución..."
-                placeholderTextColor="#999"
-                multiline
-                numberOfLines={3}
-                key={`sol-${incident.id}`}
-              />
-            </ThemedView>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Fecha de la solución propuesta:</ThemedText>
-              <TouchableOpacity
-                style={styles.dateButton}
-                onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaSolucionPicker(true); }}
-              >
-                <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_solucion).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
-                <Ionicons name="calendar" size={18} color="#007AFF" />
-              </TouchableOpacity>
-              {renderDatePicker(showFechaSolucionPicker, () => setShowFechaSolucionPicker(false), (iso) => {
-                fechaSolucionRef.current = iso;
-                setEditingIncident(prev => prev ? ({ ...prev, fecha_solucion: iso }) : prev);
-              })}
-            </ThemedView>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Fecha real de la solución:</ThemedText>
-              <TouchableOpacity
-                style={styles.dateButton}
-                onPress={ async () => { const horaAccion = await getHoraAccion(); if (!horaAccion) { Alert.alert('Error', 'No se pudo obtener la hora'); return; } setPickerDateValue(new Date(horaAccion)); setShowFechaRealSolucionPicker(true); }}
-              >
-                <ThemedText style={styles.dateButtonText}>{convertDateTimestampToLocalString(new Date(incident.fecha_real_solucion).toISOString() || '', false) || 'Seleccionar fecha'}</ThemedText>
-                <Ionicons name="calendar" size={18} color="#007AFF" />
-              </TouchableOpacity>
-              {renderDatePicker(showFechaRealSolucionPicker, () => setShowFechaRealSolucionPicker(false), (iso) => {
-                fechaRealSolucionRef.current = iso;
-                setEditingIncident(prev => prev ? ({ ...prev, fecha_real_solucion: iso }) : prev);
-              })}
-            </ThemedView>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Costo asociado del incidente:</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                defaultValue={incident.costo_asociado}
-                onChangeText={(t) => { costoAsociadoRef.current = t; }}
-                placeholder="Costo"
-                placeholderTextColor="#999"
-                key={`cost-${incident.id}`}
-              />
-            </ThemedView>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Consecutivo informe:</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                defaultValue={incident.consecutivo_informe}
-                onChangeText={(t) => { consecutivoInformeRef.current = t; }}
-                placeholder="Consecutivo"
-                placeholderTextColor="#999"
-                key={`consec-${incident.id}`}
-              />
-            </ThemedView>
-
-            <ThemedView style={styles.formGroup}>
-              <ThemedText style={styles.formLabel}>Link informe:</ThemedText>
-              <TextInput
-                style={styles.formInput}
-                defaultValue={incident.link_informe}
-                onChangeText={(t) => { linkInformeRef.current = t; }}
-                placeholder="Link"
-                placeholderTextColor="#999"
-                key={`link-${incident.id}`}
-              />
-            </ThemedView>
-          </>
-        )}
 
         {submitResponse && (
           <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
@@ -2091,7 +2633,7 @@ export default function IncidentsScreen() {
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
             style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
-            onPress={isEdit ? () => handleUpdate(incident.id!) : handleCreateWithConfirm}
+            onPress={handleCreateWithConfirm}
             disabled={isSubmitting}
           >
             {isSubmitting ? (
@@ -2102,7 +2644,7 @@ export default function IncidentsScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.cancelButton, isSubmitting && styles.buttonDisabled]}
-            onPress={isEdit ? cancelEditing : cancelCreating}
+            onPress={cancelCreating}
             disabled={isSubmitting}
           >
             <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
@@ -2166,7 +2708,7 @@ export default function IncidentsScreen() {
             </ThemedView>
           )}
 
-          {!isCreating && !editingIncident && (
+          {!isCreating && (
             <ThemedView style={styles.filtersMain}>
               <TouchableOpacity
                 style={styles.filtersHeader}
@@ -2184,6 +2726,137 @@ export default function IncidentsScreen() {
               </TouchableOpacity>
               {isFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
+                  {hasCurrentMarca && !isOperativoUser ? (
+                    <>
+                      <ThemedText style={styles.filterLabel}>
+                        Ubicación del listado (empresa → sucursal / corpo)
+                      </ThemedText>
+                      {isStructureLoading ? (
+                        <ThemedView style={styles.inlineLoadingRow}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
+                        </ThemedView>
+                      ) : (mainStructure ?? []).length === 0 ? (
+                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                      ) : (
+                        <>
+                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              selectedValue={filterEmpresaId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                handleFilterEmpresaChange(next === 0 ? null : next);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
+                              {filterEmpresaOptions.map((e) => (
+                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
+                              selectedValue={filterClienteId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                handleFilterClienteChange(next === 0 ? null : next);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterClienteOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.filterLabel}>División</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
+                              selectedValue={filterDivisionId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterDivisionId(next === 0 ? null : next);
+                                setFilterContratoId(null);
+                                filterSucursalIdRef.current = null;
+                                setFilterSucursalId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterDivisionOptionsMemo.map((d) => (
+                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
+                              selectedValue={filterContratoId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                setFilterContratoId(next === 0 ? null : next);
+                                filterSucursalIdRef.current = null;
+                                setFilterSucursalId(null);
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterContratoOptionsMemo.map((c) => (
+                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+
+                          <ThemedText style={styles.filterLabel}>Sucursal (sincroniza listado)</ThemedText>
+                          <View style={styles.pickerContainer}>
+                            <Picker
+                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
+                              selectedValue={filterSucursalId ?? 0}
+                              onValueChange={(v) => {
+                                const next = Number(v) || 0;
+                                const nextSuc = next === 0 ? null : next;
+                                filterSucursalIdRef.current = nextSuc;
+                                setFilterSucursalId(nextSuc);
+                                void fetchAll();
+                              }}
+                              style={styles.picker}
+                            >
+                              <Picker.Item
+                                label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
+                                value={0}
+                                color="#000000"
+                              />
+                              {filterSucursalOptionsMemo.map((s) => (
+                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                        </>
+                      )}
+                    </>
+                  ) : null}
+
                   <ThemedText style={styles.filterLabel}>Buscar (responsables, ejecutivo, clasificación, descripción):</ThemedText>
                   <TextInput
                     style={styles.searchInput}
@@ -2240,16 +2913,15 @@ export default function IncidentsScreen() {
             </ThemedView>
           )}
 
-          {!isCreating && !editingIncident && (
+          {!isCreating && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
             </TouchableOpacity>
           )}
 
-          {isCreating && renderIncidentForm(newIncident, 'create')}
-          {editingIncident && renderIncidentForm(editingIncident, 'edit')}
+          {isCreating && renderIncidentForm(newIncident)}
 
-          {!isCreating && !editingIncident && (
+          {!isCreating && (
             <ThemedView style={styles.listContainer}>
               {filteredIncidents.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
@@ -2272,7 +2944,15 @@ export default function IncidentsScreen() {
                     <ThemedText style={styles.cardInfo} numberOfLines={3}>Descripción: {i.descripcion || '-'}</ThemedText>
 
                     {Array.isArray(i.files) && i.files.length > 0 && (
-                      <IncidentFilesViewer incident={i} accessToken={accessToken} />
+                      <IncidentFilesViewer
+                        incident={i}
+                        accessToken={accessToken}
+                        onRequestDeleteFile={
+                          false && i.id > 0 && !i.id_local
+                            ? (f) => handleRequestDeleteIncidentFile(i, f)
+                            : undefined
+                        }
+                      />
                     )}
 
                     <ThemedView style={styles.buttonRow}>
@@ -2584,6 +3264,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   clearFiltersButtonText: { color: '#FFFFFF', fontWeight: '600' },
+  inlineLoadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+  inlineLoadingText: { fontSize: 14, opacity: 0.75, color: '#333' },
 
   createButton: { backgroundColor: '#007AFF', padding: 16, borderRadius: 8, alignItems: 'center', marginBottom: 16 },
   createButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
@@ -2811,6 +3493,8 @@ const styles = StyleSheet.create({
   modalButtonDisabled: { opacity: 0.6 },
 
   // Files viewer styles
+  fileBlockWrap: { position: 'relative' as const, marginBottom: 8 },
+  fileTrashTopRight: { position: 'absolute' as const, top: 6, right: 6, zIndex: 4, backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 6, padding: 6 },
   collapsableSection: { marginTop: 12, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, backgroundColor: '#F9F9F9', overflow: 'hidden' },
   collapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, backgroundColor: '#F0F0F0' },
   collapsableHeaderText: { fontSize: 14, fontWeight: '600', color: '#007AFF' },
@@ -2829,7 +3513,15 @@ const styles = StyleSheet.create({
 });
 
 // Componente para visualizar archivos de un incidente
-function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; accessToken?: string | null }) {
+function IncidentFilesViewer({
+  incident,
+  accessToken,
+  onRequestDeleteFile,
+}: {
+  incident: Incident;
+  accessToken?: string | null;
+  onRequestDeleteFile?: (file: any) => void;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
   const files = Array.isArray(incident.files) ? incident.files : [];
 
@@ -2862,11 +3554,15 @@ function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; ac
           {imageFiles.length > 0 && (
             <ThemedView style={styles.viewerSection}>
               <ThemedText style={styles.viewerSectionTitle}>Imágenes</ThemedText>
-              {imageFiles.map(file => (
-                <IncidentImageViewer
-                  key={file.id}
-                  imageUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
-                />
+              {imageFiles.map((file) => (
+                <ThemedView key={file.id} style={styles.fileBlockWrap}>
+                  {onRequestDeleteFile && Number(file.id) > 0 && !file.id_local ? (
+                    <TouchableOpacity style={styles.fileTrashTopRight} onPress={() => onRequestDeleteFile(file)}>
+                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                  <IncidentImageViewer imageUrl={buildIncidentFileUrl(incident.id, file, accessToken)} />
+                </ThemedView>
               ))}
             </ThemedView>
           )}
@@ -2875,12 +3571,18 @@ function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; ac
           {audioFiles.length > 0 && (
             <ThemedView style={styles.viewerSection}>
               <ThemedText style={styles.viewerSectionTitle}>Audios</ThemedText>
-              {audioFiles.map(file => (
-                <IncidentAudioPlayer
-                  key={file.id}
-                  sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
-                  label={getFileDisplayName(file)}
-                />
+              {audioFiles.map((file) => (
+                <ThemedView key={file.id} style={styles.fileBlockWrap}>
+                  {onRequestDeleteFile && Number(file.id) > 0 && !file.id_local ? (
+                    <TouchableOpacity style={styles.fileTrashTopRight} onPress={() => onRequestDeleteFile(file)}>
+                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                  <IncidentAudioPlayer
+                    sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
+                    label={getFileDisplayName(file)}
+                  />
+                </ThemedView>
               ))}
             </ThemedView>
           )}
@@ -2889,11 +3591,15 @@ function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; ac
           {videoFiles.length > 0 && (
             <ThemedView style={styles.viewerSection}>
               <ThemedText style={styles.viewerSectionTitle}>Videos</ThemedText>
-              {videoFiles.map(file => (
-                <IncidentVideoPlayer
-                  key={file.id}
-                  sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)}
-                />
+              {videoFiles.map((file) => (
+                <ThemedView key={file.id} style={styles.fileBlockWrap}>
+                  {onRequestDeleteFile && Number(file.id) > 0 && !file.id_local ? (
+                    <TouchableOpacity style={styles.fileTrashTopRight} onPress={() => onRequestDeleteFile(file)}>
+                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                  <IncidentVideoPlayer sourceUrl={buildIncidentFileUrl(incident.id, file, accessToken)} />
+                </ThemedView>
               ))}
             </ThemedView>
           )}
@@ -2902,25 +3608,31 @@ function IncidentFilesViewer({ incident, accessToken }: { incident: Incident; ac
           {documentFiles.length > 0 && (
             <ThemedView style={styles.viewerSection}>
               <ThemedText style={styles.viewerSectionTitle}>Documentos</ThemedText>
-              {documentFiles.map(file => (
-                <TouchableOpacity
-                  key={file.id}
-                  style={styles.documentRow}
-                  onPress={() => {
-                    const url = buildIncidentFileUrl(incident.id, file, accessToken);
-                    if (url) {
-                      Linking.openURL(url);
-                    } else {
-                      Alert.alert('Error', 'URL inválida para descargar el archivo');
-                    }
-                  }}
-                >
-                  <Ionicons name="document-text-outline" size={20} color="#007AFF" />
-                  <ThemedText numberOfLines={1} style={styles.documentText}>
-                    {getFileDisplayName(file)}
-                  </ThemedText>
-                  <Ionicons name="download-outline" size={20} color="#007AFF" />
-                </TouchableOpacity>
+              {documentFiles.map((file) => (
+                <ThemedView key={file.id} style={styles.fileBlockWrap}>
+                  {onRequestDeleteFile && Number(file.id) > 0 && !file.id_local ? (
+                    <TouchableOpacity style={styles.fileTrashTopRight} onPress={() => onRequestDeleteFile(file)}>
+                      <Ionicons name="trash" size={18} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                  <TouchableOpacity
+                    style={styles.documentRow}
+                    onPress={() => {
+                      const url = buildIncidentFileUrl(incident.id, file, accessToken);
+                      if (url) {
+                        Linking.openURL(url);
+                      } else {
+                        Alert.alert('Error', 'URL inválida para descargar el archivo');
+                      }
+                    }}
+                  >
+                    <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                    <ThemedText numberOfLines={1} style={styles.documentText}>
+                      {getFileDisplayName(file)}
+                    </ThemedText>
+                    <Ionicons name="download-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                </ThemedView>
               ))}
             </ThemedView>
           )}

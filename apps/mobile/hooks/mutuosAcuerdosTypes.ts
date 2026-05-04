@@ -5,6 +5,11 @@ export type MarcaDiaResumen = {
   corpo_id: number | null;
   plaza_id: number | null;
   empleadoFijo_id: number | null;
+  /** Jerarquía asociada a la marca (para alta de mutuo acuerdo). */
+  empresa_id?: number | null;
+  division_id?: number | null;
+  contrato_id?: number | null;
+  puesto_id?: number | null;
   cliente: string | null;
   sucursal: string | null;
   puesto: string | null;
@@ -53,6 +58,7 @@ export type MutuoAcuerdo = {
   can_accept_ausente?: boolean;
   can_sign_ejecutivo?: boolean;
   can_reject_ejecutivo?: boolean;
+  isActive?: boolean;
 };
 
 export type ListMutuosAcuerdosResponse = {

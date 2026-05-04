@@ -15,6 +15,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as Location from 'expo-location';
@@ -35,12 +36,20 @@ import authedFetch from '../hooks/authedFetch';
 import {
   ApreciacionVulnerabilidadItem,
   createApreciacionVulnerabilidad,
+  deleteApreciacionVulnerabilidadImage,
   deleteApreciacionVulnerabilidad,
-  getMainStructure,
   listApreciacionVulnerabilidad,
+  MainStructureCliente,
+  MainStructureContrato,
   MainStructureEmpresa,
+  MainStructurePuesto,
+  MainStructureSucursal,
+  updateApreciacionVulnerabilidadFirmaSolicitante,
   updateApreciacionVulnerabilidad,
 } from '../hooks/apreciacionVulnerabilidadFunctions';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import { buildApreciacionImagenesJsonForUpload, deleteApreciacionLocalFilesFromMeta, stripApreciacionImagesForActionPayload } from '@/hooks/apreciacionVulnerabilidadFilesSync';
 import Constants from 'expo-constants';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
@@ -60,6 +69,20 @@ function apreciacionItemIsPendingLocal(it: any): boolean {
   if (it?.id_local != null && String(it.id_local).trim() !== '') return true;
   if (Number(it?.id) === 0) return true;
   return false;
+}
+
+function extractLocalImagesMetaFromBoletaJson(boletaJson?: string): Array<{ localFileName?: string }> {
+  try {
+    const parsed = JSON.parse(String(boletaJson || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((section: any) =>
+      (Array.isArray(section?.items) ? section.items : [])
+        .map((it: any) => ({ localFileName: it?.image?.localFileName ? String(it.image.localFileName) : undefined }))
+        .filter((it: any) => !!it.localFileName)
+    );
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -90,6 +113,51 @@ async function mergeApreciacionVulnerabilidadServerIntoCache(
   return merged;
 }
 
+const APRECIACION_VULN_CACHE_KEY = 'apreciacion_vulnerabilidad_cache';
+
+async function readApreciacionVulnerabilidadCacheFull(): Promise<any[]> {
+  try {
+    const cacheStr = await AsyncStorage.getItem(APRECIACION_VULN_CACHE_KEY);
+    if (!cacheStr) return [];
+    const parsed = JSON.parse(cacheStr);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeApreciacionVulnerabilidadCacheFull(rows: any[]): Promise<void> {
+  await AsyncStorage.setItem(APRECIACION_VULN_CACHE_KEY, JSON.stringify(rows));
+}
+
+function sliceApreciacionItemsForCorpo(rows: any[], corpoId: number | null): any[] {
+  if (corpoId == null || !Number.isFinite(Number(corpoId)) || Number(corpoId) <= 0) return [];
+  const c = Number(corpoId);
+  return rows.filter((it) => Number(it?.corpo_id) === c);
+}
+
+/** Sucursal para lista/merge: si `allowMarcaFallback` es false, no se usa `current_marca` (p. ej. reinicio de filtros). */
+async function resolveApreciacionListCorpoId(
+  filterCorpoId: number | null,
+  allowMarcaFallback: boolean
+): Promise<number | null> {
+  if (filterCorpoId != null && Number.isFinite(Number(filterCorpoId))) {
+    const n = Number(filterCorpoId);
+    if (n > 0) return n;
+  }
+  if (!allowMarcaFallback) return null;
+  try {
+    const raw = await AsyncStorage.getItem('current_marca');
+    if (!raw) return null;
+    const c = JSON.parse(raw);
+    const id = c?.corpo?.id;
+    const n = Number(id);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 type VulnUI = ApreciacionVulnerabilidadItem & { id_local?: string };
 type HierarchyPath = {
   empresaId: number | null;
@@ -100,11 +168,21 @@ type HierarchyPath = {
   puestoId: number | null;
 };
 
+type HierarchyPickerOption = { id: number; label: string };
+
 type BoletaItem = {
   id: string;
   label: string;
   answer: 'si' | 'no' | null;
   isOriginal: boolean;
+  description?: string;
+  image?: {
+    id?: number;
+    name?: string;
+    url?: string;
+    localFileName?: string;
+    original_name?: string;
+  } | null;
 };
 
 type VulnerabilityLevel = 'alta' | 'media' | 'baja';
@@ -240,6 +318,91 @@ const getMarcaRoleDivisionId = (current: any): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+/** Rama `division` del merge (alias `divisiones` en algunos nodos). */
+function getClienteDivisionArray(cliente: any): any[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray(cliente.divisiones)) return cliente.divisiones;
+  return [];
+}
+
+function findDivisionIdForContratoInStructure(
+  tree: MainStructureEmpresa[],
+  empresaId: number | null,
+  clienteId: number | null,
+  contratoId: number | null,
+): number | null {
+  if (!contratoId || !Number.isFinite(Number(contratoId)) || Number(contratoId) <= 0) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return null;
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  for (const div of divisions) {
+    const contratos: any[] = Array.isArray(div?.contratos) ? div.contratos : [];
+    if (contratos.some((ct: any) => Number(ct.id) === Number(contratoId))) {
+      return Number(div.id);
+    }
+  }
+  return null;
+}
+
+function resolveDivisionIdInStructure(
+  tree: MainStructureEmpresa[],
+  empresaId: number | null,
+  clienteId: number | null,
+  divisionId: number | null,
+): number | null {
+  if (divisionId == null || !Number.isFinite(Number(divisionId))) return null;
+  if (!empresaId || !clienteId || !Array.isArray(tree)) return Number(divisionId);
+  const empresa = tree.find((e: any) => Number(e.id) === Number(empresaId));
+  const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(clienteId));
+  const divisions = getClienteDivisionArray(cliente);
+  const found = divisions.find((d: any) => Number(d.id) === Number(divisionId));
+  return found ? Number(found.id) : Number(divisionId);
+}
+
+/** División para filtros/formulario: marca + árbol mergeado (`loadMainStructureTreeMerged`). */
+function resolveMarcaDivisionForTree(current: any, tree: MainStructureEmpresa[]): number | null {
+  const empresaId = current?.empresa?.id != null ? Number(current.empresa.id) : null;
+  const clienteId = current?.cliente?.id != null ? Number(current.cliente.id) : null;
+  const contratoId = current?.contrato?.id != null ? Number(current.contrato.id) : null;
+  let divId = getMarcaRoleDivisionId(current);
+  if (divId == null && empresaId && clienteId && contratoId && Array.isArray(tree) && tree.length > 0) {
+    divId = findDivisionIdForContratoInStructure(tree, empresaId, clienteId, contratoId);
+  }
+  if (divId == null) return null;
+  return resolveDivisionIdInStructure(tree, empresaId, clienteId, divId);
+}
+
+function resolveByPuestoIdInTree(
+  tree: MainStructureEmpresa[],
+  targetPuestoId?: number | null,
+): HierarchyPath | null {
+  const pid = Number(targetPuestoId || 0);
+  if (!pid) return null;
+  for (const e of tree) {
+    for (const c of e.clientes || []) {
+      for (const d of getClienteDivisionArray(c)) {
+        for (const co of d.contratos || []) {
+          for (const s of co.sucursales || []) {
+            const found = (s.puestos || []).find((p: MainStructurePuesto) => Number(p.id) === pid);
+            if (!found) continue;
+            return {
+              empresaId: Number(e.id),
+              clienteId: Number(c.id),
+              divisionId: Number(d.id),
+              contratoId: Number(co.id),
+              corpoId: Number(s.id),
+              puestoId: Number(found.id),
+            };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const getLegacyVulnerabilityLevelFromItems = (items: any[]): VulnerabilityLevel => {
   const selected = (Array.isArray(items) ? items : []).find((item: any) => item?.answer === 'si');
   const selectedLabel = String(selected?.label || '').toLowerCase();
@@ -262,6 +425,16 @@ const normalizeBoletaSections = (value: any): BoletaSection[] => {
         label: String(item?.label || ''),
         answer: item?.answer === 'si' || item?.answer === 'no' ? item.answer : null,
         isOriginal: item?.isOriginal !== false,
+        description: typeof item?.description === 'string' ? item.description : '',
+        image: item?.image
+          ? {
+            id: item.image?.id != null ? Number(item.image.id) : undefined,
+            name: item.image?.name ? String(item.image.name) : undefined,
+            url: item.image?.url ? String(item.image.url) : undefined,
+            localFileName: item.image?.localFileName ? String(item.image.localFileName) : undefined,
+            original_name: item.image?.original_name ? String(item.image.original_name) : undefined,
+          }
+          : null,
       }));
       const section: BoletaSection = { key, title, items };
       if (key === PORCENTAJE_SECTION_KEY) {
@@ -382,6 +555,10 @@ export default function ApreciacionVulnerabilidadScreen() {
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [cameraTarget, setCameraTarget] = useState<{ sectionKey: string; itemId: string } | null>(null);
+  const cameraRef = useRef<CameraView | null>(null);
+  const [permission, requestPermission] = useCameraPermissions();
 
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
@@ -390,6 +567,9 @@ export default function ApreciacionVulnerabilidadScreen() {
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
+  const [signatureModalListTarget, setSignatureModalListTarget] = useState<VulnUI | null>(null);
+  const savingListSolicitanteFirmaRef = useRef(false);
+  const [queryAccessToken, setQueryAccessToken] = useState('');
 
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -400,6 +580,7 @@ export default function ApreciacionVulnerabilidadScreen() {
   const PICKER_NONE = 0;
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
     const state = await Network.getNetworkStateAsync();
     return !!(state.isConnected && state.isInternetReachable);
   };
@@ -478,12 +659,23 @@ export default function ApreciacionVulnerabilidadScreen() {
   };
 
   const openFirmaSolicitanteModal = () => {
+    setSignatureModalListTarget(null);
+    savingListSolicitanteFirmaRef.current = false;
+    setIsReadingSignature(false);
+    setSignatureKey((k) => k + 1);
+    setIsSignatureModalVisible(true);
+  };
+  const openListFirmaSolicitanteModal = (row: VulnUI) => {
+    setSignatureModalListTarget(row);
+    savingListSolicitanteFirmaRef.current = false;
     setIsReadingSignature(false);
     setSignatureKey((k) => k + 1);
     setIsSignatureModalVisible(true);
   };
   const closeFirmaSolicitanteModal = () => {
     setIsSignatureModalVisible(false);
+    setSignatureModalListTarget(null);
+    savingListSolicitanteFirmaRef.current = false;
     setIsReadingSignature(false);
   };
   const clearSignatureInModal = () => {
@@ -509,49 +701,98 @@ export default function ApreciacionVulnerabilidadScreen() {
       setIsReadingSignature(false);
       return;
     }
+    if (signatureModalListTarget) {
+      if (savingListSolicitanteFirmaRef.current) return;
+      savingListSolicitanteFirmaRef.current = true;
+      const target = signatureModalListTarget;
+      void (async () => {
+        try {
+          const isConnected = await getConnectionStatus();
+          const all = await readApreciacionVulnerabilidadCacheFull();
+          let next = all.map((row: any) =>
+            (Number(row.id) === Number(target.id) || String(row.id_local || '') === String(target.id_local || ''))
+              ? { ...row, firma_solicitante: sig }
+              : row
+          );
+
+          if (!apreciacionItemIsPendingLocal(target) && isConnected) {
+            const result = await updateApreciacionVulnerabilidadFirmaSolicitante({
+              id: Number(target.id),
+              firma_solicitante: sig,
+              refreshAccessToken,
+              logout,
+            });
+            if (!result.status) {
+              Alert.alert('Error', result.message || 'No se pudo guardar la firma del solicitante');
+              return;
+            }
+            const sr = (result as any).data;
+            next = all.map((row: any) =>
+              Number(row.id) === Number(target.id)
+                ? { ...row, ...(sr && typeof sr === 'object' ? sr : {}), firma_solicitante: sr?.firma_solicitante ?? sig }
+                : row
+            );
+          } else {
+            const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+            const actions = actionsStr ? JSON.parse(actionsStr) : [];
+            if (target.id_local && apreciacionItemIsPendingLocal(target)) {
+              const cidx = actions.findIndex((a: any) => a.type === 'create' && String(a.id) === String(target.id_local));
+              if (cidx !== -1) {
+                actions[cidx] = {
+                  ...actions[cidx],
+                  requestData: { ...actions[cidx].requestData, firma_solicitante: sig },
+                };
+              }
+            } else if (Number(target.id) > 0) {
+              const uidx = actions.findIndex((a: any) => a.type === 'update' && Number(a.id) === Number(target.id));
+              if (uidx !== -1) {
+                actions[uidx] = {
+                  ...actions[uidx],
+                  requestData: { ...actions[uidx].requestData, firma_solicitante: sig },
+                };
+              } else {
+                const fidx = actions.findIndex((a: any) => a.type === 'update_solicitante_firma' && Number(a.id) === Number(target.id));
+                const entry = {
+                  type: 'update_solicitante_firma',
+                  id: Number(target.id),
+                  firma_solicitante: sig,
+                };
+                if (fidx !== -1) actions[fidx] = entry;
+                else actions.push(entry);
+              }
+            }
+            await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(actions));
+          }
+          await writeApreciacionVulnerabilidadCacheFull(next);
+          setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
+          closeFirmaSolicitanteModal();
+        } finally {
+          savingListSolicitanteFirmaRef.current = false;
+          setIsReadingSignature(false);
+        }
+      })();
+      return;
+    }
     setFirmaSolicitante(sig);
     setIsReadingSignature(false);
     closeFirmaSolicitanteModal();
   };
 
-  const fetchStructure = useCallback(async () => {
+  /**
+   * Misma fuente que Activities / PhysicalMinuteAgenda: `loadMainStructureTreeMerged`.
+   * Devuelve el árbol para precarga de filtros sin depender del estado asíncrono de React.
+   */
+  const loadMainStructureCache = useCallback(async (): Promise<MainStructureEmpresa[]> => {
     setIsStructureLoading(true);
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        const cached = JSON.parse(cacheStr);
-        if (Array.isArray(cached)) {
-          setStructure(cached);
-          return;
-        }
-      }
+      const parsed = await loadMainStructureTreeMerged();
+      const empresas = Array.isArray(parsed) ? (parsed as MainStructureEmpresa[]) : [];
+      setStructure(empresas);
+      return empresas;
+    } catch (e) {
+      console.error('ApreciacionVulnerabilidad loadMainStructureCache:', e);
       setStructure([]);
-      return;
-
-      /*
-      const res = await getMainStructure({ refreshAccessToken, logout });
-      if (res.status && Array.isArray(res.structure)) setStructure(res.structure);
-      else {
-        // fallback a cache si el fetch falla
-        const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-        if (cacheStr) {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) setStructure(cached);
-          else setStructure([]);
-        } else setStructure([]);
-      }
-      */
-    } catch {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (cacheStr) {
-        try {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) setStructure(cached);
-          else setStructure([]);
-        } catch {
-          setStructure([]);
-        }
-      } else setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
@@ -564,22 +805,40 @@ export default function ApreciacionVulnerabilidadScreen() {
     logoutRef.current = logout;
   }, [refreshAccessToken, logout]);
 
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const t = await AsyncStorage.getItem('access_token');
+        if (!mounted) return;
+        setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
+      } catch {
+        if (!mounted) return;
+        setQueryAccessToken('');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const appendTokenToUrl = useCallback((url: string): string => {
+    if (!url) return '';
+    const token = queryAccessToken.trim();
+    if (!token) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [queryAccessToken]);
+
   const filterCorpoIdRef = useRef(filterCorpoId);
   filterCorpoIdRef.current = filterCorpoId;
 
   const fetchItems = useCallback(async (scopeOverride?: ApreciacionListCorpoScope | null) => {
-    const loadCacheToState = async () => {
-      const cacheStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_cache');
-      if (!cacheStr) {
-        setItems([]);
-        return;
-      }
-      try {
-        const parsed = JSON.parse(cacheStr);
-        setItems(Array.isArray(parsed) ? parsed : []);
-      } catch {
-        setItems([]);
-      }
+    const loadCacheToState = async (filterCorpoId: number | null, allowMarcaFallback: boolean) => {
+      const mergeCorpoId = await resolveApreciacionListCorpoId(filterCorpoId, allowMarcaFallback);
+      const all = await readApreciacionVulnerabilidadCacheFull();
+      setItems(sliceApreciacionItemsForCorpo(all, mergeCorpoId));
     };
 
     try {
@@ -588,10 +847,12 @@ export default function ApreciacionVulnerabilidadScreen() {
       setOfflineMessage(null);
       const isConnected = await getConnectionStatus();
 
-      const scope: ApreciacionListCorpoScope =
-        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
+      const usedExplicitScope = scopeOverride !== undefined && scopeOverride !== null;
+      const filterFromPicker = usedExplicitScope ? scopeOverride!.filterCorpoId : filterCorpoIdRef.current;
+      const allowMarcaFallback = !usedExplicitScope;
 
-      const matchesScope = makeApreciacionCorpoListMatcher(scope.filterCorpoId);
+      const mergeCorpoId = await resolveApreciacionListCorpoId(filterFromPicker, allowMarcaFallback);
+      const matchesScope = makeApreciacionCorpoListMatcher(mergeCorpoId);
 
       if (isConnected) {
         const res = await listApreciacionVulnerabilidad({
@@ -599,15 +860,17 @@ export default function ApreciacionVulnerabilidadScreen() {
           logout: () => logoutRef.current(),
         });
         if (res.status) {
-          const list = (res.data || []).map((it: any) => ({ ...it, id_local: it.id_local || '' }));
+          const list = (res.data || [])
+            .filter((it: any) => it?.isActive !== false)
+            .map((it: any) => ({ ...it, id_local: it.id_local || '' }));
           const merged = await mergeApreciacionVulnerabilidadServerIntoCache(list, matchesScope);
-          setItems(merged);
+          setItems(sliceApreciacionItemsForCorpo(merged, mergeCorpoId));
         } else {
           setError(res.message || 'Error al cargar registros');
-          await loadCacheToState();
+          await loadCacheToState(filterFromPicker, allowMarcaFallback);
         }
       } else {
-        await loadCacheToState();
+        await loadCacheToState(filterFromPicker, allowMarcaFallback);
         setOfflineMessage('Modo Offline: mostrando datos guardados.');
       }
     } catch (e: any) {
@@ -616,7 +879,10 @@ export default function ApreciacionVulnerabilidadScreen() {
       } else {
         setError(e.message || 'Error al cargar registros');
       }
-      await loadCacheToState();
+      const usedExplicitScopeErr = scopeOverride !== undefined && scopeOverride !== null;
+      const filterErr = usedExplicitScopeErr ? scopeOverride!.filterCorpoId : filterCorpoIdRef.current;
+      const allowMarcaErr = !usedExplicitScopeErr;
+      await loadCacheToState(filterErr, allowMarcaErr);
     } finally {
       setIsLoading(false);
     }
@@ -629,7 +895,7 @@ export default function ApreciacionVulnerabilidadScreen() {
     useCallback(() => {
       let cancelled = false;
       (async () => {
-        await fetchStructure();
+        const tree = await loadMainStructureCache();
         let marcaScope: ApreciacionListCorpoScope | null = null;
         const currentMarcaStr = await AsyncStorage.getItem('current_marca');
         if (currentMarcaStr) {
@@ -637,7 +903,7 @@ export default function ApreciacionVulnerabilidadScreen() {
             const current = JSON.parse(currentMarcaStr);
             const empresaIdVal = current?.empresa?.id != null ? Number(current.empresa.id) : null;
             const clienteIdVal = current?.cliente?.id != null ? Number(current.cliente.id) : null;
-            const divisionIdVal = getMarcaRoleDivisionId(current);
+            const divisionIdVal = resolveMarcaDivisionForTree(current, tree);
             const contratoIdVal = current?.contrato?.id != null ? Number(current.contrato.id) : null;
             const corpoIdVal = current?.corpo?.id != null ? Number(current.corpo.id) : null;
             setFilterEmpresaId(empresaIdVal);
@@ -655,82 +921,141 @@ export default function ApreciacionVulnerabilidadScreen() {
       return () => {
         cancelled = true;
       };
-    }, [fetchStructure])
+    }, [loadMainStructureCache]),
   );
 
   useEffect(() => {
     const handler = () => {
-      fetchStructure();
+      void loadMainStructureCache();
       fetchItemsRef.current();
     };
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);
     };
-  }, [fetchStructure]);
+  }, [loadMainStructureCache]);
 
-  // Cascada helpers (form)
+  // Cascada helpers (form): encadenar desde `structure` (mismo patrón que Activities / Acta).
   const empresas = useMemo(() => structure.map((e) => ({ id: e.id, label: e.nombre })), [structure]);
-  const selectedEmpresa = useMemo(() => structure.find((e) => e.id === empresaId) || null, [structure, empresaId]);
+  const selectedEmpresa = useMemo(
+    () => structure.find((e) => Number(e.id) === Number(empresaId)) || null,
+    [structure, empresaId],
+  );
   const clientes = useMemo(
-    () => (selectedEmpresa?.clientes || []).map((c) => ({ id: c.id, label: c.nombre })),
-    [selectedEmpresa]
+    () =>
+      (selectedEmpresa?.clientes || []).map((c: MainStructureCliente) => ({ id: c.id, label: c.nombre })),
+    [selectedEmpresa],
   );
   const selectedCliente = useMemo(
-    () => (selectedEmpresa?.clientes || []).find((c) => c.id === clienteId) || null,
-    [selectedEmpresa, clienteId]
+    () =>
+      (selectedEmpresa?.clientes || []).find((c: MainStructureCliente) => Number(c.id) === Number(clienteId)) ||
+      null,
+    [selectedEmpresa, clienteId],
   );
   const divisiones = useMemo(
-    () => (selectedCliente?.division || []).map((d) => ({ id: d.id, label: d.nombre })),
-    [selectedCliente]
+    () => getClienteDivisionArray(selectedCliente).map((d) => ({ id: d.id, label: d.nombre })),
+    [selectedCliente],
   );
   const selectedDivision = useMemo(
-    () => (selectedCliente?.division || []).find((d) => d.id === divisionId) || null,
-    [selectedCliente, divisionId]
+    () => getClienteDivisionArray(selectedCliente).find((d) => Number(d.id) === Number(divisionId)) || null,
+    [selectedCliente, divisionId],
   );
   const contratos = useMemo(
-    () => (selectedDivision?.contratos || []).map((c) => ({ id: c.id, label: c.nombre })),
-    [selectedDivision]
+    () =>
+      (selectedDivision?.contratos || []).map((c: MainStructureContrato) => ({ id: c.id, label: c.nombre })),
+    [selectedDivision],
   );
   const selectedContrato = useMemo(
-    () => (selectedDivision?.contratos || []).find((c) => c.id === contratoId) || null,
-    [selectedDivision, contratoId]
+    () =>
+      (selectedDivision?.contratos || []).find((c: MainStructureContrato) => Number(c.id) === Number(contratoId)) ||
+      null,
+    [selectedDivision, contratoId],
   );
   const corpos = useMemo(
-    () => (selectedContrato?.sucursales || []).map((s) => ({ id: s.id, label: s.nombre })),
-    [selectedContrato]
+    () =>
+      (selectedContrato?.sucursales || []).map((s: MainStructureSucursal) => ({ id: s.id, label: s.nombre })),
+    [selectedContrato],
   );
   const selectedCorpo = useMemo(
-    () => (selectedContrato?.sucursales || []).find((s) => s.id === corpoId) || null,
-    [selectedContrato, corpoId]
+    () =>
+      (selectedContrato?.sucursales || []).find(
+        (s: MainStructureSucursal) => Number(s.id) === Number(corpoId),
+      ) || null,
+    [selectedContrato, corpoId],
   );
   const puestos = useMemo(
-    () => (selectedCorpo?.puestos || []).map((p) => ({ id: p.id, label: p.nombre })),
-    [selectedCorpo]
+    () =>
+      (selectedCorpo?.puestos || []).map((p: MainStructurePuesto) => ({ id: p.id, label: p.nombre })),
+    [selectedCorpo],
   );
-  const selectedPuesto = useMemo(() => (selectedCorpo?.puestos || []).find((p) => p.id === puestoId) || null, [selectedCorpo, puestoId]);
+  const selectedPuesto = useMemo(
+    () =>
+      (selectedCorpo?.puestos || []).find((p: MainStructurePuesto) => Number(p.id) === Number(puestoId)) || null,
+    [selectedCorpo, puestoId],
+  );
 
   // filtros: mismos niveles pero independientes
-  const selectedFilterEmpresa = useMemo(() => structure.find((e) => e.id === filterEmpresaId) || null, [structure, filterEmpresaId]);
-  const filterClientes = useMemo(() => (selectedFilterEmpresa?.clientes || []).map((c) => ({ id: c.id, label: c.nombre })), [selectedFilterEmpresa]);
-  const selectedFilterCliente = useMemo(() => (selectedFilterEmpresa?.clientes || []).find((c) => c.id === filterClienteId) || null, [selectedFilterEmpresa, filterClienteId]);
-  const filterDivisiones = useMemo(() => (selectedFilterCliente?.division || []).map((d) => ({ id: d.id, label: d.nombre })), [selectedFilterCliente]);
-  const selectedFilterDivision = useMemo(() => (selectedFilterCliente?.division || []).find((d) => d.id === filterDivisionId) || null, [selectedFilterCliente, filterDivisionId]);
-  const filterContratos = useMemo(() => (selectedFilterDivision?.contratos || []).map((c) => ({ id: c.id, label: c.nombre })), [selectedFilterDivision]);
-  const selectedFilterContrato = useMemo(() => (selectedFilterDivision?.contratos || []).find((c) => c.id === filterContratoId) || null, [selectedFilterDivision, filterContratoId]);
-  const filterCorpos = useMemo(() => (selectedFilterContrato?.sucursales || []).map((s) => ({ id: s.id, label: s.nombre })), [selectedFilterContrato]);
+  const selectedFilterEmpresa = useMemo(
+    () => structure.find((e) => Number(e.id) === Number(filterEmpresaId)) || null,
+    [structure, filterEmpresaId],
+  );
+  const filterClientes = useMemo(
+    () =>
+      (selectedFilterEmpresa?.clientes || []).map((c: MainStructureCliente) => ({ id: c.id, label: c.nombre })),
+    [selectedFilterEmpresa],
+  );
+  const selectedFilterCliente = useMemo(
+    () =>
+      (selectedFilterEmpresa?.clientes || []).find(
+        (c: MainStructureCliente) => Number(c.id) === Number(filterClienteId),
+      ) || null,
+    [selectedFilterEmpresa, filterClienteId],
+  );
+  const filterDivisiones = useMemo(
+    () => getClienteDivisionArray(selectedFilterCliente).map((d) => ({ id: d.id, label: d.nombre })),
+    [selectedFilterCliente],
+  );
+  const selectedFilterDivision = useMemo(
+    () =>
+      getClienteDivisionArray(selectedFilterCliente).find((d) => Number(d.id) === Number(filterDivisionId)) ||
+      null,
+    [selectedFilterCliente, filterDivisionId],
+  );
+  const filterContratos = useMemo(
+    () =>
+      (selectedFilterDivision?.contratos || []).map((c: MainStructureContrato) => ({
+        id: c.id,
+        label: c.nombre,
+      })),
+    [selectedFilterDivision],
+  );
+  const selectedFilterContrato = useMemo(
+    () =>
+      (selectedFilterDivision?.contratos || []).find(
+        (c: MainStructureContrato) => Number(c.id) === Number(filterContratoId),
+      ) || null,
+    [selectedFilterDivision, filterContratoId],
+  );
+  const filterCorpos = useMemo(
+    () =>
+      (selectedFilterContrato?.sucursales || []).map((s: MainStructureSucursal) => ({
+        id: s.id,
+        label: s.nombre,
+      })),
+    [selectedFilterContrato],
+  );
 
   const resolveByClienteCorpoPuesto = useCallback(
     (cliente_id?: number | null, corpo_id?: number | null, puesto_id?: number | null) => {
       for (const e of structure) {
-        for (const c of e.clientes) {
-          if (cliente_id && c.id !== cliente_id) continue;
-          for (const d of c.division) {
-            for (const co of d.contratos) {
-              for (const s of co.sucursales) {
-                if (corpo_id && s.id !== corpo_id) continue;
-                for (const p of s.puestos) {
-                  if (puesto_id && p.id !== puesto_id) continue;
+        for (const c of e.clientes || []) {
+          if (cliente_id && Number(c.id) !== Number(cliente_id)) continue;
+          for (const d of getClienteDivisionArray(c)) {
+            for (const co of d.contratos || []) {
+              for (const s of co.sucursales || []) {
+                if (corpo_id && Number(s.id) !== Number(corpo_id)) continue;
+                for (const p of s.puestos || []) {
+                  if (puesto_id && Number(p.id) !== Number(puesto_id)) continue;
                   return {
                     empresaId: e.id,
                     empresa: e.nombre,
@@ -753,36 +1078,13 @@ export default function ApreciacionVulnerabilidadScreen() {
       }
       return null;
     },
-    [structure]
+    [structure],
   );
 
   const resolveByPuestoId = useCallback(
-    (targetPuestoId?: number | null): HierarchyPath | null => {
-      const pid = Number(targetPuestoId || 0);
-      if (!pid) return null;
-      for (const e of structure) {
-        for (const c of e.clientes || []) {
-          for (const d of c.division || []) {
-            for (const co of d.contratos || []) {
-              for (const s of co.sucursales || []) {
-                const found = (s.puestos || []).find((p) => Number(p.id) === pid);
-                if (!found) continue;
-                return {
-                  empresaId: Number(e.id),
-                  clienteId: Number(c.id),
-                  divisionId: Number(d.id),
-                  contratoId: Number(co.id),
-                  corpoId: Number(s.id),
-                  puestoId: Number(found.id),
-                };
-              }
-            }
-          }
-        }
-      }
-      return null;
-    },
-    [structure]
+    (targetPuestoId?: number | null): HierarchyPath | null =>
+      resolveByPuestoIdInTree(structure, targetPuestoId),
+    [structure],
   );
 
   const applyFormHierarchy = useCallback((path: HierarchyPath | null) => {
@@ -820,22 +1122,28 @@ export default function ApreciacionVulnerabilidadScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora de acción');
       return;
     }
-    console.log('horaAccion', horaAccion);
     resetForm(horaAccion);
     setEditing(null);
     setIsCreating(true);
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (currentMarcaStr) {
       const current = JSON.parse(currentMarcaStr);
+      let tree: MainStructureEmpresa[] = structure;
+      if (!Array.isArray(tree) || tree.length === 0) {
+        const loaded = await loadMainStructureTreeMerged().catch(() => []);
+        tree = Array.isArray(loaded) ? (loaded as MainStructureEmpresa[]) : [];
+        if (tree.length > 0) setStructure(tree);
+      }
       const marcaPuestoId = current?.puesto?.id != null ? Number(current.puesto.id) : null;
-      const byPuesto = resolveByPuestoId(marcaPuestoId);
+      const byPuesto = resolveByPuestoIdInTree(tree, marcaPuestoId);
       if (byPuesto) {
         applyFormHierarchy(byPuesto);
       } else {
+        const divisionResolved = resolveMarcaDivisionForTree(current, tree);
         applyFormHierarchy({
           empresaId: current?.empresa?.id != null ? Number(current.empresa.id) : null,
           clienteId: current?.cliente?.id != null ? Number(current.cliente.id) : null,
-          divisionId: getMarcaRoleDivisionId(current),
+          divisionId: divisionResolved ?? getMarcaRoleDivisionId(current),
           contratoId: current?.contrato?.id != null ? Number(current.contrato.id) : null,
           corpoId: current?.corpo?.id != null ? Number(current.corpo.id) : null,
           puestoId: marcaPuestoId,
@@ -951,20 +1259,37 @@ export default function ApreciacionVulnerabilidadScreen() {
     return true;
   };
 
-  const buildPayload = () => ({
-    // validateForm() garantiza que no son null
-    cliente_id: clienteId!,
-    corpo_id: corpoId!,
-    puesto_id: puestoId!,
-    fecha: fecha.toISOString(),
-    enlace,
-    nombre_solicitante: nombreSolicitante,
-    boleta: JSON.stringify(boleta),
-    metricas_vulnerablidad: JSON.stringify(metricas),
-    observaciones,
-    firma_solicitante: firmaSolicitante,
-    firma_responsable: firmaResponsable,
-  });
+  const buildPayload = async () => {
+    const boletaImagesMeta = boleta.flatMap((section) =>
+      (section.items || [])
+        .filter((it) => it?.image?.localFileName)
+        .map((it) => ({
+          localFileName: String(it.image?.localFileName || ''),
+          uri: String(it.image?.url || ''),
+          original_name: it.id,
+        }))
+    );
+    return {
+      empresa_id: empresaId!,
+      cliente_id: clienteId!,
+      division_id: divisionId!,
+      contrato_id: contratoId!,
+      corpo_id: corpoId!,
+      puesto_id: puestoId!,
+      fecha: fecha.toISOString(),
+      enlace,
+      nombre_solicitante: nombreSolicitante,
+      boleta: JSON.stringify(boleta),
+      metricas_vulnerablidad: JSON.stringify(metricas),
+      observaciones,
+      firma_solicitante: firmaSolicitante,
+      firma_responsable: firmaResponsable,
+      imagenes: await buildApreciacionImagenesJsonForUpload({
+        meta: stripApreciacionImagesForActionPayload(boletaImagesMeta),
+      }),
+      apreciacion_images_meta: stripApreciacionImagesForActionPayload(boletaImagesMeta),
+    };
+  };
 
   const handleSave = async () => {
     if (!employee) return;
@@ -974,17 +1299,45 @@ export default function ApreciacionVulnerabilidadScreen() {
     setSubmitResponse(null);
 
     try {
-      const payload = buildPayload();
+      const payload = await buildPayload();
       const isConnected = await getConnectionStatus();
 
       if (!editing) {
         if (isConnected) {
           const res = await createApreciacionVulnerabilidad({ requestData: payload, refreshAccessToken, logout });
           if (res.status) {
+            await deleteApreciacionLocalFilesFromMeta(payload.apreciacion_images_meta || []);
+            const rawId = (res as any).id ?? (res as any).data?.id;
+            const newId = Number(rawId);
+            if (Number.isFinite(newId)) {
+              const all = await readApreciacionVulnerabilidadCacheFull();
+              const row: VulnUI = {
+                id: newId,
+                id_local: '',
+                empresa_id: payload.empresa_id,
+                cliente_id: payload.cliente_id,
+                division_id: payload.division_id,
+                contrato_id: payload.contrato_id,
+                corpo_id: payload.corpo_id,
+                puesto_id: payload.puesto_id,
+                fecha: payload.fecha,
+                enlace: payload.enlace,
+                nombre_solicitante: payload.nombre_solicitante,
+                boleta: payload.boleta,
+                metricas_vulnerablidad: payload.metricas_vulnerablidad,
+                observaciones: payload.observaciones,
+                firma_solicitante: payload.firma_solicitante,
+                firma_responsable: payload.firma_responsable,
+              };
+              const without = all.filter((x) => Number(x.id) !== newId);
+              const mergedAll = [row, ...without];
+              await writeApreciacionVulnerabilidadCacheFull(mergedAll);
+              setItems(sliceApreciacionItemsForCorpo(mergedAll, filterCorpoIdRef.current));
+            }
             Alert.alert('Éxito', res.message || 'Registro creado correctamente');
             setTimeout(async () => {
               setIsCreating(false);
-              await fetchItems();
+              await fetchItemsRef.current();
             }, 2000);
           } else {
             Alert.alert('Error', res.message || 'No se pudo crear');
@@ -994,7 +1347,10 @@ export default function ApreciacionVulnerabilidadScreen() {
           const localItem: VulnUI = {
             id: 0,
             id_local: localId,
+            empresa_id: payload.empresa_id,
             cliente_id: clienteId || 0,
+            division_id: payload.division_id,
+            contrato_id: payload.contrato_id,
             corpo_id: corpoId || 0,
             puesto_id: puestoId || 0,
             fecha: payload.fecha,
@@ -1006,40 +1362,51 @@ export default function ApreciacionVulnerabilidadScreen() {
             firma_solicitante: payload.firma_solicitante,
             firma_responsable: payload.firma_responsable,
           };
-          const next = [localItem, ...items];
-          setItems(next);
-          await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+          const all = await readApreciacionVulnerabilidadCacheFull();
+          const mergedAll = [localItem, ...all];
+          await writeApreciacionVulnerabilidadCacheFull(mergedAll);
+          setItems(sliceApreciacionItemsForCorpo(mergedAll, filterCorpoIdRef.current));
           await upsertAction({ type: 'create', id: localId, requestData: payload });
           Alert.alert('Éxito', 'Se sincronizará cuando vuelva la conexión.');
           setTimeout(async () => {
             setIsCreating(false);
-            await fetchItems();
+            await fetchItemsRef.current();
           }, 2000);
         }
         return;
       }
 
-      const isLocal = !!editing.id_local || editing.id === 0;
+      const isLocal = apreciacionItemIsPendingLocal(editing);
       if (isConnected && !isLocal) {
         const res = await updateApreciacionVulnerabilidad({ id: editing.id, requestData: payload, refreshAccessToken, logout });
         if (res.status) {
+          await deleteApreciacionLocalFilesFromMeta(payload.apreciacion_images_meta || []);
+          const all = await readApreciacionVulnerabilidadCacheFull();
+          const updated = all.map((it) =>
+            Number(it.id) === Number(editing.id) ? { ...it, ...payload, id: editing.id } : it
+          );
+          await writeApreciacionVulnerabilidadCacheFull(updated);
+          setItems(sliceApreciacionItemsForCorpo(updated, filterCorpoIdRef.current));
           Alert.alert('Éxito', res.message || 'Registro actualizado correctamente');
           setTimeout(async () => {
             setIsCreating(false);
             setEditing(null);
-            await fetchItems();
+            await fetchItemsRef.current();
           }, 2000);
         } else {
           Alert.alert('Error', res.message || 'No se pudo actualizar');
         }
       } else {
-        const next = items.map((it) => {
-          const match = (editing.id_local && it.id_local === editing.id_local) || (!editing.id_local && it.id === editing.id);
+        const all = await readApreciacionVulnerabilidadCacheFull();
+        const next = all.map((it) => {
+          const match =
+            (editing.id_local && it.id_local === editing.id_local) ||
+            (!editing.id_local && Number(it.id) === Number(editing.id));
           if (!match) return it;
           return { ...it, ...payload };
         });
-        setItems(next);
-        await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+        await writeApreciacionVulnerabilidadCacheFull(next);
+        setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
 
         if (editing.id_local) {
           const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
@@ -1062,7 +1429,7 @@ export default function ApreciacionVulnerabilidadScreen() {
         setTimeout(async () => {
           setIsCreating(false);
           setEditing(null);
-          await fetchItems();
+          await fetchItemsRef.current();
         }, 2000);
       }
     } catch (error) {
@@ -1097,26 +1464,63 @@ export default function ApreciacionVulnerabilidadScreen() {
           setDeletingId(currentId);
           const isConnected = await getConnectionStatus();
           try {
-            if (it.id_local || it.id === 0) {
-              const next = items.filter((x) => x.id_local !== it.id_local);
-              setItems(next);
-              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+            if (apreciacionItemIsPendingLocal(it)) {
+              await deleteApreciacionLocalFilesFromMeta(extractLocalImagesMetaFromBoletaJson(it.boleta));
+              const all = await readApreciacionVulnerabilidadCacheFull();
+              const next = it.id_local
+                ? all.filter((x) => x.id_local !== it.id_local)
+                : all.filter(
+                    (x) =>
+                      !(
+                        Number(x.id) === 0 &&
+                        !x.id_local &&
+                        Number(x.corpo_id) === Number(it.corpo_id) &&
+                        String(x.fecha) === String(it.fecha) &&
+                        String(x.enlace) === String(it.enlace)
+                      )
+                  );
+              await writeApreciacionVulnerabilidadCacheFull(next);
+              setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
               if (it.id_local) await removeActionsForLocalId(it.id_local);
-              await fetchItems();
+              if (it.id && Number(it.id) > 0) {
+                const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+                if (actionsStr) {
+                  const actions = JSON.parse(actionsStr);
+                  const filtered = (Array.isArray(actions) ? actions : []).filter(
+                    (a: any) => !(a.type === 'update_solicitante_firma' && Number(a.id) === Number(it.id))
+                  );
+                  await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(filtered));
+                }
+              }
+              await fetchItemsRef.current();
               return;
             }
 
             if (isConnected) {
               const res = await deleteApreciacionVulnerabilidad({ id: it.id, refreshAccessToken, logout });
-              if (res.status) await fetchItems();
-              else Alert.alert('Error', res.message || 'No se pudo eliminar');
+              if (res.status) {
+                await deleteApreciacionLocalFilesFromMeta(extractLocalImagesMetaFromBoletaJson(it.boleta));
+                const all = await readApreciacionVulnerabilidadCacheFull();
+                const next = all.filter((x) => Number(x.id) !== Number(it.id));
+                await writeApreciacionVulnerabilidadCacheFull(next);
+                setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
+                await fetchItemsRef.current();
+              } else Alert.alert('Error', res.message || 'No se pudo eliminar');
             } else {
-              const next = items.filter((x) => x.id !== it.id);
-              setItems(next);
-              await AsyncStorage.setItem('apreciacion_vulnerabilidad_cache', JSON.stringify(next));
+              await deleteApreciacionLocalFilesFromMeta(extractLocalImagesMetaFromBoletaJson(it.boleta));
+              const all = await readApreciacionVulnerabilidadCacheFull();
+              const next = all.filter((x) => Number(x.id) !== Number(it.id));
+              await writeApreciacionVulnerabilidadCacheFull(next);
+              setItems(sliceApreciacionItemsForCorpo(next, filterCorpoIdRef.current));
+              const actionsStr = await AsyncStorage.getItem('apreciacion_vulnerabilidad_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              const cleaned = (Array.isArray(actions) ? actions : []).filter(
+                (a: any) => !(a.type === 'update_solicitante_firma' && Number(a.id) === Number(it.id))
+              );
+              await AsyncStorage.setItem('apreciacion_vulnerabilidad_actions', JSON.stringify(cleaned));
               await upsertAction({ type: 'delete', id: it.id });
               Alert.alert('Eliminado (offline)', 'Se sincronizará cuando vuelva la conexión.');
-              await fetchItems();
+              await fetchItemsRef.current();
             }
           } finally {
             setDeletingId((prev) => (prev === currentId ? null : prev));
@@ -1124,6 +1528,54 @@ export default function ApreciacionVulnerabilidadScreen() {
         },
       },
     ]);
+  };
+
+  const removeImageFromSavedBoleta = async (
+    row: VulnUI,
+    sectionKey: string,
+    itemId: string,
+    imageId: number
+  ) => {
+    const isConnected = await getConnectionStatus();
+    if (isConnected && !apreciacionItemIsPendingLocal(row)) {
+      const res = await deleteApreciacionVulnerabilidadImage({
+        boletaId: Number(row.id),
+        imageId,
+        refreshAccessToken,
+        logout,
+      });
+      if (!res.status) {
+        Alert.alert('Error', res.message || 'No se pudo eliminar la imagen');
+        return;
+      }
+    } else if (!apreciacionItemIsPendingLocal(row)) {
+      await upsertAction({ type: 'delete_file', id: Number(row.id), fileId: Number(imageId) });
+    }
+
+    const all = await readApreciacionVulnerabilidadCacheFull();
+    const updated = all.map((it) => {
+      if (Number(it.id) !== Number(row.id) && String(it.id_local || '') !== String(row.id_local || '')) return it;
+      try {
+        const parsed = JSON.parse(String(it.boleta || '[]'));
+        if (!Array.isArray(parsed)) return it;
+        const nextBoleta = parsed.map((s: any) => {
+          if (String(s?.key) !== String(sectionKey)) return s;
+          const items = Array.isArray(s?.items) ? s.items : [];
+          return {
+            ...s,
+            items: items.map((q: any) => {
+              if (String(q?.id) !== String(itemId)) return q;
+              return { ...q, image: null };
+            }),
+          };
+        });
+        return { ...it, boleta: JSON.stringify(nextBoleta) };
+      } catch {
+        return it;
+      }
+    });
+    await writeApreciacionVulnerabilidadCacheFull(updated);
+    setItems(sliceApreciacionItemsForCorpo(updated, filterCorpoIdRef.current));
   };
 
   // UI boleta helpers
@@ -1138,6 +1590,72 @@ export default function ApreciacionVulnerabilidadScreen() {
           }
       )
     );
+  };
+
+  const setAnswerDescription = (sectionKey: string, itemId: string, description: string) => {
+    setBoleta((prev) =>
+      prev.map((s) =>
+        s.key !== sectionKey
+          ? s
+          : {
+            ...s,
+            items: s.items.map((it) => (it.id === itemId ? { ...it, description } : it)),
+          }
+      )
+    );
+  };
+
+  const setAnswerImage = (sectionKey: string, itemId: string, image: BoletaItem['image']) => {
+    setBoleta((prev) =>
+      prev.map((s) =>
+        s.key !== sectionKey
+          ? s
+          : {
+            ...s,
+            items: s.items.map((it) => (it.id === itemId ? { ...it, image } : it)),
+          }
+      )
+    );
+  };
+
+  const openBoletaCamera = async (sectionKey: string, itemId: string) => {
+    if (!permission?.granted) {
+      const res = await requestPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso requerido', 'Debes permitir acceso a la cámara.');
+        return;
+      }
+    }
+    setCameraTarget({ sectionKey, itemId });
+    setIsCameraVisible(true);
+  };
+
+  const takeBoletaPicture = async () => {
+    if (!cameraRef.current || !cameraTarget) return;
+    try {
+      const photo: any = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        base64: false,
+      });
+      if (!photo?.uri) return;
+      const localFileName = await saveFile({
+        uri: photo.uri,
+        originalName: `apreciacion-vuln-${Date.now()}`,
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'apreciacion_vuln',
+      });
+      setAnswerImage(cameraTarget.sectionKey, cameraTarget.itemId, {
+        localFileName,
+        url: photo.uri,
+        original_name: `boleta-${cameraTarget.sectionKey}-${cameraTarget.itemId}`,
+      });
+      setIsCameraVisible(false);
+      setCameraTarget(null);
+    } catch (e) {
+      console.error('Error capturando imagen de boleta:', e);
+      Alert.alert('Error', 'No se pudo capturar la imagen');
+    }
   };
 
   const setVulnerabilityLevel = (level: VulnerabilityLevel) => {
@@ -1194,19 +1712,18 @@ export default function ApreciacionVulnerabilidadScreen() {
     setFilterDivisionId(null);
     setFilterContratoId(null);
     setFilterCorpoId(null);
+    fetchItemsRef.current({ filterCorpoId: null });
   };
 
-  /** El listado solo se acota por sucursal (corpo): picker o marca actual. Sin sucursal, no se muestran registros. */
+  /** `items` ya está acotado por sucursal (fetchItems / caché). Aquí solo texto de búsqueda. */
   const filtered = useMemo(() => {
-    if (filterCorpoId == null) return [];
     const q = filterSearch.trim().toLowerCase();
     return items.filter((it) => {
-      if (Number(it.corpo_id) !== Number(filterCorpoId)) return false;
       if (!q) return true;
       const hay = `${it.enlace || ''} ${it.nombre_solicitante || ''} ${it.observaciones || ''}`.toLowerCase();
       return hay.includes(q);
     });
-  }, [items, filterSearch, filterCorpoId]);
+  }, [items, filterSearch]);
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggleExpanded = (key: string) => {
@@ -1479,11 +1996,25 @@ export default function ApreciacionVulnerabilidadScreen() {
 
             <ThemedText style={styles.sectionTitle}>Firma solicitante</ThemedText>
             {it.firma_solicitante ? (
-              <ThemedView style={styles.signaturePreviewContainer}>
-                <Image source={{ uri: it.firma_solicitante }} style={styles.signaturePreview} resizeMode="contain" />
-              </ThemedView>
+              <>
+                <ThemedView style={styles.signaturePreviewContainer}>
+                  <Image source={{ uri: it.firma_solicitante }} style={styles.signaturePreview} resizeMode="contain" />
+                </ThemedView>
+                {false && (
+                  <TouchableOpacity style={styles.signatureActionButton} onPress={() => openListFirmaSolicitanteModal(it)}>
+                    <Ionicons name="create-outline" size={16} color="#007AFF" />
+                    <ThemedText style={styles.signatureActionButtonText}>Cambiar firma</ThemedText>
+                  </TouchableOpacity>
+                )}
+              </>
             ) : (
-              <ThemedText style={styles.signatureHintMuted}>Aún no hay firma solicitante.</ThemedText>
+              <>
+                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma solicitante.</ThemedText>
+                <TouchableOpacity style={styles.signatureActionButton} onPress={() => openListFirmaSolicitanteModal(it)}>
+                  <Ionicons name="add-circle-outline" size={16} color="#007AFF" />
+                  <ThemedText style={styles.signatureActionButtonText}>Añadir firma solicitante</ThemedText>
+                </TouchableOpacity>
+              </>
             )}
           </ThemedView>
         )}
@@ -1517,6 +2048,53 @@ export default function ApreciacionVulnerabilidadScreen() {
                       <ThemedText style={styles.boletaResultValue}>
                         {q.answer === 'si' ? 'Sí' : q.answer === 'no' ? 'No' : 'Sin responder'}
                       </ThemedText>
+                      {q.description ? (
+                        <ThemedText style={styles.signatureHintMuted}>Descripción: {q.description}</ThemedText>
+                      ) : null}
+                      {(() => {
+                        const serverImage = (Array.isArray(it.images) ? it.images : []).find(
+                          (img: any) => String(img?.original_name || '') === String(q.id)
+                        );
+                        const apiBase = Constants.expoConfig?.extra?.API_SERVER;
+                        const endpointGetImage =
+                          apiBase && serverImage?.name
+                            ? `${apiBase}/api/apreciacion-vulnerabilidad/${it.id}/get-image/${encodeURIComponent(String(serverImage.name))}`
+                            : '';
+                        const imageUri = endpointGetImage
+                          ? appendTokenToUrl(endpointGetImage) // Fuerza endpoint get-image del módulo + token
+                          : serverImage?.url
+                            ? appendTokenToUrl(String(serverImage.url))
+                          : q.image?.url
+                            ? String(q.image.url)
+                            : '';
+                        if (!imageUri) return null;
+                        return (
+                        <ThemedView style={[styles.signaturePreviewContainer, { marginTop: 8 }]}>
+                          <Image source={{ uri: imageUri }} style={styles.signaturePreview} resizeMode="cover" />
+                          {false && (
+                            <TouchableOpacity
+                              style={styles.removeSignatureButton}
+                              onPress={() => {
+                                Alert.alert('Confirmar', '¿Deseas eliminar este archivo?', [
+                                  { text: 'Cancelar', style: 'cancel' },
+                                  {
+                                    text: 'Eliminar',
+                                    style: 'destructive',
+                                    onPress: () => {
+                                      const imageId = Number(serverImage?.id || q.image?.id || 0);
+                                      if (!imageId) return;
+                                      void removeImageFromSavedBoleta(it, section.key, q.id, imageId);
+                                    },
+                                  },
+                                ]);
+                              }}
+                            >
+                              <Ionicons name="trash" size={18} color="#FFFFFF" />
+                            </TouchableOpacity>
+                          )}
+                        </ThemedView>
+                        );
+                      })()}
                     </ThemedView>
                   ))}
                 </ThemedView>
@@ -1526,10 +2104,12 @@ export default function ApreciacionVulnerabilidadScreen() {
         )}
 
         <ThemedView style={styles.rowButtons}>
-          <TouchableOpacity style={[styles.rowButton, styles.editButton]} onPress={() => startEditing(it)}>
-            <Ionicons name="pencil" size={18} color="#FFFFFF" />
-            <ThemedText style={styles.rowButtonText}>Editar</ThemedText>
-          </TouchableOpacity>
+          {false && (
+            <TouchableOpacity style={[styles.rowButton, styles.editButton]} onPress={() => startEditing(it)}>
+              <Ionicons name="pencil" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.rowButtonText}>Editar</ThemedText>
+            </TouchableOpacity>
+          )}
           {!(it.id_local || it.id === 0) && (
             <TouchableOpacity
               style={[styles.rowButton, styles.changesButton]}
@@ -1629,10 +2209,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
+                          fetchItemsRef.current({ filterCorpoId: null });
                         }}
                       >
                         <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
-                        {empresas.map((o) => (
+                        {empresas.map((o: HierarchyPickerOption) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
@@ -1654,10 +2235,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(null);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
+                          fetchItemsRef.current({ filterCorpoId: null });
                         }}
                       >
                         <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
-                        {filterClientes.map((o) => (
+                        {filterClientes.map((o: HierarchyPickerOption) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
@@ -1678,10 +2260,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                           setFilterDivisionId(id === PICKER_NONE ? null : id);
                           setFilterContratoId(null);
                           setFilterCorpoId(null);
+                          fetchItemsRef.current({ filterCorpoId: null });
                         }}
                       >
                         <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
-                        {filterDivisiones.map((o) => (
+                        {filterDivisiones.map((o: HierarchyPickerOption) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
@@ -1701,10 +2284,11 @@ export default function ApreciacionVulnerabilidadScreen() {
                           const id = Number(val) || 0;
                           setFilterContratoId(id === PICKER_NONE ? null : id);
                           setFilterCorpoId(null);
+                          fetchItemsRef.current({ filterCorpoId: null });
                         }}
                       >
                         <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
-                        {filterContratos.map((o) => (
+                        {filterContratos.map((o: HierarchyPickerOption) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
@@ -1722,11 +2306,13 @@ export default function ApreciacionVulnerabilidadScreen() {
                         selectedValue={filterCorpoId ?? PICKER_NONE}
                         onValueChange={(val) => {
                           const id = Number(val) || 0;
-                          setFilterCorpoId(id === PICKER_NONE ? null : id);
+                          const nextCorpo = id === PICKER_NONE ? null : id;
+                          setFilterCorpoId(nextCorpo);
+                          fetchItemsRef.current({ filterCorpoId: nextCorpo });
                         }}
                       >
                         <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
-                        {filterCorpos.map((o) => (
+                        {filterCorpos.map((o: HierarchyPickerOption) => (
                           <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                         ))}
                       </Picker>
@@ -1780,7 +2366,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
-                    {empresas.map((o) => (
+                    {empresas.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1804,7 +2390,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
-                    {clientes.map((o) => (
+                    {clientes.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1827,7 +2413,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
-                    {divisiones.map((o) => (
+                    {divisiones.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1849,7 +2435,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
-                    {contratos.map((o) => (
+                    {contratos.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1870,7 +2456,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
-                    {corpos.map((o) => (
+                    {corpos.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1890,7 +2476,7 @@ export default function ApreciacionVulnerabilidadScreen() {
                     }}
                   >
                     <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} color="#000000" />
-                    {puestos.map((o) => (
+                    {puestos.map((o: HierarchyPickerOption) => (
                       <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
                     ))}
                   </Picker>
@@ -1957,6 +2543,43 @@ export default function ApreciacionVulnerabilidadScreen() {
                             ) : (
                               <View style={styles.trashTinyPlaceholder} />
                             )}
+                          </ThemedView>
+                          <ThemedView style={{ marginTop: 8 }}>
+                            <TextInput
+                              style={[styles.input, { marginBottom: 8 }]}
+                              placeholder="Descripción opcional..."
+                              placeholderTextColor="#999"
+                              value={bi.description || ''}
+                              onChangeText={(t) => setAnswerDescription(section.key, bi.id, t)}
+                            />
+                            <TouchableOpacity
+                              style={[styles.openSignatureButton, { marginTop: 0 }]}
+                              onPress={() => openBoletaCamera(section.key, bi.id)}
+                            >
+                              <Ionicons name="camera" size={18} color="#000000" />
+                              <ThemedText style={styles.openSignatureButtonText}>
+                                {bi.image?.localFileName || bi.image?.url ? 'Cambiar foto opcional' : 'Tomar foto opcional'}
+                              </ThemedText>
+                            </TouchableOpacity>
+                            {bi.image?.localFileName || bi.image?.url ? (
+                              <ThemedView style={[styles.signaturePreviewContainer, { marginTop: 8 }]}>
+                                <Image
+                                  source={{
+                                    uri: bi.image?.localFileName
+                                      ? getLocalFileDisplayUri(String(bi.image.localFileName))
+                                      : String(bi.image?.url || ''),
+                                  }}
+                                  style={styles.signaturePreview}
+                                  resizeMode="cover"
+                                />
+                                <TouchableOpacity
+                                  style={styles.removeSignatureButton}
+                                  onPress={() => setAnswerImage(section.key, bi.id, null)}
+                                >
+                                  <Ionicons name="trash" size={18} color="#FFFFFF" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ) : null}
                           </ThemedView>
                         </ThemedView>
                       ))}
@@ -2156,6 +2779,36 @@ export default function ApreciacionVulnerabilidadScreen() {
           }}
         />
       )}
+
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => {
+          setIsCameraVisible(false);
+          setCameraTarget(null);
+        }}
+      >
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back">
+            <View style={styles.cameraTopBar}>
+              <TouchableOpacity
+                style={styles.cameraCancelButton}
+                onPress={() => {
+                  setIsCameraVisible(false);
+                  setCameraTarget(null);
+                }}
+              >
+                <Ionicons name="close" size={26} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.cameraBottomBar}>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={takeBoletaPicture}>
+                <Ionicons name="camera" size={34} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </CameraView>
+        </View>
+      </Modal>
 
       {/* Modal firma solicitante */}
       <Modal visible={isSignatureModalVisible} animationType="fade" transparent presentationStyle="overFullScreen" onRequestClose={closeFirmaSolicitanteModal}>
@@ -2375,6 +3028,12 @@ export default function ApreciacionVulnerabilidadScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  cameraContainer: { flex: 1, backgroundColor: '#000000' },
+  camera: { flex: 1, justifyContent: 'space-between' },
+  cameraTopBar: { paddingTop: 50, paddingHorizontal: 16, alignItems: 'flex-end' },
+  cameraBottomBar: { paddingBottom: 40, alignItems: 'center' },
+  cameraCancelButton: { width: 42, height: 42, borderRadius: 21, backgroundColor: 'rgba(0,0,0,0.45)', alignItems: 'center', justifyContent: 'center' },
+  cameraCaptureButton: { width: 72, height: 72, borderRadius: 36, borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.35)' },
   scrollView: { flex: 1 },
   scrollContent: { padding: 16 },
   content: { width: '100%', maxWidth: 900, alignSelf: 'center' },
@@ -2618,6 +3277,18 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   openSignatureButtonText: { fontWeight: '800', color: '#000' },
+  signatureActionButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  signatureActionButtonText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
 
   // Firma responsable (alineado con StaffEvaluationsScreen)
   formGroup: { marginBottom: 16 },

@@ -19,33 +19,42 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const evaluaciones = await callDynamicPrisma({
             req,
-            data: { action: "GET", table: "c_evaluacion_empleado", operation: "findMany", where: { corpo_id: corpo.id } }
+            data: { action: "GET", table: "c_evaluacion_empleado", operation: "findMany", where: { corpo_id: corpo.id, isActive: true } }
         });
 
         const evaluaciones_return: {
-            id: number,
+            id: number;
             empleado: {
-                id: number,
-                nombre: string,
-                cedula: string,
-            },
+                id: number;
+                nombre: string;
+                cedula: string;
+            };
             evaluador: {
-                id: number,
-                nombre: string,
-                cedula: string,
-            },
-            fecha_ingreso: string,
-            fecha_evaluacion: string,
-            evaluacion: string,
-            comentarios: string,
-            firma_evaluador: string,
-            firma_empleado: string | null,
-            firma_empleado_manual: string | null,
-            tipo: string,
-            id_local: string
+                id: number;
+                nombre: string;
+                cedula: string;
+            };
+            fecha_ingreso: string;
+            fecha_evaluacion: string;
+            evaluacion: string;
+            comentarios: string;
+            firma_evaluador: string;
+            firma_empleado: string | null;
+            firma_empleado_manual: string | null;
+            tipo: string;
+            id_local: string;
+            empresa_id: number | null;
+            cliente_id: number | null;
+            division_id: number | null;
+            contrato_id: number | null;
+            corpo_id: number | null;
+            puesto_id: number | null;
+            plaza_id: number | null;
+            isActive: boolean;
         }[] = [];
 
         for (const evaluacion of evaluaciones) {
+            if (evaluacion && evaluacion.isActive === false) continue;
             const empleado = await callDynamicPrisma({
                 req,
                 data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: evaluacion.empleado_id } }
@@ -72,7 +81,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 firma_empleado: evaluacion.firma_empleado ?? null,
                 firma_empleado_manual: evaluacion.firma_empleado_manual ?? null,
                 tipo: evaluacion.tipo,
-                id_local: ""
+                id_local: "",
+                empresa_id: evaluacion.empresa_id,
+                cliente_id: evaluacion.cliente_id,
+                division_id: evaluacion.division_id,
+                contrato_id: evaluacion.contrato_id,
+                corpo_id: evaluacion.corpo_id,
+                puesto_id: evaluacion.puesto_id,
+                plaza_id: evaluacion.plaza_id,
+                isActive: evaluacion.isActive !== false,
             });
         }
         return NextResponse.json({ status: true, evaluaciones: evaluaciones_return }, { status: 200 });

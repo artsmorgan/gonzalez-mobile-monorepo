@@ -22,6 +22,7 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import { Collapsible } from '@/components/Collapsible';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -254,12 +255,6 @@ export default function EntregaPuestosScreen() {
     return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
   };
 
-  const generateRandomMaintenanceId = (): number => {
-    const ts = Date.now();
-    const rand = Math.floor(Math.random() * 1000000);
-    return Number(`${ts}${rand}`);
-  };
-
   /**
    * Sincroniza las actividades en activities_cache (solo revisión de equipo)
    * con el último estado de los artículos del puesto actual.
@@ -316,15 +311,12 @@ export default function EntregaPuestosScreen() {
   };
 
   /**
-   * Actualiza en main_structure_cache el último mantenimiento de los artículos del puesto actual
-   * usando el estado recién guardado en el formulario de entrega de puestos.
+   * Actualiza el último mantenimiento de los artículos del puesto tras confirmar la entrega.
+   * Con esquema de fragmentos: escribe `puesto_{id}_articulos`; si no, mergea el árbol y persiste el monolito.
    */
   const updateMainStructureCacheWithEntrega = async (options?: { enqueueActions?: boolean }) => {
     try {
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
-      if (!cacheStr) return;
-      const parsed: any = JSON.parse(cacheStr);
-      if (!Array.isArray(parsed) || !currentMarca || !Array.isArray(articulos) || articulos.length === 0) {
+      if (!currentMarca || !Array.isArray(articulos) || articulos.length === 0) {
         return;
       }
       const shouldEnqueueActions = Boolean(options?.enqueueActions);
@@ -362,176 +354,31 @@ export default function EntregaPuestosScreen() {
         }
       };
 
-      const updated = parsed.map((empresa: any) => {
-        if (!empresa?.clientes) return empresa;
-        return {
-          ...empresa,
-          clientes: empresa.clientes.map((cliente: any) => {
-            if (!cliente?.division) return cliente;
-            return {
-              ...cliente,
-              division: cliente.division.map((division: any) => {
-                if (!division?.contratos) return division;
-                return {
-                  ...division,
-                  contratos: division.contratos.map((contrato: any) => {
-                    if (!contrato?.sucursales) return contrato;
-                    return {
-                      ...contrato,
-                      sucursales: contrato.sucursales.map((sucursal: any) => {
-                        if (!sucursal?.puestos) return sucursal;
-                        return {
-                          ...sucursal,
-                          puestos: sucursal.puestos.map((puesto: any) => {
-                            if (!puesto || puesto.id !== puestoId || !Array.isArray(puesto.articulos)) {
-                              return puesto;
-                            }
+      const enqueueFn = shouldEnqueueActions
+        ? (p: {
+            id: number;
+            requestData: Record<string, unknown>;
+            meta: { puestoId: number; source: 'plan' | 'asignado'; estructuraId: number | null };
+          }) => {
+            upsertAction({
+              type: 'update',
+              id: p.id,
+              requestData: p.requestData,
+              meta: p.meta,
+            });
+          }
+        : undefined;
 
-                            const articulosById = new Map<number, ArticuloForm>(
-                              articulos.map((a) => [a.id, a] as [number, ArticuloForm])
-                            );
-
-                            const updatedArticulos = puesto.articulos.map((art: any) => {
-                              const form = articulosById.get(Number(art.id));
-                              if (!form) return art;
-
-                              const existingUltimo = art.ultimo_mantenimiento && typeof art.ultimo_mantenimiento === 'object'
-                                ? { ...art.ultimo_mantenimiento }
-                                : null;
-                              const existingMaints = Array.isArray(art.mantenimientos) ? [...art.mantenimientos] : [];
-
-                              const isPlan = String(form.tipo || art.tipo || '').toLowerCase() === 'plan';
-                              const articuloEstructuraId = Number(form.id || art.id || 0) || null;
-                              const estadoActual = String(form.estado || 'Bueno');
-                              const lastEstado = String(existingUltimo?.estado || 'Bueno');
-                              const shouldCreate = estadoActual !== 'Bueno' && (existingUltimo == null || lastEstado === 'Bueno');
-                              const shouldUpdate =
-                                !shouldCreate &&
-                                existingUltimo != null &&
-                                ((estadoActual === 'Bueno' && lastEstado !== 'Bueno') || (estadoActual !== lastEstado));
-
-                              const newBasic = {
-                                id: generateRandomMaintenanceId(),
-                                articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                                articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                                estado: estadoActual,
-                                cantidad_necesaria: Number(form.cantidad_requerida || 0),
-                                cantidad_real: Number(form.cantidad_real || 0),
-                                observaciones: form.observaciones || '',
-                                fecha_solucion: null,
-                                accion: null,
-                                fecha_inicio: null,
-                                numero_boleta_proveeduria: null,
-                                tipo: null,
-                                marca: null,
-                                modelo: null,
-                                serie_placa: null,
-                                marca_nuevo: null,
-                                modelo_nuevo: null,
-                                serie_placa_nuevo: null,
-                                categoria: null,
-                                tipo_mantenimiento_art: null,
-                                fecha_salida: null,
-                                fecha_entrada: null,
-                                kilometraje: null,
-                                mant_armas_form: null,
-                                categoria_mantenimiento: null,
-                                detalle: null,
-                                numero_fc: null,
-                                proveedor: null,
-                                costo_mo: null,
-                                costo_i: null,
-                                iva: null,
-                                costo_total: null,
-                                fecha_fin: null,
-                                reincidencia_treinta_dias: null,
-                                tipo_mant_art_reincid: null,
-                                c_archivos_adjuntos_articulo_mantenimiento: [],
-                                created_at: horaAccion,
-                                updated_at: horaAccion,
-                                /** Opcional: indica que el registro se creó/actualizó desde Entrega de puestos */
-                                evaluacion_mantenimiento_origen: 'entrega_puestos' as const,
-                              };
-
-                              let nextUltimo: any = existingUltimo ? { ...existingUltimo } : { ...newBasic };
-                              let nextMantenimientos: any[] = [...existingMaints];
-
-                              if (shouldCreate) {
-                                nextUltimo = { ...newBasic };
-                                nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                              } else {
-                                nextUltimo = {
-                                  ...(existingUltimo ?? newBasic),
-                                  articulo_plan_id: isPlan ? articuloEstructuraId : null,
-                                  articulo_asignado_id: isPlan ? null : articuloEstructuraId,
-                                  estado: estadoActual,
-                                  cantidad_necesaria:
-                                    existingUltimo?.cantidad_necesaria != null
-                                      ? existingUltimo.cantidad_necesaria
-                                      : Number(form.cantidad_requerida || 0),
-                                  cantidad_real: Number(form.cantidad_real || 0),
-                                  observaciones: form.observaciones || '',
-                                  fecha_solucion: estadoActual === 'Bueno' ? horaAccion : null,
-                                  updated_at: horaAccion,
-                                  evaluacion_mantenimiento_origen: 'entrega_puestos' as const,
-                                };
-                                if (existingUltimo?.id) {
-                                  let replaced = false;
-                                  nextMantenimientos = nextMantenimientos.map((m: any) => {
-                                    if (Number(m?.id) !== Number(existingUltimo.id)) return m;
-                                    replaced = true;
-                                    return { ...m, ...nextUltimo };
-                                  });
-                                  if (!replaced) nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                                } else {
-                                  nextMantenimientos = [nextUltimo, ...nextMantenimientos];
-                                }
-
-                                if (shouldUpdate && existingUltimo?.id) {
-                                  upsertAction({
-                                    type: 'update',
-                                    id: existingUltimo.id,
-                                    requestData: {
-                                      estado: estadoActual,
-                                      cantidad_necesaria:
-                                        existingUltimo?.cantidad_necesaria != null
-                                          ? existingUltimo.cantidad_necesaria
-                                          : Number(form.cantidad_requerida || 0),
-                                      cantidad_real: Number(form.cantidad_real || 0),
-                                      observaciones: form.observaciones || '',
-                                      fecha_solucion: estadoActual === 'Bueno' ? horaAccion : null,
-                                      hora_accion: horaAccion,
-                                    },
-                                    meta: { puestoId, source: isPlan ? 'plan' : 'asignado', estructuraId: articuloEstructuraId },
-                                  });
-                                }
-                              }
-
-                              return {
-                                ...art,
-                                mantenimientos: nextMantenimientos,
-                                ultimo_mantenimiento: nextUltimo,
-                                ultimo_registro_mantenimiento: nextUltimo,
-                              };
-                            });
-
-                            return {
-                              ...puesto,
-                              articulos: updatedArticulos,
-                            };
-                          }),
-                        };
-                      }),
-                    };
-                  }),
-                };
-              }),
-            };
-          }),
-        };
+      const articulosById = new Map<number, ArticuloForm>(
+        articulos.map((a) => [a.id, a] as [number, ArticuloForm])
+      );
+      await rewritePuestoArticulosInMainStructure({
+        puestoId,
+        formsById: articulosById,
+        horaAccionMs: horaAccion,
+        origin: 'entrega_puestos',
+        enqueueUpdate: enqueueFn,
       });
-
-      await AsyncStorage.setItem('main_structure_cache', JSON.stringify(updated));
       if (shouldEnqueueActions) {
         await AsyncStorage.setItem(actionsKey, JSON.stringify(actionsArr));
       }
@@ -548,6 +395,7 @@ export default function EntregaPuestosScreen() {
   };
 
   const formatTime = (time: string | Date): string => {
+    if (!time) return 'No definido';
     if (typeof time === 'string') {
       // Si es un string de tiempo (HH:MM:SS o HH:MM)
       const parts = time.split(':');
@@ -686,6 +534,22 @@ export default function EntregaPuestosScreen() {
   useEffect(() => {
     loadData();
   }, []);
+
+  const isDateParsable = (value: string | Date | null | undefined): boolean => {
+    if (!value) return false;
+    if (typeof value === 'string') {
+      return value.includes('T');
+    }
+    return true;
+  };
+
+  const isTimeParsable = (value: string | Date | null | undefined): boolean => {
+    if (!value) return false;
+    if (typeof value === 'string') {
+      return value.includes(':');
+    }
+    return true;
+  };
 
   const formatDateOnly = (value: string | Date | null | undefined): string => {
     if (!value) return 'No definido';
@@ -886,7 +750,14 @@ export default function EntregaPuestosScreen() {
     }
   };
 
-  const calculateFechaSalida = (fecha: string, horaInicio: string, horaFin: string): string => {
+  const calculateFechaSalida = (
+    fecha: string,
+    horaInicio: string | null | undefined,
+    horaFin: string | null | undefined
+  ): string => {
+    if (!horaInicio || !horaFin) {
+      return 'Indeterminable';
+    }
     const fechaObj = new Date(fecha);
     // Comparar solo las horas, no las fechas completas
     const inicioParts = horaInicio.split(':');
@@ -956,16 +827,16 @@ export default function EntregaPuestosScreen() {
                 puesto_id: currentMarca.puesto.id,
                 division: currentMarca.roleDivision.division.id,
                 oficial_entrega: info.previous_employee.nombre,
-                fecha_entrada_entrega: fechaEntradaEntrega,
-                fecha_salida_entrega: fechaSalidaEntrega,
-                hora_entrada_entrega: horaEntradaEntrega,
-                hora_salida_entrega: horaSalidaEntrega,
+                fecha_entrada_entrega: isDateParsable(fechaEntradaEntrega) ? fechaEntradaEntrega : '1970-01-01',
+                fecha_salida_entrega: isDateParsable(fechaSalidaEntrega) ? fechaSalidaEntrega : '1970-01-01',
+                hora_entrada_entrega: isTimeParsable(horaEntradaEntrega) ? horaEntradaEntrega : '1970-01-01T00:00',
+                hora_salida_entrega: isTimeParsable(horaSalidaEntrega) ? horaSalidaEntrega : '1970-01-01T00:00',
                 turno_entrega: info.previous_marca.tipo_turno,
                 oficial_recibe: employee?.name || 'Desconocido',
-                fecha_entrada_recibe: fechaEntradaRecibe,
-                fecha_salida_recibe: fechaSalidaRecibe,
-                hora_entrada_recibe: horaEntradaRecibe,
-                hora_salida_recibe: horaSalidaRecibe,
+                fecha_entrada_recibe: isDateParsable(fechaEntradaRecibe) ? fechaEntradaRecibe : '1970-01-01',
+                fecha_salida_recibe: isDateParsable(fechaSalidaRecibe) ? fechaSalidaRecibe : '1970-01-01',
+                hora_entrada_recibe: isTimeParsable(horaEntradaRecibe) ? horaEntradaRecibe : '1970-01-01T00:00',
+                hora_salida_recibe: isTimeParsable(horaSalidaRecibe) ? horaSalidaRecibe : '1970-01-01T00:00',
                 turno_recibe: currentMarca.tipo_turno,
                 articulos_puesto: articulosPuesto,
                 observaciones: observaciones,
@@ -1103,22 +974,10 @@ export default function EntregaPuestosScreen() {
   }
 
   const fechaEntradaEntrega = info ? formatDate(info.previous_marca.fecha) : '';
-  const fechaSalidaEntrega = info
-    ? calculateFechaSalida(
-      info.previous_marca.fecha,
-      info.previous_marca.hora_inicio,
-      info.previous_marca.hora_fin
-    )
-    : '';
   const horaEntradaEntrega = info ? formatTime(info.previous_marca.hora_inicio) : '';
   const horaSalidaEntrega = info ? formatTime(info.previous_marca.hora_fin) : '';
 
   const fechaEntradaRecibe = formatDate(currentMarca.fecha);
-  const fechaSalidaRecibe = calculateFechaSalida(
-    currentMarca.fecha,
-    currentMarca.hora_inicio,
-    currentMarca.hora_fin
-  );
   const horaEntradaRecibe = formatTime(currentMarca.hora_inicio);
   const horaSalidaRecibe = formatTime(currentMarca.hora_fin);
 
@@ -1341,7 +1200,7 @@ export default function EntregaPuestosScreen() {
 
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              <Ionicons name="swap-horizontal" size={22} color="#000000" /> Entrega de Puestos
+              <Ionicons name="briefcase" size={22} color="#000000" /> Entrega de Puestos
             </ThemedText>
             <ThemedText style={styles.subtitle}>Registro de entrega y recepción de puestos</ThemedText>
           </ThemedView>

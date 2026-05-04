@@ -33,6 +33,14 @@ import { createVoiceNote as createVoiceNoteAPI, deleteVoiceNote as deleteVoiceNo
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import { readMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import {
+  filterVoiceNotesToPuestoFetchScope,
+  isPendingOfflineVoiceNoteCreate,
+  mergeVoiceNotesCacheForPuestoScope,
+  voiceNoteInPuestoFetchScope,
+} from '@/hooks/voiceNotesCacheHelpers';
+import { saveFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 
 type VoiceNotesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'VoiceNotes'>;
 
@@ -86,6 +94,9 @@ interface VoiceNote {
   created_at: string;
   created_by: number;
   nombre_firma: string;
+  isActive?: boolean;
+  /** Archivo de audio en documentos (offline / cola); prioridad sobre file_base64 al reproducir. */
+  local_audio_file?: string;
 }
 
 type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
@@ -135,6 +146,27 @@ function traceVoiceNoteInStructure(
               sucursalId: s.id,
               puestoId: resolvedPuesto,
             };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Primer puesto de una sucursal en el árbol (para filtro de lista cuando la nota no lleva puesto). */
+function getFirstPuestoIdInSucursalCorpo(
+  tree: MainStructureTree,
+  corpoId: number
+): number | null {
+  for (const e of tree) {
+    for (const c of e.clientes ?? []) {
+      for (const d of c.division ?? []) {
+        for (const co of d.contratos ?? []) {
+          for (const s of co.sucursales ?? []) {
+            if (Number(s.id) !== Number(corpoId)) continue;
+            const p0 = s.puestos?.[0];
+            return p0 != null && Number(p0.id) > 0 ? Number(p0.id) : null;
           }
         }
       }
@@ -280,48 +312,6 @@ function getMarcaPuestoIdFromJson(marca: any): number | null {
   return Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
-/**
- * Misma visibilidad que GET /api/voice-notes?corpo_id=&puesto_id= (con puesto > 0):
- * misma sucursal y la nota es de ese puesto o a nivel sucursal (sin puesto).
- */
-function voiceNoteInPuestoFetchScope(vn: VoiceNote, corpoId: number, puestoId: number): boolean {
-  if (Number(vn?.corpo?.id) !== Number(corpoId)) return false;
-  if (vn.puesto == null) return true;
-  return Number(vn.puesto?.id) === Number(puestoId);
-}
-
-function isPendingOfflineVoiceNoteCreate(vn: VoiceNote): boolean {
-  return Boolean(
-    vn?.id_local &&
-      String(vn.id_local) !== '' &&
-      (!Number.isFinite(Number(vn.id)) || Number(vn.id) === 0)
-  );
-}
-
-/** Sustituye en caché solo las notas del alcance (corpo+puesto); conserva otras jerarquías y borradores locales del alcance. */
-function mergeVoiceNotesCacheForPuestoScope(
-  previous: VoiceNote[],
-  corpoId: number,
-  puestoId: number,
-  fromApi: VoiceNote[]
-): VoiceNote[] {
-  const prev = Array.isArray(previous) ? previous : [];
-  const rest = prev.filter(
-    (v) =>
-      !voiceNoteInPuestoFetchScope(v, corpoId, puestoId) || isPendingOfflineVoiceNoteCreate(v)
-  );
-  return [...rest, ...fromApi];
-}
-
-function filterVoiceNotesToPuestoFetchScope(
-  cache: VoiceNote[],
-  corpoId: number,
-  puestoId: number
-): VoiceNote[] {
-  const arr = Array.isArray(cache) ? cache : [];
-  return arr.filter((v) => voiceNoteInPuestoFetchScope(v, corpoId, puestoId));
-}
-
 export default function VoiceNotesScreen() {
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -410,8 +400,13 @@ export default function VoiceNotesScreen() {
 
   // Audio players for list items - using Maps to store audio URIs
   const [audioUris, setAudioUris] = useState<Map<string, string>>(new Map());
+  const audioUrisRef = useRef<Map<string, string>>(new Map());
+  useEffect(() => {
+    audioUrisRef.current = audioUris;
+  }, [audioUris]);
   const [audioDurations, setAudioDurations] = useState<Map<string, number>>(new Map());
   const [resetFlags, setResetFlags] = useState<Map<string, boolean>>(new Map());
+  const [loadingAudioUris, setLoadingAudioUris] = useState<Set<string>>(() => new Set());
 
   // Filter states (texto)
   const [filterTitulo, setFilterTitulo] = useState('');
@@ -455,7 +450,7 @@ export default function VoiceNotesScreen() {
   const fetchMainStructure = useCallback(async () => {
     try {
       setIsStructureLoading(true);
-      const cacheStr = await AsyncStorage.getItem('main_structure_cache');
+      const cacheStr = await readMainStructureCacheString();
       if (cacheStr) {
         try {
           const cached = JSON.parse(cacheStr);
@@ -1217,6 +1212,12 @@ export default function VoiceNotesScreen() {
         requestData.structure_corpo_id = createSucursalId;
         requestData.structure_puesto_id =
           createPuestoId != null && createPuestoId > 0 ? createPuestoId : null;
+        if (createDivisionId != null && createDivisionId > 0) {
+          requestData.structure_division_id = createDivisionId;
+        }
+        if (createContratoId != null && createContratoId > 0) {
+          requestData.structure_contrato_id = createContratoId;
+        }
       }
 
       const hasConnection = await checkConnection();
@@ -1241,6 +1242,30 @@ export default function VoiceNotesScreen() {
       } else {
         const localId = `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
 
+        if (!recordedAudioUri) {
+          Alert.alert('Error', 'No se pudo guardar el audio (URI ausente).');
+          return;
+        }
+
+        let localAudioFileName: string;
+        try {
+          localAudioFileName = await saveFile({
+            uri: recordedAudioUri,
+            originalName: 'note',
+            extension: 'm4a',
+            type: 'audio',
+            prefix: 'voice_note',
+          });
+        } catch (e) {
+          console.error('voice note saveFile:', e);
+          Alert.alert('Error', 'No se pudo guardar el audio en el dispositivo');
+          return;
+        }
+
+        const requestDataForQueue: Record<string, unknown> = { ...requestData };
+        delete requestDataForQueue.file_base64;
+        requestDataForQueue.audio_local_file = localAudioFileName;
+
         const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
         if (!Array.isArray(actions)) actions = [];
@@ -1248,7 +1273,7 @@ export default function VoiceNotesScreen() {
           (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
         );
         actions.push({
-          requestData,
+          requestData: requestDataForQueue,
           marcaId,
           id: localId,
           type: 'create',
@@ -1302,7 +1327,9 @@ export default function VoiceNotesScreen() {
           firma_responsable: signatureHash,
           nombre_creator: employee?.name || '-',
           id_local: localId,
-          file_base64: recordedAudioBase64!,
+          file_base64: '',
+          local_audio_file: localAudioFileName,
+          isActive: true,
           created_at: new Date(horaAccion).toISOString(),
           created_by: (employee?.id || 0) as number,
           nombre_firma: firmaResponsable?.empleadoDetalle
@@ -1316,10 +1343,34 @@ export default function VoiceNotesScreen() {
 
         if (useHierarchy) {
           const cid = createSucursalId != null ? Number(createSucursalId) : 0;
-          const pid =
-            createPuestoId != null && createPuestoId > 0 ? Number(createPuestoId) : NaN;
-          if (cid > 0 && Number.isFinite(pid) && pid > 0) {
-            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(cacheArr, cid, pid));
+          const pidFromForm =
+            createPuestoId != null && createPuestoId > 0 ? Number(createPuestoId) : null;
+          const pidForList =
+            pidFromForm && pidFromForm > 0
+              ? pidFromForm
+              : (cid > 0 ? getFirstPuestoIdInSucursalCorpo(structure, cid) : null);
+
+          if (roleName !== 'OPERATIVO') {
+            if (createEmpresaId != null) setFilterEmpresaId(createEmpresaId);
+            if (createClienteId != null) setFilterClienteId(createClienteId);
+            if (createDivisionId != null) setFilterDivisionId(createDivisionId);
+            if (createContratoId != null) setFilterContratoId(createContratoId);
+            if (cid > 0) setFilterSucursalId(cid);
+            if (pidForList != null && pidForList > 0) {
+              setFilterPuestoId(pidForList);
+            }
+          }
+
+          if (cid > 0 && pidForList != null && pidForList > 0) {
+            setVoiceNotes(filterVoiceNotesToPuestoFetchScope(cacheArr, cid, pidForList));
+          } else if (cid > 0) {
+            setVoiceNotes(
+              cacheArr.filter(
+                (v) =>
+                  Number(v?.corpo?.id) === cid &&
+                  (isPendingOfflineVoiceNoteCreate(v) || (v as VoiceNote).isActive !== false)
+              )
+            );
           }
         } else {
           const cid =
@@ -1387,6 +1438,46 @@ export default function VoiceNotesScreen() {
 
       const hasConnection = await checkConnection();
 
+      if (voiceNote.local_audio_file) {
+        try {
+          await deleteFile(voiceNote.local_audio_file);
+        } catch {
+          /* idempotente */
+        }
+      }
+
+      const isLocalDraft =
+        id_local != null &&
+        String(id_local) !== '' &&
+        (!Number.isFinite(Number(voiceNoteId)) || Number(voiceNoteId) <= 0);
+
+      if (isLocalDraft) {
+        const actionsStr = await AsyncStorage.getItem('voice_notes_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        if (!Array.isArray(actions)) actions = [];
+        const filteredActions = actions.filter(
+          (a: any) => !(a?.type === 'create' && String(a?.id) === String(id_local))
+        );
+        await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(filteredActions));
+
+        const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const filteredCache = (Array.isArray(cache) ? cache : []).filter(
+          (v: VoiceNote) => String(v.id_local) !== String(id_local)
+        );
+        await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(filteredCache));
+
+        setVoiceNotes((prev) => prev.filter((v) => String(v.id_local) !== String(id_local)));
+
+        Alert.alert(
+          'Éxito',
+          hasConnection
+            ? 'Borrador local eliminado.'
+            : 'Nota de voz eliminada localmente; se quitó de la cola y la caché.'
+        );
+        return;
+      }
+
       if (hasConnection) {
         const result = await deleteVoiceNoteAPI({
           voiceNoteId,
@@ -1405,28 +1496,18 @@ export default function VoiceNotesScreen() {
         let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
         if (!Array.isArray(actions)) actions = [];
 
-        if (id_local !== '') {
-          const filteredActions = actions.filter(
-            (a: any) =>
-              !(a?.type === 'create' && String(a?.id) === String(id_local))
-          );
-          await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(filteredActions));
-        } else {
-          actions = appendOfflineVoiceNoteDelete(actions, voiceNoteId);
-          await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
-        }
+        actions = appendOfflineVoiceNoteDelete(actions, voiceNoteId);
+        await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
 
         const cacheStr = await AsyncStorage.getItem('voice_notes_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
 
-        const filteredCache = cache.filter((v: VoiceNote) =>
-          id_local !== '' ? v.id_local !== id_local : v.id !== voiceNoteId
+        const filteredCache = (Array.isArray(cache) ? cache : []).filter(
+          (v: VoiceNote) => v.id !== voiceNoteId
         );
         await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(filteredCache));
 
-        setVoiceNotes((prev) =>
-          prev.filter((v) => (id_local !== '' ? v.id_local !== id_local : v.id !== voiceNoteId))
-        );
+        setVoiceNotes((prev) => prev.filter((v) => v.id !== voiceNoteId));
 
         Alert.alert('Modo Offline', 'Nota de voz eliminada localmente. Se sincronizará cuando haya conexión.');
       }
@@ -1603,6 +1684,12 @@ export default function VoiceNotesScreen() {
           rd.structure_corpo_id = editSucursalId;
           rd.structure_puesto_id =
             editPuestoId != null && editPuestoId > 0 ? editPuestoId : null;
+          if (editDivisionId != null && editDivisionId > 0) {
+            rd.structure_division_id = editDivisionId;
+          }
+          if (editContratoId != null && editContratoId > 0) {
+            rd.structure_contrato_id = editContratoId;
+          }
         } else if (roleName === 'OPERATIVO') {
           rd.marca_id = marcaId;
           rd.use_structure_from_hierarchy = false;
@@ -1819,65 +1906,88 @@ export default function VoiceNotesScreen() {
 
   const toggleVoiceNoteExpanded = (voiceNote: VoiceNote) => {
     const key = getUniqueKey(voiceNote);
-    setExpandedVoiceNotes(prev => {
+    setExpandedVoiceNotes((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(key)) {
         newSet.delete(key);
       } else {
         newSet.add(key);
-        // Load audio URI when expanding for the first time
         if (!audioUris.has(key)) {
-          loadVoiceNoteAudio(voiceNote);
+          setLoadingAudioUris((s) => new Set(s).add(key));
+          void loadVoiceNoteAudio(voiceNote).finally(() => {
+            setLoadingAudioUris((s) => {
+              const n = new Set(s);
+              n.delete(key);
+              return n;
+            });
+          });
         }
       }
       return newSet;
     });
   };
 
-  const loadVoiceNoteAudio = async (voiceNote: VoiceNote) => {
-    try {
-      const key = getUniqueKey(voiceNote);
+  /**
+   * Resuelve la URI reproducible. Devuelve el string para uso inmediato (p. ej. play justo al cargar).
+   */
+  const loadVoiceNoteAudio = async (voiceNote: VoiceNote): Promise<string | null> => {
+    const key = getUniqueKey(voiceNote);
+    const already = audioUrisRef.current.get(key);
+    if (already) return already;
 
-      // Check if it's offline (id_local !== "")
+    try {
+      if (voiceNote.local_audio_file) {
+        const display = getLocalFileDisplayUri(voiceNote.local_audio_file);
+        if (!display) {
+          Alert.alert('Error', 'No se encontró el archivo de audio en el dispositivo.');
+          return null;
+        }
+        setAudioUris((prev) => {
+          const newMap = new Map(prev);
+          newMap.set(key, display);
+          return newMap;
+        });
+        return display;
+      }
+
       if (voiceNote.id_local !== '') {
-        // Offline audio: use file_base64
         if (!voiceNote.file_base64) {
           Alert.alert('Error', 'No se puede reproducir el audio offline sin datos guardados.');
-          return;
+          return null;
         }
 
-        // Store URI for base64 audio
         const audioUri = `data:audio/m4a;base64,${voiceNote.file_base64}`;
-        setAudioUris(prev => {
+        setAudioUris((prev) => {
           const newMap = new Map(prev);
           newMap.set(key, audioUri);
           return newMap;
         });
-      } else {
-        // Online audio: use API URL con token, siguiendo el estándar de JobManualsScreen
-        const hasConnection = await checkConnection();
-        if (!hasConnection) {
-          Alert.alert('Error', 'No se puede reproducir el audio sin conexión a internet.');
-          return;
-        }
-
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
-        }
-
-        // Use API URL directly as audio source (con token en query)
-        const rawUrl = `${apiUrl}/api/voice-notes/${voiceNote.id}/get-note`;
-        const audioUri = appendTokenToUrl(rawUrl);
-        setAudioUris(prev => {
-          const newMap = new Map(prev);
-          newMap.set(key, audioUri);
-          return newMap;
-        });
+        return audioUri;
       }
+
+      const hasConnection = await checkConnection();
+      if (!hasConnection) {
+        Alert.alert('Error', 'No se puede reproducir el audio sin conexión a internet.');
+        return null;
+      }
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+
+      const rawUrl = `${apiUrl}/api/voice-notes/${voiceNote.id}/get-note`;
+      const audioUri = appendTokenToUrl(rawUrl);
+      setAudioUris((prev) => {
+        const newMap = new Map(prev);
+        newMap.set(key, audioUri);
+        return newMap;
+      });
+      return audioUri;
     } catch (error) {
       console.error('Error loading voice note audio:', error);
       Alert.alert('Error', 'No se pudo cargar el audio');
+      return null;
     }
   };
 
@@ -1985,7 +2095,13 @@ export default function VoiceNotesScreen() {
     const cid = filterSucursalId;
     const pid = filterPuestoId;
     if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) return [];
-    if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return [];
+    if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) {
+      return voiceNotes.filter(
+        (vn) =>
+          Number(vn?.corpo?.id) === Number(cid) &&
+          (isPendingOfflineVoiceNoteCreate(vn) || (vn as VoiceNote).isActive !== false)
+      );
+    }
     return voiceNotes.filter((vn) => voiceNoteInPuestoFetchScope(vn, Number(cid), Number(pid)));
   }, [
     voiceNotes,
@@ -2038,12 +2154,10 @@ export default function VoiceNotesScreen() {
   const [playingStates, setPlayingStates] = useState<Map<string, boolean>>(new Map());
   const [audioPositions, setAudioPositions] = useState<Map<string, number>>(new Map());
 
-  const playVoiceNoteAudio = (voiceNote: VoiceNote) => {
+  const playVoiceNoteAudio = async (voiceNote: VoiceNote) => {
     const key = getUniqueKey(voiceNote);
-    const audioUri = audioUris.get(key);
-
+    let audioUri = audioUrisRef.current.get(key) ?? (await loadVoiceNoteAudio(voiceNote));
     if (!audioUri) {
-      Alert.alert('Error', 'El audio no está cargado. Por favor, expanda el componente de Audio primero.');
       return;
     }
 
@@ -3125,6 +3239,12 @@ export default function VoiceNotesScreen() {
                   {/* Collapsable Content - Audio and Transcription */}
                   {isExpanded && (
                     <ThemedView style={styles.collapsableContent}>
+                      {loadingAudioUris.has(key) && (
+                        <ThemedView style={styles.loadingAudioRow}>
+                          <ActivityIndicator size="small" color="#007AFF" />
+                          <ThemedText style={styles.loadingAudioText}>Cargando audio…</ThemedText>
+                        </ThemedView>
+                      )}
                       {/* Firma (dentro del colapsable) */}
                       {firmaData && (
                         <ThemedView style={styles.signatureInfo}>
@@ -3768,6 +3888,16 @@ const styles = StyleSheet.create({
   collapseButtonText: {
     fontSize: 14,
     fontWeight: '600',
+    color: '#007AFF',
+  },
+  loadingAudioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  loadingAudioText: {
+    fontSize: 14,
     color: '#007AFF',
   },
   collapsableContent: {
