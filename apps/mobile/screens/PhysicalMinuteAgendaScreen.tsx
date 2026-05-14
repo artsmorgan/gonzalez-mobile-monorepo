@@ -71,6 +71,7 @@ type AgendaMinutaRecord = {
   temas_a_tratar?: string;
   observaciones: string;
   firma_responsable: string;
+  estado?: boolean;
   created_at: string;
   synced?: boolean;
   cliente_nombre?: string | null;
@@ -78,8 +79,8 @@ type AgendaMinutaRecord = {
   puesto_nombre?: string | null;
 };
 
-type ParticipanteItem = { id_local: string; nombre: string; cedula: string; firma: string | null };
-type AcuerdoItem = { id_local: string; texto: string };
+type ParticipanteItem = { id_local: string; nombre: string; puesto: string; firma: string | null };
+type AcuerdoItem = { id_local: string; texto: string; responsable: string; fecha_limite: string };
 type TemaItem = { id_local: string; tema: string };
 
 type AcuerdosPayload = {
@@ -167,9 +168,9 @@ const formatParticipantesForDisplay = (participantesJson: string): string => {
     if (!Array.isArray(participantes) || participantes.length === 0) return 'No hay participantes.';
     return participantes.map((p, idx) => {
       const nombre = p?.nombre || '-';
-      const cedula = p?.cedula || '-';
+      const puesto = p?.puesto || p?.cedula || '-';
       const tieneFirma = p?.firma ? 'Sí' : 'No';
-      return `${idx + 1}. ${nombre} (Cédula: ${cedula}, Firma: ${tieneFirma})`;
+      return `${idx + 1}. ${nombre} (Puesto: ${puesto}, Firma: ${tieneFirma})`;
     }).join('\n');
   } catch (e) {
     console.error('Error formatting participantes for display:', e);
@@ -183,7 +184,9 @@ const formatAcuerdosForDisplay = (acuerdosJson: string): string => {
     if (!Array.isArray(acuerdos) || acuerdos.length === 0) return 'No hay acuerdos.';
     return acuerdos.map((a, idx) => {
       const texto = a?.texto || '-';
-      return `${idx + 1}. ${texto}`;
+      const responsable = String(a?.responsable || '').trim() || '-';
+      const fechaLimite = String(a?.fecha_limite || '').trim() || '-';
+      return `${idx + 1}. ${texto} (Responsable: ${responsable}, Fecha límite: ${fechaLimite})`;
     }).join('\n');
   } catch (e) {
     console.error('Error formatting acuerdos for display:', e);
@@ -446,8 +449,10 @@ export default function PhysicalMinuteAgendaScreen() {
   const [horaFin, setHoraFin] = useState<Date>(new Date());
   const [showTimePickerInicio, setShowTimePickerInicio] = useState(false);
   const [showTimePickerFin, setShowTimePickerFin] = useState(false);
+  const [showAcuerdoDatePickerForId, setShowAcuerdoDatePickerForId] = useState<string | null>(null);
   const [autor, setAutor] = useState('');
   const [observaciones, setObservaciones] = useState('');
+  const [estado, setEstado] = useState(false);
 
   const [participantes, setParticipantes] = useState<ParticipanteItem[]>([]);
   const [acuerdos, setAcuerdos] = useState<AcuerdoItem[]>([]);
@@ -1039,6 +1044,7 @@ export default function PhysicalMinuteAgendaScreen() {
     setHoraFin(new Date(horaAccion));
     setAutor('');
     setObservaciones('');
+    setEstado(false);
     setParticipantes([]);
     setAcuerdos([]);
     setTemasATratar([]);
@@ -1103,6 +1109,7 @@ export default function PhysicalMinuteAgendaScreen() {
     setTitulo(String(r.titulo ?? ''));
     setAutor(String(r.autor ?? ''));
     setObservaciones(String(r.observaciones ?? ''));
+    setEstado(Boolean((r as any).estado));
 
     const fechaParsed = r.fecha instanceof Date ? r.fecha : new Date(String(r.fecha));
     setFecha(Number.isNaN(fechaParsed.getTime()) ? new Date(horaAccion) : fechaParsed);
@@ -1119,7 +1126,7 @@ export default function PhysicalMinuteAgendaScreen() {
       parsedParticipantes.map((p) => ({
         id_local: p.id_local || generateRandomId(),
         nombre: p.nombre || '',
-        cedula: p.cedula || '',
+        puesto: (p as any).puesto || (p as any).cedula || '',
         firma: p.firma ?? null,
       }))
     );
@@ -1127,6 +1134,8 @@ export default function PhysicalMinuteAgendaScreen() {
       (parsedAcuerdos || []).map((a) => ({
         id_local: a.id_local || generateRandomId(),
         texto: a.texto || '',
+        responsable: (a as any).responsable || '',
+        fecha_limite: (a as any).fecha_limite || '',
       }))
     );
     setTemasATratar(
@@ -1225,7 +1234,7 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const addParticipante = () => {
-    setParticipantes((prev) => [...prev, { id_local: generateRandomId(), nombre: '', cedula: '', firma: null }]);
+    setParticipantes((prev) => [...prev, { id_local: generateRandomId(), nombre: '', puesto: '', firma: null }]);
   };
 
   const removeParticipante = (id_local: string) => {
@@ -1237,7 +1246,7 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const addAcuerdo = () => {
-    setAcuerdos((prev) => [...prev, { id_local: generateRandomId(), texto: '' }]);
+    setAcuerdos((prev) => [...prev, { id_local: generateRandomId(), texto: '', responsable: '', fecha_limite: '' }]);
   };
 
   const removeAcuerdo = (id_local: string) => {
@@ -1291,13 +1300,13 @@ export default function PhysicalMinuteAgendaScreen() {
     try {
       const empleado = await getEmpleadoByCodigo(code);
       const nombre = String(empleado?.nombre_completo || empleado?.nombre || '').trim();
-      const cedula = String(empleado?.cedula || '').trim();
+      const puesto = String(empleado?.puesto_nombre || empleado?.puesto || empleado?.cargo || '').trim();
       setParticipantes((prev) => [
         ...prev,
         {
           id_local: generateRandomId(),
           nombre,
-          cedula,
+          puesto,
           firma: null,
         },
       ]);
@@ -1549,6 +1558,7 @@ export default function PhysicalMinuteAgendaScreen() {
       temas_a_tratar: JSON.stringify(temasArray),
       observaciones: observaciones.trim() || ' ',
       firma_responsable: firmaResponsable,
+      estado,
       cliente_nombre: selectedClienteNode?.nombre ?? null,
       corpo_nombre: sucursalNombre,
       puesto_nombre: puestoNombre,
@@ -2025,6 +2035,7 @@ export default function PhysicalMinuteAgendaScreen() {
                   <ThemedText style={styles.listItemSubtitle}>Sucursal: {r.corpo_nombre || acuerdosMeta?.sucursal_nombre || String(r.corpo_id)}</ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>Puesto: {r.puesto_nombre || acuerdosMeta?.puesto_nombre || String(r.puesto_id)}</ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>Fecha: {fechaTxt}</ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>Estado: {r.estado ? 'Completado' : 'Pendiente'}</ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     Hora: {typeof r.hora_inicio === 'string' && /^\d{1,2}:\d{2}$/.test(r.hora_inicio) ? r.hora_inicio : (r.hora_inicio ? formatTimeHHmm(r.hora_inicio instanceof Date ? r.hora_inicio : new Date(String(r.hora_inicio))) : '—')}
                     {' – '}
@@ -2049,10 +2060,11 @@ export default function PhysicalMinuteAgendaScreen() {
                     ) : (
                       participantesArr.map((p: any, idx: number) => {
                         const sigUri = formatSignatureForDisplay(p?.firma || null);
+                        const puestoTxt = String(p?.puesto || p?.cedula || '').trim() || '—';
                         return (
                           <ThemedView key={String(p?.id_local || idx)} style={styles.personDetailCard}>
                             <ThemedText style={styles.personDetailTitle}>{String(p?.nombre || '').trim() || '—'}</ThemedText>
-                            <ThemedText style={styles.detailLine}>Cédula: {String(p?.cedula || '').trim() || '—'}</ThemedText>
+                            <ThemedText style={styles.detailLine}>Puesto: {puestoTxt}</ThemedText>
                             {sigUri ? (
                               <Image source={{ uri: sigUri }} style={styles.signaturePreview} resizeMode="contain" />
                             ) : (
@@ -2079,9 +2091,11 @@ export default function PhysicalMinuteAgendaScreen() {
                       <ThemedText style={styles.detailLine}>—</ThemedText>
                     ) : (
                       acuerdosArr.map((a: any, idx: number) => (
-                        <ThemedText key={String(a?.id_local || idx)} style={styles.detailLine}>
-                          - {String(a?.texto || '').trim() || '—'}
-                        </ThemedText>
+                        <ThemedView key={String(a?.id_local || idx)} style={styles.changeDescriptionContainer}>
+                          <ThemedText style={styles.detailLine}>- {String(a?.texto || '').trim() || '—'}</ThemedText>
+                          <ThemedText style={styles.detailLine}>Responsable: {String(a?.responsable || '').trim() || '—'}</ThemedText>
+                          <ThemedText style={styles.detailLine}>Fecha límite: {String(a?.fecha_limite || '').trim() || '—'}</ThemedText>
+                        </ThemedView>
                       ))
                     )}
                   </ThemedView>
@@ -2355,8 +2369,22 @@ export default function PhysicalMinuteAgendaScreen() {
             <ThemedText style={styles.label}>Autor</ThemedText>
             <TextInput style={styles.input} value={autor} onChangeText={setAutor} placeholder="Autor" />
 
-          <ThemedText style={styles.label}>Observaciones</ThemedText>
-          <TextInput style={[styles.input, styles.textArea]} value={observaciones} onChangeText={setObservaciones} placeholder="Observaciones" multiline />
+            <ThemedText style={styles.label}>Estado</ThemedText>
+            <TouchableOpacity
+              style={styles.checkboxRow}
+              activeOpacity={0.8}
+              onPress={() => setEstado((prev) => !prev)}
+            >
+              <Ionicons
+                name={estado ? 'checkbox' : 'square-outline'}
+                size={20}
+                color={estado ? '#007AFF' : '#8E8E93'}
+              />
+              <ThemedText style={styles.checkboxLabel}>Completado</ThemedText>
+            </TouchableOpacity>
+
+            <ThemedText style={styles.label}>Observaciones</ThemedText>
+            <TextInput style={[styles.input, styles.textArea]} value={observaciones} onChangeText={setObservaciones} placeholder="Observaciones" multiline />
 
           <ThemedText style={styles.formSectionTitle}>Participantes</ThemedText>
           <ThemedText style={styles.label}>Buscar participante por código</ThemedText>
@@ -2381,7 +2409,7 @@ export default function PhysicalMinuteAgendaScreen() {
                   <ThemedView style={styles.expandHeader}>
                     <ThemedView style={styles.expandHeaderContent}>
                       <ThemedText style={styles.expandHeaderText}>{displayName}</ThemedText>
-                      {!!p.cedula && <ThemedText style={styles.expandHeaderSubText}>Cédula: {p.cedula}</ThemedText>}
+                      {!!p.puesto && <ThemedText style={styles.expandHeaderSubText}>Puesto: {p.puesto}</ThemedText>}
                     </ThemedView>
                     <ThemedView style={styles.expandHeaderActions}>
                       <TouchableOpacity onPress={() => removeParticipante(p.id_local)} style={styles.removeExpandButton} activeOpacity={0.85}>
@@ -2394,8 +2422,8 @@ export default function PhysicalMinuteAgendaScreen() {
                     <ThemedText style={styles.label}>Nombre</ThemedText>
                     <TextInput style={styles.input} value={p.nombre} onChangeText={(t) => updateParticipante(p.id_local, { nombre: t })} placeholder="Nombre" />
 
-                    <ThemedText style={styles.label}>Cédula</ThemedText>
-                    <TextInput style={styles.input} value={p.cedula} onChangeText={(t) => updateParticipante(p.id_local, { cedula: t })} placeholder="Cédula" />
+                    <ThemedText style={styles.label}>Puesto</ThemedText>
+                    <TextInput style={styles.input} value={p.puesto} onChangeText={(t) => updateParticipante(p.id_local, { puesto: t })} placeholder="Puesto" />
 
                     <ThemedText style={styles.formSectionTitle}>Firma</ThemedText>
                     <TouchableOpacity style={styles.signatureButton} onPress={() => openParticipanteSignature(p.id_local)} activeOpacity={0.85}>
@@ -2437,6 +2465,33 @@ export default function PhysicalMinuteAgendaScreen() {
                       placeholder="Escriba el acuerdo"
                       multiline
                     />
+                    <ThemedText style={styles.label}>Responsable</ThemedText>
+                    <TextInput
+                      style={styles.input}
+                      value={a.responsable}
+                      onChangeText={(t) => updateAcuerdo(a.id_local, { responsable: t })}
+                      placeholder="Responsable"
+                    />
+                    <ThemedText style={styles.label}>Fecha límite</ThemedText>
+                    <TouchableOpacity
+                      style={styles.dateButton}
+                      onPress={() => setShowAcuerdoDatePickerForId(a.id_local)}
+                      activeOpacity={0.85}
+                    >
+                      <ThemedText style={styles.dateButtonText}>{a.fecha_limite || 'Seleccione fecha'}</ThemedText>
+                      <Ionicons name="calendar" size={18} color="#007AFF" />
+                    </TouchableOpacity>
+                    {showAcuerdoDatePickerForId === a.id_local && (
+                      <DateTimePicker
+                        value={a.fecha_limite ? new Date(`${a.fecha_limite}T00:00:00`) : new Date()}
+                        mode="date"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={(_, d) => {
+                          if (Platform.OS === 'android') setShowAcuerdoDatePickerForId(null);
+                          if (d) updateAcuerdo(a.id_local, { fecha_limite: formatDateISO(d) });
+                        }}
+                      />
+                    )}
                   </ThemedView>
                 </ThemedView>
               );
@@ -2668,7 +2723,7 @@ export default function PhysicalMinuteAgendaScreen() {
                                                 arr.map((p: any, i: number) => (
                                                   <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
                                                     <ThemedText style={styles.changeDescription}>
-                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'})
+                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Puesto: {String(p?.puesto ?? p?.cedula ?? '').trim() || '—'})
                                                     </ThemedText>
                                                     {p?.firma ? (
                                                       <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
@@ -2710,7 +2765,7 @@ export default function PhysicalMinuteAgendaScreen() {
                                         arr.map((p: any, i: number) => (
                                           <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
                                             <ThemedText style={styles.changeDescription}>
-                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'})
+                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Puesto: {String(p?.puesto ?? p?.cedula ?? '').trim() || '—'})
                                             </ThemedText>
                                             {p?.firma ? (
                                               <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
@@ -3114,6 +3169,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#F9F9F9',
   },
   dateButtonText: { fontSize: 16, color: '#000000' },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxLabel: { color: '#000000', fontSize: 14, fontWeight: '600' },
 
   emptyTextSmall: { color: '#000', opacity: 0.6 },
   smallHint: { color: '#000', opacity: 0.6, marginBottom: 8 },

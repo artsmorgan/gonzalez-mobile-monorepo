@@ -40,7 +40,9 @@ import {
   deleteAttendanceControl,
   deleteAttendanceControlImage,
   listAttendanceControl,
+  updateAttendanceEmpleadoSignature,
 } from '@/hooks/evaluationFunctions';
+import SignatureScreen from 'react-native-signature-canvas';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { eventBus } from '@/hooks/eventBus';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
@@ -167,6 +169,12 @@ interface QRInfo {
 
 interface Colaborador {
   empleado_id: number | null;
+  empleado_original_id?: number | null;
+  empleado_reemplaza_id?: number | null;
+  nombre_original?: string;
+  nombre_reemplazo?: string;
+  cedula_reemplazo?: string;
+  is_reemplazo?: boolean;
   marca_id?: number | null;
   ausente?: boolean;
   nombre_colaborador?: string;
@@ -184,6 +192,7 @@ interface Colaborador {
   cedula_sustituto: string;
   firma_sustituto: string; // base64 del QR
   firma_sustituto_info: QRInfo | null; // Información decodificada del QR
+  firma_manual?: string;
 }
 
 type AttendanceControlImageLocal = {
@@ -216,8 +225,13 @@ interface AttendanceControl {
   fecha: string | null;
   turno: string | null;
   total_presentes: string | null;
+  total_empleados_turno?: string | null;
   colaboradores: string | null;
   firma_responsable?: string | null;
+  nombre_supervisor?: string | null;
+  comentarios?: string | null;
+  firma_manual_supervisor?: string | null;
+  empleado_firmas?: Array<{ id?: number; empleado_id: number; firma: string }>;
   created_at: string;
   synced?: boolean;
   images?: AttendanceControlImageRemote[];
@@ -230,8 +244,12 @@ interface EditingAttendanceControl {
   fecha: string;
   turno: string;
   total_presentes: string;
+  total_empleados_turno: string;
   colaboradores: Colaborador[];
   firma_responsable: string;
+  nombre_supervisor: string;
+  comentarios: string;
+  firma_manual_supervisor: string;
 }
 
 function attendanceControlRecordIsDraft(record: { id_local?: string; id?: string; synced?: boolean }): boolean {
@@ -321,6 +339,13 @@ const TURNOS_API_MAP: Record<string, string> = {
   MIXTO: 'M',
   NOCTURNO: 'N',
 };
+
+const signatureWebStyle = `
+  .m-signature-pad {box-shadow: none; border: none;}
+  .m-signature-pad--body {border: 1px solid #e0e0e0;}
+  .m-signature-pad--footer {display: none; margin: 0px;}
+  body,html {width: 100%; height: 100%;}
+`;
 
 const normalizeTurnoToApi = (turno: string): string => {
   const key = String(turno || '').trim().toUpperCase();
@@ -416,11 +441,18 @@ export default function AttendanceControlScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [turno, setTurno] = useState('');
   const [totalPresentes, setTotalPresentes] = useState('');
+  const [totalEmpleadosTurno, setTotalEmpleadosTurno] = useState('');
+  const [nombreSupervisor, setNombreSupervisor] = useState('');
+  const [comentarios, setComentarios] = useState('');
+  const [firmaManualSupervisor, setFirmaManualSupervisor] = useState('');
+  const [employeeSignaturesByMarca, setEmployeeSignaturesByMarca] = useState<Record<string, string>>({});
+  const [employeeSignaturesByEmpleadoId, setEmployeeSignaturesByEmpleadoId] = useState<Record<string, string>>({});
   const [colaboradores, setColaboradores] = useState<Colaborador[]>([]);
   const [isRefreshingColaboradores, setIsRefreshingColaboradores] = useState(false);
   const [isResumenModalVisible, setIsResumenModalVisible] = useState(false);
   const [resumenModalTitle, setResumenModalTitle] = useState('Resumen colaboradores');
   const [resumenColaboradores, setResumenColaboradores] = useState<Colaborador[]>([]);
+  const [resumenControlId, setResumenControlId] = useState<string | null>(null);
 
   // Carga de marcas al seleccionar fecha, sucursal y turno
   const [loadingMarcas, setLoadingMarcas] = useState(false);
@@ -430,6 +462,13 @@ export default function AttendanceControlScreen() {
   // Image states
   const [imagenesLocal, setImagenesLocal] = useState<AttendanceControlImageLocal[]>([]);
   const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
+
+  // Firma manual (garabato)
+  const signatureRef = useRef<any>(null);
+  const [signatureModalVisible, setSignatureModalVisible] = useState(false);
+  const [signatureKey, setSignatureKey] = useState(0);
+  const [signatureTarget, setSignatureTarget] = useState<{ type: 'supervisor' | 'empleado'; marcaId?: number | null } | null>(null);
+  const [isSavingEmpleadoFirma, setIsSavingEmpleadoFirma] = useState(false);
 
   // Camera states
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -667,6 +706,16 @@ export default function AttendanceControlScreen() {
       cliente: clienteName,
       sucursal_nombre: raw?.sucursal_nombre ?? raw?.e_estructura_sucursal?.nombre ?? null,
       total_presentes: raw?.total_presentes !== null && raw?.total_presentes !== undefined ? String(raw.total_presentes) : null,
+      total_empleados_turno:
+        raw?.total_empleados_turno !== null && raw?.total_empleados_turno !== undefined ? String(raw.total_empleados_turno) : null,
+      nombre_supervisor: raw?.nombre_supervisor != null ? String(raw.nombre_supervisor) : null,
+      comentarios: raw?.comentarios != null ? String(raw.comentarios) : null,
+      firma_manual_supervisor: raw?.firma_manual_supervisor != null ? String(raw.firma_manual_supervisor) : null,
+      empleado_firmas: Array.isArray(raw?.empleado_firmas)
+        ? raw.empleado_firmas
+        : Array.isArray(raw?.c_control_asistencia_empleado_firmas)
+          ? raw.c_control_asistencia_empleado_firmas
+          : [],
       images: mappedImages,
     } as AttendanceControl;
   };
@@ -713,6 +762,9 @@ export default function AttendanceControlScreen() {
 
   const parseFechaToDate = (value: any): Date => {
     if (!value) return new Date();
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    }
     if (typeof value === 'string' && value.includes('/')) {
       const parts = value.split('/');
       if (parts.length === 3) {
@@ -724,8 +776,103 @@ export default function AttendanceControlScreen() {
         }
       }
     }
+    if (typeof value === 'string') {
+      const raw = value.trim();
+      // Evita corrimientos por zona horaria al editar registros guardados como ISO.
+      const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (m) {
+        const yyyy = Number(m[1]);
+        const mm = Number(m[2]);
+        const dd = Number(m[3]);
+        if (!Number.isNaN(yyyy) && !Number.isNaN(mm) && !Number.isNaN(dd)) {
+          return new Date(yyyy, mm - 1, dd);
+        }
+      }
+    }
     const d = new Date(value);
     return Number.isNaN(d.getTime()) ? new Date() : d;
+  };
+
+  const formatSignatureForDisplay = (value?: string | null) => {
+    if (!value) return '';
+    const v = String(value).trim();
+    if (!v) return '';
+    return v.startsWith('data:') ? v : `data:image/png;base64,${v}`;
+  };
+
+  const getBase64Only = (value?: string | null): string => {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    const comma = v.indexOf(',');
+    if (v.startsWith('data:') && comma >= 0) return v.slice(comma + 1);
+    return v;
+  };
+
+  const openSignatureModal = (target: { type: 'supervisor' | 'empleado'; marcaId?: number | null }) => {
+    setSignatureTarget(target);
+    setSignatureModalVisible(true);
+    setSignatureKey((prev) => prev + 1);
+  };
+
+  const closeSignatureModal = () => {
+    setSignatureModalVisible(false);
+    setSignatureTarget(null);
+  };
+
+  const clearSignatureInModal = () => {
+    setSignatureKey((prev) => prev + 1);
+    if (signatureRef.current) signatureRef.current.clearSignature();
+  };
+
+  const persistEmpleadoSignatureImmediately = useCallback(
+    async (controlId: string, marcaId: number, dataUri: string) => {
+      const recordId = String(controlId || '').trim();
+      if (!recordId || recordId.startsWith('local-')) return;
+      setIsSavingEmpleadoFirma(true);
+      const firma = getBase64Only(dataUri);
+      try {
+        const result = await updateAttendanceEmpleadoSignature({
+          controlId: recordId,
+          marca_id: marcaId,
+          firma,
+          refreshAccessToken,
+          logout,
+        });
+        if (!result.status) {
+          Alert.alert('Error', result.message || 'No se pudo guardar la firma del colaborador');
+        }
+      } finally {
+        setIsSavingEmpleadoFirma(false);
+      }
+    },
+    [logout, refreshAccessToken]
+  );
+
+  const handleSignatureRead = (signature: string) => {
+    const formatted = signature.startsWith('data:') ? signature : `data:image/png;base64,${signature}`;
+    if (!signatureTarget) return;
+    if (signatureTarget.type === 'supervisor') {
+      setFirmaManualSupervisor(formatted);
+    } else if (signatureTarget.type === 'empleado') {
+      const marcaId = Number(signatureTarget.marcaId || 0);
+      if (!marcaId) {
+        Alert.alert('Error', 'No se encontró la marca para guardar la firma');
+        return;
+      }
+      setEmployeeSignaturesByMarca((prev) => ({ ...prev, [String(marcaId)]: formatted }));
+      const immediateControlId =
+        editingRecord?.id != null && String(editingRecord.id).trim() !== ''
+          ? String(editingRecord.id).trim()
+          : String(resumenControlId || '').trim();
+      if (immediateControlId && !immediateControlId.startsWith('local-')) {
+        void persistEmpleadoSignatureImmediately(immediateControlId, marcaId, formatted);
+      }
+    }
+    closeSignatureModal();
+  };
+
+  const acceptSignature = () => {
+    if (signatureRef.current) signatureRef.current.readSignature();
   };
 
   const loadMarcas = useCallback(async () => {
@@ -756,16 +903,34 @@ export default function AttendanceControlScreen() {
         setErrorMarcas(data?.message || 'Error al cargar las marcas');
         return;
       }
-      const list = Array.isArray(data?.data?.colaboradores) ? data.data.colaboradores : [];
+      const listRaw = Array.isArray(data?.data?.colaboradores) ? data.data.colaboradores : [];
+      const list = listRaw.map((c: any) => {
+        const eid = Number(c?.empleado_id || 0);
+        const firmaManual = eid > 0 ? employeeSignaturesByEmpleadoId[String(eid)] || '' : '';
+        return { ...c, firma_manual: firmaManual };
+      });
       const total = typeof data?.data?.total_presentes === 'number' ? data.data.total_presentes : list.filter((c: any) => !c?.ausente).length;
+      const totalTurno = typeof data?.data?.total_empleados_turno === 'number' ? data.data.total_empleados_turno : list.length;
       setPreviewColaboradores(list);
+      if (editingRecord) {
+        setColaboradores(list as Colaborador[]);
+      }
+      setEmployeeSignaturesByMarca(
+        list.reduce((acc: Record<string, string>, c: any) => {
+          const mid = Number(c?.marca_id || 0);
+          const sig = String(c?.firma_manual || '').trim();
+          if (mid > 0 && sig) acc[String(mid)] = sig;
+          return acc;
+        }, {})
+      );
       setTotalPresentes(String(total));
+      setTotalEmpleadosTurno(String(totalTurno));
     } catch (e: any) {
       setErrorMarcas(e?.message || 'Error al cargar las marcas de empleados');
     } finally {
       setLoadingMarcas(false);
     }
-  }, [fecha, formCorpoId, turno, refreshAccessToken, logout]);
+  }, [fecha, formCorpoId, turno, refreshAccessToken, logout, employeeSignaturesByEmpleadoId, editingRecord]);
 
   useEffect(() => {
     if (!isCreating && !editingRecord) return;
@@ -819,10 +984,26 @@ export default function AttendanceControlScreen() {
 
       const updated = updatedRecords.find((r: any) => String(r.id) === String(recordId));
       let parsed: Colaborador[] = [];
+      let firmasMap: Record<string, string> = {};
+      const firmaRows = Array.isArray(updated?.empleado_firmas) ? updated?.empleado_firmas : [];
+      if (Array.isArray(firmaRows) && firmaRows.length > 0) {
+        firmasMap = firmaRows.reduce((acc: Record<string, string>, item: any) => {
+          const eid = Number(item?.empleado_id || 0);
+          const sig = String(item?.firma || '').trim();
+          if (eid > 0 && sig) acc[String(eid)] = formatSignatureForDisplay(sig);
+          return acc;
+        }, {});
+      }
       if (updated?.colaboradores) {
         try {
           const arr = JSON.parse(updated.colaboradores);
-          if (Array.isArray(arr)) parsed = arr;
+          if (Array.isArray(arr)) {
+            parsed = arr.map((c: any) => {
+              const eid = Number(c?.empleado_id || 0);
+              const firmaManual = eid > 0 ? firmasMap[String(eid)] || '' : '';
+              return { ...c, firma_manual: firmaManual };
+            });
+          }
         } catch {
           parsed = [];
         }
@@ -831,11 +1012,21 @@ export default function AttendanceControlScreen() {
       if (editingRecord && String(editingRecord.id) === String(recordId)) {
         setColaboradores(parsed);
         setTotalPresentes(String(parsed.filter((c: any) => !c?.ausente).length));
+        setTotalEmpleadosTurno(String(parsed.length));
       }
 
+      setEmployeeSignaturesByMarca(
+        parsed.reduce((acc: Record<string, string>, c: any) => {
+          const mid = Number(c?.marca_id || 0);
+          const sig = String(c?.firma_manual || '').trim();
+          if (mid > 0 && sig) acc[String(mid)] = sig;
+          return acc;
+        }, {})
+      );
       setResumenColaboradores(parsed);
       if (openModalAfter) {
         setResumenModalTitle(`Resumen colaboradores - Control #${recordId}`);
+        setResumenControlId(String(recordId));
         setIsResumenModalVisible(true);
       }
     } catch (e: any) {
@@ -1154,6 +1345,12 @@ export default function AttendanceControlScreen() {
     setFecha(new Date(horaAccion));
     setTurno('');
     setTotalPresentes('');
+    setTotalEmpleadosTurno('');
+    setNombreSupervisor('');
+    setComentarios('');
+    setFirmaManualSupervisor('');
+    setEmployeeSignaturesByMarca({});
+    setEmployeeSignaturesByEmpleadoId({});
     setColaboradores([]);
     setFirmaResponsable(null);
     setFirmaResponsableHash('');
@@ -1373,136 +1570,15 @@ export default function AttendanceControlScreen() {
 
   const startEditing = async (record: AttendanceControl) => {
     setIsCreating(false);
-    let colaboradoresArray: Colaborador[] = [];
-
-    if (record.colaboradores) {
-      try {
-        colaboradoresArray = JSON.parse(record.colaboradores);
-        if (!Array.isArray(colaboradoresArray)) colaboradoresArray = [];
-
-        // Decodificar los QR guardados para mostrar la información
-        colaboradoresArray = await Promise.all(colaboradoresArray.map(async (colab: any) => {
-          const decoded: Colaborador = {
-            empleado_id: typeof colab.empleado_id === 'number' ? colab.empleado_id : null,
-            nombre_colaborador: colab.nombre_colaborador || '',
-            cedula: colab.cedula || '',
-            firma_comentario: colab.firma_comentario || '',
-            firma_comentario_info: null,
-            entrada: colab.entrada || '',
-            salida: colab.salida || '',
-            sustituto_id: typeof colab.sustituto_id === 'number' ? colab.sustituto_id : null,
-            nombre_sustituto: colab.nombre_sustituto || '',
-            cedula_sustituto: colab.cedula_sustituto || '',
-            firma_sustituto: colab.firma_sustituto || '',
-            firma_sustituto_info: null,
-          };
-
-          // Decodificar firma_comentario si existe
-          if (colab.firma_comentario) {
-            try {
-              const decodedData = atob(colab.firma_comentario);
-              const parts = decodedData.split(':');
-              if (parts.length === 5) {
-                const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-                let empleadoDetalle = undefined;
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (apiUrl) {
-                  try {
-                    const empleadoResponse = await authedFetch({
-                      url: `${apiUrl}/api/empleados/${empleadoId}`,
-                      init: {
-                        method: 'GET',
-                        headers: {
-                          'Content-Type': 'application/json',
-                        },
-                      },
-                      refreshAccessToken,
-                      logout,
-                    });
-                    if (!empleadoResponse) return decoded;
-                    if (empleadoResponse.ok) {
-                      const empleadoData = await empleadoResponse.json();
-                      empleadoDetalle = {
-                        nombre: empleadoData.nombre,
-                        primer_apellido: empleadoData.primer_apellido,
-                        segundo_apellido: empleadoData.segundo_apellido,
-                      };
-                    }
-                  } catch (err) {
-                    console.error('Error fetching empleado details:', err);
-                  }
-                }
-
-                decoded.firma_comentario_info = {
-                  sessionId,
-                  empleadoId,
-                  latitud,
-                  longitud,
-                  timestamp,
-                  empleadoDetalle,
-                };
-              }
-            } catch (e) {
-              console.error('Error decoding firma_comentario:', e);
-            }
-          }
-
-          // Decodificar firma_sustituto si existe
-          if (colab.firma_sustituto) {
-            try {
-              const decodedData = atob(colab.firma_sustituto);
-              const parts = decodedData.split(':');
-              if (parts.length === 5) {
-                const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-                let empleadoDetalle = undefined;
-                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                if (apiUrl) {
-                  try {
-                    const empleadoResponse = await authedFetch({
-                      url: `${apiUrl}/api/empleados/${empleadoId}`,
-                      init: {
-                        method: 'GET',
-                        headers: {
-                          'Content-Type': 'application/json',
-                        },
-                      },
-                      refreshAccessToken,
-                      logout,
-                    });
-                    if (!empleadoResponse) return decoded;
-                    if (empleadoResponse.ok) {
-                      const empleadoData = await empleadoResponse.json();
-                      empleadoDetalle = {
-                        nombre: empleadoData.nombre,
-                        primer_apellido: empleadoData.primer_apellido,
-                        segundo_apellido: empleadoData.segundo_apellido,
-                      };
-                    }
-                  } catch (err) {
-                    console.error('Error fetching empleado details:', err);
-                  }
-                }
-
-                decoded.firma_sustituto_info = {
-                  sessionId,
-                  empleadoId,
-                  latitud,
-                  longitud,
-                  timestamp,
-                  empleadoDetalle,
-                };
-              }
-            } catch (e) {
-              console.error('Error decoding firma_sustituto:', e);
-            }
-          }
-
-          return decoded;
-        }));
-      } catch (e) {
-        colaboradoresArray = [];
-      }
-    }
+    const colaboradoresArray: Colaborador[] = [];
+    const firmasRowsAll = Array.isArray(record.empleado_firmas) ? record.empleado_firmas : [];
+    const firmaByEmpleadoAll = firmasRowsAll.reduce((acc: Record<string, string>, f: any) => {
+      const eid = Number(f?.empleado_id || 0);
+      const sig = String(f?.firma || '').trim();
+      if (eid > 0 && sig) acc[String(eid)] = formatSignatureForDisplay(sig);
+      return acc;
+    }, {});
+    setEmployeeSignaturesByEmpleadoId(firmaByEmpleadoAll);
 
     setEditingRecord({
       id: record.id,
@@ -1510,14 +1586,27 @@ export default function AttendanceControlScreen() {
       fecha: record.fecha || '',
       turno: record.turno || '',
       total_presentes: record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '',
+      total_empleados_turno:
+        record.total_empleados_turno !== null && record.total_empleados_turno !== undefined ? String(record.total_empleados_turno) : '',
       colaboradores: colaboradoresArray,
       firma_responsable: record.firma_responsable || '',
+      nombre_supervisor: record.nombre_supervisor || '',
+      comentarios: record.comentarios || '',
+      firma_manual_supervisor: record.firma_manual_supervisor || '',
     });
 
     setFecha(parseFechaToDate(record.fecha));
     setTurno(turnoFromRecordToPickerValue(record.turno));
     setTotalPresentes(record.total_presentes !== null && record.total_presentes !== undefined ? String(record.total_presentes) : '');
-    setColaboradores(colaboradoresArray);
+    setTotalEmpleadosTurno(
+      record.total_empleados_turno !== null && record.total_empleados_turno !== undefined ? String(record.total_empleados_turno) : String(colaboradoresArray.length)
+    );
+    setNombreSupervisor(record.nombre_supervisor || '');
+    setComentarios(record.comentarios || '');
+    setFirmaManualSupervisor(formatSignatureForDisplay(record.firma_manual_supervisor || ''));
+    setColaboradores([]);
+    setPreviewColaboradores([]);
+    setEmployeeSignaturesByMarca({});
     // Cargar jerarquía desde corpo_id en el árbol (empresa → sucursal)
     let editTree: MainStructureTree = structure;
     if (!editTree?.length) {
@@ -1783,6 +1872,19 @@ export default function AttendanceControlScreen() {
       const currentMarcaData = JSON.parse(currentMarca);
 
       const imagenesStr = await buildAttendanceImagenesPayload(imagenesLocal);
+      const empleadosByMarca: Record<string, number> = {};
+      [...(previewColaboradores || []), ...(colaboradores || [])].forEach((c: any) => {
+        const marcaId = Number(c?.marca_id || 0);
+        const empleadoId = Number(c?.empleado_id || 0);
+        if (marcaId > 0 && empleadoId > 0) empleadosByMarca[String(marcaId)] = empleadoId;
+      });
+      const firmasEmpleadosArr = Object.entries(employeeSignaturesByMarca)
+        .map(([marcaId, firma]) => ({
+          marca_id: Number(marcaId),
+          empleado_id: Number(empleadosByMarca[String(marcaId)] || 0),
+          firma: getBase64Only(firma),
+        }))
+        .filter((x) => Number.isFinite(x.marca_id) && x.marca_id > 0 && String(x.firma || '').trim() !== '');
 
       const requestData = {
         marca_id: currentMarcaData.id,
@@ -1795,6 +1897,11 @@ export default function AttendanceControlScreen() {
         fecha: formatDate(fecha) || null,
         turno: normalizeTurnoToApi(turno.trim() || ''),
         firma_responsable: firmaResponsableHash,
+        total_empleados_turno: Number(totalEmpleadosTurno || previewColaboradores.length || 0),
+        nombre_supervisor: nombreSupervisor.trim() || null,
+        comentarios: comentarios.trim() || null,
+        firma_manual_supervisor: getBase64Only(firmaManualSupervisor) || null,
+        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : {}),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
       };
 
@@ -1867,6 +1974,19 @@ export default function AttendanceControlScreen() {
     try {
 
       const imagenesStr = await buildAttendanceImagenesPayload(imagenesLocal);
+      const empleadosByMarca: Record<string, number> = {};
+      [...(previewColaboradores || []), ...(colaboradores || [])].forEach((c: any) => {
+        const marcaId = Number(c?.marca_id || 0);
+        const empleadoId = Number(c?.empleado_id || 0);
+        if (marcaId > 0 && empleadoId > 0) empleadosByMarca[String(marcaId)] = empleadoId;
+      });
+      const firmasEmpleadosArr = Object.entries(employeeSignaturesByMarca)
+        .map(([marcaId, firma]) => ({
+          marca_id: Number(marcaId),
+          empleado_id: Number(empleadosByMarca[String(marcaId)] || 0),
+          firma: getBase64Only(firma),
+        }))
+        .filter((x) => Number.isFinite(x.marca_id) && x.marca_id > 0 && String(x.firma || '').trim() !== '');
 
       const requestData = {
         empresa_id: formEmpresaId,
@@ -1878,6 +1998,11 @@ export default function AttendanceControlScreen() {
         fecha: formatDate(fecha) || null,
         turno: normalizeTurnoToApi(turno.trim() || ''),
         firma_responsable: firmaResponsableHash,
+        total_empleados_turno: Number(totalEmpleadosTurno || previewColaboradores.length || 0),
+        nombre_supervisor: nombreSupervisor.trim() || null,
+        comentarios: comentarios.trim() || null,
+        firma_manual_supervisor: getBase64Only(firmaManualSupervisor) || null,
+        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : {}),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
       };
 
@@ -2046,6 +2171,15 @@ export default function AttendanceControlScreen() {
                   </ThemedText>
                   <ThemedText style={styles.listItemSubtitle}>
                     Total Presentes: {record.total_presentes || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Total turno: {record.total_empleados_turno || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Supervisor: {record.nombre_supervisor || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Comentarios: {record.comentarios || 'N/A'}
                   </ThemedText>
                   {!!(record.id || record.id_local) &&
                     (listRemoteImages.length > 0 || (record.images_local && record.images_local.length > 0)) && (
@@ -2522,9 +2656,64 @@ export default function AttendanceControlScreen() {
                   placeholder="Total presentes"
                   placeholderTextColor="#999"
                   value={totalPresentes}
-                  onChangeText={setTotalPresentes}
+                  editable={false}
+                  selectTextOnFocus={false}
                   keyboardType="numeric"
                 />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Total empleados del turno</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Total del turno"
+                  placeholderTextColor="#999"
+                  value={totalEmpleadosTurno}
+                  editable={false}
+                  selectTextOnFocus={false}
+                  keyboardType="numeric"
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre supervisor</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre del supervisor"
+                  placeholderTextColor="#999"
+                  value={nombreSupervisor}
+                  onChangeText={setNombreSupervisor}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Comentarios</ThemedText>
+                <TextInput
+                  style={[styles.formInput, { minHeight: 90, textAlignVertical: 'top' as const }]}
+                  placeholder="Escriba observaciones"
+                  placeholderTextColor="#999"
+                  value={comentarios}
+                  onChangeText={setComentarios}
+                  multiline
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Firma manual supervisor</ThemedText>
+                <TouchableOpacity
+                  style={styles.signatureButton}
+                  onPress={() => openSignatureModal({ type: 'supervisor' })}
+                >
+                  <Ionicons name="create-outline" size={20} color="#FFFFFF" />
+                  <ThemedText style={styles.signatureButtonText}>
+                    {firmaManualSupervisor ? 'Editar firma' : 'Agregar firma'}
+                  </ThemedText>
+                </TouchableOpacity>
+                {firmaManualSupervisor ? (
+                  <ThemedView style={{ marginTop: 10 }}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaManualSupervisor) }} style={styles.signaturePreview} resizeMode="contain" />
+                  </ThemedView>
+                ) : null}
               </ThemedView>
 
               {/* Lista de colaboradores según marcas */}
@@ -2547,15 +2736,35 @@ export default function AttendanceControlScreen() {
                     </ThemedText>
                     <ThemedText style={styles.previewColaboradoresSub}>Presentes:</ThemedText>
                     {previewColaboradores.filter((c: any) => !c?.ausente).map((c: any, idx: number) => (
-                      <ThemedText key={`p-${idx}`} style={styles.previewColaboradorLine}>
-                        • {c?.nombre || c?.nombre_colaborador || '-'} {c?.cedula ? `(${c.cedula})` : ''}
-                        {`\n`}  Puesto: {c?.puesto || '-'} | Inicio: {formatHoraLabel(c?.hora_inicio)} | Fin: {formatHoraLabel(c?.hora_fin)}
-                      </ThemedText>
+                      <ThemedView key={`p-${idx}`} style={{ marginBottom: 10, backgroundColor: '#F5F5F5' }}>
+                        <ThemedText style={[styles.previewColaboradorLine, c?.empleado_reemplaza_id ? styles.replacementText : null]}>
+                          • {c?.nombre || c?.nombre_colaborador || '-'} {c?.cedula ? `(${c.cedula})` : ''}
+                          {c?.empleado_reemplaza_id ? ` [REEMPLAZO${c?.cedula_reemplazo ? `: ${c.cedula_reemplazo}` : ''}]` : ''}
+                          {`\n`}  Puesto: {c?.puesto || '-'} | Inicio: {formatHoraLabel(c?.hora_inicio)} | Fin: {formatHoraLabel(c?.hora_fin)}
+                        </ThemedText>
+                        <TouchableOpacity
+                          style={styles.smallSignatureButton}
+                          onPress={() => openSignatureModal({ type: 'empleado', marcaId: Number(c?.marca_id || 0) })}
+                        >
+                          <Ionicons name="create-outline" size={16} color="#FFFFFF" />
+                          <ThemedText style={styles.smallSignatureButtonText}>
+                            {employeeSignaturesByMarca[String(Number(c?.marca_id || 0))] ? 'Editar firma' : 'Firma manual'}
+                          </ThemedText>
+                        </TouchableOpacity>
+                        {employeeSignaturesByMarca[String(Number(c?.marca_id || 0))] ? (
+                          <Image
+                            source={{ uri: formatSignatureForDisplay(employeeSignaturesByMarca[String(Number(c?.marca_id || 0))]) }}
+                            style={styles.signaturePreviewSmall}
+                            resizeMode="contain"
+                          />
+                        ) : null}
+                      </ThemedView>
                     ))}
                     <ThemedText style={styles.previewColaboradoresSub}>Ausentes:</ThemedText>
                     {previewColaboradores.filter((c: any) => c?.ausente).map((c: any, idx: number) => (
-                      <ThemedText key={`a-${idx}`} style={styles.previewColaboradorLine}>
+                      <ThemedText key={`a-${idx}`} style={[styles.previewColaboradorLine, c?.empleado_reemplaza_id ? styles.replacementText : null]}>
                         • {c?.nombre || c?.nombre_colaborador || '-'} {c?.cedula ? `(${c.cedula})` : ''}
+                        {c?.empleado_reemplaza_id ? ` [REEMPLAZO${c?.cedula_reemplazo ? `: ${c.cedula_reemplazo}` : ''}]` : ''}
                         {`\n`}  Puesto: {c?.puesto || '-'} | Inicio: {formatHoraLabel(c?.hora_inicio)} | Fin: {formatHoraLabel(c?.hora_fin)}
                       </ThemedText>
                     ))}
@@ -2794,13 +3003,19 @@ export default function AttendanceControlScreen() {
         animationType="fade"
         transparent
         presentationStyle="overFullScreen"
-        onRequestClose={() => setIsResumenModalVisible(false)}
+        onRequestClose={() => {
+          setIsResumenModalVisible(false);
+          setResumenControlId(null);
+        }}
       >
         <View style={styles.overlay}>
           <ThemedView style={styles.floatModalCardMovimientos}>
             <ThemedView style={styles.floatModalHeader}>
               <ThemedText style={styles.modalTitle}>{resumenModalTitle}</ThemedText>
-              <TouchableOpacity onPress={() => setIsResumenModalVisible(false)}>
+              <TouchableOpacity onPress={() => {
+                setIsResumenModalVisible(false);
+                setResumenControlId(null);
+              }}>
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ThemedView>
@@ -2812,9 +3027,10 @@ export default function AttendanceControlScreen() {
                 resumenColaboradores.map((c: any, idx: number) => (
                   <ThemedView key={`res-col-${idx}`} style={styles.cambioCollapsableMain}>
                     <ThemedView style={styles.cambioCollapsableContent}>
-                      <ThemedText style={styles.changeDescription}>
+                      <ThemedText style={[styles.changeDescription, c?.empleado_reemplaza_id ? styles.replacementText : null]}>
                         <ThemedText style={{ fontWeight: '800' }}>Empleado: </ThemedText>
                         {c?.nombre || c?.nombre_colaborador || '-'}
+                        {c?.empleado_reemplaza_id ? ` [REEMPLAZO${c?.cedula_reemplazo ? `: ${c.cedula_reemplazo}` : ''}]` : ''}
                       </ThemedText>
                       <ThemedText style={styles.changeDescription}>
                         <ThemedText style={{ fontWeight: '800' }}>Cédula: </ThemedText>
@@ -2840,11 +3056,72 @@ export default function AttendanceControlScreen() {
                         <ThemedText style={{ fontWeight: '800' }}>Estado: </ThemedText>
                         {c?.ausente ? 'Ausente' : 'Presente'}
                       </ThemedText>
+                      {!c?.ausente ? (
+                        <>
+                          <TouchableOpacity
+                            style={[styles.smallSignatureButton, { marginTop: 8 }]}
+                            onPress={() => openSignatureModal({ type: 'empleado', marcaId: Number(c?.marca_id || 0) })}
+                            disabled={isSavingEmpleadoFirma}
+                          >
+                            {isSavingEmpleadoFirma ? (
+                              <ActivityIndicator size="small" color="#FFFFFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="create-outline" size={16} color="#FFFFFF" />
+                                <ThemedText style={styles.smallSignatureButtonText}>
+                                  {employeeSignaturesByMarca[String(Number(c?.marca_id || 0))] ? 'Editar firma' : 'Firma manual'}
+                                </ThemedText>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                          {employeeSignaturesByMarca[String(Number(c?.marca_id || 0))] ? (
+                            <Image
+                              source={{ uri: formatSignatureForDisplay(employeeSignaturesByMarca[String(Number(c?.marca_id || 0))]) }}
+                              style={styles.signaturePreviewSmall}
+                              resizeMode="contain"
+                            />
+                          ) : null}
+                        </>
+                      ) : null}
                     </ThemedView>
                   </ThemedView>
                 ))
               )}
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal visible={signatureModalVisible} animationType="fade" transparent onRequestClose={closeSignatureModal}>
+        <View style={styles.overlay}>
+          <ThemedView style={styles.signatureModalCard}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {signatureTarget?.type === 'supervisor' ? 'Firma manual supervisor' : 'Firma manual del colaborador'}
+              </ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <View style={styles.signatureCanvasWrapper}>
+              <SignatureScreen
+                key={signatureKey}
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                webStyle={signatureWebStyle}
+                autoClear={false}
+                imageType="image/png"
+                backgroundColor="#FFFFFF"
+              />
+            </View>
+            <View style={styles.signatureModalButtons}>
+              <TouchableOpacity style={[styles.cancelButton, { flex: 1 }]} onPress={clearSignatureInModal}>
+                <ThemedText style={styles.cancelButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.confirmButton, { flex: 1 }]} onPress={acceptSignature}>
+                <ThemedText style={styles.confirmButtonText}>Guardar firma</ThemedText>
+              </TouchableOpacity>
+            </View>
           </ThemedView>
         </View>
       </Modal>
@@ -3368,6 +3645,67 @@ const styles = StyleSheet.create({
     color: '#555',
     marginLeft: 8,
     marginBottom: 2,
+  },
+  replacementText: {
+    color: '#C62828',
+    fontWeight: '700',
+  },
+  smallSignatureButton: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: '#007AFF',
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  smallSignatureButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  signaturePreview: {
+    width: '100%',
+    height: 110,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 8,
+    backgroundColor: '#FFF',
+  },
+  signaturePreviewSmall: {
+    marginTop: 6,
+    width: 180,
+    height: 70,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 6,
+    backgroundColor: '#FFF',
+  },
+  signatureModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 700,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    paddingBottom: 12,
+  },
+  signatureCanvasWrapper: {
+    height: 320,
+    margin: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+  },
+  signatureModalButtons: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
   },
   cameraButton: {
     flexDirection: 'row',

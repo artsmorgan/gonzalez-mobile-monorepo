@@ -191,6 +191,7 @@ import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
+import ReportesScreen from './screens/ReportesScreen';
 import {
   createStaffEvaluation,
   deleteStaffEvaluation,
@@ -329,6 +330,7 @@ export type RootStackParamList = {
   ChecklistSupervision: undefined;
   PuestoUbicacion: undefined;
   Jerarquia: undefined;
+  Reportes: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -418,6 +420,7 @@ function RootNavigator() {
       <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
       <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
+      <Stack.Screen name="Reportes" component={ReportesScreen} />
     </Stack.Navigator>
   );
 }

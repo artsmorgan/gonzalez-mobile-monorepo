@@ -54,6 +54,21 @@ function ensureStringJson(value: any, fallback: string) {
   }
 }
 
+function parseBooleanInput(value: any): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  return undefined;
+}
+
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -138,6 +153,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (body.temas_a_tratar !== undefined) data.temas_a_tratar = ensureStringJson(body.temas_a_tratar, "[]");
     if (body.observaciones !== undefined) data.observaciones = String(body.observaciones);
     if (body.firma_responsable !== undefined) data.firma_responsable = String(body.firma_responsable);
+    if (body.estado !== undefined) {
+      const estadoVal = parseBooleanInput(body.estado);
+      if (estadoVal === undefined) {
+        return NextResponse.json({ status: false, message: "estado inválido" }, { status: 400 });
+      }
+      data.estado = estadoVal;
+    }
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
     const eq = (a: any, b: any) => {
@@ -281,6 +303,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
               participantes: existingRecord.participantes,
               acuerdos: existingRecord.acuerdos,
               observaciones: existingRecord.observaciones,
+              estado: (existingRecord as any).estado ?? false,
             },
             after: null,
           }]),

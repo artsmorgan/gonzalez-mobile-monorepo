@@ -220,6 +220,10 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
         <ThemedView style={styles.activityInfo}>
           <ThemedText style={styles.activityName}>{activity.nombre_actividad}</ThemedText>
           <ThemedText style={activity.is_pendiente ? styles.activityFrecuenciaPending : styles.activityFrecuencia}>{activity.is_pendiente ? 'Pendiente' : activity.frecuencia}</ThemedText>
+          {(() => {
+            const scheduleLbl = formatScheduleUiLabel(activity.schedule ?? []);
+            return scheduleLbl ? <ThemedText style={styles.activityScheduleHint}>{scheduleLbl}</ThemedText> : null;
+          })()}
         </ThemedView>
 
         <ThemedView style={styles.checkboxContainer}>
@@ -560,6 +564,8 @@ interface Actividad {
   id: number;
   nombre_actividad: string;
   frecuencia: string;
+  /** Horas HH:mm desde `frecuencia.schedule` (solo lista por marca; informativo). */
+  schedule?: string[];
   descripcion_actividad: string;
   is_revision_equipo: boolean;
   is_marcada: boolean;
@@ -582,6 +588,45 @@ interface Inventario {
 interface Reglas {
   nombre: string;
   valor: string;
+}
+
+/** Hora local HH:mm desde un `Date` (sin conversión TZ; igual criterio que ReportesScreen). */
+function activitiesHmFromDate(d: Date): string {
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function activitiesHmOkStr(s: string): boolean {
+  return /^\d{2}:\d{2}$/.test(String(s || '').trim());
+}
+
+function activitiesParseHmToLocalDate(hmStr: string): Date {
+  const t = String(hmStr || '').trim();
+  const [h, m] = t.split(':').map((x) => parseInt(x, 10));
+  const base = new Date(2000, 0, 1, 0, 0, 0, 0);
+  base.setHours(Number.isFinite(h) ? h : 0, Number.isFinite(m) ? m : 0, 0, 0);
+  return base;
+}
+
+/** Lee `schedule` desde el JSON almacenado en `e_actividades.frecuencia`. */
+function parseScheduleFromFrecuenciaJsonStore(frecuenciaStr: string | null | undefined): string[] {
+  if (!frecuenciaStr || !String(frecuenciaStr).trim()) return [];
+  try {
+    const parsed = JSON.parse(String(frecuenciaStr));
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.schedule)) return [];
+    return parsed.schedule
+      .filter((x: unknown) => typeof x === 'string' && activitiesHmOkStr(String(x).trim()))
+      .map((x: string) => String(x).trim())
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function formatScheduleUiLabel(times: string[]): string | null {
+  if (!times.length) return null;
+  return `Horario: ${times.join(', ')}`;
 }
 
 interface RevisionEquipo {
@@ -843,6 +888,11 @@ export default function ActivitiesScreen() {
   const [activityDescription, setActivityDescription] = useState('');
   const [activityStartDate, setActivityStartDate] = useState<Date>(new Date());
   const [showStartDatePicker, setShowStartDatePicker] = useState(false);
+  const [activityScheduleExpanded, setActivityScheduleExpanded] = useState(false);
+  /** Horarios HH:mm informativos (se guardan en `frecuencia.schedule`). */
+  const [activityScheduleSlots, setActivityScheduleSlots] = useState<string[]>([]);
+  const [scheduleSlotPickerIndex, setScheduleSlotPickerIndex] = useState<number | null>(null);
+  const scheduleSlotPickerIndexRef = useRef<number | null>(null);
   const [tipoActividad, setTipoActividad] = useState<'Normal' | 'Inventario'>('Normal');
   const [puestos, setPuestos] = useState<PuestoOption[]>([]);
   const [selectedPuestoId, setSelectedPuestoId] = useState<string>('');
@@ -1378,6 +1428,10 @@ export default function ActivitiesScreen() {
     setEndType('never');
     setEndDate('');
     setShowEndDatePicker(false);
+    setActivityScheduleExpanded(false);
+    setActivityScheduleSlots([]);
+    setScheduleSlotPickerIndex(null);
+    scheduleSlotPickerIndexRef.current = null;
   };
 
   const prepareCreateActivityForm = async () => {
@@ -1760,6 +1814,22 @@ export default function ActivitiesScreen() {
       if (customUnit === 'week') {
         setSelectedWeekdays([weekdayKeyFromDate(cal)]);
       }
+    }
+  };
+
+  const handleScheduleSlotTimeChange = (_event: any, selectedDate?: Date) => {
+    const idx = scheduleSlotPickerIndexRef.current;
+    if (Platform.OS === 'android') {
+      setScheduleSlotPickerIndex(null);
+      scheduleSlotPickerIndexRef.current = null;
+    }
+    if (selectedDate && idx !== null && idx >= 0) {
+      const hm = activitiesHmFromDate(selectedDate);
+      setActivityScheduleSlots((prev) => {
+        const next = [...prev];
+        if (idx < next.length) next[idx] = hm;
+        return next;
+      });
     }
   };
 
@@ -2356,6 +2426,16 @@ export default function ActivitiesScreen() {
     }
 
     config.title = generateRepetitionTitle(config, repetitionType);
+
+    const scheduleClean = [
+      ...new Set(
+        activityScheduleSlots.map((s) => String(s).trim()).filter(activitiesHmOkStr)
+      ),
+    ].sort();
+    if (scheduleClean.length > 0) {
+      config.schedule = scheduleClean;
+    }
+
     return config;
   };
 
@@ -3404,10 +3484,12 @@ export default function ActivitiesScreen() {
       day: 'Día',
       endType: 'Finalización',
       endDate: 'Fecha de finalización',
+      schedule: 'Horario',
     };
     const orderedKeys = [
       'title', 'type', 'interval', 'unit', 'weekday', 'weekdays',
       'weekOrdinal', 'monthOption', 'month', 'day', 'endType', 'endDate',
+      'schedule',
     ];
 
     const lines: string[] = [];
@@ -3507,6 +3589,9 @@ export default function ActivitiesScreen() {
     }
     setEditingCreatedActivityId(activity.id);
     setIsEditingCreatedActivity(true);
+    setActivityScheduleExpanded(false);
+    setScheduleSlotPickerIndex(null);
+    scheduleSlotPickerIndexRef.current = null;
     setActivityName(activity.nombre_actividad || '');
     setActivityDescription(activity.descripcion_actividad || '');
     const startCal = calendarDateFromPicker(
@@ -3535,11 +3620,15 @@ export default function ActivitiesScreen() {
         if (freq.endDate) setEndDate(freq.endDate);
         if (freq.month != null) setYearMonth(String(freq.month));
         if (freq.day != null) setYearDay(String(freq.day));
+        const sched = parseScheduleFromFrecuenciaJsonStore(activity.frecuencia);
+        setActivityScheduleSlots(sched.length ? [...sched] : []);
       } else {
         setSelectedWeekdays([weekdayKeyFromDate(startCal)]);
+        setActivityScheduleSlots([]);
       }
     } catch {
       setSelectedWeekdays([weekdayKeyFromDate(startCal)]);
+      setActivityScheduleSlots([]);
     }
     setTipoActividad(activity.es_revision_equipo ? 'Inventario' : 'Normal');
     try {
@@ -3872,10 +3961,17 @@ export default function ActivitiesScreen() {
               ) : createdActivities.length === 0 ? (
                 <ThemedText style={styles.helperText}>Selecciona un puesto para cargar actividades creadas.</ThemedText>
               ) : (
-                createdActivities.map((item) => (
+                createdActivities.map((item) => {
+                  const createdScheduleLbl = formatScheduleUiLabel(parseScheduleFromFrecuenciaJsonStore(item.frecuencia));
+                  return (
                   <ThemedView key={item.id} style={styles.assignedItem}>
                     <ThemedText style={styles.assignedTitle}>{item.nombre_actividad}</ThemedText>
                     <ThemedText style={styles.helperText}>{item.descripcion_actividad}</ThemedText>
+                    {createdScheduleLbl ? (
+                      <ThemedText style={[styles.helperText, { marginTop: 4 }]}>
+                        {createdScheduleLbl}
+                      </ThemedText>
+                    ) : null}
                     <View style={[styles.modalButtons, { flexWrap: 'wrap' }]}>
                       <ScalePressButton
                         style={[styles.editButton, styles.createdActionButton]}
@@ -3912,7 +4008,8 @@ export default function ActivitiesScreen() {
                       <ThemedText style={styles.secondaryButtonText}>Actualizar puestos</ThemedText>
                     </ScalePressButton>
                   </ThemedView>
-                ))
+                  );
+                })
               )}
             </ThemedView>
           )}
@@ -3962,6 +4059,82 @@ export default function ActivitiesScreen() {
                     onChange={handleStartDateChange}
                   />
                 )}
+
+                <TouchableOpacity
+                  style={styles.dateButton}
+                  activeOpacity={0.85}
+                  onPress={() => {
+                    setActivityScheduleExpanded((prev) => {
+                      const next = !prev;
+                      if (!next) {
+                        setScheduleSlotPickerIndex(null);
+                        scheduleSlotPickerIndexRef.current = null;
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  <ThemedText style={styles.dateButtonText}>Horario (opcional)</ThemedText>
+                  <Ionicons name={activityScheduleExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
+                </TouchableOpacity>
+                {activityScheduleExpanded ? (
+                  <ThemedView style={{ marginBottom: 12 }}>
+                    <ThemedText style={[styles.helperText, { marginBottom: 10 }]}>
+                      Horas locales informativas (no afectan el marcado).
+                    </ThemedText>
+                    {activityScheduleSlots.map((slot, idx) => (
+                      <ThemedView
+                        key={`schedule-slot-${idx}`}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}
+                      >
+                        <TouchableOpacity
+                          style={[styles.dateButton, { flex: 1, marginBottom: 0 }]}
+                          onPress={() => {
+                            scheduleSlotPickerIndexRef.current = idx;
+                            setScheduleSlotPickerIndex(idx);
+                          }}
+                        >
+                          <ThemedText style={styles.dateButtonText}>{slot}</ThemedText>
+                          <Ionicons name="time-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          accessibilityLabel="Eliminar hora"
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          onPress={() => {
+                            setActivityScheduleSlots((prev) => prev.filter((_, j) => j !== idx));
+                            setScheduleSlotPickerIndex(null);
+                            scheduleSlotPickerIndexRef.current = null;
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={22} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                    ))}
+                    <ScalePressButton
+                      style={[styles.secondaryButton, { alignSelf: 'flex-start', minWidth: 140 }]}
+                      onPress={() => {
+                        setActivityScheduleSlots((prev) => [
+                          ...prev,
+                          prev.length ? prev[prev.length - 1] : '09:00',
+                        ]);
+                      }}
+                    >
+                      <ThemedText style={styles.secondaryButtonText}>Añadir hora</ThemedText>
+                    </ScalePressButton>
+                    {scheduleSlotPickerIndex !== null &&
+                    scheduleSlotPickerIndex >= 0 &&
+                    scheduleSlotPickerIndex < activityScheduleSlots.length ? (
+                      <DateTimePicker
+                        value={activitiesParseHmToLocalDate(
+                          activityScheduleSlots[scheduleSlotPickerIndex] || '09:00'
+                        )}
+                        mode="time"
+                        display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                        onChange={handleScheduleSlotTimeChange}
+                      />
+                    ) : null}
+                  </ThemedView>
+                ) : null}
 
                 <ThemedText style={styles.sectionTitle}>Tipo de actividad</ThemedText>
                 <ThemedView style={styles.pickerContainer}>
@@ -5333,6 +5506,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FF9500',
     paddingHorizontal: 6,
     borderRadius: 4,
+    alignSelf: 'flex-start',
+  },
+  activityScheduleHint: {
+    fontSize: 13,
+    color: '#555',
+    fontWeight: '500',
     alignSelf: 'flex-start',
   },
   teamReviewBadge: {

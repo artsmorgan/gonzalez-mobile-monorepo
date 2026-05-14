@@ -13,6 +13,7 @@ export type LlaveroItem = {
   contrato_id?: number;
   isActive?: boolean;
   nombre_llavero: string;
+  numero_llavero: string;
   observaciones: string;
   firma_responsable: string;
   created_by: number;

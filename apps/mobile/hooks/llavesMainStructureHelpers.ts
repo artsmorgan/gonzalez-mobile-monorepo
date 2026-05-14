@@ -519,6 +519,7 @@ export function applyLlaveUpdatePayloadToTree(tree: any[], llaveId: number, rd: 
     empresa_id: rd.empresa_id != null ? Number(rd.empresa_id) : row.empresa_id,
     division_id: rd.division_id != null ? Number(rd.division_id) : row.division_id,
     contrato_id: rd.contrato_id != null ? Number(rd.contrato_id) : row.contrato_id,
+    numero_llave: rd.numero_llave != null ? rd.numero_llave : row.numero_llave,
     lugar_abre: rd.lugar_abre != null ? rd.lugar_abre : row.lugar_abre,
     cantidad_copias: rd.cantidad_copias != null ? rd.cantidad_copias : row.cantidad_copias,
     observaciones: rd.observaciones != null ? rd.observaciones : row.observaciones,
@@ -560,6 +561,7 @@ export function applyLlaveroUpdatePayloadToTree(tree: any[], llaveroId: number, 
     division_id: rd.division_id != null ? Number(rd.division_id) : row.division_id,
     contrato_id: rd.contrato_id != null ? Number(rd.contrato_id) : row.contrato_id,
     nombre_llavero: rd.nombre_llavero != null ? rd.nombre_llavero : row.nombre_llavero,
+    numero_llavero: rd.numero_llavero != null ? rd.numero_llavero : row.numero_llavero,
     observaciones: rd.observaciones != null ? rd.observaciones : row.observaciones,
     firma_responsable: rd.firma_responsable != null ? rd.firma_responsable : row.firma_responsable,
     llaves: nextLlaves,
@@ -665,7 +667,7 @@ export function enrichLlaveroLlavesLinks(llaveros: any[], llavesMaster: any[]): 
       return {
         ...link,
         llave: lk
-          ? { id: lk.id, lugar_abre: lk.lugar_abre, cantidad_copias: lk.cantidad_copias }
+          ? { id: lk.id, lugar_abre: lk.lugar_abre, cantidad_copias: lk.cantidad_copias, numero_llave: lk.numero_llave }
           : link.llave ?? null,
       };
     }),

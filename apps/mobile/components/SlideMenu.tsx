@@ -258,6 +258,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Visitors');
   };
 
+  const handleReportesPress = () => {
+    onClose();
+    navigation.navigate('Reportes');
+  };
+
   const handleEvaluationsPress = () => {
     onClose();
     navigation.navigate('StaffEvaluations');
@@ -455,6 +460,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'reportes': return <Ionicons name="bar-chart" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
   };
@@ -1263,6 +1269,24 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   Registro de Visitantes
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[styles.menuItem, isActiveRoute('Reportes') && styles.activeMenuItem]}
+                onPress={handleReportesPress}
+              >
+                <ThemedText
+                  style={[styles.menuItemText, isActiveRoute('Reportes') && styles.activeMenuItemText]}
+                >
+                  {getActionIcon('reportes', isActiveRoute('Reportes'))}
+                </ThemedText>
+                <ThemedText
+                  style={[styles.menuItemText, isActiveRoute('Reportes') && styles.activeMenuItemText]}
+                >
+                  Reportes
                 </ThemedText>
               </TouchableOpacity>
             )}

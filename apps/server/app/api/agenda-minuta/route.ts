@@ -200,6 +200,7 @@ export async function POST(req: NextRequest) {
       temas_a_tratar,
       observaciones,
       firma_responsable,
+      estado,
     } = await req.json();
 
     const required: Array<[string, any]> = [
@@ -267,6 +268,7 @@ export async function POST(req: NextRequest) {
           temas_a_tratar: temas_a_tratar !== undefined ? ensureStringJson(temas_a_tratar, "[]") : "[]",
           observaciones: String(observaciones ?? "-"),
           firma_responsable: String(firma_responsable),
+          estado: Boolean(estado),
           created_at: createdAt.toISOString(),
           created_by: payload.id?.toString?.() || "",
         },
@@ -364,6 +366,7 @@ export async function POST(req: NextRequest) {
               acuerdos: record.acuerdos,
               observaciones: record.observaciones,
               firma_responsable: record.firma_responsable,
+              estado: (record as any).estado ?? false,
             },
           }]),
           created_at: createdAt.toISOString(),

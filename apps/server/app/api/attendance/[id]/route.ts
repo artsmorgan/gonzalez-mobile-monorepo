@@ -5,6 +5,7 @@ import { getActivities } from "../../../../utils/createActivities";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
 import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
+import getRoleDivision from "../../../../utils/getRoleDivision";
 
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
     const empleado = await callDynamicPrisma({
@@ -39,6 +40,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
         }
 
+        let empresa 
+        let cliente: any;
+        let contrato: any;
+        let corpo: any;
+        let puesto: any;
+        let plaza: any;
+        let horario: any;
+        let empleado: any;
+        let empleado_plaza: any;
+
         switch (type) {
             case "entrada":
                 if (marcaDia.hora_entrada_digitada != null) {
@@ -49,7 +60,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 marcaDia.hora_entrada = '1970-01-01T' + time;
                 marcaDia.hora_entrada_digitada = horaAccionDate;
 
-                const empresa = await callDynamicPrisma({
+                empresa = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -62,7 +73,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
                 }
 
-                const cliente = await callDynamicPrisma({
+                cliente = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -75,7 +86,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
                 }
 
-                const contrato = await callDynamicPrisma({
+                contrato = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -88,7 +99,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 200 });
                 }
 
-                const corpo = await callDynamicPrisma({
+                corpo = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -101,7 +112,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
                 }
 
-                const puesto = await callDynamicPrisma({
+                puesto = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -114,7 +125,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
                 }
 
-                const plaza = await callDynamicPrisma({
+                plaza = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -127,7 +138,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
                 }
 
-                const horario = await callDynamicPrisma({
+                horario = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -170,7 +181,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
                 }
 
-                const empleado = await callDynamicPrisma({
+                empleado = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
@@ -224,8 +235,74 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 }
                 break;
         }
+        
+        /*
+        empleado_plaza = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_empleado_plaza",
+                operation: "findFirst",
+                where: {
+                    empleado_id: empleado.id,
+                    plaza_id: marcaDia.plaza_id
+                }
+            }
+        });
 
-        return NextResponse.json({ status: true, message: type == "entrada" ? "Ingreso de trabajo confirmado" : "Salida de trabajo confirmada" }, { status: 200 });
+        const roleDivision = await getRoleDivision(req, plaza, empleado_plaza);
+
+        const marca_return = {
+            id: marcaDia.id,
+            hora_entrada_digitada: marcaDia.hora_entrada_digitada ?? null,
+            hora_salida_digitada: marcaDia.hora_salida_digitada ?? null,
+            hora_inicio: marcaDia.hora_inicio,
+            hora_fin: marcaDia.hora_fin,
+            fecha: marcaDia.fecha,
+            tipo_turno: marcaDia.tipo_turno,
+            horas_duracion: marcaDia.horas_duracion,
+            roleDivision: roleDivision,
+            empleadoFijo_id: empleado.id,
+            empresa: {
+                id: empresa.id,
+                nombre: empresa.nombre
+            },
+            cliente: {
+                id: cliente.id,
+                nombre: cliente.nombre
+            },
+            contrato: {
+                id: contrato.id,
+                nombre: contrato.nombre
+            },
+            corpo: {
+                id: corpo.id,
+                nombre: corpo.nombre,
+                ubicacion: {
+                    lat: corpo.coordenadas_gpslat,
+                    lng: corpo.coordenadas_gpslng
+                }
+            },
+            puesto: {
+                id: puesto.id,
+                nombre: puesto.nombre,
+                tiene_relevo: puesto.tiene_relevo ?? false,
+                ubicacion: {
+                    lat: puesto.coordenadas_gpslat ? parseFloat(puesto.coordenadas_gpslat) : null,
+                    lng: puesto.coordenadas_gpslng ? parseFloat(puesto.coordenadas_gpslng) : null
+                }
+            },
+            plaza: {
+                id: plaza.id,
+                nombre: plaza.nombre
+            },
+            horario: {
+                id: horario.id,
+                nombre: horario.titulo
+            }
+        };
+*/
+        return NextResponse.json({ status: true, message: type == "entrada" ? "Ingreso de trabajo confirmado" : "Salida de trabajo confirmada", marca: null }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);

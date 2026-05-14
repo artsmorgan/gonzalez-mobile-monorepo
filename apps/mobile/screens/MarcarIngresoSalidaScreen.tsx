@@ -19,6 +19,7 @@ import * as Network from 'expo-network';
 import { formatDateDMY } from '../utils/formatDate';
 import saveMarca from '@/hooks/saveMarca';
 import saveAbsentReason from '@/hooks/saveAbsentReason';
+import updateNomenclator from '@/hooks/updateNomenclator';
 import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
 import {
   appendAttendanceAction,
@@ -163,6 +164,10 @@ export default function MarcarIngresoSalidaScreen() {
   const [futureMarks, setFutureMarks] = useState<any[]>([]);
   const [isLoadingFutureMarks, setIsLoadingFutureMarks] = useState(false);
   const hasRequestedInitialFetchRef = useRef(false);
+  /** Aviso informativo entrada (cerrable), mismo patrón que ChecklistSupervisionScreen. */
+  const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
+  /** Re-render del reloj cuando no hay `attendanceData` (hora local CR como respaldo). */
+  const [clockTick, setClockTick] = useState(0);
   useEffect(() => {
     const handler = () => {
       fetchAttendanceStatus();
@@ -227,6 +232,12 @@ export default function MarcarIngresoSalidaScreen() {
       intervalRef.current = null;
     }
   }, [isAuthenticated, employee, isProcessingMark, isLoadingData, attendanceData]);
+
+  useEffect(() => {
+    if (attendanceData) return;
+    const id = setInterval(() => setClockTick((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, [attendanceData]);
 
   const fetchAttendanceStatus = async () => {
     try {
@@ -635,52 +646,6 @@ export default function MarcarIngresoSalidaScreen() {
 
       await AsyncStorage.multiRemove(['visitors_cache', 'vehicles_cache']);
 
-      await Promise.all([
-        getLunchTimeConfig(updatedMarca.id),
-        getActivities(updatedMarca.id),
-        //getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
-        getCategories(),
-        //getTiposProductoNoConforme(),
-        getTipoActivo(),
-        getEmployeesCorpo(updatedMarca.corpo.id),
-        //getIncidents(updatedMarca.corpo.id),
-        getIncidentsClassifications(),
-        getDocumentTypes(),
-        getExecutives(),
-        getPuestosCorpo(updatedMarca.corpo.id),
-        //getCorporateVehicles(updatedMarca.corpo.id),
-        /*(async () => {
-          const mid = Number(updatedMarca.id);
-          const cid = Number(updatedMarca.corpo?.id ?? updatedMarca.corpo_id ?? 0);
-          if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
-          if (!(await evaluateInternetConnection())) return;
-          await syncVehiclesVisitasCacheFromNetwork({
-            marcaId: mid,
-            corpoId: cid,
-            refreshAccessToken,
-            logout,
-          });
-        })(),
-        (async () => {
-          const mid = Number(updatedMarca.id);
-          const cid = Number(updatedMarca.corpo?.id ?? updatedMarca.corpo_id ?? 0);
-          if (!Number.isFinite(mid) || mid <= 0 || !Number.isFinite(cid) || cid <= 0) return;
-          if (!(await evaluateInternetConnection())) return;
-          await syncVisitorsCacheFromNetwork({
-            marcaId: mid,
-            corpoId: cid,
-            refreshAccessToken,
-            logout,
-          });
-        })(),*/
-        //getVoiceNotes(updatedMarca),
-        getArticulos(),
-        //getJobManuals(updatedMarca.puesto?.id),
-        //getLlaves(Number(updatedMarca.corpo?.id) || 0),
-        //getLlaveros(Number(updatedMarca.corpo?.id) || 0),
-        getCategoriesMantenimiento(),
-      ]);
-
       const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
       if (shouldUpdateMainStructure) {
         await getMainStructure();
@@ -703,6 +668,13 @@ export default function MarcarIngresoSalidaScreen() {
       if (shouldRefreshStatus) {
         await fetchAttendanceStatus();
       }
+
+      Promise.all([
+        getLunchTimeConfig(updatedMarca.id),
+        getActivities(updatedMarca.id),
+      ]);
+
+      await updateNomenclator(updatedMarca, refreshAccessToken, logout);
     } catch (storageError) {
       console.error('Error hydrating entrada context:', storageError);
     }
@@ -820,6 +792,15 @@ export default function MarcarIngresoSalidaScreen() {
         'remembered_cedula',
         'server_time',
         'main_structure_created_at',
+        'categories_cache',
+        'tipo_activos_cache',
+        'incidents_classifications_cache',
+        'document_types_cache',
+        'executives_cache',
+        'puestos_corpo_cache',
+        'categoria_mantenimiento_cache',
+        'tipo_quejas_cache',
+        'tipo_clientes_quejas_cache'
       ];
       const keys = await AsyncStorage.getAllKeys();
 
@@ -836,17 +817,48 @@ export default function MarcarIngresoSalidaScreen() {
     }
   }
 
-  const getJobManuals = async (puestoId: number | null | undefined) => {
-    const pid =
-      puestoId != null && Number.isFinite(Number(puestoId)) && Number(puestoId) > 0 ? Number(puestoId) : null;
-    if (!pid) return;
+  const getLunchTimeConfig = async (marcaId: number) => {
+    await AsyncStorage.removeItem('lunch_time_config');
+    await AsyncStorage.setItem('alert_lunch_time', 'false');
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
 
+    const response = await authedFetch({
+      url: `${apiUrl}/api/lunch-time/${marcaId}`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) return;
+    console.log("getLunchTimeConfig");
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getLunchTimeConfig`);
+    }
+    const data = await response.json();
+
+    if (data.status) {
+      await AsyncStorage.setItem('lunch_time_config', JSON.stringify(data));
+      await AsyncStorage.setItem('alert_lunch_time', 'true');
+    }
+}
+
+const getActivities = async (marcaId: number) => {
+    // Eliminar actions
+    await AsyncStorage.removeItem('activities_actions');
+    await AsyncStorage.removeItem('activities_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
     const response = await authedFetch({
-      url: `${apiUrl}/api/job-manuals?puesto_id=${pid}`,
+      url: `${apiUrl}/api/activities/marca/${marcaId}`,
       init: {
         method: 'GET',
         headers: {
@@ -858,16 +870,13 @@ export default function MarcarIngresoSalidaScreen() {
     });
     if (!response) return;
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getJobManuals`);
+      throw new Error(`HTTP error! status: ${response.status} getActivities`);
     }
     const data = await response.json();
-    if (data.status && Array.isArray(data.manuals)) {
-      const prevStr = await AsyncStorage.getItem('job_manuals_cache');
-      const prev = prevStr ? JSON.parse(prevStr) : [];
-      const merged = mergeJobManualsCacheForPuesto(Array.isArray(prev) ? prev : [], data.manuals, pid);
-      await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
+    if (data.status) {
+      await AsyncStorage.setItem('activities_cache', JSON.stringify(data.actividades));
     }
-  }
+}
 
   const getMainStructure = async () => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -949,630 +958,6 @@ export default function MarcarIngresoSalidaScreen() {
       return false;
     }
   };
-
-  const getBitacoraVehiculoDetenido = async (marcaId: number) => {
-    await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/bitacora-vehiculo-detenido?m=${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getBitacoraVehiculoDetenido`);
-    }
-    const data = await response.json();
-    if (!data.status) return;
-    const rows = Array.isArray(data.data) ? data.data : [];
-    let sid = Number(rows[0]?.sucursal_id ?? rows[0]?.corpo_id ?? 0);
-    if (!sid) {
-      try {
-        const cm = await AsyncStorage.getItem('current_marca');
-        if (cm) {
-          const parsed = JSON.parse(cm);
-          sid = Number(parsed.corpo?.id ?? parsed.corpo_id ?? 0);
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    if (sid > 0) {
-      const { mergeBitacorasDetenidosForSucursalFromServer } = await import('@/hooks/bitacoraMainStructureCache');
-      await mergeBitacorasDetenidosForSucursalFromServer({ sucursalId: sid, serverRows: rows });
-    }
-  };
-
-  const getDocumentosEntregados = async (corpoId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('documentos_entregados_actions');
-    await AsyncStorage.removeItem('documentos_entregados_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/documentos-entregados?corpo_id=${encodeURIComponent(String(corpoId))}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getDocumentosEntregados`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('documentos_entregados_cache', JSON.stringify(data.data));
-    }
-  }
-
-  const getLlaves = async (corpoId: number) => {
-    await AsyncStorage.removeItem('llaves_actions');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const cid = Number(corpoId);
-    if (!Number.isFinite(cid) || cid <= 0) {
-      return;
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/llaves?corpo_id=${encodeURIComponent(String(cid))}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getLlaves`);
-    }
-    const data = await response.json();
-    if (data.status && Array.isArray(data.data)) {
-      const cacheStr = await AsyncStorage.getItem('llaves_cache');
-      const existing = cacheStr ? JSON.parse(cacheStr) : [];
-      const merged = mergeLlavesCacheForCorpo(existing, data.data, cid);
-      await AsyncStorage.setItem('llaves_cache', JSON.stringify(merged));
-    }
-  };
-  
-  const getLlaveros = async (corpoId: number) => {
-    await AsyncStorage.removeItem('llaveros_actions');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const cid = Number(corpoId);
-    if (!Number.isFinite(cid) || cid <= 0) {
-      return;
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/llaveros?corpo_id=${encodeURIComponent(String(cid))}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getLlaveros`);
-    }
-    const data = await response.json();
-    if (data.status && Array.isArray(data.data)) {
-      const cacheStr = await AsyncStorage.getItem('llaveros_cache');
-      const existing = cacheStr ? JSON.parse(cacheStr) : [];
-      const merged = mergeLlaverosCacheForCorpo(existing, data.data, cid);
-      await AsyncStorage.setItem('llaveros_cache', JSON.stringify(merged));
-    }
-  };
-
-  const getTrainings = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('trainings_actions');
-    await AsyncStorage.removeItem('trainings_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/training?m=${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getTrainings`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('trainings_cache', JSON.stringify(data.capacitaciones));
-    }
-  }
-
-  const getVoiceNotes = async (marca: { corpo?: { id?: number }; puesto?: { id?: number } }) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('voice_notes_actions');
-    await AsyncStorage.removeItem('voice_notes_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const corpoId = marca.corpo?.id != null ? Number(marca.corpo.id) : null;
-    if (!corpoId || corpoId <= 0) {
-      return;
-    }
-    let url = `${apiUrl}/api/voice-notes?corpo_id=${corpoId}`;
-    const mp = marca.puesto?.id != null ? Number(marca.puesto.id) : null;
-    if (mp != null && mp > 0) {
-      url += `&puesto_id=${mp}`;
-    }
-    const response = await authedFetch({
-      url,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getVoiceNotes`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('voice_notes_cache', JSON.stringify(data.voiceNotes));
-    }
-  }
-
-  const getCategories = async () => {
-    await AsyncStorage.removeItem('categories_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/categories`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    console.log("getCategories");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getCategories`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('categories_cache', JSON.stringify(data.categories));
-    }
-  }
-
-  const getCategoriesMantenimiento = async () => {
-    await AsyncStorage.removeItem('categoria_mantenimiento_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/categoria-mantenimiento`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    console.log("getCategoriesMantenimiento");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getCategoriesMantenimiento`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('categoria_mantenimiento_cache', JSON.stringify(data.categorias));
-    }
-  }
-
-  const getTiposProductoNoConforme = async () => {
-    await AsyncStorage.removeItem('tipos_producto_no_conforme_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/non-conforming-product/types`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getTiposProductoNoConforme`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('tipos_producto_no_conforme_cache', JSON.stringify(data.data || []));
-    }
-  }
-
-  const getTipoActivo = async () => {
-    await AsyncStorage.removeItem('tipo_activos_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/visitors/categories`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    console.log("getTipoActivo");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getTipoActivo`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('tipo_activos_cache', JSON.stringify(data));
-    }
-  }
-
-  const getNotes = async (
-    puestoId: number,
-    puestoMeta?: { id: number; nombre?: string } | null
-  ) => {
-    const pid = Number(puestoId);
-    if (!Number.isFinite(pid) || pid <= 0) {
-      return;
-    }
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-
-    const response = await authedFetch({
-      url: `${apiUrl}/api/puestos/0/notas?puesto_id=${encodeURIComponent(String(pid))}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getNotes`);
-    }
-    const data = await response.json();
-    if (data.status && Array.isArray(data.notas)) {
-      const cached = parseNotesCache(await AsyncStorage.getItem('notes_cache'));
-      const legacyPid = cached.puesto?.id ?? pid;
-      const mergedNotas = mergeNotesCacheForPuesto(
-        cached.notas || [],
-        data.notas,
-        pid,
-        legacyPid,
-        mergeNotesBase64FromCache
-      );
-      await AsyncStorage.setItem(
-        'notes_cache',
-        JSON.stringify({
-          notas: mergedNotas,
-          puesto: puestoMeta ?? cached.puesto ?? { id: pid },
-        })
-      );
-    }
-  };
-
-  const getEvaluations = async (corpoId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('evaluations_staff_actions');
-    await AsyncStorage.removeItem('evaluations_staff_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/evaluation/corpo/${corpoId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getEvaluations`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('evaluations_staff_cache', JSON.stringify(data.evaluaciones));
-    }
-  }
-
-  const getEmployeesCorpo = async (corpoId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('employees_corpo_actions');
-    await AsyncStorage.removeItem('employees_corpo_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/empleados/corpo/${corpoId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getEmployeesCorpo`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('employees_corpo_cache', JSON.stringify(data.empleados));
-    }
-  }
-
-  const getIncidents = async (corpoId: number) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/incidents?corpo_id=${corpoId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getIncidents`);
-    }
-    const data = await response.json();
-    if (data.status && Array.isArray(data.incidents)) {
-      const prev = (await getIncidentsCache()) || [];
-      const merged = mergeIncidentsCacheForCorpo(prev, data.incidents, corpoId);
-      await setIncidentsCache(merged);
-    }
-  }
-
-  const getIncidentsClassifications = async () => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('incidents_classifications_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/incidents/classification`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getIncidentsClassifications`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('incidents_classifications_cache', JSON.stringify(data.classifications));
-    }
-  }
-
-  const getDocumentTypes = async () => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('document_types_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/document-types`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getDocumentTypes`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('document_types_cache', JSON.stringify(data.documentTypes));
-    }
-  }
-
-  const getExecutives = async () => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('executives_actions');
-    await AsyncStorage.removeItem('executives_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/executives`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getExecutives`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('executives_cache', JSON.stringify(data.executives));
-    }
-  }
-
-  const getSurveys = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('surveys_actions');
-    await AsyncStorage.removeItem('surveys_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/encuesta-nps?m=${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getSurveys`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('surveys_cache', JSON.stringify(data.encuestas));
-    }
-  }
-
-  const getPuestosCorpo = async (corpoId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('puestos_corpo_actions');
-    await AsyncStorage.removeItem('puestos_corpo_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/puestos/corpo/${corpoId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getPuestosCorpo`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('puestos_corpo_cache', JSON.stringify(data.puestos));
-    }
-  }
-
-  const getArticulos = async () => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('articulos_actions');
-    await AsyncStorage.removeItem('articulos_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/articulos`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getArticulos`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
-    }
-  }
 
   const handleMenuPress = () => {
     setIsMenuVisible(true);
@@ -1780,6 +1165,30 @@ export default function MarcarIngresoSalidaScreen() {
     return hoursReturn;
   };
 
+  /** HH:mm para la tarjeta "Hora actual" (siempre visible): servidor vía marca, `horaAccion`, o reloj local CR). */
+  const getDisplayClockText = (): string => {
+    void clockTick;
+    if (attendanceData?.current_time) {
+      try {
+        return getNextTime(attendanceData.current_time);
+      } catch {
+        return '—';
+      }
+    }
+    if (horaAccion != null && Number.isFinite(Number(horaAccion))) {
+      try {
+        return getNextTime(new Date(Number(horaAccion)).toISOString());
+      } catch {
+        /* continuar al fallback */
+      }
+    }
+    try {
+      return format(toZonedTime(new Date(), 'America/Costa_Rica'), 'HH:mm');
+    } catch {
+      return '—';
+    }
+  };
+
   const getDisability = () => {
     if (!attendanceData) return true;
 
@@ -1793,38 +1202,6 @@ export default function MarcarIngresoSalidaScreen() {
     if (attendanceData.estado === 'Ingresado' && !attendanceData.change_available) return true;
 
     return false;
-  }
-
-  const getLunchTimeConfig = async (marcaId: number) => {
-    await AsyncStorage.removeItem('lunch_time_config');
-    await AsyncStorage.setItem('alert_lunch_time', 'false');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-
-    const response = await authedFetch({
-      url: `${apiUrl}/api/lunch-time/${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    console.log("getLunchTimeConfig");
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getLunchTimeConfig`);
-    }
-    const data = await response.json();
-
-    if (data.status) {
-      await AsyncStorage.setItem('lunch_time_config', JSON.stringify(data));
-      await AsyncStorage.setItem('alert_lunch_time', 'true');
-    }
   }
 
   const convertDateToLocal = (date: string) => {
@@ -1889,35 +1266,6 @@ export default function MarcarIngresoSalidaScreen() {
 
     return '--:--';
   };
-
-  const getActivities = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('activities_actions');
-    await AsyncStorage.removeItem('activities_cache');
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/activities/marca/${marcaId}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getActivities`);
-    }
-    const data = await response.json();
-    if (data.status) {
-      await AsyncStorage.setItem('activities_cache', JSON.stringify(data.actividades));
-    }
-  }
 
   const getCorporateVehicles = async (corpoId: number) => {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
@@ -2322,7 +1670,25 @@ export default function MarcarIngresoSalidaScreen() {
               Control de asistencia
             </ThemedText>
           </ThemedView>
-          {/* Future Marks Button */}
+
+          {isEntradaMarcaHintVisible ? (
+            <ThemedView style={[styles.entradaMarcaHintBox, styles.entradaMarcaHintTopRow]}>
+              <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
+              <ThemedView style={styles.entradaMarcaHintTextRow}>
+                <ThemedText style={[styles.entradaMarcaHintText, { flex: 1 }]}>
+                  Para poder marcar entrada, asegúrate de estar mínimo 15 minutos antes del inicio o durante tu turno
+                </ThemedText>
+                <TouchableOpacity
+                  onPress={() => setIsEntradaMarcaHintVisible(false)}
+                  style={styles.entradaMarcaHintClose}
+                  accessibilityLabel="Cerrar aviso"
+                >
+                  <ThemedText style={styles.entradaMarcaHintCloseText}>Cerrar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
+          ) : null}
+
           <ThemedView style={styles.testButtonContainer}>
             <TouchableOpacity
               style={styles.futureMarksButton}
@@ -2330,9 +1696,14 @@ export default function MarcarIngresoSalidaScreen() {
             >
               <Ionicons name="calendar-outline" size={20} color="#FFFFFF" />
               <ThemedText style={styles.futureMarksButtonText}>
-                Ver marcas futuras
+                Ver turnos futuros
               </ThemedText>
             </TouchableOpacity>
+          </ThemedView>
+
+          <ThemedView style={[styles.infoCard, { marginBottom: 16 }]}>
+            <ThemedText style={styles.currentTimeTitle}>Hora actual</ThemedText>
+            <ThemedText style={styles.currentTime}>{getDisplayClockText()}</ThemedText>
           </ThemedView>
           {/* Test Button - Always Visible */}
           
@@ -2498,10 +1869,6 @@ export default function MarcarIngresoSalidaScreen() {
               </ThemedView>
             ) : (
             <ThemedView style={styles.contentContainer}>
-              <ThemedView style={styles.infoCard}>
-                <ThemedText style={styles.currentTimeTitle}>Hora actual</ThemedText>
-                <ThemedText style={styles.currentTime}>{attendanceData ? getNextTime(attendanceData.current_time) : ''}</ThemedText>
-              </ThemedView>
               {/* Work Information Card */}
               <ThemedView style={styles.infoCard}>
                 <ThemedText style={styles.infoCardTitle}>Información Laboral</ThemedText>
@@ -2779,6 +2146,52 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: 'bold',
     textAlign: 'center',
+    color: '#007AFF',
+  },
+  entradaMarcaHintBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8DAF8',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  entradaMarcaHintTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    width: '100%',
+    backgroundColor: '#E8F4FF',
+  },
+  entradaMarcaHintTextRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    minWidth: 0,
+    backgroundColor: '#E8F4FF',
+  },
+  entradaMarcaHintText: {
+    fontSize: 14,
+    color: '#1a1a1a',
+    lineHeight: 20,
+    backgroundColor: '#E8F4FF',
+  },
+  entradaMarcaHintClose: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+  },
+  entradaMarcaHintCloseText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: '#007AFF',
   },
   scrollView: {

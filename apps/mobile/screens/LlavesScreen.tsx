@@ -210,6 +210,7 @@ export default function LlavesScreen() {
   const [isLlaveroCreating, setIsLlaveroCreating] = useState(false);
   const [llaveroEditing, setLlaveroEditing] = useState<LlaveroUI | null>(null);
   const [llaveroNombre, setLlaveroNombre] = useState('');
+  const [llaveroNumero, setLlaveroNumero] = useState('');
   const [llaveroObservaciones, setLlaveroObservaciones] = useState('');
   const [llaveroFirmaResponsable, setLlaveroFirmaResponsable] = useState('');
   /** Selección de llaves para llavero: `s:<id servidor>` o `l:<id_local>` (llaves solo offline). */
@@ -299,6 +300,7 @@ export default function LlavesScreen() {
   // UI: create/edit
   const [isCreating, setIsCreating] = useState(false);
   const [editing, setEditing] = useState<LlaveUI | null>(null);
+  const [numeroLlave, setNumeroLlave] = useState('');
   const [lugarAbre, setLugarAbre] = useState('');
   const [cantidadCopias, setCantidadCopias] = useState<string>('1');
   const [observaciones, setObservaciones] = useState('');
@@ -1021,6 +1023,7 @@ export default function LlavesScreen() {
   }, [llaves, isMovModalVisible, movLlave?.id, movLlave?.id_local, movIsCreating, movEditing]);
 
   const resetForm = () => {
+    setNumeroLlave('');
     setLugarAbre('');
     setCantidadCopias('1');
     setObservaciones('');
@@ -1038,6 +1041,7 @@ export default function LlavesScreen() {
   const startEditing = async (it: LlaveUI) => {
     setEditing(it);
     setIsCreating(true);
+    setNumeroLlave(it.numero_llave || '');
     setLugarAbre(it.lugar_abre || '');
     setCantidadCopias(String(it.cantidad_copias ?? 1));
     setObservaciones(it.observaciones || '');
@@ -1161,6 +1165,7 @@ export default function LlavesScreen() {
     }
     return {
       marca_id: current.id,
+      numero_llave: numeroLlave,
       lugar_abre: lugarAbre,
       cantidad_copias: parseInt(String(cantidadCopias), 10) || 0,
       observaciones: observaciones ?? '',
@@ -1718,6 +1723,7 @@ export default function LlavesScreen() {
                 division_id: payload.division_id,
                 contrato_id: payload.contrato_id,
                 isActive: true,
+                numero_llave: payload.numero_llave,
                 lugar_abre: payload.lugar_abre,
                 cantidad_copias: payload.cantidad_copias,
                 observaciones: payload.observaciones,
@@ -1756,6 +1762,7 @@ export default function LlavesScreen() {
             division_id: payload.division_id,
             contrato_id: payload.contrato_id,
             isActive: true,
+            numero_llave: payload.numero_llave,
             lugar_abre: payload.lugar_abre,
             cantidad_copias: payload.cantidad_copias,
             observaciones: payload.observaciones,
@@ -1810,6 +1817,7 @@ export default function LlavesScreen() {
           if (!match) return it;
           return {
             ...it,
+            numero_llave: payload.numero_llave,
             lugar_abre: payload.lugar_abre,
             cantidad_copias: payload.cantidad_copias,
             observaciones: payload.observaciones,
@@ -1883,6 +1891,10 @@ export default function LlavesScreen() {
       Alert.alert('Error', 'El nombre del llavero es obligatorio');
       return false;
     }
+    if (!llaveroNumero.trim()) {
+      Alert.alert('Error', 'El número del llavero es obligatorio');
+      return false;
+    }
     if (!llaveroFirmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
       return false;
@@ -1939,6 +1951,7 @@ export default function LlavesScreen() {
     return {
       marca_id: current.id,
       nombre_llavero: llaveroNombre.trim(),
+      numero_llavero: llaveroNumero.trim(),
       observaciones: llaveroObservaciones.trim(),
       firma_responsable: llaveroFirmaResponsable,
       llaves_refs,
@@ -1991,6 +2004,7 @@ export default function LlavesScreen() {
                 contrato_id: payload.contrato_id,
                 isActive: true,
                 nombre_llavero: payload.nombre_llavero,
+                numero_llavero: payload.numero_llavero,
                 observaciones: payload.observaciones,
                 firma_responsable: payload.firma_responsable,
                 created_by: Number(employee?.id) || 0,
@@ -2037,6 +2051,7 @@ export default function LlavesScreen() {
             contrato_id: payload.contrato_id,
             isActive: true,
             nombre_llavero: payload.nombre_llavero,
+            numero_llavero: payload.numero_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
             created_by: Number(employee.id) || 0,
@@ -2095,6 +2110,7 @@ export default function LlavesScreen() {
           return {
             ...it,
             nombre_llavero: payload.nombre_llavero,
+            numero_llavero: payload.numero_llavero,
             observaciones: payload.observaciones,
             firma_responsable: payload.firma_responsable,
             cliente_id: payload.cliente_id,
@@ -2686,6 +2702,7 @@ export default function LlavesScreen() {
   // Funciones para Llaveros (similar a Llaves)
   const resetLlaveroForm = () => {
     setLlaveroNombre('');
+    setLlaveroNumero('');
     setLlaveroObservaciones('');
     setLlaveroFirmaResponsable('');
     setLlaveroSelectedLlaveKeys([]);
@@ -2705,6 +2722,7 @@ export default function LlavesScreen() {
     setLlaveroEditing(it);
     setIsLlaveroCreating(true);
     setLlaveroNombre(it.nombre_llavero || '');
+    setLlaveroNumero(it.numero_llavero || '');
     setLlaveroObservaciones(it.observaciones || '');
     setLlaveroFirmaResponsable(it.firma_responsable || '');
     const keys = (it.llaves || []).map(llaveroLinkRowToSelectionKey).filter(Boolean) as string[];
@@ -2830,7 +2848,7 @@ export default function LlavesScreen() {
         if (d !== filterFecha) return false;
       }
       if (!q) return true;
-      const haystack = `${it.lugar_abre ?? ''} ${it.cantidad_copias ?? ''} ${it.observaciones ?? ''}`.toLowerCase();
+      const haystack = `${it.numero_llave ?? ''} ${it.cantidad_copias ?? ''} ${it.observaciones ?? ''}`.toLowerCase();
       return haystack.includes(q);
     });
   }, [llaves, filterSearch, filterFecha]);
@@ -2922,7 +2940,7 @@ export default function LlavesScreen() {
     return (
       <ThemedView key={key} style={styles.bitacoraCard}>
         <ThemedText style={styles.bitTitle}>
-          {it.lugar_abre}
+          {it.numero_llave}
           {it.id_local ? ' (offline)' : ''}
         </ThemedText>
 
@@ -3054,12 +3072,13 @@ export default function LlavesScreen() {
             </ThemedText>
             {(it.llaves || []).length > 0 && (
               <ThemedView style={{ marginTop: 8 }}>
-                <ThemedText style={styles.bitLabel}>Lugares que abren:</ThemedText>
+                <ThemedText style={styles.bitLabel}>Números de llaves y lugares que abren:</ThemedText>
                 {(it.llaves || []).map((llaveRel: any, idx: number) => {
                   const lugarAbre = llaveRel.llave?.lugar_abre || 'N/A';
+                  const numeroLlave = llaveRel.llave?.numero_llave || 'N/A';
                   return (
                     <ThemedText key={idx} style={[styles.bitValue, { marginTop: 4 }]}>
-                      • {lugarAbre}
+                      • {numeroLlave} - {lugarAbre}
                     </ThemedText>
                   );
                 })}
@@ -3480,6 +3499,15 @@ export default function LlavesScreen() {
                     </ThemedView>
                   ) : null}
 
+                  <ThemedText style={styles.label}>Número de llave *</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ej: 1234567890"
+                    placeholderTextColor="#999"
+                    value={numeroLlave}
+                    onChangeText={setNumeroLlave}
+                  />
+
                   <ThemedText style={styles.label}>Lugar que abre *</ThemedText>
                   <TextInput
                     style={styles.input}
@@ -3746,6 +3774,15 @@ export default function LlavesScreen() {
                     value={llaveroNombre}
                     onChangeText={setLlaveroNombre}
                   />
+                  
+                  <ThemedText style={styles.label}>Número del llavero *</ThemedText>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Ej: 1, 2, 3..."
+                    placeholderTextColor="#999"
+                    value={llaveroNumero}
+                    onChangeText={setLlaveroNumero}
+                  />
 
                   <ThemedText style={styles.label}>Observaciones</ThemedText>
                   <TextInput
@@ -3807,7 +3844,7 @@ export default function LlavesScreen() {
                                   <ThemedText
                                     style={[styles.llaveSelectorText, isSelected && styles.llaveSelectorTextSelected]}
                                   >
-                                    {llave.lugar_abre} ({llave.cantidad_copias} copias)
+                                    {llave.numero_llave} ({llave.cantidad_copias} copias)
                                   </ThemedText>
                                 </TouchableOpacity>
                               );
@@ -4034,7 +4071,7 @@ export default function LlavesScreen() {
           <ScrollView style={styles.floatModalScroll} contentContainerStyle={styles.floatModalScrollContent} keyboardShouldPersistTaps="handled">
             <ThemedView style={styles.modalCard}>
               <ThemedText style={styles.modalCardTitle}>Llave:</ThemedText>
-              <ThemedText style={styles.modalCardValue}>{movLlave?.lugar_abre || '-'}</ThemedText>
+              <ThemedText style={styles.modalCardValue}>{movLlave?.numero_llave || '-'}</ThemedText>
             </ThemedView>
 
             {/* Filtros movimientos (collapsable) */}

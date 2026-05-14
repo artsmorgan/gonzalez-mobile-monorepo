@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime, format } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import getRoleDivision from "../../../../../utils/getRoleDivision";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -383,84 +384,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
         });
 
-        const roleDivision: { role: { nombre: string, id: number }, division: { nombre: string, id: number } } = {
-            role: { id: 0, nombre: "" },
-            division: { id: 0, nombre: "" },
-        };
-
-        if (empleado_plaza && empleado_plaza.plaza_id && empleado_plaza.division_id) {
-            const division = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "n_division",
-                    operation: "findFirst",
-                    where: {
-                        id: empleado_plaza.division_id
-                    }
-                }
-            });
-
-            if (division) {
-                roleDivision.division.id = division.id;
-                roleDivision.division.nombre = division.nombre;
-            }
-
-            if (plaza.categoriaSalarial_id) {
-                const categoria_salarial = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "pg_categoria_salarial",
-                        operation: "findFirst",
-                        where: {
-                            id: plaza.categoriaSalarial_id
-                        }
-                    }
-                });
-
-                if (categoria_salarial && categoria_salarial.categoriaEmpleado_id) {
-                    const categoria_empleado = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "pg_categoria_empleado",
-                            operation: "findFirst",
-                            where: {
-                                id: categoria_salarial.categoriaEmpleado_id
-                            }
-                        }
-                    });
-
-                    if (categoria_empleado) {
-                        let role = "OPERATIVO";
-                        switch (categoria_empleado.codigo) {
-                            case "OFI":
-                                role = "OPERATIVO";
-                                break;
-                            case "MIS":
-                                role = "OPERATIVO";
-                                break;
-                            case "OFC":
-                                role = "OPERATIVO";
-                                break;
-                            case "ADM":
-                                role = "ADMINISTRATIVO";
-                                break;
-                            case "COO":
-                                role = "SUPERVISOR";
-                                break;
-                            case "SUP":
-                                role = "SUPERVISOR";
-                                break;
-                        }
-
-                        roleDivision.role.id = categoria_empleado.id;
-                        roleDivision.role.nombre = role;
-                    }
-                }
-            }
-        }
+        const roleDivision = await getRoleDivision(req, plaza, empleado_plaza);
 
         const marca_return = {
             id: marcaDia.id,
@@ -511,6 +435,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 nombre: horario.titulo
             }
         };
+
+        console.log("marca_return", marca_return);
 
         const data = {
             status: true,

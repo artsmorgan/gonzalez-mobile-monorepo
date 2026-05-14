@@ -249,6 +249,7 @@ export async function GET(req: NextRequest) {
                 observaciones: v.observaciones,
                 tipo_accion: v.tipo_accion,
                 pers_autoriza_salida: v.pers_autoriza_salida,
+                firma_visitante: v.firma_visitante,
                 foto_cedula: v.foto_cedula,
                 updated_at: v.updated_at,
                 activos: activos,
@@ -292,6 +293,7 @@ export async function POST(req: NextRequest) {
             tipo_accion, // Opcional
             pers_autoriza_salida, // Opcional
             foto_cedula, // viene en base64 y opcional
+            firma_visitante, // viene en base64 y opcional
             activos,
         } = await req.json();
 
@@ -371,6 +373,7 @@ export async function POST(req: NextRequest) {
                     observaciones,
                     tipo_accion,
                     pers_autoriza_salida,
+                    firma_visitante,
                     isActive: true,
                 }
             }
@@ -400,6 +403,7 @@ export async function POST(req: NextRequest) {
                             observaciones: new_visita.observaciones,
                             tipo_accion: new_visita.tipo_accion,
                             pers_autoriza_salida: new_visita.pers_autoriza_salida,
+                            firma_visitante: new_visita.firma_visitante,
                             activos: activos,
                         },
                     }]),

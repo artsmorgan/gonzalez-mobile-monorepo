@@ -2969,7 +2969,9 @@ interface CreateComplaintsMasterParams {
     empresa_presenta_queja: string;
     persona_presenta_queja: string;
     medio_recepcion_queja: string;
+    tipo_cliente: string;
     tipo_queja: string;
+    estimacion_dannio: string;
     ubicacion: string;
     nivel_queja: string;
     fecha_queja: string;
@@ -3003,7 +3005,9 @@ interface UpdateComplaintsMasterParams {
     empresa_presenta_queja?: string;
     persona_presenta_queja?: string;
     medio_recepcion_queja?: string;
+    tipo_cliente?: string;
     tipo_queja?: string;
+    estimacion_dannio?: string;
     ubicacion?: string;
     nivel_queja?: string;
     fecha_queja?: string;
@@ -3692,6 +3696,7 @@ interface CreateAgendaMinutaParams {
     temas_a_tratar?: string; // JSON string (array of strings)
     observaciones: string;
     firma_responsable: string;
+    estado?: boolean;
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -8289,6 +8294,11 @@ interface CreateAttendanceControlParams {
     fecha?: string | null;
     turno?: string | null;
     firma_responsable?: string | null;
+    total_empleados_turno?: number;
+    nombre_supervisor?: string | null;
+    comentarios?: string | null;
+    firma_manual_supervisor?: string | null;
+    firmas_empleados?: string;
     imagenes?: string;
   };
   refreshAccessToken: () => Promise<boolean>;
@@ -8307,6 +8317,11 @@ interface UpdateAttendanceControlParams {
     fecha?: string | null;
     turno?: string | null;
     firma_responsable?: string | null;
+    total_empleados_turno?: number;
+    nombre_supervisor?: string | null;
+    comentarios?: string | null;
+    firma_manual_supervisor?: string | null;
+    firmas_empleados?: string;
     imagenes?: string;
     delete_imagenes?: string;
   };
@@ -8578,6 +8593,78 @@ export const deleteAttendanceControlImage = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al eliminar la imagen',
+    };
+  }
+};
+
+interface UpdateAttendanceEmpleadoSignatureParams {
+  controlId: string | number;
+  marca_id: number;
+  firma: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+export const updateAttendanceEmpleadoSignature = async ({
+  controlId,
+  marca_id,
+  firma,
+  refreshAccessToken,
+  logout,
+}: UpdateAttendanceEmpleadoSignatureParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/attendance-control/${encodeURIComponent(String(controlId))}/employee-signature`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({ marca_id, firma }),
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return updateAttendanceEmpleadoSignature({ controlId, marca_id, firma, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error updating attendance employee signature:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al actualizar la firma manual del empleado',
     };
   }
 };

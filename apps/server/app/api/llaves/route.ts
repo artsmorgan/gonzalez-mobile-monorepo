@@ -58,6 +58,7 @@ export async function GET(req: NextRequest) {
       division_id: r.division_id,
       contrato_id: r.contrato_id,
       isActive: r.isActive !== false,
+      numero_llave: r.numero_llave,
       lugar_abre: r.lugar_abre,
       cantidad_copias: r.cantidad_copias,
       observaciones: r.observaciones,
@@ -102,6 +103,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const {
       marca_id,
+      numero_llave,
       lugar_abre,
       cantidad_copias,
       observaciones,
@@ -114,7 +116,7 @@ export async function POST(req: NextRequest) {
       puesto_id: bodyPuestoId,
     } = body ?? {};
 
-    if (!marca_id || !lugar_abre || cantidad_copias === undefined || cantidad_copias === null || !firma_responsable) {
+    if (!marca_id || !numero_llave || !lugar_abre || cantidad_copias === undefined || cantidad_copias === null || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
@@ -170,6 +172,7 @@ export async function POST(req: NextRequest) {
           division_id: useDivision,
           contrato_id: useContrato,
           isActive: true,
+          numero_llave: String(numero_llave),
           lugar_abre: String(lugar_abre),
           cantidad_copias: parseInt(String(cantidad_copias)) || 0,
           observaciones: typeof observaciones === "string" ? observaciones : "",
@@ -235,6 +238,7 @@ export async function POST(req: NextRequest) {
               cliente_id: created.cliente_id,
               corpo_id: created.corpo_id,
               puesto_id: created.puesto_id,
+              numero_llave: created.numero_llave,
               lugar_abre: created.lugar_abre,
               cantidad_copias: created.cantidad_copias,
               observaciones: created.observaciones,

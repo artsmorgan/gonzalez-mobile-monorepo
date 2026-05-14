@@ -112,7 +112,9 @@ interface Complaint {
   empresa_presenta_queja: string | null;
   persona_presenta_queja: string | null;
   medio_recepcion_queja: string | null;
+  tipo_cliente: string | null;
   tipo_queja: string | null;
+  estimacion_dannio: string | null;
   ubicacion: string | null;
   nivel_queja: string | null;
   fecha_queja: string | null;
@@ -146,7 +148,9 @@ interface EditingComplaint {
   empresa_presenta_queja: string;
   persona_presenta_queja: string;
   medio_recepcion_queja: string;
+  tipo_cliente: string;
   tipo_queja: string;
+  estimacion_dannio: string;
   ubicacion: string;
   nivel_queja: string;
   fecha_queja: string;
@@ -185,6 +189,53 @@ type LocalFile = {
   storedFileName?: string;
   server_file_id?: number; // para archivos existentes precargados (c_anexos_quejas.id)
 };
+
+/** Catálogos persistidos en AsyncStorage por `MarcarIngresoSalidaScreen` (`tipo_clientes_quejas_cache`, `tipo_quejas_cache`). */
+type TipoCatalogoQuejaItem = { id: number; nombre: string };
+
+const LEGACY_TIPO_CLIENTE_QUEJA_OPTIONS: TipoCatalogoQuejaItem[] = [
+  { id: -1, nombre: 'Publico' },
+  { id: -2, nombre: 'Privado' },
+  { id: -3, nombre: 'Interno' },
+];
+
+function parseTipoCatalogoQuejasCache(raw: string | null): TipoCatalogoQuejaItem[] {
+  if (raw == null || String(raw).trim() === '') return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const out: TipoCatalogoQuejaItem[] = [];
+    for (const x of parsed) {
+      if (x == null || typeof x !== 'object') continue;
+      const o = x as Record<string, unknown>;
+      const id = Number(o.id);
+      const nombre = o.nombre != null ? String(o.nombre).trim() : '';
+      if (!Number.isFinite(id) || nombre === '') continue;
+      out.push({ id, nombre });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+async function readDefaultTipoClienteYQuejaFromCaches(): Promise<{ tipoCliente: string; tipoQueja: string }> {
+  let tipoCliente = 'Publico';
+  let tipoQueja = 'Publico';
+  try {
+    const [rawC, rawQ] = await Promise.all([
+      AsyncStorage.getItem('tipo_clientes_quejas_cache'),
+      AsyncStorage.getItem('tipo_quejas_cache'),
+    ]);
+    const listC = parseTipoCatalogoQuejasCache(rawC);
+    const listQ = parseTipoCatalogoQuejasCache(rawQ);
+    if (listC.length > 0) tipoCliente = listC[0].nombre;
+    if (listQ.length > 0) tipoQueja = listQ[0].nombre;
+  } catch {
+    /* defaults */
+  }
+  return { tipoCliente, tipoQueja };
+}
 
 interface FirmaData {
   sessionId: string;
@@ -391,7 +442,12 @@ export default function ComplaintsMasterScreen() {
   const [empresaPresentaQueja, setEmpresaPresentaQueja] = useState('');
   const [personaPresentaQueja, setPersonaPresentaQueja] = useState('');
   const [medioRecepcionQueja, setMedioRecepcionQueja] = useState('');
+  const [tipoCliente, setTipoCliente] = useState('');
   const [tipoQueja, setTipoQueja] = useState('');
+  /** Listas desde AsyncStorage (`MarcarIngresoSalidaScreen`): `tipo_clientes_quejas_cache`, `tipo_quejas_cache`. */
+  const [tipoClientesQuejasCache, setTipoClientesQuejasCache] = useState<TipoCatalogoQuejaItem[]>([]);
+  const [tipoQuejasCache, setTipoQuejasCache] = useState<TipoCatalogoQuejaItem[]>([]);
+  const [estimacionDannio, setEstimacionDannio] = useState('');
   const [ubicacion, setUbicacion] = useState('');
   const [nivelQueja, setNivelQueja] = useState('');
   const [fechaQueja, setFechaQueja] = useState('');
@@ -505,19 +561,86 @@ export default function ComplaintsMasterScreen() {
 
   const [deletingRecordKey, setDeletingRecordKey] = useState<string | null>(null);
 
+  const tipoClienteOpcionesPicker = useMemo(() => {
+    const base =
+      tipoClientesQuejasCache.length > 0 ? tipoClientesQuejasCache : LEGACY_TIPO_CLIENTE_QUEJA_OPTIONS;
+    if (tipoCliente && !base.some((x) => x.nombre === tipoCliente)) {
+      return [{ id: -10_000, nombre: tipoCliente }, ...base];
+    }
+    return base;
+  }, [tipoClientesQuejasCache, tipoCliente]);
+
+  const tipoQuejaOpcionesPicker = useMemo(() => {
+    const base = tipoQuejasCache.length > 0 ? tipoQuejasCache : LEGACY_TIPO_CLIENTE_QUEJA_OPTIONS;
+    if (tipoQueja && !base.some((x) => x.nombre === tipoQueja)) {
+      return [{ id: -10_000, nombre: tipoQueja }, ...base];
+    }
+    return base;
+  }, [tipoQuejasCache, tipoQueja]);
+
   const isOperativo = roleName === 'OPERATIVO';
 
-  const getConnectionStatus = async (): Promise<boolean> => {
-    //return false;
+  /** Misma política que `MantenimientoEquipoScreen` / uso previo en esta pantalla. */
+  const getConnectionStatus = useCallback(async (): Promise<boolean> => {
     try {
-    const networkState = await Network.getNetworkStateAsync();
+      const networkState = await Network.getNetworkStateAsync();
       if (!networkState.isConnected) return false;
       if (networkState.isInternetReachable === false) return false;
       return true;
     } catch {
       return false;
     }
-  };
+  }, []);
+
+  /** Solo con internet: GET `complaints-master/tipo-quejas` y `tipo-clientes` → AsyncStorage + estado (`tipo_*_cache`). */
+  const refreshTipoCatalogosFromServerIfOnline = useCallback(
+    async (isCancelled?: () => boolean) => {
+      const online = await getConnectionStatus();
+      if (!online) return;
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl || String(apiUrl).trim() === '') return;
+
+      const pull = async (
+        path: 'tipo-quejas' | 'tipo-clientes',
+        storageKey: 'tipo_quejas_cache' | 'tipo_clientes_quejas_cache',
+        setList: React.Dispatch<React.SetStateAction<TipoCatalogoQuejaItem[]>>,
+      ) => {
+        try {
+          const res = await authedFetch({
+            url: `${apiUrl}/api/complaints-master/${path}`,
+            init: {
+              method: 'GET',
+              headers: { 'Content-Type': 'application/json' },
+            },
+            refreshAccessToken,
+            logout,
+          });
+          if (!res?.ok) return;
+          const data = (await res.json()) as {
+            status?: boolean;
+            tipoQuejas?: unknown;
+            tipoClientes?: unknown;
+          };
+          if (!data?.status) return;
+          const rawArr = path === 'tipo-quejas' ? data.tipoQuejas : data.tipoClientes;
+          if (!Array.isArray(rawArr)) return;
+          const json = JSON.stringify(rawArr);
+          if (isCancelled?.()) return;
+          await AsyncStorage.setItem(storageKey, json);
+          if (isCancelled?.()) return;
+          setList(parseTipoCatalogoQuejasCache(json));
+        } catch {
+          /* fallo puntual: se conserva el cache ya cargado */
+        }
+      };
+
+      await Promise.all([
+        pull('tipo-quejas', 'tipo_quejas_cache', setTipoQuejasCache),
+        pull('tipo-clientes', 'tipo_clientes_quejas_cache', setTipoClientesQuejasCache),
+      ]);
+    },
+    [getConnectionStatus, refreshAccessToken, logout],
+  );
 
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
@@ -868,6 +991,35 @@ export default function ComplaintsMasterScreen() {
         cancelled = true;
       };
     }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const isCancelled = () => cancelled;
+      void (async () => {
+        try {
+          const [rawClientes, rawQuejas] = await Promise.all([
+            AsyncStorage.getItem('tipo_clientes_quejas_cache'),
+            AsyncStorage.getItem('tipo_quejas_cache'),
+          ]);
+          if (cancelled) return;
+          setTipoClientesQuejasCache(parseTipoCatalogoQuejasCache(rawClientes));
+          setTipoQuejasCache(parseTipoCatalogoQuejasCache(rawQuejas));
+        } catch {
+          if (!cancelled) {
+            setTipoClientesQuejasCache([]);
+            setTipoQuejasCache([]);
+          }
+        }
+        if (!cancelled) {
+          await refreshTipoCatalogosFromServerIfOnline(isCancelled);
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [refreshTipoCatalogosFromServerIfOnline])
   );
 
   useEffect(() => {
@@ -1414,7 +1566,10 @@ export default function ComplaintsMasterScreen() {
     setEmpresaPresentaQueja('');
     setPersonaPresentaQueja('');
     setMedioRecepcionQueja('Correo');
-    setTipoQueja('Publico');
+    const { tipoCliente: defTipoCliente, tipoQueja: defTipoQueja } = await readDefaultTipoClienteYQuejaFromCaches();
+    setTipoCliente(defTipoCliente);
+    setTipoQueja(defTipoQueja);
+    setEstimacionDannio('');
     setUbicacion('');
     setNivelQueja('Leve');
     setFechaQueja(fechaHoy);
@@ -1518,7 +1673,9 @@ export default function ComplaintsMasterScreen() {
       empresa_presenta_queja: record.empresa_presenta_queja || '',
       persona_presenta_queja: record.persona_presenta_queja || '',
       medio_recepcion_queja: record.medio_recepcion_queja || '',
+      tipo_cliente: record.tipo_cliente || '',
       tipo_queja: record.tipo_queja || '',
+      estimacion_dannio: record.estimacion_dannio || '',
       ubicacion: record.ubicacion || '',
       nivel_queja: record.nivel_queja || '',
       fecha_queja: record.fecha_queja || '',
@@ -1537,7 +1694,9 @@ export default function ComplaintsMasterScreen() {
     setEmpresaPresentaQueja(record.empresa_presenta_queja || '');
     setPersonaPresentaQueja(record.persona_presenta_queja || '');
     setMedioRecepcionQueja(record.medio_recepcion_queja || '');
+    setTipoCliente(record.tipo_cliente || '');
     setTipoQueja(record.tipo_queja || '');
+    setEstimacionDannio(record.estimacion_dannio || '');
     setUbicacion(record.ubicacion || '');
     setNivelQueja(record.nivel_queja || '');
     setFechaQueja(record.fecha_queja || '');
@@ -1805,7 +1964,9 @@ export default function ComplaintsMasterScreen() {
         empresa_presenta_queja: empresaPresentaQueja.trim(),
         persona_presenta_queja: personaPresentaQueja.trim(),
         medio_recepcion_queja: medioRecepcionQueja.trim(),
+        tipo_cliente: tipoCliente.trim(),
         tipo_queja: tipoQueja.trim(),
+        estimacion_dannio: estimacionDannio.trim(),
         ubicacion: ubicacion.trim(),
         nivel_queja: nivelQueja.trim(),
         fecha_queja: fechaQueja.trim(),
@@ -1930,7 +2091,9 @@ export default function ComplaintsMasterScreen() {
           empresa_presenta_queja: empresaPresentaQueja.trim() || null,
           persona_presenta_queja: personaPresentaQueja.trim() || null,
           medio_recepcion_queja: medioRecepcionQueja.trim() || null,
+          tipo_cliente: tipoCliente.trim() || null,
           tipo_queja: tipoQueja.trim() || null,
+          estimacion_dannio: estimacionDannio.trim() || null,
           ubicacion: ubicacion.trim() || null,
           nivel_queja: nivelQueja.trim() || null,
           fecha_queja: fechaQueja.trim() || null,
@@ -2017,7 +2180,9 @@ export default function ComplaintsMasterScreen() {
         empresa_presenta_queja: empresaPresentaQueja.trim(),
         persona_presenta_queja: personaPresentaQueja.trim(),
         medio_recepcion_queja: medioRecepcionQueja.trim(),
+        tipo_cliente: tipoCliente.trim(),
         tipo_queja: tipoQueja.trim(),
+        estimacion_dannio: estimacionDannio.trim(),
         ubicacion: ubicacion.trim(),
         nivel_queja: nivelQueja.trim(),
         fecha_queja: fechaQueja.trim(),
@@ -2197,7 +2362,9 @@ export default function ComplaintsMasterScreen() {
                 empresa_presenta_queja: empresaPresentaQueja.trim() || null,
                 persona_presenta_queja: personaPresentaQueja.trim() || null,
                 medio_recepcion_queja: medioRecepcionQueja.trim() || null,
+                tipo_cliente: tipoCliente.trim() || null,
                 tipo_queja: tipoQueja.trim() || null,
+                estimacion_dannio: estimacionDannio.trim() || null,
                 ubicacion: ubicacion.trim() || null,
                 nivel_queja: nivelQueja.trim() || null,
                 fecha_queja: fechaQueja.trim() || null,
@@ -2584,19 +2751,54 @@ export default function ComplaintsMasterScreen() {
           </ThemedView>
         </ThemedView>
 
+        {/* Tipo de cliente */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Tipo de cliente</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              selectedValue={
+                isEditing
+                  ? tipoCliente
+                  : tipoCliente || tipoClienteOpcionesPicker[0]?.nombre || 'Publico'
+              }
+              onValueChange={setTipoCliente}
+              style={styles.picker}
+            >
+              {isEditing ? <Picker.Item label="Seleccionar" value="" color="#000000" /> : null}
+              {tipoClienteOpcionesPicker.map((opt) => (
+                <Picker.Item
+                  key={`tipo-cliente-${opt.id}-${opt.nombre}`}
+                  label={opt.nombre}
+                  value={opt.nombre}
+                  color="#000000"
+                />
+              ))}
+            </Picker>
+          </ThemedView>
+        </ThemedView>
+        
         {/* Tipo de queja */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Tipo de queja</ThemedText>
           <ThemedView style={styles.pickerContainer}>
             <Picker
-              selectedValue={isEditing ? tipoQueja : (tipoQueja || 'Publico')}
+              selectedValue={
+                isEditing
+                  ? tipoQueja
+                  : tipoQueja || tipoQuejaOpcionesPicker[0]?.nombre || 'Publico'
+              }
               onValueChange={setTipoQueja}
               style={styles.picker}
             >
               {isEditing ? <Picker.Item label="Seleccionar" value="" color="#000000" /> : null}
-              <Picker.Item label="Público" value="Publico" color="#000000" />
-              <Picker.Item label="Privado" value="Privado" color="#000000" />
-              <Picker.Item label="Interno" value="Interno" color="#000000" />
+              {tipoQuejaOpcionesPicker.map((opt) => (
+                <Picker.Item
+                  key={`tipo-queja-${opt.id}-${opt.nombre}`}
+                  label={opt.nombre}
+                  value={opt.nombre}
+                  color="#000000"
+                />
+              ))}
             </Picker>
           </ThemedView>
         </ThemedView>
@@ -2676,6 +2878,18 @@ export default function ComplaintsMasterScreen() {
             textAlignVertical="top"
             value={descripcionQueja}
             onChangeText={setDescripcionQueja}
+          />
+        </ThemedView>
+        
+        {/* Estimacion de daño */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Estimacion de daño</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            placeholder="Estimacion de daño"
+            placeholderTextColor="#999"
+            value={estimacionDannio}
+            onChangeText={setEstimacionDannio}
           />
         </ThemedView>
 
@@ -2989,6 +3203,10 @@ export default function ComplaintsMasterScreen() {
               <ThemedText style={styles.listItemSubtitle}>
                 <ThemedText style={styles.detailLabel}>Tipo de queja: </ThemedText>
                 {record.tipo_queja || 'Sin tipo'}
+              </ThemedText>
+              <ThemedText style={styles.listItemSubtitle}>
+                <ThemedText style={styles.detailLabel}>Estimación de daño: </ThemedText>
+                {record.estimacion_dannio || 'Sin estimación'}
               </ThemedText>
               <ThemedText style={styles.listItemSubtitle}>
                 <ThemedText style={styles.detailLabel}>Estado: </ThemedText>

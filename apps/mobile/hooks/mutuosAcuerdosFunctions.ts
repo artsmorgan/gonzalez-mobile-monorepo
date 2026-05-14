@@ -123,13 +123,26 @@ export const createMutuoAcuerdo = async ({
 export const acceptMutuoAcuerdo = async ({
   id,
   role,
+  firma_ausente_manual,
+  firma_reemplaza_manual,
   refreshAccessToken,
   logout,
-}: { id: number; role: 'ausente' | 'reemplaza' } & CommonAuth): Promise<BasicResponse> => {
+}: {
+  id: number;
+  role: 'ausente' | 'reemplaza';
+  firma_ausente_manual?: string;
+  firma_reemplaza_manual?: string;
+} & CommonAuth): Promise<BasicResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const aus = firma_ausente_manual != null ? normalizeBase64(String(firma_ausente_manual)) : '';
+    const rem = firma_reemplaza_manual != null ? normalizeBase64(String(firma_reemplaza_manual)) : '';
+    const body: Record<string, string> = { role };
+    if (role === 'ausente') body.firma_ausente_manual = aus;
+    if (role === 'reemplaza') body.firma_reemplaza_manual = rem;
 
     const response = await authedFetch({
       url: `${apiUrl}/api/mutuos-acuerdos/${id}`,
@@ -138,7 +151,7 @@ export const acceptMutuoAcuerdo = async ({
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ role }),
+        body: JSON.stringify(body),
       },
       refreshAccessToken: refresh,
       logout: doLogout,

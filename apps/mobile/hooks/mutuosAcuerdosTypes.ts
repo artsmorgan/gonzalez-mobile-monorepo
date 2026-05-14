@@ -36,6 +36,8 @@ export type MutuoAcuerdo = {
   ausente_acepta: boolean;
   ausente_acepta_at?: string | null;
   motivo: string;
+  firma_ausente_manual?: string | null;
+  firma_reemplaza_manual?: string | null;
   firma_ejecutivo_cuenta_manual?: string | null;
   firma_ejecutivo_cuenta_digital: string;
   firma_responsable: string;
