@@ -6,6 +6,68 @@ import { transporter } from '../../../transporter';
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
+function escapeHtmlForEmail(s: string): string {
+    return s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
+/** Soporta legado `[{ question, value|result }]` y formato móvil `{ form, know_process }`. */
+function buildEvaluacionesEmailHtml(evaluacionesRaw: string): string {
+    if (!evaluacionesRaw || !String(evaluacionesRaw).trim()) return "";
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(evaluacionesRaw);
+    } catch {
+        return `<p>${escapeHtmlForEmail(String(evaluacionesRaw))}</p><br>`;
+    }
+    if (Array.isArray(parsed)) {
+        let html = "";
+        for (const item of parsed) {
+            if (!item || typeof item !== "object") continue;
+            const row = item as Record<string, unknown>;
+            const q = String(row.question ?? "").trim();
+            const v = row.result ?? row.value ?? "";
+            html += `<p><strong>${escapeHtmlForEmail(q)}</strong>: ${escapeHtmlForEmail(String(v))}</p><br>`;
+        }
+        return html;
+    }
+    if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        Array.isArray((parsed as Record<string, unknown>).form)
+    ) {
+        const o = parsed as { form: unknown[]; know_process?: unknown };
+        let html = "";
+        for (const sec of o.form) {
+            if (!sec || typeof sec !== "object") continue;
+            const secObj = sec as Record<string, unknown>;
+            const title = String(secObj.section_title ?? "").trim();
+            if (title) html += `<h3>${escapeHtmlForEmail(title)}</h3>`;
+            const questions = Array.isArray(secObj.questions) ? secObj.questions : [];
+            for (const q of questions) {
+                if (!q || typeof q !== "object") continue;
+                const qRow = q as Record<string, unknown>;
+                const qt = String(qRow.question ?? "").trim();
+                const apply = Boolean(qRow.apply);
+                const val = apply ? Number(qRow.value) : 0;
+                const valLabel = apply && Number.isFinite(val) ? `Calificación: ${val} / 5` : "Calificación: N/A (0)";
+                html += `<p><strong>${escapeHtmlForEmail(qt)}</strong> — Aplica: ${apply ? "Sí" : "No"} — ${valLabel}</p>`;
+            }
+            const obs = String(secObj.observations ?? "").trim();
+            if (obs) html += `<p><em>Observaciones:</em> ${escapeHtmlForEmail(obs)}</p>`;
+            html += "<br>";
+        }
+        const kp = Boolean(o.know_process);
+        html += `<p><strong>¿Conoce el procedimiento de atención de quejas de la compañía?</strong> ${kp ? "Sí" : "No"}</p><br>`;
+        return html;
+    }
+    return `<p>${escapeHtmlForEmail(JSON.stringify(parsed))}</p><br>`;
+}
+
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, message } = await verifyAccessTokenByApi(req);
@@ -433,11 +495,7 @@ export async function POST(req: NextRequest) {
                     },
                 },
             });
-            const evaluaciones_json = JSON.parse(evaluaciones);
-            let evaluaciones_html = "";
-            for (const item of evaluaciones_json) {
-                evaluaciones_html += `<p>${item.question}: ${item.result}</p><br>`;
-            }
+            const evaluaciones_html = buildEvaluacionesEmailHtml(evaluaciones);
 
             // Solo enviar correo si hay un email válido
             if (email_persona_evaluada && email_persona_evaluada.trim() !== '') {

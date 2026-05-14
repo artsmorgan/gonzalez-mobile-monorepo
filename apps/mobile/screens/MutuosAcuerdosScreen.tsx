@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   Platform,
   ScrollView,
@@ -165,6 +166,14 @@ const getBase64Only = (signature: string | null | undefined): string => {
   return s;
 };
 
+/** URI para mostrar firma guardada (base64 crudo o data URL). */
+const signatureDataUri = (raw?: string | null): string | null => {
+  if (!raw || !String(raw).trim()) return null;
+  const s = String(raw).trim();
+  if (s.startsWith('data:image/')) return s;
+  return `data:image/png;base64,${s}`;
+};
+
 const signatureWebStyle = `
 body, html { margin: 0; padding: 0; height: 100%; width: 100%; }
 .m-signature-pad { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 0; box-shadow: none; border: none; background-color: #FFFFFF; }
@@ -203,6 +212,13 @@ export default function MutuosAcuerdosScreen() {
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
+
+  const [participantSigModalVisible, setParticipantSigModalVisible] = useState(false);
+  const [participantSigRecordId, setParticipantSigRecordId] = useState<number | null>(null);
+  const [participantSigRole, setParticipantSigRole] = useState<'ausente' | 'reemplaza' | null>(null);
+  const [participantIsReadingSig, setParticipantIsReadingSig] = useState(false);
+  const [participantSignatureKey, setParticipantSignatureKey] = useState(0);
+  const participantSignatureRef = useRef<any>(null);
 
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterEstado, setFilterEstado] = useState<'all' | 'pendiente' | 'aprobado' | 'rechazado'>('all');
@@ -652,31 +668,90 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const runAcceptMutuo = async (recordId: number, role: 'ausente' | 'reemplaza') => {
+  const runAcceptMutuo = async (recordId: number, role: 'ausente' | 'reemplaza', manualB64: string): Promise<boolean> => {
     const key = `${recordId}-${role}`;
     setAcceptingMutuoKey(key);
     try {
-      const response = await acceptMutuoAcuerdo({ id: recordId, role, refreshAccessToken, logout });
+      const response = await acceptMutuoAcuerdo({
+        id: recordId,
+        role,
+        firma_ausente_manual: role === 'ausente' ? manualB64 : undefined,
+        firma_reemplaza_manual: role === 'reemplaza' ? manualB64 : undefined,
+        refreshAccessToken,
+        logout,
+      });
       if (!response.status) {
         Alert.alert('Error', response.message || 'No se pudo registrar la aceptación');
-        return;
+        return false;
       }
       Alert.alert('Éxito', response.message || 'Aceptación registrada');
       await fetchRecords();
+      return true;
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudo registrar la aceptación');
+      return false;
     } finally {
       setAcceptingMutuoKey(null);
     }
   };
 
-  const handleAccept = (recordId: number, role: 'ausente' | 'reemplaza') => {
-    if (acceptingMutuoKey) return;
-    const label = role === 'ausente' ? 'empleado ausente' : 'empleado reemplaza';
-    Alert.alert('Confirmar', `¿Registrar la aceptación como ${label}?`, [
+  const openParticipantAcceptModal = (recordId: number, role: 'ausente' | 'reemplaza') => {
+    if (acceptingMutuoKey || signatureModalVisible || participantSigModalVisible) return;
+    setParticipantSigRecordId(recordId);
+    setParticipantSigRole(role);
+    setParticipantSignatureKey((k) => k + 1);
+    setParticipantSigModalVisible(true);
+  };
+
+  const closeParticipantAcceptModal = () => {
+    setParticipantSigModalVisible(false);
+    setParticipantSigRecordId(null);
+    setParticipantSigRole(null);
+    setParticipantIsReadingSig(false);
+    setParticipantSignatureKey((k) => k + 1);
+  };
+
+  const submitParticipantAcceptReadCanvas = () => {
+    if (!participantSigRecordId || !participantSigRole) return;
+    try {
+      setParticipantIsReadingSig(true);
+      participantSignatureRef.current?.readSignature?.();
+    } catch {
+      setParticipantIsReadingSig(false);
+      Alert.alert('Error', 'No se pudo leer la firma manual');
+    }
+  };
+
+  const submitParticipantAccept = () => {
+    if (participantIsReadingSig || acceptingMutuoKey) return;
+    const label = participantSigRole === 'ausente' ? 'empleado ausente' : 'empleado reemplaza';
+    Alert.alert('Confirmar', `¿Registrar la aceptación como ${label} con la firma dibujada?`, [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Aceptar', onPress: () => void runAcceptMutuo(recordId, role) },
+      { text: 'Aceptar', onPress: () => void submitParticipantAcceptReadCanvas() },
     ]);
+  };
+
+  const onParticipantSignatureRead = async (signature: string) => {
+    try {
+      if (!participantSigRecordId || !participantSigRole) {
+        Alert.alert('Error', 'Sesión de firma inválida');
+        return;
+      }
+      const formatted = String(signature || '').startsWith('data:')
+        ? String(signature)
+        : `data:image/png;base64,${String(signature || '')}`;
+      const b64 = getBase64Only(formatted);
+      if (!b64 || b64.length < 80) {
+        Alert.alert('Error', 'La firma manual está vacía o es demasiado corta');
+        return;
+      }
+      const ok = await runAcceptMutuo(participantSigRecordId, participantSigRole, b64);
+      if (ok) closeParticipantAcceptModal();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo registrar la aceptación');
+    } finally {
+      setParticipantIsReadingSig(false);
+    }
   };
 
   const runRejectByExecutive = async (recordId: number) => {
@@ -707,6 +782,7 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const openSignatureModal = (recordId: number) => {
+    if (participantSigModalVisible) return;
     setSigningRecordId(recordId);
     setFirmaEjecutivoDigital('');
     setSignatureKey((k) => k + 1);
@@ -1217,6 +1293,22 @@ export default function MutuosAcuerdosScreen() {
                         Fecha/Horario: {formatDateFromIsoToDMY(r.marca_ausente?.fecha)} {formatTime(r.marca_ausente?.hora_inicio)} - {formatTime(r.marca_ausente?.hora_fin)} ({r.marca_ausente?.tipo_turno_texto || 'Sin definir'})
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>Acepta: {r.ausente_acepta ? 'Sí' : 'No'}</ThemedText>
+                      {r.ausente_acepta_at ? (
+                        <ThemedText style={styles.cardLine}>
+                          <ThemedText style={styles.cardLabel}>Aceptación: </ThemedText>
+                          {formatDateFromIsoToDMY(r.ausente_acepta_at)} {formatTime(r.ausente_acepta_at)}
+                        </ThemedText>
+                      ) : null}
+                      {signatureDataUri(r.firma_ausente_manual) ? (
+                        <ThemedView style={styles.signaturePreviewBlock}>
+                          <ThemedText style={styles.cardLabel}>Firma manual (ausente)</ThemedText>
+                          <Image
+                            source={{ uri: signatureDataUri(r.firma_ausente_manual) as string }}
+                            style={styles.signaturePreviewImage}
+                            resizeMode="contain"
+                          />
+                        </ThemedView>
+                      ) : null}
 
                       <ThemedText style={styles.sectionTitle}>Empleado reemplaza</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_reemplaza_nombre || `ID ${r.empleadoReemplaza_id}`}</ThemedText>
@@ -1225,6 +1317,22 @@ export default function MutuosAcuerdosScreen() {
                         Fecha/Horario: {formatDateFromIsoToDMY(r.marca_reemplaza?.fecha)} {formatTime(r.marca_reemplaza?.hora_inicio)} - {formatTime(r.marca_reemplaza?.hora_fin)} ({r.marca_reemplaza?.tipo_turno_texto || 'Sin definir'})
                       </ThemedText>
                       <ThemedText style={styles.cardLine}>Acepta: {r.reemplaza_acepta ? 'Sí' : 'No'}</ThemedText>
+                      {r.reemplaza_acepta_at ? (
+                        <ThemedText style={styles.cardLine}>
+                          <ThemedText style={styles.cardLabel}>Aceptación: </ThemedText>
+                          {formatDateFromIsoToDMY(r.reemplaza_acepta_at)} {formatTime(r.reemplaza_acepta_at)}
+                        </ThemedText>
+                      ) : null}
+                      {signatureDataUri(r.firma_reemplaza_manual) ? (
+                        <ThemedView style={styles.signaturePreviewBlock}>
+                          <ThemedText style={styles.cardLabel}>Firma manual (reemplaza)</ThemedText>
+                          <Image
+                            source={{ uri: signatureDataUri(r.firma_reemplaza_manual) as string }}
+                            style={styles.signaturePreviewImage}
+                            resizeMode="contain"
+                          />
+                        </ThemedView>
+                      ) : null}
 
                       <ThemedView style={styles.actionsRow}>
                         {r.can_accept_ausente ? (
@@ -1234,9 +1342,9 @@ export default function MutuosAcuerdosScreen() {
                               styles.acceptBtn,
                               acceptingMutuoKey === `${r.id}-ausente` && styles.buttonDisabled,
                             ]}
-                            onPress={() => handleAccept(r.id, 'ausente')}
+                            onPress={() => openParticipantAcceptModal(r.id, 'ausente')}
                             activeOpacity={0.85}
-                            disabled={acceptingMutuoKey !== null}
+                            disabled={acceptingMutuoKey !== null || participantSigModalVisible || signatureModalVisible}
                           >
                             {acceptingMutuoKey === `${r.id}-ausente` ? (
                               <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1253,9 +1361,9 @@ export default function MutuosAcuerdosScreen() {
                               styles.acceptBtn,
                               acceptingMutuoKey === `${r.id}-reemplaza` && styles.buttonDisabled,
                             ]}
-                            onPress={() => handleAccept(r.id, 'reemplaza')}
+                            onPress={() => openParticipantAcceptModal(r.id, 'reemplaza')}
                             activeOpacity={0.85}
-                            disabled={acceptingMutuoKey !== null}
+                            disabled={acceptingMutuoKey !== null || participantSigModalVisible || signatureModalVisible}
                           >
                             {acceptingMutuoKey === `${r.id}-reemplaza` ? (
                               <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1270,6 +1378,7 @@ export default function MutuosAcuerdosScreen() {
                             style={[styles.actionBtn, styles.signBtn]}
                             onPress={() => openSignatureModal(r.id)}
                             activeOpacity={0.85}
+                            disabled={acceptingMutuoKey !== null || participantSigModalVisible}
                           >
                             <Ionicons name="create-outline" size={18} color="#FFFFFF" />
                             <ThemedText style={styles.actionBtnText}>Aprobar</ThemedText>
@@ -1299,7 +1408,7 @@ export default function MutuosAcuerdosScreen() {
                               );
                             }}
                             activeOpacity={0.85}
-                            disabled={rejectingMutuoId !== null}
+                            disabled={rejectingMutuoId !== null || participantSigModalVisible}
                           >
                             {rejectingMutuoId === r.id ? (
                               <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1421,6 +1530,76 @@ export default function MutuosAcuerdosScreen() {
                 >
                   {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
                   <ThemedText style={styles.modalAcceptBtnText}>Aceptar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={participantSigModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={closeParticipantAcceptModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatCard}>
+            <View style={styles.floatHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {participantSigRole === 'reemplaza' ? 'Aceptar (empleado reemplaza)' : 'Aceptar (empleado ausente)'}
+              </ThemedText>
+              <TouchableOpacity onPress={closeParticipantAcceptModal} disabled={!!acceptingMutuoKey}>
+                <Ionicons name="close" size={22} color="#333" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 620 }} contentContainerStyle={{ padding: 12 }}>
+              <ThemedText style={styles.signatureHintMuted}>
+                Dibuje su firma en el recuadro. Es obligatoria para registrar su aceptación del mutuo acuerdo.
+              </ThemedText>
+              <ThemedView style={styles.signatureContainer}>
+                <SignatureScreen
+                  ref={participantSignatureRef}
+                  onOK={onParticipantSignatureRead}
+                  onEmpty={() => {
+                    setParticipantIsReadingSig(false);
+                    Alert.alert('Error', 'La firma manual está vacía');
+                  }}
+                  onClear={() => {
+                    setParticipantIsReadingSig(false);
+                  }}
+                  descriptionText=""
+                  clearText="Limpiar"
+                  confirmText="Aceptar"
+                  webStyle={signatureWebStyle}
+                  key={participantSignatureKey}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalClearBtn, !!acceptingMutuoKey && styles.buttonDisabled]}
+                  onPress={() => {
+                    participantSignatureRef.current?.clearSignature?.();
+                    setParticipantSignatureKey((k) => k + 1);
+                  }}
+                  activeOpacity={0.85}
+                  disabled={!!acceptingMutuoKey}
+                >
+                  <Ionicons name="refresh" size={18} color="#000" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalAcceptBtn, (!!acceptingMutuoKey || participantIsReadingSig) && styles.buttonDisabled]}
+                  onPress={submitParticipantAccept}
+                  activeOpacity={0.85}
+                  disabled={!!acceptingMutuoKey || participantIsReadingSig}
+                >
+                  {acceptingMutuoKey || participantIsReadingSig ? (
+                    <ActivityIndicator size="small" color="#000" />
+                  ) : (
+                    <Ionicons name="checkmark" size={18} color="#000" />
+                  )}
                 </TouchableOpacity>
               </ThemedView>
             </ScrollView>
@@ -1641,6 +1820,16 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 18, fontWeight: 'bold' },
   modalDigitalRow: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 4 },
   signatureContainer: { height: 280, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', marginTop: 8 },
+  signaturePreviewBlock: { marginTop: 10, marginBottom: 4 },
+  signaturePreviewImage: {
+    width: '100%',
+    height: 120,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#DDD',
+    borderRadius: 8,
+    backgroundColor: '#FAFAFA',
+  },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, gap: 12, backgroundColor: '#FFFFFF' },
   modalClearBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#EDEDED', gap: 8 },
   modalClearBtnText: { fontWeight: '800', color: '#000' },

@@ -27,6 +27,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const {
       marca_id,
       nombre_llavero,
+      numero_llavero,
       observaciones,
       firma_responsable,
       llaves,
@@ -116,6 +117,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       division_id: nextDivision,
       contrato_id: nextContrato,
       nombre_llavero: typeof nombre_llavero === "string" ? nombre_llavero : existing.nombre_llavero,
+      numero_llavero: typeof numero_llavero === "string" ? numero_llavero : existing.numero_llavero,
       observaciones: typeof observaciones === "string" ? observaciones : existing.observaciones,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,
       created_at: existing.created_at ?? (toZonedTime(new Date(), "America/Costa_Rica") as Date),
@@ -309,6 +311,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
               corpo_id: existing.corpo_id,
               puesto_id: existing.puesto_id,
               nombre_llavero: existing.nombre_llavero,
+              numero_llavero: existing.numero_llavero,
               observaciones: existing.observaciones,
             },
             after: null,

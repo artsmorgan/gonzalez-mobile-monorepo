@@ -83,16 +83,35 @@ export async function GET(req: NextRequest) {
           e_estructura_sucursal: { select: { id: true, nombre: true } },
           e_estructura_puesto: { select: { id: true, nombre: true } },
         },
+        c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
+          select: {
+            id: true,
+            nombre: true,
+            primer_apellido: true,
+            segundo_apellido: true,
+            cedula: true,
+          },
+        },
         orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
       },
     });
 
     const colaboradores = (Array.isArray(marcas) ? marcas : []).map((m: any) => {
-      const emp = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
+      const empFijo = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
+      const empReemplazo = m.c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado;
+      const emp = empReemplazo || empFijo;
       const nombre = [emp?.nombre, emp?.primer_apellido, emp?.segundo_apellido].filter(Boolean).join(" ").trim();
-      const ausente = !m.hora_entrada_digitada;
+      const ausente = m.hora_entrada_digitada != null ? false : true;
+      const nombreOriginal = [empFijo?.nombre, empFijo?.primer_apellido, empFijo?.segundo_apellido].filter(Boolean).join(" ").trim();
+      const nombreReemplazo = [empReemplazo?.nombre, empReemplazo?.primer_apellido, empReemplazo?.segundo_apellido].filter(Boolean).join(" ").trim();
       return {
-        empleado_id: emp?.id || m.empleadoFijo_id || null,
+        empleado_id: emp?.id || m.empleadoReemplaza_id || m.empleadoFijo_id || null,
+        empleado_original_id: empFijo?.id || m.empleadoFijo_id || null,
+        empleado_reemplaza_id: empReemplazo?.id || m.empleadoReemplaza_id || null,
+        nombre_original: nombreOriginal || "",
+        nombre_reemplazo: nombreReemplazo || "",
+        cedula_reemplazo: empReemplazo?.cedula || "",
+        is_reemplazo: Boolean(empReemplazo?.id || m.empleadoReemplaza_id),
         marca_id: m.id,
         ausente,
         nombre: nombre || "",
@@ -107,11 +126,12 @@ export async function GET(req: NextRequest) {
     });
 
     const totalPresentes = colaboradores.filter((c: any) => !c.ausente).length;
+    const totalEmpleadosTurno = colaboradores.length;
 
     return NextResponse.json({
       status: true,
       message: "Marcas obtenidas correctamente",
-      data: { colaboradores, total_presentes: totalPresentes },
+      data: { colaboradores, total_presentes: totalPresentes, total_empleados_turno: totalEmpleadosTurno },
     }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";

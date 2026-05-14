@@ -26,6 +26,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const body = await req.json();
     const {
       marca_id,
+      numero_llave,
       lugar_abre,
       cantidad_copias,
       observaciones,
@@ -115,6 +116,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       empresa_id: nextEmpresa,
       division_id: nextDivision,
       contrato_id: nextContrato,
+      numero_llave: typeof numero_llave === "string" ? numero_llave : existing.numero_llave,
       lugar_abre: typeof lugar_abre === "string" ? lugar_abre : existing.lugar_abre,
       cantidad_copias:
         cantidad_copias === undefined || cantidad_copias === null
@@ -265,6 +267,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
               cliente_id: existing.cliente_id,
               corpo_id: existing.corpo_id,
               puesto_id: existing.puesto_id,
+              numero_llave: existing.numero_llave,
               lugar_abre: existing.lugar_abre,
               cantidad_copias: existing.cantidad_copias,
               observaciones: existing.observaciones,

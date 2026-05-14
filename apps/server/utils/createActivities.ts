@@ -186,9 +186,15 @@ export async function getActivities(req: NextRequest, id: number) {
                 : [];
 
             let frecuencia = "";
+            let scheduleTimes: string[] = [];
             try {
                 const frecuencia_json = JSON.parse(actividad.frecuencia);
                 frecuencia = frecuencia_json.title || "";
+                if (Array.isArray(frecuencia_json.schedule)) {
+                    scheduleTimes = (frecuencia_json.schedule as unknown[])
+                        .filter((x): x is string => typeof x === "string" && /^\d{2}:\d{2}$/.test(String(x).trim()))
+                        .map((x) => String(x).trim());
+                }
             } catch (error: unknown) {
                 const errorMessage = error instanceof Error ? error.message : "Error desconocido";
                 console.log(errorMessage);
@@ -199,6 +205,7 @@ export async function getActivities(req: NextRequest, id: number) {
                 nombre_actividad: actividad.nombre_actividad,
                 descripcion_actividad: actividad.descripcion_actividad,
                 frecuencia,
+                ...(scheduleTimes.length > 0 ? { schedule: scheduleTimes } : {}),
                 is_revision_equipo: es_revision_equipo,
                 is_marcada: Boolean(registro.marcada),
                 is_pendiente: pendiente,

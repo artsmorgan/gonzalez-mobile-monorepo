@@ -63,6 +63,7 @@ export async function GET(req: NextRequest) {
       contrato_id: r.contrato_id,
       isActive: r.isActive !== false,
       nombre_llavero: r.nombre_llavero,
+      numero_llavero: r.numero_llavero,
       observaciones: r.observaciones,
       firma_responsable: r.firma_responsable,
       created_by: r.created_by,
@@ -97,6 +98,7 @@ export async function GET(req: NextRequest) {
               division_id: l.e_llave.division_id,
               contrato_id: l.e_llave.contrato_id,
               isActive: l.e_llave.isActive !== false,
+              numero_llave: l.e_llave.numero_llave,
               lugar_abre: l.e_llave.lugar_abre,
               cantidad_copias: l.e_llave.cantidad_copias,
             }
@@ -123,6 +125,7 @@ export async function POST(req: NextRequest) {
     const {
       marca_id,
       nombre_llavero,
+      numero_llavero,
       observaciones,
       firma_responsable,
       llaves,
@@ -134,7 +137,7 @@ export async function POST(req: NextRequest) {
       puesto_id: bodyPuestoId,
     } = body ?? {};
 
-    if (!marca_id || !nombre_llavero || !firma_responsable) {
+    if (!marca_id || !nombre_llavero || !numero_llavero || !firma_responsable) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
@@ -191,6 +194,7 @@ export async function POST(req: NextRequest) {
           contrato_id: useContrato,
           isActive: true,
           nombre_llavero: String(nombre_llavero),
+          numero_llavero: String(numero_llavero),
           observaciones: typeof observaciones === "string" ? observaciones : "",
           firma_responsable: String(firma_responsable),
           created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
@@ -272,6 +276,7 @@ export async function POST(req: NextRequest) {
               corpo_id: created.corpo_id,
               puesto_id: created.puesto_id,
               nombre_llavero: created.nombre_llavero,
+              numero_llavero: created.numero_llavero,
               observaciones: created.observaciones,
               firma_responsable: created.firma_responsable,
             },

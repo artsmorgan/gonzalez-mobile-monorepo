@@ -201,7 +201,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 }
             }
 
-            const description = "Se ha registrado un movimiento del llavero " + llavero.nombre_llavero + " de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + " (Del empleado " + nombre_persona_entrega + " a " + nombre_persona_recibe + ")";
+            const description = "Se ha registrado un movimiento del llavero " + llavero.nombre_llavero + " - " + llavero.numero_llavero + " de la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro + " (Del empleado " + nombre_persona_entrega + " a " + nombre_persona_recibe + ")";
             await sendNotificationByRole(req, llavero.corpo_id, [], "Movimiento de llavero registrado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 

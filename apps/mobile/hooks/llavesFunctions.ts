@@ -12,6 +12,7 @@ export type LlaveItem = {
   division_id?: number;
   contrato_id?: number;
   isActive?: boolean;
+  numero_llave: string;
   lugar_abre: string;
   cantidad_copias: number;
   observaciones: string;

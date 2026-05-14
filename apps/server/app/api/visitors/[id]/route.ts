@@ -81,6 +81,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             tipo_accion,
             pers_autoriza_salida,
             foto_cedula, // viene en base64
+            firma_visitante, // viene en base64 y opcional
             activos,
         } = await req.json();
 
@@ -104,6 +105,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             observaciones,
             tipo_accion,
             pers_autoriza_salida,
+            firma_visitante,
             updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
         };
 
@@ -220,7 +222,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const cambiosArr: Array<{ prop: string; before: any; after: any }> = [];
         for (const [k, v] of Object.entries(updateData)) {
             // No registramos archivos: esos vienen en `foto_cedula` y se guardan aparte.
-            if (k === "foto_cedula") continue;
+            if (k === "foto_cedula" || k === "firma_visitante") continue;
 
             const before = (visitor as any)[k];
             const after = v;

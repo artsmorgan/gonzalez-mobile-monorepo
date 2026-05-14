@@ -46,67 +46,65 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
             req,
             data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpo.id } }
         });
-        for (const puesto of puestos_corpo) {
-            const plazas_puesto = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id: puesto.id } }
-            });
-            for (const plaza of plazas_puesto) {
-                if (plaza.categoriaSalarial_id) {
-                    const categoria_salarial = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "pg_categoria_salarial",
-                            operation: "findFirst",
-                            where: { id: plaza.categoriaSalarial_id }
+
+        const puestos_corpo_ids = puestos_corpo.map((puesto: { id: number }) => puesto.id);
+        const plazas_puestos = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id: { in: puestos_corpo_ids } } }
+        });
+
+        const plazas_puestos_categoria_salarial_ids = plazas_puestos.map((plaza: { categoriaSalarial_id: number }) => plaza.categoriaSalarial_id != null ? plaza.categoriaSalarial_id : 0).filter((id: number) => id > 0);
+
+        const categoria_salariales = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "pg_categoria_salarial", operation: "findMany", where: { id: { in: plazas_puestos_categoria_salarial_ids } } }
+        });
+
+        const categoria_salariales_categoria_empleado_ids = categoria_salariales.map((categoria_salarial: { categoriaEmpleado_id: number }) => categoria_salarial.categoriaEmpleado_id != null ? categoria_salarial.categoriaEmpleado_id : 0).filter((id: number) => id > 0);
+
+        const categoria_empleados = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "pg_categoria_empleado", operation: "findMany", where: { id: { in: categoria_salariales_categoria_empleado_ids } } }
+        });
+
+        for (const plaza of plazas_puestos) {
+            if (plaza.categoriaSalarial_id) {
+                const categoria_salarial = categoria_salariales.find((categoria_salarial: { id: number }) => categoria_salarial.id === plaza.categoriaSalarial_id);
+
+                if (categoria_salarial && categoria_salarial.categoriaEmpleado_id) {
+                    const categoria_empleado = categoria_empleados.find((categoria_empleado: { id: number }) => categoria_empleado.id === categoria_salarial.categoriaEmpleado_id);
+
+                    if (categoria_empleado) {
+                        let role = "OPERATIVO";
+                        switch (categoria_empleado.codigo) {
+                            case "OFI":
+                                role = "OPERATIVO";
+                                break;
+                            case "MIS":
+                                role = "OPERATIVO";
+                                break;
+                            case "ADM":
+                                role = "ADMINISTRATIVO";
+                                break;
+                            case "COO":
+                                role = "SUPERVISOR";
+                                break;
+                            case "SUP":
+                                role = "SUPERVISOR";
+                                break;
+                            case "OFC":
+                                role = "OPERATIVO";
+                                break;
                         }
-                    });
 
-                    if (categoria_salarial && categoria_salarial.categoriaEmpleado_id) {
-                        const categoria_empleado = await callDynamicPrisma({
-                            req,
-                            data: {
-                                action: "GET",
-                                table: "pg_categoria_empleado",
-                                operation: "findFirst",
-                                where: { id: categoria_salarial.categoriaEmpleado_id }
-                            }
-                        });
-
-                        if (categoria_empleado) {
-                            let role = "OPERATIVO";
-                            switch (categoria_empleado.codigo) {
-                                case "OFI":
-                                    role = "OPERATIVO";
-                                    break;
-                                case "MIS":
-                                    role = "OPERATIVO";
-                                    break;
-                                case "ADM":
-                                    role = "ADMINISTRATIVO";
-                                    break;
-                                case "COO":
-                                    role = "SUPERVISOR";
-                                    break;
-                                case "SUP":
-                                    role = "SUPERVISOR";
-                                    break;
-                                case "OFC":
-                                    role = "OPERATIVO";
-                                    break;
-                            }
-
-                            if (roles.includes(role)) {
-                                receiver.push(plaza.id);
-                            }
+                        if (roles.includes(role)) {
+                            receiver.push(plaza.id);
                         }
                     }
                 }
             }
         }
     }
-
 
     if (receiver.length > 0) {
         console.log("sendNotificationByRole");

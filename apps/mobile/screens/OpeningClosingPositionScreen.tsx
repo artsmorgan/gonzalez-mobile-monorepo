@@ -57,6 +57,7 @@ import {
   deleteOpeningClosingLocalFilesFromMeta,
   stripOpeningClosingImagesForActionPayload,
 } from '@/hooks/openingClosingPositionFilesSync';
+import { loadPuestoArticulosForTable } from '@/hooks/puestoArticulosSync';
 
 type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
 
@@ -95,6 +96,88 @@ interface InventarioItem {
   marca: string;
   modelo: string;
   descripcion: string;
+}
+
+function normalizeArticuloNomencladorId(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/** Mapeo desde filas guardadas en el fragmento `puesto_<id>_articulos` de la main-structure cache. */
+function mapFragmentArticuloToInventarioItem(art: any, catalog: ArticuloCatalogItem[]): InventarioItem {
+  const ultimo = art?.ultimo_mantenimiento ?? art?.ultimo_registro_mantenimiento ?? null;
+
+  const nombreEquipo = String(art?.articulo_nombre ?? art?.nombre ?? '').trim();
+
+  const nomId = normalizeArticuloNomencladorId(art?.articulo_nomenclador_id);
+
+  let tipo_id: number | null = null;
+  let tipo_nombre = '';
+
+  if (nomId != null) {
+    const hit = catalog.find((c) => c.id === nomId);
+    if (hit) {
+      tipo_id = nomId;
+      tipo_nombre = hit.nombre;
+    } else if (catalog.length === 0) {
+      tipo_id = nomId;
+    }
+  }
+
+  const topMarca = art?.marca != null ? String(art.marca).trim() : '';
+  let marca = '';
+  if (topMarca) {
+    marca = topMarca;
+  } else if (ultimo?.marca_nuevo != null && String(ultimo.marca_nuevo).trim() !== '') {
+    marca = String(ultimo.marca_nuevo).trim();
+  } else if (ultimo?.marca != null && String(ultimo.marca).trim() !== '') {
+    marca = String(ultimo.marca).trim();
+  }
+
+  let serieCandidate = '';
+  if (art?.serie != null && String(art.serie).trim() !== '') {
+    serieCandidate = String(art.serie).trim();
+  } else if (ultimo?.serie_placa_nuevo != null && String(ultimo.serie_placa_nuevo).trim() !== '') {
+    serieCandidate = String(ultimo.serie_placa_nuevo).trim();
+  } else if (ultimo?.serie_placa != null && String(ultimo.serie_placa).trim() !== '') {
+    serieCandidate = String(ultimo.serie_placa).trim();
+  }
+
+  const modeloPieces: string[] = [];
+  const m1 = ultimo?.modelo != null ? String(ultimo.modelo).trim() : '';
+  const m2 = ultimo?.modelo_nuevo != null ? String(ultimo.modelo_nuevo).trim() : '';
+  if (m1) modeloPieces.push(m1);
+  if (m2 && m2 !== m1) modeloPieces.push(m2);
+
+  const descRaw = ultimo?.observaciones != null ? String(ultimo.observaciones).trim() : '';
+
+  const numFc =
+    ultimo?.numero_fc != null && String(ultimo.numero_fc).trim() !== ''
+      ? String(ultimo.numero_fc).trim()
+      : '';
+  const boleta =
+    ultimo?.numero_boleta_proveeduria != null && String(ultimo.numero_boleta_proveeduria).trim() !== ''
+      ? String(ultimo.numero_boleta_proveeduria).trim()
+      : '';
+  let numero_activo = '';
+  if (numFc && boleta) numero_activo = `${numFc} (${boleta})`;
+  else if (numFc) numero_activo = numFc;
+  else numero_activo = boleta;
+
+  return {
+    activos_equipos: nombreEquipo,
+    tipo_id,
+    tipo_nombre,
+    numero_activo,
+    numero_serie: serieCandidate,
+    marca,
+    modelo: modeloPieces.join(' / '),
+    descripcion: descRaw,
+  };
 }
 
 type OcpImageLocal = {
@@ -299,6 +382,8 @@ export default function OpeningClosingPositionScreen() {
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null); // current_marca.roleDivision.division.id
   const [roleName, setRoleName] = useState<string | null>(null);
+  /** `current_marca.puesto.id` (prioridad Inventario preload si rol OPERATIVO). */
+  const [marcaContextPuestoId, setMarcaContextPuestoId] = useState<number | null>(null);
   // Estructura principal (árbol) + loading + selección
   const [mainStructureFetched, setMainStructureFetched] = useState(false);
   const [structure, setStructure] = useState<MainStructureTree>([]);
@@ -328,9 +413,14 @@ export default function OpeningClosingPositionScreen() {
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const fetchPositionsRef = useRef<(corpoIdOverride?: string | null) => Promise<void>>(async () => {});
 
-  // Catálogo artículos (inventario - solo Seguridad)
+  // Catálogo artículos (inventario: divisiones que no son Seguridad ni Aseo y limpieza)
   const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
   const [isArticulosLoading, setIsArticulosLoading] = useState(false);
+  const articulosCatalogRef = useRef<ArticuloCatalogItem[]>([]);
+
+  useEffect(() => {
+    articulosCatalogRef.current = articulosCatalog;
+  }, [articulosCatalog]);
 
   // Form states
   const [fechaRealizado, setFechaRealizado] = useState<Date>(new Date());
@@ -809,12 +899,22 @@ export default function OpeningClosingPositionScreen() {
       const currentMarca = await AsyncStorage.getItem('current_marca');
       if (!currentMarca) {
         setHasCurrentMarca(false);
+        setMarcaContextPuestoId(null);
         setIsLoading(false);
         return;
       }
 
       setHasCurrentMarca(true);
       const currentMarcaData = JSON.parse(currentMarca);
+      const marcaPuestoRaw = currentMarcaData?.puesto?.id;
+      setMarcaContextPuestoId(
+        marcaPuestoRaw !== undefined &&
+          marcaPuestoRaw !== null &&
+          Number.isFinite(Number(marcaPuestoRaw)) &&
+          Number(marcaPuestoRaw) > 0
+          ? Number(marcaPuestoRaw)
+          : null
+      );
       const corpoIdFromMarca = currentMarcaData?.corpo?.id != null ? String(currentMarcaData.corpo.id) : null;
       const effectiveCorpoId = (corpoIdOverride !== undefined && corpoIdOverride !== null ? corpoIdOverride : null) ?? corpoIdFromMarca;
 
@@ -958,6 +1058,15 @@ export default function OpeningClosingPositionScreen() {
           const divIdRaw =
             currentMarcaData?.roleDivision?.division?.id ?? currentMarcaData?.role_division?.division?.id;
           setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+          const marcaPuestoRawFm = currentMarcaData?.puesto?.id;
+          setMarcaContextPuestoId(
+            marcaPuestoRawFm !== undefined &&
+              marcaPuestoRawFm !== null &&
+              Number.isFinite(Number(marcaPuestoRawFm)) &&
+              Number(marcaPuestoRawFm) > 0
+              ? Number(marcaPuestoRawFm)
+              : null
+          );
           const rnRaw =
             currentMarcaData?.roleDivision?.role?.nombre ??
             currentMarcaData?.role_division?.role?.nombre ??
@@ -981,6 +1090,7 @@ export default function OpeningClosingPositionScreen() {
           }
         } else {
           setRoleName(null);
+          setMarcaContextPuestoId(null);
         }
       })();
       const onRestored = () => {
@@ -1193,6 +1303,16 @@ export default function OpeningClosingPositionScreen() {
     roleName,
   ]);
 
+  /** Puesto efectivo para precargar inventario desde `puesto_<id>_articulos`: jerarquía o marca si OPERATIVO. */
+  const inventarioSourcePuestoId = useMemo(() => {
+    if (roleName === 'OPERATIVO') {
+      const m = marcaContextPuestoId;
+      return m !== null && Number.isFinite(m) && m > 0 ? m : null;
+    }
+    const sp = selectedPuestoId;
+    return sp !== null && Number.isFinite(sp) && sp > 0 ? sp : null;
+  }, [roleName, marcaContextPuestoId, selectedPuestoId]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1212,7 +1332,17 @@ export default function OpeningClosingPositionScreen() {
     };
   }, [filterCorpoId, fetchPositions, roleName]);
 
-  const isSeguridadDivision = selectedDivisionId === 4;
+  /** Inventario visible en formulario: no Seguridad (4) ni Aseo y limpieza (5). */
+  const showInventarioSection = useMemo(
+    () => selectedDivisionId != null && selectedDivisionId !== 4 && selectedDivisionId !== 5,
+    [selectedDivisionId]
+  );
+
+  /** Persistir JSON de inventario: divisiones con UI + registros legacy Seguridad (4) en edición. */
+  const shouldPersistInventario = useMemo(
+    () => showInventarioSection || (!!editingRecord && selectedDivisionId === 4),
+    [showInventarioSection, editingRecord, selectedDivisionId]
+  );
 
   // Actividades: cargar predefinidas según división cuando se inicia la creación (o si cambia cliente/división durante creación)
   useEffect(() => {
@@ -1220,17 +1350,76 @@ export default function OpeningClosingPositionScreen() {
     setActividades(buildActividadesForDivision(selectedDivisionId));
   }, [isCreating, editingRecord, selectedDivisionId]);
 
-  // Inventario: si no es Seguridad, asegurar [] y ocultar sección
+  // Inventario: vaciar si no aplica la sección (solo en alta); en edición Seguridad conservar lo cargado desde BD
   useEffect(() => {
     if (!isCreating && !editingRecord) return;
-    if (!isSeguridadDivision) {
-      setInventario([]);
-      setExpandedInventarioIndices([]);
+    if (!showInventarioSection) {
+      if (!editingRecord) {
+        setInventario([]);
+        setExpandedInventarioIndices([]);
+      }
     } else {
-      // Cargar catálogo de artículos solo cuando aplica
       loadArticulosCatalog();
     }
-  }, [isSeguridadDivision, isCreating, editingRecord, loadArticulosCatalog]);
+  }, [showInventarioSection, isCreating, editingRecord, loadArticulosCatalog]);
+
+  // Inventario (nuevo registro): precarga desde fragmento `puesto_<id>_articulos` / caché principal
+  useEffect(() => {
+    if (!isCreating || editingRecord) return;
+    if (!showInventarioSection) return;
+
+    const pid = inventarioSourcePuestoId;
+    if (pid === null) {
+      setInventario([]);
+      setExpandedInventarioIndices([]);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await loadPuestoArticulosForTable(pid);
+        if (cancelled) return;
+        const catalogAtMap = articulosCatalogRef.current;
+        const rows = Array.isArray(raw) ? raw : [];
+        const mapped =
+          rows.length === 0
+            ? []
+            : rows.map((a: unknown) =>
+                mapFragmentArticuloToInventarioItem(a as Record<string, unknown>, catalogAtMap)
+              );
+        if (cancelled) return;
+        setInventario(mapped);
+        setExpandedInventarioIndices([]);
+      } catch {
+        if (!cancelled) {
+          setInventario([]);
+          setExpandedInventarioIndices([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreating, editingRecord, showInventarioSection, inventarioSourcePuestoId, selectedDivisionId]);
+
+  // Completa tipo_nombre cuando llega el catálogo nomenclador tras el primer mapeo
+  useEffect(() => {
+    if (!isCreating || editingRecord || !showInventarioSection || articulosCatalog.length === 0) return;
+    setInventario((prev) => {
+      if (prev.length === 0) return prev;
+      let touched = false;
+      const next = prev.map((row) => {
+        if (row.tipo_id === null || (row.tipo_nombre ?? '').trim() !== '') return row;
+        const hit = articulosCatalog.find((c) => c.id === row.tipo_id);
+        if (!hit) return row;
+        touched = true;
+        return { ...row, tipo_nombre: hit.nombre };
+      });
+      return touched ? next : prev;
+    });
+  }, [articulosCatalog, isCreating, editingRecord, showInventarioSection]);
 
   const resetForm = async () => {
     const horaAccion = await getHoraAccion();
@@ -1258,12 +1447,12 @@ export default function OpeningClosingPositionScreen() {
 
   const startCreating = async () => {
     ocpEditSnapshotRef.current = null;
-    setIsCreating(true);
     setEditingRecord(null);
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
     await resetForm();
+    setIsCreating(true);
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (currentMarca) {
       const currentMarcaData = JSON.parse(currentMarca);
@@ -1603,7 +1792,7 @@ export default function OpeningClosingPositionScreen() {
       }
 
       const actividadesStr = JSON.stringify(actividades || []);
-      const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+      const inventarioStr = JSON.stringify(shouldPersistInventario ? (inventario || []) : []);
 
       const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
 
@@ -1748,7 +1937,7 @@ export default function OpeningClosingPositionScreen() {
       }
 
       const actividadesStr = JSON.stringify(actividades || []);
-      const inventarioStr = JSON.stringify(isSeguridadDivision ? (inventario || []) : []);
+      const inventarioStr = JSON.stringify(shouldPersistInventario ? (inventario || []) : []);
 
       const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
 
@@ -1847,7 +2036,7 @@ export default function OpeningClosingPositionScreen() {
                 nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
                 nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
                 actividades: JSON.stringify(actividades || []),
-                inventario: JSON.stringify(isSeguridadDivision ? (inventario || []) : []),
+                inventario: JSON.stringify(shouldPersistInventario ? (inventario || []) : []),
                 otras_observaciones: otrasObservaciones.trim() || null,
                 firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
                 firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
@@ -2888,7 +3077,7 @@ export default function OpeningClosingPositionScreen() {
               </ThemedView>
 
               {/* Lista de inventario */}
-              {isSeguridadDivision && (
+              {showInventarioSection && (
                 <ThemedView style={styles.sectionContainer}>
                   <ThemedView style={styles.sectionHeader}>
                     <ThemedText style={styles.sectionTitle}>Inventario de activos y/o equipos</ThemedText>

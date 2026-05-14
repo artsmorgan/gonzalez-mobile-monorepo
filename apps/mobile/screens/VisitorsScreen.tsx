@@ -26,8 +26,16 @@ import {
 } from '@/hooks/visitorsCacheHelpers';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import SignatureScreen from 'react-native-signature-canvas';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
+
+/** Estilos del lienzo de firma (WebView) — alineado con StaffEvaluationsScreen. */
+const VISITOR_SIGNATURE_PAD_WEB_STYLE = `
+  .m-signature-pad--footer {display: none; margin: 0px;}
+  .m-signature-pad {box-shadow: none; border: none;}
+  body,html {width: 100%; height: 100%; background: #ffffff;}
+`;
 
 interface Responsable {
   id: number;
@@ -66,6 +74,7 @@ interface Visitor {
   tipo_accion: string | null;
   pers_autoriza_salida: string | null;
   foto_cedula: string | null;
+  firma_visitante?: string | null;
   activos: Activo[];
   created_at?: string;
   updated_at: string;
@@ -100,6 +109,7 @@ interface EditingVisitor {
   pers_autoriza_salida: string;
   foto_cedula: string | null;
   foto_cedula_nueva: string | null;
+  firma_visitante: string | null;
   activos: EditingActivo[];
 }
 
@@ -143,6 +153,26 @@ function numOrNull(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** `e_activo_visitante.detalles` en API/caché suele ser string JSON; el formulario usa `{ detalle, descripcion }[]`. */
+function normalizeActivosDetallesForForm(detalles: unknown): { detalle: string; descripcion: string }[] {
+  if (detalles == null) return [];
+  let raw: unknown = detalles;
+  if (typeof detalles === 'string') {
+    const t = detalles.trim();
+    if (!t) return [];
+    try {
+      raw = JSON.parse(t);
+    } catch {
+      return [{ detalle: '', descripcion: t }];
+    }
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw.map((det: any) => ({
+    detalle: det?.detalle != null ? String(det.detalle) : '',
+    descripcion: det?.descripcion != null ? String(det.descripcion) : '',
+  }));
 }
 
 function getDivisionIdFromMarcaJson(marca: any): number | null {
@@ -315,6 +345,15 @@ export default function VisitorsScreen() {
     return appendTokenToUrl(`${apiUrl}/api/uploads/visitors/${id}/cedula?name=${encodedName}`);
   };
 
+  const resolveVisitorCedulaListUri = (v: Visitor): string | null => {
+    const raw = v.foto_cedula;
+    if (!raw || typeof raw !== 'string' || raw.trim() === '') return null;
+    const t = raw.trim();
+    if (t.startsWith('data:') || t.startsWith('file:')) return t;
+    if (/^https?:\/\//i.test(t)) return appendTokenToUrl(t);
+    return getVisitorCedulaImageUrl(v.id, t);
+  };
+
   // Visitors state
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -372,6 +411,7 @@ export default function VisitorsScreen() {
     pers_autoriza_salida: '',
     foto_cedula: null,
     foto_cedula_nueva: null,
+    firma_visitante: null,
     activos: [],
   });
 
@@ -401,7 +441,7 @@ export default function VisitorsScreen() {
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
 
   // Expanded details state
-  const [expandedVisitorIds, setExpandedVisitorIds] = useState<number[]>([]);
+  const [expandedVisitorRowKeys, setExpandedVisitorRowKeys] = useState<string[]>([]);
 
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -479,8 +519,16 @@ export default function VisitorsScreen() {
         if (activo.numero_id) partes.push(`Nº identificador: ${activo.numero_id}`);
         if (activo.numero_activo) partes.push(`N° Activo: ${activo.numero_activo}`);
 
-        if (activo.detalles && Array.isArray(activo.detalles) && activo.detalles.length > 0) {
-          const detallesStr = activo.detalles
+        let detallesParsed: unknown = activo.detalles;
+        if (typeof detallesParsed === 'string' && String(detallesParsed).trim()) {
+          try {
+            detallesParsed = JSON.parse(detallesParsed);
+          } catch {
+            detallesParsed = [{ detalle: '', descripcion: String(detallesParsed) }];
+          }
+        }
+        if (detallesParsed && Array.isArray(detallesParsed) && detallesParsed.length > 0) {
+          const detallesStr = detallesParsed
             .map((d: any) => `${d.detalle || ''}: ${d.descripcion || ''}`)
             .filter((s: string) => s.trim())
             .join('; ');
@@ -1158,6 +1206,7 @@ export default function VisitorsScreen() {
       pers_autoriza_salida: '',
       foto_cedula: null,
       foto_cedula_nueva: null,
+      firma_visitante: null,
       activos: [],
     });
     // Initialize refs
@@ -1206,6 +1255,7 @@ export default function VisitorsScreen() {
       pers_autoriza_salida: '',
       foto_cedula: null,
       foto_cedula_nueva: null,
+      firma_visitante: null,
       activos: [],
     });
   };
@@ -1284,14 +1334,8 @@ export default function VisitorsScreen() {
       const fechaEntrada = parseFechaFromString(visitor.hora_entrada);
       const fechaSalida = visitor.hora_salida ? parseFechaFromString(visitor.hora_salida) : '';
 
-      // Helper para mapear activos - evitar duplicación de código
-      const mapActivos = (detalles: any) => {
-        const detallesArray = Array.isArray(detalles) ? detalles : [];
-        return detallesArray.map((det: any) => ({
-          detalle: det.detalle || '',
-          descripcion: det.descripcion || ''
-        }));
-      };
+      // Helper para mapear activos (detalles vienen como JSON string desde API/BD)
+      const mapActivosDetalles = (detalles: unknown) => normalizeActivosDetallesForForm(detalles);
 
       // Función helper para crear el objeto visitor
       const createEditingVisitorObject = (fotoCedulaValue: string | null) => ({
@@ -1313,10 +1357,11 @@ export default function VisitorsScreen() {
         pers_autoriza_salida: visitor.pers_autoriza_salida || '',
         foto_cedula: fotoCedulaValue,
         foto_cedula_nueva: null,
+        firma_visitante: visitor.firma_visitante != null ? String(visitor.firma_visitante) : null,
         activos: visitor.activos.map(activo => ({
           tipo_id: activo.tipo.id,
           nombre: activo.nombre ?? '',
-          detalles: mapActivos(activo.detalles),
+          detalles: mapActivosDetalles(activo.detalles),
           numero_id: activo.numero_id ?? '',
           numero_activo: activo.numero_activo ?? '',
         })),
@@ -1555,6 +1600,7 @@ export default function VisitorsScreen() {
                 tipo_accion: newVisitor.es_funcionario && newVisitor.tipo_accion ? newVisitor.tipo_accion : null,
                 pers_autoriza_salida: newVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                 foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
+                firma_visitante: newVisitor.firma_visitante,
                 activos: newVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
                   nombre: activo.nombre ?? '',
@@ -1640,6 +1686,7 @@ export default function VisitorsScreen() {
                   tipo_accion: newVisitor.es_funcionario && newVisitor.tipo_accion ? newVisitor.tipo_accion : null,
                   pers_autoriza_salida: newVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                   foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
+                  firma_visitante: newVisitor.firma_visitante,
                   activos: newVisitor.activos.map(activo => ({
                     tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
                     nombre: activo.nombre ?? '',
@@ -1822,6 +1869,7 @@ export default function VisitorsScreen() {
                 tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                 pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                 foto_cedula: editingVisitor.foto_cedula_nueva || null,
+                firma_visitante: editingVisitor.firma_visitante,
                 activos: editingVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
                   nombre: activo.nombre ?? '',
@@ -1898,6 +1946,7 @@ export default function VisitorsScreen() {
                       observaciones: editingVisitor.es_funcionario ? observacionesRef.current : null,
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
+                      firma_visitante: editingVisitor.firma_visitante,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
                         nombre: activo.nombre ?? '',
@@ -1937,6 +1986,7 @@ export default function VisitorsScreen() {
                       tipo_accion: editingVisitor.es_funcionario && editingVisitor.tipo_accion ? editingVisitor.tipo_accion : null,
                       pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                       foto_cedula: fotoCedula,
+                      firma_visitante: editingVisitor.firma_visitante,
                       activos: editingVisitor.activos.map(activo => ({
                         tipo_id: activo.tipo_id,
                         nombre: activo.nombre ?? '',
@@ -1992,6 +2042,7 @@ export default function VisitorsScreen() {
                     pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                     // Reemplazar foto_cedula con nueva imagen si se tomó una
                     foto_cedula: editingVisitor.foto_cedula_nueva || cache[visitorIndex].foto_cedula,
+                    firma_visitante: editingVisitor.firma_visitante ?? cache[visitorIndex].firma_visitante,
                     activos: editingVisitor.activos.map(activo => ({
                       tipo: tipoActivos.find(t => t.id === activo.tipo_id) || { id: activo.tipo_id || 0, nombre: 'Desconocido' },
                       nombre: activo.nombre ?? '',
@@ -2141,13 +2192,12 @@ export default function VisitorsScreen() {
     }
   };
 
-  const toggleVisitorDetails = (visitorId: number) => {
-    setExpandedVisitorIds(prev => {
-      if (prev.includes(visitorId)) {
-        return prev.filter(id => id !== visitorId);
-      } else {
-        return [...prev, visitorId];
+  const toggleVisitorDetails = (rowKey: string) => {
+    setExpandedVisitorRowKeys(prev => {
+      if (prev.includes(rowKey)) {
+        return prev.filter(k => k !== rowKey);
       }
+      return [...prev, rowKey];
     });
   };
 
@@ -2452,6 +2502,74 @@ export default function VisitorsScreen() {
       matchesPuestoNombre
     );
   });
+
+  const firmaVisitanteModalTargetEditRef = useRef(false);
+  const firmaVisitantePadRef = useRef<any>(null);
+  const [firmaVisitanteModalVisible, setFirmaVisitanteModalVisible] = useState(false);
+  const [firmaVisitantePadKey, setFirmaVisitantePadKey] = useState(0);
+  const [firmaVisitanteReading, setFirmaVisitanteReading] = useState(false);
+
+  const closeFirmaVisitanteModal = () => {
+    setFirmaVisitanteModalVisible(false);
+    setFirmaVisitanteReading(false);
+  };
+
+  const openFirmaVisitanteModal = (forEdit: boolean) => {
+    firmaVisitanteModalTargetEditRef.current = forEdit;
+    setFirmaVisitantePadKey((k) => k + 1);
+    setFirmaVisitanteModalVisible(true);
+  };
+
+  const triggerFirmaVisitanteRead = () => {
+    try {
+      setFirmaVisitanteReading(true);
+      firmaVisitantePadRef.current?.readSignature?.();
+    } catch {
+      setFirmaVisitanteReading(false);
+      Alert.alert('Error', 'No se pudo leer la firma. Dibuje primero en el recuadro.');
+    }
+  };
+
+  const handleFirmaVisitanteReadOk = (signature: string) => {
+    setFirmaVisitanteReading(false);
+    const sig = String(signature || '').trim();
+    if (!sig || sig.length < 20) {
+      Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+      return;
+    }
+    setFirmaVisitanteModalVisible(false);
+    if (firmaVisitanteModalTargetEditRef.current) {
+      setEditingVisitor((prev) => (prev ? { ...prev, firma_visitante: sig } : prev));
+    } else {
+      setNewVisitor((prev) => ({ ...prev, firma_visitante: sig }));
+    }
+  };
+
+  const clearFirmaVisitantePad = () => {
+    try {
+      firmaVisitantePadRef.current?.clearSignature?.();
+    } catch {
+      /* noop */
+    }
+    setFirmaVisitantePadKey((k) => k + 1);
+  };
+
+  const clearFirmaVisitanteFromForm = (forEdit: boolean) => {
+    Alert.alert('Quitar firma', '¿Eliminar la firma del visitante?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          if (forEdit) {
+            setEditingVisitor((prev) => (prev ? { ...prev, firma_visitante: null } : prev));
+          } else {
+            setNewVisitor((prev) => ({ ...prev, firma_visitante: null }));
+          }
+        },
+      },
+    ]);
+  };
 
   const renderVisitorForm = (visitor: EditingVisitor, isEditing: boolean) => {
     const updateField = (field: keyof EditingVisitor, value: any) => {
@@ -3015,6 +3133,41 @@ export default function VisitorsScreen() {
           ))}
         </ThemedView>
 
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.label}>Firma del visitante (opcional)</ThemedText>
+          {visitor.firma_visitante && String(visitor.firma_visitante).startsWith('data:image') ? (
+            <Image
+              source={{ uri: visitor.firma_visitante }}
+              style={styles.firmaVisitantePreview}
+              resizeMode="contain"
+            />
+          ) : (
+            <ThemedText style={styles.firmaVisitanteHint}>Sin firma capturada.</ThemedText>
+          )}
+          <ThemedView style={styles.firmaVisitanteActions}>
+            <TouchableOpacity
+              style={styles.firmaVisitanteButton}
+              onPress={() => openFirmaVisitanteModal(isEditing)}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="pencil" size={18} color="#FFFFFF" />
+              <ThemedText style={styles.firmaVisitanteButtonText}>
+                {visitor.firma_visitante ? 'Cambiar firma' : 'Dibujar firma'}
+              </ThemedText>
+            </TouchableOpacity>
+            {visitor.firma_visitante ? (
+              <TouchableOpacity
+                style={[styles.firmaVisitanteButton, styles.firmaVisitanteButtonSecondary]}
+                onPress={() => clearFirmaVisitanteFromForm(isEditing)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="trash-outline" size={18} color="#000" />
+                <ThemedText style={styles.firmaVisitanteButtonTextSecondary}>Quitar</ThemedText>
+              </TouchableOpacity>
+            ) : null}
+          </ThemedView>
+        </ThemedView>
+
         {/* Foto de cédula */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.label}>Foto de Cédula (Opcional)</ThemedText>
@@ -3073,8 +3226,7 @@ export default function VisitorsScreen() {
   const renderVisitorItem = (visitor: Visitor) => {
     const rowKey = getVisitorRowKey(visitor.id, visitor.id_local);
     const isDeletingThis = deletingVisitorKey === rowKey;
-    const isExpanded = expandedVisitorIds.includes(visitor.id);
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    const isExpanded = expandedVisitorRowKeys.includes(rowKey);
 
     return (
       <ThemedView key={rowKey} style={styles.visitorCard}>
@@ -3146,7 +3298,7 @@ export default function VisitorsScreen() {
         {/* Botón para expandir/colapsar detalles */}
         <TouchableOpacity
           style={styles.toggleDetailsButton}
-          onPress={() => toggleVisitorDetails(visitor.id)}
+          onPress={() => toggleVisitorDetails(rowKey)}
         >
           <ThemedText style={styles.toggleDetailsText}>
             {isExpanded ? 'Ocultar detalles' : 'Ver más detalles'}
@@ -3161,6 +3313,49 @@ export default function VisitorsScreen() {
         {/* Sección collapsable con detalles adicionales */}
         {isExpanded && (
           <ThemedView style={styles.expandedDetails}>
+            <ThemedView style={styles.fotoCedulaSection}>
+              <ThemedText style={styles.sectionTitle}>Firma del visitante</ThemedText>
+              {(() => {
+                const raw = visitor.firma_visitante;
+                if (raw == null || String(raw).trim() === '') {
+                  return <ThemedText style={styles.visitorValue}>Sin firma registrada.</ThemedText>;
+                }
+                const s = String(raw).trim();
+                if (s.startsWith('data:') || /^https?:\/\//i.test(s)) {
+                  const uri = /^https?:\/\//i.test(s) ? appendTokenToUrl(s) : s;
+                  return (
+                    <Image
+                      source={{ uri }}
+                      style={styles.firmaVisitantePreview}
+                      resizeMode="contain"
+                    />
+                  );
+                }
+                return <ThemedText style={styles.visitorValue}>Firma no disponible en vista previa.</ThemedText>;
+              })()}
+            </ThemedView>
+
+            {visitor.foto_cedula ? (
+              <ThemedView style={styles.fotoCedulaSection}>
+                <ThemedText style={styles.sectionTitle}>Foto de cédula</ThemedText>
+                {(() => {
+                  const cedulaUri = resolveVisitorCedulaListUri(visitor);
+                  return cedulaUri ? (
+                    <Image
+                      source={{ uri: cedulaUri }}
+                      style={styles.fotoCedulaImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <ThemedText style={styles.visitorValue}>
+                      Hay foto guardada como archivo en servidor, pero aún no está disponible hasta sincronizar el
+                      registro.
+                    </ThemedText>
+                  );
+                })()}
+              </ThemedView>
+            ) : null}
+
             {visitor.observaciones && (
               <ThemedView style={styles.visitorDetail}>
                 <ThemedText style={styles.visitorLabel}>Observaciones:</ThemedText>
@@ -3232,31 +3427,6 @@ export default function VisitorsScreen() {
                     </ThemedView>
                   );
                 })}
-              </ThemedView>
-            )}
-
-            {/* Foto de cédula */}
-            {visitor.foto_cedula && (
-              <ThemedView style={styles.fotoCedulaSection}>
-                <ThemedText style={styles.sectionTitle}>Foto de Cédula</ThemedText>
-                {visitor.foto_cedula.startsWith('data:image') ? (
-                  <Image
-                    source={{ uri: visitor.foto_cedula }}
-                    style={styles.fotoCedulaImage}
-                    resizeMode="contain"
-                  />
-                ) : (
-                  (() => {
-                    const cedulaUri = getVisitorCedulaImageUrl(visitor.id, visitor.foto_cedula);
-                    return cedulaUri ? (
-                      <Image
-                        source={{ uri: cedulaUri }}
-                        style={styles.fotoCedulaImage}
-                        resizeMode="contain"
-                      />
-                    ) : null;
-                  })()
-                )}
               </ThemedView>
             )}
           </ThemedView>
@@ -3667,6 +3837,66 @@ export default function VisitorsScreen() {
           </ThemedView>
         </ScrollView>
       )}
+
+      <Modal
+        visible={firmaVisitanteModalVisible}
+        animationType="fade"
+        transparent
+        presentationStyle="overFullScreen"
+        onRequestClose={closeFirmaVisitanteModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatModalCardSignature}>
+            <ThemedView style={styles.floatModalHeader}>
+              <ThemedText style={styles.modalTitle}>Firma del visitante</ThemedText>
+              <TouchableOpacity onPress={closeFirmaVisitanteModal} accessibilityLabel="Cerrar">
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={styles.signatureModalHintVisitors}>
+              Dibuje la firma dentro del recuadro.
+            </ThemedText>
+            <View style={styles.signaturePadBoxVisitors}>
+              {firmaVisitanteModalVisible ? (
+                <SignatureScreen
+                  ref={firmaVisitantePadRef}
+                  onOK={handleFirmaVisitanteReadOk}
+                  onEmpty={() => {
+                    setFirmaVisitanteReading(false);
+                    Alert.alert('Error', 'No se detectó la firma. Intenta de nuevo.');
+                  }}
+                  descriptionText=""
+                  clearText=""
+                  confirmText=""
+                  webStyle={VISITOR_SIGNATURE_PAD_WEB_STYLE}
+                  key={firmaVisitantePadKey}
+                />
+              ) : null}
+            </View>
+            <ThemedView style={styles.modalActionsRowFirma}>
+              <TouchableOpacity style={styles.modalClearBtnFirma} onPress={closeFirmaVisitanteModal}>
+                <ThemedText style={styles.modalClearBtnFirmaText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.modalClearBtnFirma} onPress={clearFirmaVisitantePad}>
+                <Ionicons name="trash-outline" size={20} color="#000" />
+                <ThemedText style={styles.modalClearBtnFirmaText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptBtnFirma, firmaVisitanteReading && { opacity: 0.7 }]}
+                onPress={triggerFirmaVisitanteRead}
+                disabled={firmaVisitanteReading}
+              >
+                {firmaVisitanteReading ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Ionicons name="checkmark" size={20} color="#000" />
+                )}
+                <ThemedText style={styles.modalAcceptBtnFirmaText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
 
       {/* Modal de cámara */}
       <Modal
@@ -4616,6 +4846,106 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     gap: 8,
+  },
+  floatModalCardSignature: {
+    width: '100%',
+    maxWidth: 520,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  signatureModalHintVisitors: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    color: '#666',
+    fontSize: 13,
+  },
+  signaturePadBoxVisitors: {
+    marginTop: 10,
+    marginHorizontal: 16,
+    height: 260,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalActionsRowFirma: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  modalClearBtnFirma: {
+    flex: 1,
+    minWidth: 90,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#EDEDED',
+    gap: 6,
+  },
+  modalClearBtnFirmaText: { fontWeight: '700', color: '#000', fontSize: 14 },
+  modalAcceptBtnFirma: {
+    flex: 1,
+    minWidth: 90,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: '#D7F5E5',
+    gap: 6,
+  },
+  modalAcceptBtnFirmaText: { fontWeight: '700', color: '#000', fontSize: 14 },
+  firmaVisitantePreview: {
+    width: '100%',
+    height: 120,
+    marginTop: 8,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  firmaVisitanteHint: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#888',
+  },
+  firmaVisitanteActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 12,
+  },
+  firmaVisitanteButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: '#007AFF',
+  },
+  firmaVisitanteButtonText: {
+    fontWeight: '700',
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  firmaVisitanteButtonSecondary: {
+    backgroundColor: '#EDEDED',
+  },
+  firmaVisitanteButtonTextSecondary: {
+    fontWeight: '700',
+    color: '#000',
+    fontSize: 14,
   },
 });
 

@@ -90,7 +90,7 @@ interface Survey {
   firma_responsable: string;
   nombre_firma: string;
   fecha: string;
-  evaluaciones: string; // JSON string array
+  evaluaciones: string; // JSON: objeto { form, know_process } o legado [{ question, value }]
   observations: string;
   contrato_id?: number;
 }
@@ -210,19 +210,214 @@ async function persistFirmaPersonaInSurveyActionsQueue(survey: Survey, sig: stri
   await AsyncStorage.setItem('surveys_actions', JSON.stringify(actions));
 }
 
-interface Question {
-  title: string;
-  inputs: {
-    type: 'punctuation' | 'radio' | 'text' | 'select';
-    length?: string;
-    options?: string[];
-    required: boolean;
-  };
+/** Fila legada en `evaluaciones` (JSON array) antes del formulario estructurado. */
+interface SurveyFormQuestionRow {
+  apply: boolean;
+  question: string;
+  value: number;
+}
+
+interface SurveyFormSectionRow {
+  section_title: string;
+  questions: SurveyFormQuestionRow[];
+  observations: string;
+}
+
+interface SurveyEvaluationFormPayload {
+  form: SurveyFormSectionRow[];
+  know_process: boolean;
 }
 
 interface Answer {
   question: string;
   value: string | number;
+}
+
+function cloneEvaluationForm(src: SurveyEvaluationFormPayload): SurveyEvaluationFormPayload {
+  return JSON.parse(JSON.stringify(src)) as SurveyEvaluationFormPayload;
+}
+
+function defaultQuestionRow(text: string): SurveyFormQuestionRow {
+  return { apply: true, question: text, value: 5 };
+}
+
+function defaultSection(title: string, questionTexts: string[]): SurveyFormSectionRow {
+  return {
+    section_title: title,
+    questions: questionTexts.map(defaultQuestionRow),
+    observations: '',
+  };
+}
+
+function createDefaultEvaluationFormAseo(): SurveyEvaluationFormPayload {
+  return {
+    form: [
+      defaultSection('Califique la calidad del servicio en cuanto a los siguientes aspectos', [
+        '¿Cómo es el trato del personal al público?',
+        '¿El personal es respetuoso con los funcionarios?',
+        'Domina el personal los lineamientos del puesto de trabajo',
+        '¿El personal siempre lleva su uniforme completo y bien presentado?',
+        '¿El equipo de trabajo diario se encuentra en optimas condiciones?',
+        '¿El personal utiliza un vocabulario respetuoso durante su jornada laboral?',
+      ]),
+      defaultSection(
+        '¿Cómo califica el servicio recibido por el personal (Marque solo para aquellos con los que tiene contacto)',
+        ['Gerencia de Operaciones', 'Asistentes de Operaciones', 'Supervisores', 'Misceláneos'],
+      ),
+      defaultSection('¿Cómo califica la calidad del servicio de Aseo y Limpieza en cuanto a nuestro trabajo?', [
+        '¿Cumple el servicio lo estipulado en el contrato?',
+        '¿Los productos de limpieza utilizados en el servicio son de la calidad esperada?',
+        '¿El plazo de entregas de productos de limpieza cumple con sus necesidades?',
+        '¿Son atendidas sus quejas en el plazo acordado con la empresa?',
+        '¿Considera que la empresa ha mejorado el servicio con respecto al año anterior?',
+      ]),
+      defaultSection('¿Cómo califica la comunicación con la empresa?', [
+        '¿Cómo califica la comunicación entre la compañía y usted como cliente?',
+        '¿Esa comunicación está generando los resultados esperados?',
+      ]),
+      defaultSection('APRECIACIONES GLOBALES', [
+        '¿Cuál es su nivel de satisfacción global respecto al servicio que le brindamos?',
+      ]),
+    ],
+    know_process: false,
+  };
+}
+
+function createDefaultEvaluationFormSeguridad(): SurveyEvaluationFormPayload {
+  return {
+    form: [
+      defaultSection('Califique la calidad del servicio en cuanto a los siguientes aspectos', [
+        '¿Cómo es el trato del personal al público?',
+        '¿El personal es respetuoso con los funcionarios?',
+        'Domina el personal los lineamientos del puesto de trabajo',
+        '¿El personal siempre lleva su uniforme completo y bien presentado?',
+        '¿El equipo de trabajo diario se encuentra en optimas condiciones?',
+        '¿El personal utiliza un vocabulario respetuoso durante su jornada laboral?',
+      ]),
+      defaultSection(
+        '¿Cómo califica el servicio recibido por el personal (Marque solo para aquellos con los que tiene contacto)',
+        ['Gerencia de Operaciones', 'Asistentes de Operaciones', 'Supervisores', 'Misceláneos'],
+      ),
+      defaultSection('¿Cómo califica la calidad del servicio de Seguridad en cuanto a nuestro trabajo?', [
+        '¿Cumple el servicio lo estipulado en el contrato?',
+        '¿Son atendidas sus quejas en el plazo acordado con la empresa?',
+        '¿Considera que la empresa ha mejorado el servicio con respecto al año anterior?',
+      ]),
+      defaultSection('¿Cómo califica la comunicación con la empresa?', [
+        '¿Cómo califica la comunicación entre la compañía y usted como cliente?',
+        '¿Esa comunicación está generando los resultados esperados?',
+      ]),
+      defaultSection('APRECIACIONES GLOBALES', [
+        '¿Cuál es su nivel de satisfacción global respecto al servicio que le brindamos?',
+      ]),
+    ],
+    know_process: false,
+  };
+}
+
+function getDefaultEvaluationFormForDivision(division: string): SurveyEvaluationFormPayload | null {
+  if (division === 'Seguridad') return createDefaultEvaluationFormSeguridad();
+  if (division === 'Aseo & Limpieza') return createDefaultEvaluationFormAseo();
+  return null;
+}
+
+function normalizeEvaluationFormPayload(raw: unknown): SurveyEvaluationFormPayload | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  if (!Array.isArray(o.form)) return null;
+  const know_process = typeof o.know_process === 'boolean' ? o.know_process : false;
+  const form: SurveyFormSectionRow[] = [];
+  for (const sec of o.form as any[]) {
+    if (!sec || typeof sec !== 'object') continue;
+    const section_title = String((sec as any).section_title ?? '').trim() || 'Sección';
+    const observations = String((sec as any).observations ?? '');
+    const questions: SurveyFormQuestionRow[] = [];
+    const qArr = Array.isArray((sec as any).questions) ? (sec as any).questions : [];
+    for (const q of qArr) {
+      if (!q || typeof q !== 'object') continue;
+      const applyRaw = (q as any).apply;
+      const apply = applyRaw === undefined || applyRaw === null ? true : Boolean(applyRaw);
+      const question = String((q as any).question ?? '').trim() || 'Pregunta';
+      let value = Number((q as any).value);
+      if (!Number.isFinite(value)) value = apply ? 5 : 0;
+      if (value < 0) value = 0;
+      if (value > 5) value = 5;
+      if (!apply) value = 0;
+      else if (value < 1) value = 1;
+      questions.push({ apply, question, value });
+    }
+    form.push({ section_title, questions, observations });
+  }
+  if (!form.length) return null;
+  return { form, know_process };
+}
+
+/** Migra formato antiguo `[{ question, value }]` al nuevo payload según plantilla de división. */
+function migrateLegacyEvaluacionesToForm(
+  legacy: Answer[],
+  division: string,
+): SurveyEvaluationFormPayload {
+  const base = getDefaultEvaluationFormForDivision(division) || createDefaultEvaluationFormSeguridad();
+  const next = cloneEvaluationForm(base);
+  const flat: SurveyFormQuestionRow[] = [];
+  next.form.forEach((s) => s.questions.forEach((q) => flat.push(q)));
+  legacy.forEach((row, i) => {
+    if (i >= flat.length) return;
+    const v = row.value;
+    const num = typeof v === 'number' ? v : parseInt(String(v), 10);
+    flat[i].apply = true;
+    if (Number.isFinite(num) && num >= 1 && num <= 5) flat[i].value = num;
+    else flat[i].value = 5;
+    const qt = String(row.question || '').trim();
+    if (qt) flat[i].question = qt;
+  });
+  return next;
+}
+
+function parseEvaluacionesStored(jsonStr: string | undefined | null, divisionFallback: string): SurveyEvaluationFormPayload {
+  const empty = getDefaultEvaluationFormForDivision(divisionFallback) || createDefaultEvaluationFormSeguridad();
+  if (!jsonStr || !String(jsonStr).trim()) return cloneEvaluationForm(empty);
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const asObj = normalizeEvaluationFormPayload(parsed);
+    if (asObj) return asObj;
+    if (Array.isArray(parsed) && parsed.length > 0 && parsed[0] && typeof parsed[0] === 'object' && 'question' in parsed[0]) {
+      return migrateLegacyEvaluacionesToForm(parsed as Answer[], divisionFallback);
+    }
+  } catch {
+    /* ignore */
+  }
+  return cloneEvaluationForm(empty);
+}
+
+function sanitizeEvaluationForPersist(form: SurveyEvaluationFormPayload): SurveyEvaluationFormPayload {
+  const next = cloneEvaluationForm(form);
+  next.form.forEach((sec) => {
+    sec.questions.forEach((q) => {
+      if (!q.apply) q.value = 0;
+      else if (q.value < 1 || q.value > 5) q.value = 5;
+    });
+  });
+  if (typeof next.know_process !== 'boolean') next.know_process = false;
+  return next;
+}
+
+function tryParseEvaluacionesForDisplay(
+  jsonStr: string | undefined | null,
+): { kind: 'new'; payload: SurveyEvaluationFormPayload } | { kind: 'legacy'; rows: Answer[] } | { kind: 'empty' } {
+  if (!jsonStr || !String(jsonStr).trim()) return { kind: 'empty' };
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const obj = normalizeEvaluationFormPayload(parsed);
+    if (obj) return { kind: 'new', payload: obj };
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const ok = parsed.every((x: any) => x && typeof x === 'object' && 'question' in x);
+      if (ok) return { kind: 'legacy', rows: parsed as Answer[] };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { kind: 'empty' };
 }
 
 interface FirmaData {
@@ -237,111 +432,6 @@ interface FirmaData {
     segundo_apellido: string;
   };
 }
-
-const QUESTIONS_SEGURIDAD: Question[] = [
-  {
-    title: "¿Cómo Califica el  trato del personal hacia el  publico y los funcionarios?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Domina el personal los lineamientos del puesto de trabajo?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿El equipo de trabajo diario se encuentra en optimas condiciones?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica el servicio  recibido por el personal?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica el servicio de la supervision realizada por nuestro personal?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica la calidad del servicio en cuanto a nuestro trabajo?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿La empresa Cumple el servicio con lo estipulado en el contrato? ",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Son atendidas sus quejas en el plazo acordado con el personal que lo atiende?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica la comunicación  entre la compañia y usted como cliente?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cuál es su nivel de satisfacción global respecto al servicio que le brindamos?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de seguridad el correo es gerenteseg@corporaciongonzalez.com",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-];
-
-const QUESTIONS_ASEO: Question[] = [
-  {
-    title: "¿Cómo Califica el  trato del personal hacia el  publico y los funcionarios?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Domina el personal los lineamientos del puesto de trabajo?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿El equipo de trabajo diario se encuentra en optimas condiciones?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica el servicio  recibido por el personal?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica el servicio de la supervision realizada por nuestro personal?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica la calidad del servicio en cuanto a nuestro trabajo?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿La empresa Cumple el servicio con lo estipulado en el contrato? ",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Son atendidas sus quejas en el plazo acordado con el personal que lo atiende?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cómo califica la comunicación  entre la compañia y usted como cliente?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Cuál es su nivel de satisfacción global respecto al servicio que le brindamos?",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-  {
-    title: "¿Conoce el procedimiento de atención de quejas de la compañía? Para el caso de Aseo el correo es gerenteaseo@corporaciongonzalez",
-    inputs: { type: "punctuation", length: "5", required: true }
-  },
-];
-
-// Función para obtener las preguntas según la división
-const getQuestionsForDivision = (division: string): Question[] => {
-  if (division === 'Seguridad') {
-    return QUESTIONS_SEGURIDAD;
-  } else if (division === 'Aseo & Limpieza') {
-    return QUESTIONS_ASEO;
-  }
-  // Por defecto, retornar preguntas de Seguridad
-  return QUESTIONS_SEGURIDAD;
-};
 
 /** Normaliza `firma_responsable` (trim, sin espacios internos, quita prefijo data URL si viene). */
 function normalizeFirmaResponsableInput(value: unknown): string {
@@ -730,9 +820,63 @@ export default function SatisfactionSurveysScreen() {
   const [showFechaEncuestaPicker, setShowFechaEncuestaPicker] = useState(false);
   const [selectedDivision, setSelectedDivision] = useState<string>('Seguridad');
 
-  // Answers state and ref
-  const [answers, setAnswers] = useState<{ [key: number]: string | number }>({});
-  const answersRef = useRef<{ [key: number]: string | number }>({});
+  const [evaluationForm, setEvaluationForm] = useState<SurveyEvaluationFormPayload | null>(null);
+  const evaluationFormRef = useRef<SurveyEvaluationFormPayload | null>(null);
+
+  const patchEvaluationForm = useCallback((updater: (draft: SurveyEvaluationFormPayload) => void) => {
+    const base = evaluationFormRef.current;
+    if (!base) return;
+    const draft = cloneEvaluationForm(base);
+    updater(draft);
+    evaluationFormRef.current = draft;
+    setEvaluationForm(draft);
+  }, []);
+
+  const getEvaluationJsonForSave = useCallback((): string | null => {
+    const raw = evaluationFormRef.current;
+    if (!raw || !raw.form.length) return null;
+    return JSON.stringify(sanitizeEvaluationForPersist(raw));
+  }, []);
+
+  const [addQuestionModalVisible, setAddQuestionModalVisible] = useState(false);
+  const [addQuestionSectionIndex, setAddQuestionSectionIndex] = useState<number | null>(null);
+  const [addQuestionDraft, setAddQuestionDraft] = useState('');
+
+  const closeAddQuestionModal = useCallback(() => {
+    setAddQuestionModalVisible(false);
+    setAddQuestionSectionIndex(null);
+    setAddQuestionDraft('');
+  }, []);
+
+  const openAddQuestionModal = useCallback((sectionIndex: number) => {
+    setAddQuestionSectionIndex(sectionIndex);
+    setAddQuestionDraft('');
+    setAddQuestionModalVisible(true);
+  }, []);
+
+  const requestAddQuestionSubmit = useCallback(() => {
+    const text = addQuestionDraft.trim();
+    if (addQuestionSectionIndex == null) return;
+    if (!text) {
+      Alert.alert('Error', 'Escriba el texto de la pregunta.');
+      return;
+    }
+    const sectionIdx = addQuestionSectionIndex;
+    Alert.alert('Confirmar', '¿Está seguro de que desea agregar esta pregunta?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Sí',
+        onPress: () => {
+          patchEvaluationForm((d) => {
+            if (sectionIdx != null && d.form[sectionIdx]) {
+              d.form[sectionIdx].questions.push(defaultQuestionRow(text));
+            }
+          });
+          closeAddQuestionModal();
+        },
+      },
+    ]);
+  }, [addQuestionDraft, addQuestionSectionIndex, patchEvaluationForm, closeAddQuestionModal]);
 
   // Signature states
   const [personSignature, setPersonSignature] = useState<string | null>(null);
@@ -1789,6 +1933,16 @@ export default function SatisfactionSurveysScreen() {
     }
 
     generateResponsableSignature();
+
+    const evalTmpl = getDefaultEvaluationFormForDivision(divisionRef.current);
+    if (evalTmpl) {
+      const cloned = cloneEvaluationForm(evalTmpl);
+      evaluationFormRef.current = cloned;
+      setEvaluationForm(cloned);
+    } else {
+      evaluationFormRef.current = null;
+      setEvaluationForm(null);
+    }
   };
 
   const cancelCreating = () => {
@@ -1835,21 +1989,9 @@ export default function SatisfactionSurveysScreen() {
       divisionRef.current = '';
     }
 
-    try {
-      const arr = JSON.parse(survey.evaluaciones || '[]');
-      const ans: { [key: number]: string | number } = {};
-      if (Array.isArray(arr)) {
-        arr.forEach((ev: any, i: number) => {
-          const v = ev.value ?? ev.result ?? '';
-          ans[i] = v;
-        });
-      }
-      setAnswers(ans);
-      answersRef.current = ans;
-    } catch {
-      setAnswers({});
-      answersRef.current = {};
-    }
+    const parsedForm = parseEvaluacionesStored(survey.evaluaciones, divisionRef.current);
+    evaluationFormRef.current = parsedForm;
+    setEvaluationForm(parsedForm);
 
     if (survey.firma_persona_evaluada?.trim()) {
       const f = survey.firma_persona_evaluada.trim();
@@ -1949,8 +2091,11 @@ export default function SatisfactionSurveysScreen() {
     observacionesRef.current = '';
     responsableNombreRef.current = '';
     responsableCedulaRef.current = '';
-    setAnswers({});
-    answersRef.current = {};
+    evaluationFormRef.current = null;
+    setEvaluationForm(null);
+    setAddQuestionModalVisible(false);
+    setAddQuestionSectionIndex(null);
+    setAddQuestionDraft('');
     setPersonSignature(null);
     personSignatureRef.current = null;
     setFirmaResponsable(null);
@@ -2021,13 +2166,21 @@ export default function SatisfactionSurveysScreen() {
       return;
     }
 
-    // Validate all questions answered
-    const currentQuestions = getQuestionsForDivision(selectedDivision);
-    for (let i = 0; i < currentQuestions.length; i++) {
-      const answer = answersRef.current[i] || answers[i];
-      if (currentQuestions[i].inputs.required && !answer) {
-        Alert.alert('Error', `Debe responder la pregunta ${i + 1}`);
-        return;
+    if (selectedDivision !== 'Seguridad' && selectedDivision !== 'Aseo & Limpieza') {
+      Alert.alert('Error', 'Debe seleccionar una división con formulario (Seguridad o Aseo & Limpieza).');
+      return;
+    }
+    const formPayloadPre = evaluationFormRef.current;
+    if (!formPayloadPre || !formPayloadPre.form.length) {
+      Alert.alert('Error', 'No hay formulario de evaluación. Seleccione división y jerarquía correctamente.');
+      return;
+    }
+    for (const sec of formPayloadPre.form) {
+      for (const q of sec.questions) {
+        if (q.apply && (q.value < 1 || q.value > 5)) {
+          Alert.alert('Error', 'Califique con 1 a 5 estrellas todas las preguntas marcadas como "Aplica".');
+          return;
+        }
       }
     }
 
@@ -2066,12 +2219,11 @@ export default function SatisfactionSurveysScreen() {
 
               const currentMarcaData = JSON.parse(currentMarca);
 
-              // Build evaluaciones array using ref first, then state
-              const currentQuestions = getQuestionsForDivision(selectedDivision);
-              const evaluaciones: Answer[] = currentQuestions.map((question, index) => ({
-                question: question.title,
-                value: answersRef.current[index] || answers[index] || ''
-              }));
+              const evaluacionesJson = getEvaluationJsonForSave();
+              if (!evaluacionesJson) {
+                Alert.alert('Error', 'No se pudo preparar el formulario de evaluación.');
+                return;
+              }
 
               // Signature is already in base64 format from SignatureScreen
               const personSignatureBase64 = personSignatureRef.current || personSignature || '';
@@ -2141,7 +2293,7 @@ export default function SatisfactionSurveysScreen() {
                 contrato_id:
                   contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
                 fecha: fechaEncuestaRef.current,
-                evaluaciones: JSON.stringify(evaluaciones),
+                evaluaciones: evaluacionesJson,
                 persona_evaluada: personaNombreRef.current,
                 cedula_persona_evaluada: personaCedulaRef.current,
                 telefono_persona_evaluada: personaTelefonoRef.current,
@@ -2209,7 +2361,7 @@ export default function SatisfactionSurveysScreen() {
                       firma_responsable: firmaResponsableBase64,
                       nombre_firma: '',
                       fecha: fechaEncuestaRef.current,
-                      evaluaciones: JSON.stringify(evaluaciones),
+                      evaluaciones: evaluacionesJson,
                       observations: observacionesRef.current.trim() || '-',
                     };
                     const merged0 = upsertSurveyCacheRowForPuesto(list0, row0, puestoId!);
@@ -2283,7 +2435,7 @@ export default function SatisfactionSurveysScreen() {
                   firma_responsable: firmaResponsableBase64,
                   nombre_firma: '',
                   fecha: fechaEncuestaRef.current,
-                  evaluaciones: JSON.stringify(evaluaciones),
+                  evaluaciones: evaluacionesJson,
                   observations: observacionesRef.current.trim() || '-',
                 };
 
@@ -2364,12 +2516,21 @@ export default function SatisfactionSurveysScreen() {
       Alert.alert('Error', 'Debe seleccionar la fecha de la encuesta');
       return;
     }
-    const currentQuestionsEd = getQuestionsForDivision(selectedDivision);
-    for (let i = 0; i < currentQuestionsEd.length; i++) {
-      const answer = answersRef.current[i] || answers[i];
-      if (currentQuestionsEd[i].inputs.required && !answer) {
-        Alert.alert('Error', `Debe responder la pregunta ${i + 1}`);
-        return;
+    if (selectedDivision !== 'Seguridad' && selectedDivision !== 'Aseo & Limpieza') {
+      Alert.alert('Error', 'Debe seleccionar una división con formulario (Seguridad o Aseo & Limpieza).');
+      return;
+    }
+    const formPayloadEdit = evaluationFormRef.current;
+    if (!formPayloadEdit || !formPayloadEdit.form.length) {
+      Alert.alert('Error', 'No hay formulario de evaluación.');
+      return;
+    }
+    for (const sec of formPayloadEdit.form) {
+      for (const q of sec.questions) {
+        if (q.apply && (q.value < 1 || q.value > 5)) {
+          Alert.alert('Error', 'Califique con 1 a 5 estrellas todas las preguntas marcadas como "Aplica".');
+          return;
+        }
       }
     }
     if (!responsableNombreRef.current.trim()) {
@@ -2399,11 +2560,11 @@ export default function SatisfactionSurveysScreen() {
             }
             const currentMarcaData = JSON.parse(currentMarca);
 
-            const currentQuestions = getQuestionsForDivision(selectedDivision);
-            const evaluaciones: Answer[] = currentQuestions.map((question, index) => ({
-              question: question.title,
-              value: answersRef.current[index] || answers[index] || '',
-            }));
+            const evaluacionesJson = getEvaluationJsonForSave();
+            if (!evaluacionesJson) {
+              Alert.alert('Error', 'No se pudo preparar el formulario de evaluación.');
+              return;
+            }
 
             const personSignatureBase64 = personSignatureRef.current || personSignature || '';
             const firmaResponsableBase64 = getFirmaResponsableBase64ForSave();
@@ -2472,7 +2633,7 @@ export default function SatisfactionSurveysScreen() {
               contrato_id:
                 contratoId != null && Number(contratoId) > 0 ? Number(contratoId) : 0,
               fecha: fechaEncuestaRef.current,
-              evaluaciones: JSON.stringify(evaluaciones),
+              evaluaciones: evaluacionesJson,
               persona_evaluada: personaNombreRef.current,
               cedula_persona_evaluada: personaCedulaRef.current,
               telefono_persona_evaluada: personaTelefonoRef.current,
@@ -2547,7 +2708,7 @@ export default function SatisfactionSurveysScreen() {
                         firma_persona_evaluada: personSignatureBase64,
                         firma_responsable: firmaResponsableBase64,
                         fecha: fechaEncuestaRef.current,
-                        evaluaciones: JSON.stringify(evaluaciones),
+                        evaluaciones: evaluacionesJson,
                         observations: observacionesRef.current.trim() || '-',
                         empresa: editLabels.empresa,
                         cliente: editLabels.cliente,
@@ -2604,7 +2765,7 @@ export default function SatisfactionSurveysScreen() {
                     firma_persona_evaluada: personSignatureBase64,
                     firma_responsable: firmaResponsableBase64,
                     fecha: fechaEncuestaRef.current,
-                    evaluaciones: JSON.stringify(evaluaciones),
+                    evaluaciones: evaluacionesJson,
                     observations: observacionesRef.current.trim() || '-',
                     empresa: editLabels.empresa,
                     cliente: editLabels.cliente,
@@ -2926,99 +3087,6 @@ export default function SatisfactionSurveysScreen() {
       display: none;
     }
   `;
-
-  // Inicializar respuestas con valor por defecto (5 estrellas) cuando se carga el formulario o cambia la división
-  useEffect(() => {
-    if (
-      formDivisionId &&
-      (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') &&
-      (isCreating || editingSurvey)
-    ) {
-      const currentQuestions = getQuestionsForDivision(selectedDivision);
-      setAnswers(prevAnswers => {
-        const newAnswers = { ...prevAnswers };
-        let hasChanges = false;
-
-        currentQuestions.forEach((question, index) => {
-          if (question.inputs.type === 'punctuation' && !prevAnswers[index]) {
-            const maxStars = parseInt(question.inputs.length || '5');
-            newAnswers[index] = maxStars;
-            answersRef.current[index] = maxStars;
-            hasChanges = true;
-          }
-        });
-
-        return hasChanges ? newAnswers : prevAnswers;
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formDivisionId, selectedDivision, isCreating, editingSurvey]);
-
-  const renderStarRating = (questionIndex: number, maxStars: number) => {
-    // Si no hay valor, usar el máximo (todas las estrellas marcadas por defecto)
-    const currentRating = answers[questionIndex] as number || maxStars;
-
-    return (
-      <ThemedView style={styles.starsContainer}>
-        {[...Array(maxStars)].map((_, index) => (
-          <TouchableOpacity
-            key={index}
-            onPress={() => {
-              const newAnswers = { ...answers };
-              newAnswers[questionIndex] = index + 1;
-              setAnswers(newAnswers);
-              answersRef.current[questionIndex] = index + 1;
-            }}
-          >
-            <Ionicons
-              name={index < currentRating ? 'star' : 'star-outline'}
-              size={32}
-              color="#FFD700"
-            />
-          </TouchableOpacity>
-        ))}
-      </ThemedView>
-    );
-  };
-
-  const renderQuestion = (question: Question, index: number) => {
-    return (
-      <ThemedView key={index} style={styles.questionContainer}>
-        <ThemedText style={styles.questionTitle}>
-          {index + 1}. {question.title}
-        </ThemedText>
-
-        {question.inputs.type === 'punctuation' && (
-          renderStarRating(index, parseInt(question.inputs.length || '5'))
-        )}
-
-        {question.inputs.type === 'radio' && (
-          <ThemedView style={styles.radioContainer}>
-            {question.inputs.options?.map((option, optIndex) => (
-              <TouchableOpacity
-                key={optIndex}
-                style={styles.radioOption}
-                onPress={() => {
-                  const newAnswers = { ...answers };
-                  newAnswers[index] = option;
-                  setAnswers(newAnswers);
-                  answersRef.current[index] = option;
-                }}
-              >
-                <Ionicons
-                  name={answers[index] === option ? 'radio-button-on' : 'radio-button-off'}
-                  size={24}
-                  color="#007AFF"
-                />
-                <ThemedText style={styles.radioLabel}>{option}</ThemedText>
-              </TouchableOpacity>
-            ))}
-          </ThemedView>
-        )}
-
-      </ThemedView>
-    );
-  };
 
   const getActionIcon = (action: string) => {
     switch (action.toLowerCase()) {
@@ -3439,13 +3507,7 @@ export default function SatisfactionSurveysScreen() {
                       const isExpanded = expandedSurveys.has(rowKey);
                       const firmasData = decodedFirmas.get(rowKey);
 
-                      // Parse evaluaciones
-                      let evaluacionesArray: Answer[] = [];
-                      try {
-                        evaluacionesArray = JSON.parse(survey.evaluaciones);
-                      } catch (e) {
-                        console.error('Error parsing evaluaciones:', e);
-                      }
+                      const evalParsed = tryParseEvaluacionesForDisplay(survey.evaluaciones);
 
                       return (
                         <ThemedView key={rowKey} style={styles.surveyCard}>
@@ -3585,15 +3647,46 @@ export default function SatisfactionSurveysScreen() {
                               </ThemedView>
 
                               {/* Evaluaciones */}
-                              {evaluacionesArray.length > 0 && (
+                              {evalParsed.kind === 'legacy' && evalParsed.rows.length > 0 && (
                                 <ThemedView style={styles.evaluacionesContainer}>
                                   <ThemedText style={styles.evaluacionesTitle}>Evaluaciones:</ThemedText>
-                                  {evaluacionesArray.map((evaluacion, index) => (
+                                  {evalParsed.rows.map((evaluacion, index) => (
                                     <ThemedView key={index} style={styles.evaluacionItem}>
                                       <ThemedText style={styles.evaluacionQuestion}>{evaluacion.question}</ThemedText>
                                       <ThemedText style={styles.evaluacionResult}>Respuesta: {evaluacion.value}</ThemedText>
                                     </ThemedView>
                                   ))}
+                                </ThemedView>
+                              )}
+                              {evalParsed.kind === 'new' && (
+                                <ThemedView style={styles.evaluacionesContainer}>
+                                  <ThemedText style={styles.evaluacionesTitle}>Evaluaciones:</ThemedText>
+                                  {evalParsed.payload.form.map((sec, si) => (
+                                    <ThemedView key={`sec-${si}`} style={styles.evalFormSection}>
+                                      <ThemedText style={styles.evalFormSectionTitle}>{sec.section_title}</ThemedText>
+                                      {sec.questions.map((q, qi) => (
+                                        <ThemedView key={`q-${si}-${qi}`} style={styles.evalFormQuestionBlock}>
+                                          <ThemedText style={styles.evalFormQuestionText}>{q.question}</ThemedText>
+                                          <ThemedText style={styles.evaluacionResult}>
+                                            Aplica: {q.apply ? 'Sí' : 'No'}
+                                            {q.apply ? ` — Calificación: ${q.value} / 5` : ' — Calificación: N/A (0)'}
+                                          </ThemedText>
+                                        </ThemedView>
+                                      ))}
+                                      {sec.observations.trim().length > 0 && (
+                                        <>
+                                          <ThemedText style={styles.evalFormObsLabel}>Observaciones de la sección</ThemedText>
+                                          <ThemedText style={styles.observacionesText}>{sec.observations}</ThemedText>
+                                        </>
+                                      )}
+                                    </ThemedView>
+                                  ))}
+                                  <ThemedView style={[styles.evalKnowProcessRow, { marginTop: 8 }]}>
+                                    <ThemedText style={styles.evaluacionResult}>
+                                      ¿Conoce el procedimiento de atención de quejas de la compañía?:{' '}
+                                      {evalParsed.payload.know_process ? 'Sí' : 'No'}
+                                    </ThemedText>
+                                  </ThemedView>
                                 </ThemedView>
                               )}
 
@@ -3763,14 +3856,26 @@ export default function SatisfactionSurveysScreen() {
                                     setSelectedDivision('');
                                     divisionRef.current = '';
                                   }
-                                  // Limpiar respuestas cuando cambia la división
-                                  setAnswers({});
-                                  answersRef.current = {};
+                                  const tmpl = getDefaultEvaluationFormForDivision(divisionRef.current);
+                                  if (tmpl) {
+                                    const cloned = cloneEvaluationForm(tmpl);
+                                    evaluationFormRef.current = cloned;
+                                    setEvaluationForm(cloned);
+                                  } else {
+                                    evaluationFormRef.current = null;
+                                    setEvaluationForm(null);
+                                  }
                                   setFormKey(prev => prev + 1);
                                 }
                               } else {
                                 setSelectedDivision('Seguridad');
                                 divisionRef.current = 'Seguridad';
+                                const tmplElse = getDefaultEvaluationFormForDivision('Seguridad');
+                                if (tmplElse) {
+                                  const c2 = cloneEvaluationForm(tmplElse);
+                                  evaluationFormRef.current = c2;
+                                  setEvaluationForm(c2);
+                                }
                               }
                             }}
                             style={styles.picker}
@@ -3786,7 +3891,7 @@ export default function SatisfactionSurveysScreen() {
                           <ThemedView style={styles.warningBox}>
                             <Ionicons name="warning" size={20} color="#FF9500" />
                             <ThemedText style={styles.warningText}>
-                              No existe un formulario para esta división. Solo están disponibles formularios para "Seguridad" y "Aseo & Limpieza".
+                              No existe un formulario para esta división. Solo están disponibles formularios para las divisiones Seguridad y Aseo & Limpieza.
                             </ThemedText>
                           </ThemedView>
                         )}
@@ -3966,15 +4071,128 @@ export default function SatisfactionSurveysScreen() {
                     )}
                   </ThemedView>
 
-                  {/* Questions - Solo mostrar si hay una división válida seleccionada */}
-                  {formDivisionId && (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') && (
+                  {/* Evaluación estructurada */}
+                  {formDivisionId && (selectedDivision === 'Seguridad' || selectedDivision === 'Aseo & Limpieza') && evaluationForm && (
                     <ThemedView style={styles.sectionContainer}>
                       <ThemedView style={styles.sectionHeader}>
-                        <ThemedText style={styles.sectionTitle}>Preguntas</ThemedText>
+                        <ThemedText style={styles.sectionTitle}>Evaluación</ThemedText>
                       </ThemedView>
-                      {getQuestionsForDivision(selectedDivision).map((question, index) => renderQuestion(question, index))}
+                      {evaluationForm.form.map((sec, sectionIndex) => (
+                        <ThemedView key={`eval-sec-${formKey}-${sectionIndex}`} style={styles.evalFormSection}>
+                          <ThemedText style={styles.evalFormSectionTitle}>{sec.section_title}</ThemedText>
+                          {sec.questions.map((q, qIndex) => (
+                            <ThemedView key={`eval-q-${sectionIndex}-${qIndex}`} style={styles.evalFormQuestionBlock}>
+                              <TouchableOpacity
+                                style={styles.evalFormApplyRow}
+                                onPress={() => {
+                                  patchEvaluationForm((d) => {
+                                    const row = d.form[sectionIndex]?.questions[qIndex];
+                                    if (!row) return;
+                                    row.apply = !row.apply;
+                                    row.value = row.apply ? (row.value >= 1 && row.value <= 5 ? row.value : 5) : 0;
+                                  });
+                                }}
+                              >
+                                <Ionicons
+                                  name={q.apply ? 'checkbox' : 'square-outline'}
+                                  size={22}
+                                  color="#007AFF"
+                                />
+                                <ThemedText style={styles.evalFormApplyLabel}>Aplica</ThemedText>
+                              </TouchableOpacity>
+                              <ThemedText style={styles.evalFormQuestionText}>{q.question}</ThemedText>
+                              {q.apply ? (
+                                <ThemedView style={styles.starsContainer}>
+                                  {[0, 1, 2, 3, 4].map((starIdx) => (
+                                    <TouchableOpacity
+                                      key={starIdx}
+                                      onPress={() => {
+                                        patchEvaluationForm((d) => {
+                                          const row = d.form[sectionIndex]?.questions[qIndex];
+                                          if (row) row.value = starIdx + 1;
+                                        });
+                                      }}
+                                    >
+                                      <Ionicons
+                                        name={starIdx < q.value ? 'star' : 'star-outline'}
+                                        size={28}
+                                        color="#FFD700"
+                                      />
+                                    </TouchableOpacity>
+                                  ))}
+                                </ThemedView>
+                              ) : null}
+                            </ThemedView>
+                          ))}
+                          <ThemedText style={styles.evalFormObsLabel}>Observaciones</ThemedText>
+                          <TextInput
+                            style={[styles.input, styles.textArea]}
+                            value={sec.observations}
+                            onChangeText={(text) => {
+                              patchEvaluationForm((d) => {
+                                if (d.form[sectionIndex]) d.form[sectionIndex].observations = text;
+                              });
+                            }}
+                            placeholder="Observaciones de esta sección"
+                            placeholderTextColor="#999"
+                            multiline
+                          />
+                          <TouchableOpacity
+                            style={styles.evalAddQuestionBtn}
+                            onPress={() => openAddQuestionModal(sectionIndex)}
+                          >
+                            <ThemedText style={styles.evalAddQuestionBtnText}>Agregar pregunta</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))}
+                      <TouchableOpacity
+                        style={styles.evalKnowProcessRow}
+                        onPress={() => {
+                          patchEvaluationForm((d) => {
+                            d.know_process = !d.know_process;
+                          });
+                        }}
+                      >
+                        <Ionicons
+                          name={evaluationForm.know_process ? 'checkbox' : 'square-outline'}
+                          size={22}
+                          color="#007AFF"
+                        />
+                        <ThemedText style={styles.evalKnowProcessText}>
+                          ¿Conoce el procedimiento de atención de quejas de la compañía?
+                        </ThemedText>
+                      </TouchableOpacity>
                     </ThemedView>
                   )}
+
+                  <Modal
+                    visible={addQuestionModalVisible}
+                    animationType="fade"
+                    transparent
+                    onRequestClose={closeAddQuestionModal}
+                  >
+                    <View style={styles.addQuestionModalBackdrop}>
+                      <View style={styles.addQuestionModalCard}>
+                        <ThemedText style={styles.addQuestionModalTitle}>Nueva pregunta</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={addQuestionDraft}
+                          onChangeText={setAddQuestionDraft}
+                          placeholder="Texto de la pregunta"
+                          placeholderTextColor="#999"
+                          multiline
+                        />
+                        <ThemedView style={styles.evalModalActions}>
+                          <TouchableOpacity onPress={closeAddQuestionModal}>
+                            <ThemedText style={styles.evalModalCancelText}>Cancelar</ThemedText>
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={requestAddQuestionSubmit}>
+                            <ThemedText style={styles.evalModalAcceptText}>Aceptar</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      </View>
+                    </View>
+                  </Modal>
 
                   {/* Observaciones */}
                   <ThemedView style={styles.formGroup}>
@@ -4993,6 +5211,113 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     backgroundColor: '#f8f9fa',
+  },
+  evalFormSection: {
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+  },
+  evalFormSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#111',
+    marginBottom: 10,
+  },
+  evalFormQuestionBlock: {
+    marginBottom: 12,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  evalFormApplyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 6,
+  },
+  evalFormApplyLabel: {
+    fontSize: 14,
+    color: '#333',
+    fontWeight: '500',
+  },
+  evalFormQuestionText: {
+    fontSize: 14,
+    color: '#333',
+    marginBottom: 6,
+  },
+  evalFormObsLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 8,
+    marginBottom: 4,
+    color: '#333',
+  },
+  evalAddQuestionBtn: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#E8F4FF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  evalAddQuestionBtnText: {
+    color: '#007AFF',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  evalKnowProcessRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 8,
+  },
+  evalKnowProcessText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
+  },
+  addQuestionModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  addQuestionModalCard: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 18,
+  },
+  addQuestionModalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    marginBottom: 12,
+    color: '#111',
+  },
+  evalModalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 16,
+    marginTop: 16,
+  },
+  evalModalCancelText: {
+    color: '#666',
+    fontSize: 15,
+  },
+  evalModalAcceptText: {
+    color: '#007AFF',
+    fontWeight: '600',
+    fontSize: 15,
   },
   signaturePreviewContainer: {
     marginBottom: 12,
