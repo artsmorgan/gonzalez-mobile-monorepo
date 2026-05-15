@@ -6,14 +6,14 @@ type RoleDivision = {
     division: { id: number, nombre: string };
 };
 
-export default async function getRoleDivision(req: NextRequest, plaza: any, empleado_plaza: any) {
+export default async function getRoleDivision(req: NextRequest, plaza: any, contrato: any) {
     const roleDivision: RoleDivision = {
         role: { id: 0, nombre: "Indeterminable" },
         division: { id: 0, nombre: "Indeterminable" },
     };
 
     try {
-        if (empleado_plaza && empleado_plaza.plaza_id && empleado_plaza.division_id) {
+        if (contrato.division_id) {
             const division = await callDynamicPrisma({
                 req,
                 data: {
@@ -21,7 +21,7 @@ export default async function getRoleDivision(req: NextRequest, plaza: any, empl
                     table: "n_division",
                     operation: "findFirst",
                     where: {
-                        id: empleado_plaza.division_id
+                        id: contrato.division_id
                     }
                 }
             });
