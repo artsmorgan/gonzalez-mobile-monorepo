@@ -229,6 +229,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'remembered_cedula',
             'server_time',
             'main_structure_created_at',
+            'categories_cache',
+            'tipo_activos_cache',
+            'incidents_classifications_cache',
+            'document_types_cache',
+            'executives_cache',
+            'puestos_corpo_cache',
+            'categoria_mantenimiento_cache',
+            'tipo_quejas_cache',
+            'tipo_clientes_quejas_cache'
           ];
           const keys = await AsyncStorage.getAllKeys();
     

@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { toZonedTime } from "date-fns-tz";
+import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../../utils/prismaClient";
+import { resolveReportMobileAbsolutePath } from "../../../../utils/reportesMobileFile";
 import { verifyAccessToken } from "../../../../utils/verifyToken";
 import { verifyTokenFromBody } from "../../../../utils/verifyTokenFromBody";
 import {
@@ -247,6 +249,8 @@ type ReportesPayload = {
     firma_responsable?: string;
     /** JSON string opcional con snapshot de filas (solo UI) */
     filters_json?: string;
+    /** mobileReportUploadsPath — reporte completado para resolver ruta en `uploads/` */
+    reportId?: number;
 };
 
 function assertMobileToken(payload: ReportesPayload) {
@@ -1270,6 +1274,34 @@ export async function POST(req: NextRequest) {
                 },
                 { status: 200 },
             );
+        }
+
+        if (op === "mobileReportUploadsPath") {
+            const reportIdRaw = (payload as any).reportId ?? (payload as any).report_id;
+            const reportId = Number(reportIdRaw);
+            if (!Number.isFinite(reportId) || reportId <= 0) {
+                return NextResponse.json({ status: false, message: "reportId es obligatorio" }, { status: 400 });
+            }
+
+            const row = await prisma.e_reportes_mobile.findUnique({ where: { id: reportId } });
+            if (!row) {
+                return NextResponse.json({ status: false, message: "Reporte no encontrado" }, { status: 404 });
+            }
+            if (String(row.estado || "").toLowerCase() !== "completado") {
+                return NextResponse.json({ status: false, message: "El reporte aún no está completado" }, { status: 409 });
+            }
+
+            try {
+                const absolutePath = await resolveReportMobileAbsolutePath(row.id, row.filters);
+                const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+                const relativeForFiles = path.relative(uploadsRoot, absolutePath).replace(/\\/g, "/");
+                if (relativeForFiles.startsWith("..")) {
+                    return NextResponse.json({ status: false, message: "Ruta de archivo inválida" }, { status: 500 });
+                }
+                return NextResponse.json({ status: true, data: { url: relativeForFiles } }, { status: 200 });
+            } catch {
+                return NextResponse.json({ status: false, message: "Archivo no encontrado en el servidor" }, { status: 404 });
+            }
         }
 
         return NextResponse.json({ status: false, message: `Operación no soportada: ${op}` }, { status: 400 });

@@ -374,22 +374,6 @@ function parseTipoQuejasCatalogoFromCache(raw: string | null): { id: number; nom
   }
 }
 
-/** Ruta pública servida desde `apps/server/public/uploads/reportes_mobile/`. */
-function reportExcelWebPath(row: ReportRow): string {
-  let outputFile: string | null = null;
-  try {
-    const parsed = JSON.parse(row.filters || '{}') as { outputFile?: string };
-    if (parsed.outputFile && String(parsed.outputFile).trim()) {
-      outputFile = String(parsed.outputFile).trim();
-    }
-  } catch {
-    outputFile = null;
-  }
-  const fileName = outputFile || `reporte_${row.id}.xlsx`;
-  const safe = fileName.replace(/[/\\]/g, '_');
-  return `/uploads/reportes_mobile/${encodeURIComponent(safe)}`;
-}
-
 function ymd(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -2028,7 +2012,7 @@ export default function ReportesScreen() {
       return;
     }
     const base = apiUrl.replace(/\/+$/, '');
-    const resourceUrl = `${base}${reportExcelWebPath(row)}`;
+    const resourceUrl = `${base}/api/reportes/mobile/${row.id}/get-file`;
     const uri = appendTokenToUrl(`${resourceUrl}?t=${Date.now()}`);
     const can = await Linking.canOpenURL(uri);
     if (can) await Linking.openURL(uri);
@@ -2848,7 +2832,7 @@ export default function ReportesScreen() {
               <Ionicons name="bar-chart" size={22} color="#000000" /> Reportes
             </ThemedText>
             <ThemedText style={styles.subtitle}>
-              Consulta y generación de reportes (Excel, ZIP con documentos) desde el servidor
+              Consulta y generación de reportes (Excel u otros tipos de archivo) desde el servidor
             </ThemedText>
           </ThemedView>
 
