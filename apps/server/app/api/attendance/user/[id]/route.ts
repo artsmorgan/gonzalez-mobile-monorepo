@@ -371,20 +371,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Horario de entrada y salida no configurado" }, { status: 200 });
         }
 
-        const empleado_plaza = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado_plaza",
-                operation: "findFirst",
-                where: {
-                    empleado_id: empleado.id,
-                    plaza_id: marcaDia.plaza_id
-                }
-            }
-        });
-
-        const roleDivision = await getRoleDivision(req, plaza, empleado_plaza);
+        const roleDivision = await getRoleDivision(req, plaza, contrato);
 
         const marca_return = {
             id: marcaDia.id,

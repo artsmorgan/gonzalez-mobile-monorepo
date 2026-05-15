@@ -1273,7 +1273,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {hasCurrentMarca && (hasPermissionRole(['ADMINISTRATIVO'])) && (
               <TouchableOpacity
                 style={[styles.menuItem, isActiveRoute('Reportes') && styles.activeMenuItem]}
                 onPress={handleReportesPress}
