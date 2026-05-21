@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
+import { toZonedTime } from "date-fns-tz";
 
 export async function PUT(
     req: NextRequest,
@@ -29,6 +30,12 @@ export async function PUT(
         const body = await req.json();
         const latitud = body?.latitud;
         const longitud = body?.longitud;
+        const horaAccionRaw = body?.horaAccion;
+        const horaAccionNum =
+            horaAccionRaw != null && horaAccionRaw !== "" ? Number(horaAccionRaw) : NaN;
+        const createdAt = Number.isFinite(horaAccionNum)
+            ? new Date(horaAccionNum)
+            : toZonedTime(new Date(), "America/Costa_Rica");
 
         if (latitud === undefined || longitud === undefined) {
             return NextResponse.json(
@@ -63,6 +70,9 @@ export async function PUT(
             );
         }
 
+        let latitud_anterior = puesto.coordenadas_gpslat;
+        let longitud_anterior = puesto.coordenadas_gpslng;
+
         const puestoObj = puesto as any;
 
         const updatedPuesto = await callDynamicPrisma({
@@ -87,6 +97,23 @@ export async function PUT(
                 { status: 500 }
             );
         }
+
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "c_ubicacion_puesto_registro_cambios",
+                data: {
+                    puesto_id: puestoId,
+                    latitud_anterior: latitud_anterior ? String(latitud_anterior) : null,
+                    longitud_anterior: longitud_anterior ? String(longitud_anterior) : null,
+                    latitud_nueva: latitud ? String(latitud) : null,
+                    longitud_nueva: longitud ? String(longitud) : null,
+                    created_at: createdAt.toISOString(),
+                    created_by: payload?.id,
+                }
+            }
+        });
 
         const plazas = await callDynamicPrisma({
             req,

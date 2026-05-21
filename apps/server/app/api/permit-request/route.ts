@@ -269,8 +269,9 @@ export async function POST(req: NextRequest) {
     const fechaInicio = `${body?.fecha_inicio}T00:00:00.000Z`;
     const fechaFin = `${body?.fecha_fin}T00:00:00.000Z`;
     const horaAccion = parseDateInputToDate(body?.hora_accion);
-    const comentarios = String(body?.comentarios || "").trim();
+    const motivo = String(body?.motivo ?? body?.comentarios ?? "").trim();
     const firmaResponsable = String(body?.firma_responsable || "").trim();
+    const firmaEmpleadoManual = stripDataUrlBase64(String(body?.firma_empleado_manual || "").trim());
 
     const rawFiles = Array.isArray(body?.files) ? body.files : [];
     const legacyFileBase64 = String(body?.file_base64 || "").trim();
@@ -319,8 +320,14 @@ export async function POST(req: NextRequest) {
     if (new Date(fechaInicio).getTime() > new Date(fechaFin).getTime()) {
       return NextResponse.json({ status: false, message: "fecha_inicio no puede ser mayor a fecha_fin" }, { status: 400 });
     }
+    if (!motivo) {
+      return NextResponse.json({ status: false, message: "El motivo es obligatorio" }, { status: 400 });
+    }
     if (!firmaResponsable || firmaResponsable.length < 10) {
       return NextResponse.json({ status: false, message: "La firma responsable es obligatoria" }, { status: 400 });
+    }
+    if (!firmaEmpleadoManual || firmaEmpleadoManual.length < 20) {
+      return NextResponse.json({ status: false, message: "La firma manual del empleado es obligatoria" }, { status: 400 });
     }
     if (!plazaId) {
       return NextResponse.json({ status: false, message: "Debes seleccionar una plaza" }, { status: 400 });
@@ -511,10 +518,12 @@ export async function POST(req: NextRequest) {
           fecha_inicio: fechaInicio,
           fecha_fin: fechaFin,
           ejecutivo_cuenta: ejecutivoCuenta,
-          comentarios: comentarios || null,
+          motivo,
           reemplazo_obligatorio: null,
           turnos: JSON.stringify(turnos),
           firma_responsable: firmaResponsable,
+          firma_empleado_manual: firmaEmpleadoManual,
+          observaciones: null,
           firma_ejecutivo_cuenta_digital: null,
           firma_ejecutivo_cuenta_manual: null,
           created_at: now,

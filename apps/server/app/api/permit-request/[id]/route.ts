@@ -72,6 +72,7 @@ export async function PUT(
             ? Number(body.reemplazo_obligatorio)
             : null;
         const horaAccion = parseDateInputToDate(body?.hora_accion);
+        const observaciones = String(body?.observaciones || "").trim();
         const firmaDigital = String(body?.firma_ejecutivo_cuenta_digital || "").trim();
         const firmaManual = String(body?.firma_ejecutivo_cuenta_manual || "").trim();
 
@@ -191,6 +192,7 @@ export async function PUT(
                 data: {
                     reemplazo_obligatorio: reemplazoObligatorio,
                     turnos: JSON.stringify(turnosUpdated),
+                    observaciones: observaciones || null,
                     firma_ejecutivo_cuenta_digital: firmaDigital,
                     firma_ejecutivo_cuenta_manual: firmaManual,
                     estado: "aprobado",
@@ -212,6 +214,7 @@ export async function PUT(
                         { prop: "turnos", before: existing.turnos, after: JSON.stringify(turnosUpdated) },
                         { prop: "firma_ejecutivo_cuenta_digital", before: existing.firma_ejecutivo_cuenta_digital || null, after: firmaDigital },
                         { prop: "firma_ejecutivo_cuenta_manual", before: existing.firma_ejecutivo_cuenta_manual || null, after: firmaManual },
+                        { prop: "observaciones", before: (existing as any)?.observaciones || null, after: observaciones || null },
                         { prop: "estado", before: (existing as any)?.estado || null, after: "aprobado" },
                     ]),
                     created_at: nowIso,

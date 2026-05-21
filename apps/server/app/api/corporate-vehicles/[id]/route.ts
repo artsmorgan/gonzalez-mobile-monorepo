@@ -5,6 +5,10 @@ import fs from "fs";
 import path from "path";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import {
+  buildCorporateVehicleOptionalFields,
+  normalizeMarca,
+} from "../../../../utils/corporateVehiclePayload";
 
 export const runtime = "nodejs";
 
@@ -58,6 +62,7 @@ export async function PUT(
       prox_cambio_aceite,
       modelo,
       anno,
+      marca,
       descripcion,
       titulo_propiedad,
       rtv,
@@ -85,18 +90,50 @@ export async function PUT(
     if (empresa_id !== undefined) updateData.empresa_id = Number(empresa_id);
     if (cliente_id !== undefined) updateData.cliente_id = Number(cliente_id);
     if (corpo_id !== undefined) updateData.sucursal_id = Number(corpo_id);
-    if (placa !== undefined) updateData.placa = String(placa ?? "");
-    if (tipo !== undefined) updateData.tipo = String(tipo ?? "");
     if (tipo_autoria !== undefined) updateData.tipo_autoria = String(tipo_autoria ?? "");
     if (estado !== undefined) updateData.estado = String(estado ?? "");
-    if (kilometraje !== undefined) updateData.kilometraje = Number(kilometraje ?? 0);
-    if (prox_cambio_aceite !== undefined) updateData.prox_cambio_aceite = Number(prox_cambio_aceite ?? 0);
-    if (modelo !== undefined) updateData.modelo = String(modelo ?? "");
-    if (anno !== undefined) updateData.anno = Number(anno ?? 0);
-    if (descripcion !== undefined) updateData.descripcion = String(descripcion ?? "");
-    if (titulo_propiedad !== undefined) updateData.titulo_propiedad = Boolean(titulo_propiedad);
-    if (rtv !== undefined) updateData.rtv = Boolean(rtv);
-    if (marchamo !== undefined) updateData.marchamo = Boolean(marchamo);
+
+    const finalTipo = tipo !== undefined ? String(tipo ?? "") : String(existingObj.tipo ?? "");
+    if (tipo !== undefined) updateData.tipo = finalTipo;
+
+    const optionalFieldKeys = [
+      "placa",
+      "kilometraje",
+      "prox_cambio_aceite",
+      "modelo",
+      "anno",
+      "descripcion",
+      "titulo_propiedad",
+      "rtv",
+      "marchamo",
+    ] as const;
+    const optionalTouched = optionalFieldKeys.some((k) => body[k] !== undefined) || tipo !== undefined;
+
+    if (optionalTouched) {
+      const optionalFields = buildCorporateVehicleOptionalFields({
+        tipo: finalTipo,
+        placa: placa !== undefined ? placa : existingObj.placa,
+        kilometraje: kilometraje !== undefined ? kilometraje : existingObj.kilometraje,
+        prox_cambio_aceite:
+          prox_cambio_aceite !== undefined ? prox_cambio_aceite : existingObj.prox_cambio_aceite,
+        modelo: modelo !== undefined ? modelo : existingObj.modelo,
+        anno: anno !== undefined ? anno : existingObj.anno,
+        descripcion: descripcion !== undefined ? descripcion : existingObj.descripcion,
+        titulo_propiedad:
+          titulo_propiedad !== undefined ? titulo_propiedad : existingObj.titulo_propiedad,
+        rtv: rtv !== undefined ? rtv : existingObj.rtv,
+        marchamo: marchamo !== undefined ? marchamo : existingObj.marchamo,
+      });
+      Object.assign(updateData, optionalFields);
+    }
+
+    if (marca !== undefined) {
+      const marcaNorm = normalizeMarca(marca);
+      if (!marcaNorm) {
+        return NextResponse.json({ status: false, message: "Marca es requerida" }, { status: 400 });
+      }
+      updateData.marca = marcaNorm;
+    }
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable ?? "");
     if (division_id !== undefined) updateData.division_id = Number(division_id ?? 0);
     if (contrato_id !== undefined) updateData.contrato_id = Number(contrato_id ?? 0);
@@ -333,6 +370,7 @@ export async function DELETE(
               tipo_autoria: existingObj.tipo_autoria,
               modelo: existingObj.modelo,
               anno: existingObj.anno,
+              marca: existingObj.marca,
             },
             after: null,
           }]),

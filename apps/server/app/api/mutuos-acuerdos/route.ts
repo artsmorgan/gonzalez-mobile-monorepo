@@ -245,7 +245,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (marcaDiaAusente_id === marcaDiaReemplaza_id) {
-      return NextResponse.json({ status: false, message: "Las marcas de ausente y reemplaza deben ser diferentes" }, { status: 400 });
+      return NextResponse.json({ status: false, message: "Las marcas de primer y segundo turno deben ser diferentes" }, { status: 400 });
     }
 
     const [marcaAusente, marcaReemplaza] = await Promise.all([

@@ -36,6 +36,16 @@ import {
     readPuestoUbicacionDispositivoMap,
     writePuestoUbicacionDispositivo,
 } from '@/hooks/mainStructureFragmentsStorage';
+import getHoraAccion from '@/hooks/getHoraAccion';
+
+async function getHoraAccionSafeMs(): Promise<number> {
+    try {
+        const t = await getHoraAccion();
+        return typeof t === 'number' && Number.isFinite(t) ? t : Date.now();
+    } catch {
+        return Date.now();
+    }
+}
 
 type PuestoUbicacionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'PuestoUbicacion'>;
 
@@ -588,6 +598,7 @@ export default function PuestoUbicacionScreen() {
 
             try {
                 setIsUpdating(true);
+                const horaAccion = await getHoraAccionSafeMs();
                 const isConnected = await getConnectionStatus();
 
                 if (isConnected) {
@@ -602,7 +613,7 @@ export default function PuestoUbicacionScreen() {
                                 'Content-Type': 'application/json',
                                 'ngrok-skip-browser-warning': '69420',
                             },
-                            body: JSON.stringify({ latitud, longitud }),
+                            body: JSON.stringify({ latitud, longitud, horaAccion }),
                         },
                         refreshAccessToken,
                         logout,
@@ -639,7 +650,7 @@ export default function PuestoUbicacionScreen() {
                         sucursal_id: filterCorpoId ?? null,
                         action: 'update',
                         type: 'puesto_ubicacion',
-                        payload: { latitud, longitud },
+                        payload: { latitud, longitud, horaAccion },
                         synced: false,
                     });
 
@@ -657,6 +668,7 @@ export default function PuestoUbicacionScreen() {
                         type: 'puesto_ubicacion',
                         latitud,
                         longitud,
+                        horaAccion,
                         synced: false,
                     });
                     await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
@@ -814,6 +826,7 @@ export default function PuestoUbicacionScreen() {
                             body: JSON.stringify({
                                 latitud: action.payload.latitud,
                                 longitud: action.payload.longitud,
+                                horaAccion: action.payload?.horaAccion ?? action.horaAccion,
                             }),
                         },
                         refreshAccessToken,

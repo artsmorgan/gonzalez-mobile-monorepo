@@ -3,6 +3,29 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import {
+  buildCorporateVehicleCreateFromBitacora,
+  canRegisterCorporateVehicleFromBitacora,
+} from "../../../../utils/corporateVehiclePayload";
+import { hydrateBitacoraRevisionImagesFromMultipart } from "../../../../utils/bitacoraRevisionImages";
+
+type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
+
+async function parseBitacoraPutBody(req: NextRequest): Promise<{
+  body: Record<string, any>;
+  multipartForm: MultipartBody | null;
+}> {
+  const contentType = req.headers.get("content-type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    const formData = (await req.formData()) as unknown as MultipartBody;
+    const rawMeta = formData.get("metadata");
+    if (typeof rawMeta !== "string") {
+      throw new Error("metadata faltante o inválido");
+    }
+    return { body: JSON.parse(rawMeta), multipartForm: formData };
+  }
+  return { body: await req.json(), multipartForm: null };
+}
 
 function normalizeToStringifiedJson(value: any): string {
   if (typeof value === "string") return value;
@@ -28,7 +51,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
     }
 
-    const body = await req.json();
+    let body: Record<string, any>;
+    let multipartForm: MultipartBody | null = null;
+    try {
+      const parsed = await parseBitacoraPutBody(req);
+      body = parsed.body;
+      multipartForm = parsed.multipartForm;
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : "Cuerpo inválido";
+      return NextResponse.json({ status: false, message: msg }, { status: 200 });
+    }
     const {
       tipo,
       vehiculo_id,
@@ -68,61 +100,66 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     if (!finalVehiculoId && register_vehicle) {
       try {
-        const {
-          placa,
-          tipo: vehTipo,
-          tipo_autoria,
-          kilometraje,
-          prox_cambio_aceite,
-          modelo,
-          anno,
-          titulo_propiedad,
-          rtv,
-          marchamo,
-        } = register_vehicle as any;
-
-        const newVehicle = await callDynamicPrisma({
-          req,
-          data: {
-            action: "POST",
-            table: "c_vehiculos_corporativos",
-            operation: "create",
-            data: {
-              empresa_id: existing.empresa_id,
-              cliente_id: existing.cliente_id,
-              sucursal_id: existing.sucursal_id,
-              placa: String(placa ?? ""),
-              tipo: String(vehTipo ?? tipo ?? existing.tipo ?? ""),
-              tipo_autoria: String(tipo_autoria ?? existing.tipo_autoria ?? ""),
-              estado: "Activo",
-              kilometraje: Number(kilometraje ?? 0),
-              prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
-              modelo: String(modelo ?? ""),
-              anno: Number(anno ?? 0),
-              descripcion: "-",
-              titulo_propiedad: Boolean(titulo_propiedad ?? true),
-              rtv: Boolean(rtv ?? true),
-              marchamo: Boolean(marchamo ?? true),
-              firma_responsable: typeof firma_responsable === "string" && firma_responsable.trim().length > 0
+        const reg = { ...(register_vehicle as Record<string, unknown>) };
+        if (!reg.tipo && tipo) reg.tipo = tipo;
+        if (canRegisterCorporateVehicleFromBitacora(reg)) {
+          const createdAtPut = toZonedTime(new Date(), "America/Costa_Rica") as Date;
+          const createdByPut = parseInt(String((payload as any)?.id ?? 0)) || 0;
+          const createData = buildCorporateVehicleCreateFromBitacora(reg, {
+            empresa_id: existing.empresa_id,
+            cliente_id: existing.cliente_id,
+            sucursal_id: existing.sucursal_id,
+            firma_responsable:
+              typeof firma_responsable === "string" && firma_responsable.trim().length > 0
                 ? firma_responsable
                 : String(existing.firma_responsable ?? ""),
+            created_by: createdByPut,
+            created_at: createdAtPut.toISOString(),
+          });
+          const newVehicle = await callDynamicPrisma({
+            req,
+            data: {
+              action: "POST",
+              table: "c_vehiculos_corporativos",
+              operation: "create",
+              data: createData,
             },
-          },
-        });
+          });
 
-        if (newVehicle && (newVehicle as any).id) {
-          finalVehiculoId = Number((newVehicle as any).id);
+          if (newVehicle && (newVehicle as any).id) {
+            finalVehiculoId = Number((newVehicle as any).id);
+          }
         }
       } catch (vehError) {
         console.error("Error creando vehículo corporativo desde bitácora (PUT):", vehError);
       }
     }
+    let revisionForUpdate =
+      informacion_revision !== undefined
+        ? normalizeToStringifiedJson(informacion_revision)
+        : existing.informacion_revision;
+
+    if (informacion_revision !== undefined && multipartForm) {
+      try {
+        revisionForUpdate = await hydrateBitacoraRevisionImagesFromMultipart(
+          req,
+          id,
+          revisionForUpdate,
+          multipartForm
+        );
+      } catch (imgErr) {
+        console.error("Error subiendo imágenes de revisión (bitácora PUT):", imgErr);
+        const msg = imgErr instanceof Error ? imgErr.message : "Error al subir imágenes";
+        return NextResponse.json({ status: false, message: msg }, { status: 200 });
+      }
+    }
+
     const updateData: any = {
       tipo: typeof tipo === "string" ? tipo : existing.tipo,
       vehiculo_id: finalVehiculoId,
       uso_id: uso_id !== undefined ? (uso_id ? Number(uso_id) : null) : existing.uso_id ?? null,
       informacion_general: informacion_general !== undefined ? normalizeToStringifiedJson(informacion_general) : existing.informacion_general,
-      informacion_revision: informacion_revision !== undefined ? normalizeToStringifiedJson(informacion_revision) : existing.informacion_revision,
+      informacion_revision: revisionForUpdate,
       movimientos_vehiculos: movimientos_vehiculos !== undefined ? normalizeToStringifiedJson(movimientos_vehiculos) : existing.movimientos_vehiculos,
       observaciones: typeof observaciones === "string" ? observaciones ?? "-" : existing.observaciones,
       firma_responsable: typeof firma_responsable === "string" ? firma_responsable : existing.firma_responsable,

@@ -151,12 +151,83 @@ import {
     type ManualesPuestoOrderKey,
 } from "./reports-functions/manualesPuestoReport";
 import {
+    buildArticulosPuestoExcelConsolidado,
+    normalizeArticulosPuestoFilters,
+    queryArticulosPuestoRows,
+    type ArticulosPuestoOrderKey,
+} from "./reports-functions/articulosPuestoReport";
+import {
+    buildMantenimientoArticulosExcelConsolidado,
+    normalizeMantenimientoArticulosFilters,
+    queryMantenimientoArticulosRows,
+    type MantenimientoArticulosOrderKey,
+} from "./reports-functions/mantenimientoArticulosReport";
+import {
+    buildRegistroVehiculosCorporativosExcelConsolidado,
+    normalizeRegistroVehiculosCorporativosFilters,
+    queryRegistroVehiculosCorporativosRows,
+    type RegistroVehiculosCorporativosOrderKey,
+} from "./reports-functions/registroVehiculosCorporativosReport";
+import {
+    buildRevisionVehiculosExcelConsolidado,
+    normalizeRevisionVehiculosFilters,
+    queryRevisionVehiculosRows,
+    type RevisionVehiculosOrderKey,
+} from "./reports-functions/revisionVehiculosReport";
+import { buildRevisionVehiculosExcelIndividual } from "./reports-functions/revisionVehiculosIndividualVehiculo";
+import {
     buildRegistroVisitasExcelConsolidado,
     buildRegistroVisitasIndividualZip,
     normalizeRegistroVisitasFilters,
     queryRegistroVisitasRows,
     type RegistroVisitasOrderKey,
 } from "./reports-functions/registroVisitasReport";
+import {
+    buildNotasVozExcelConsolidado,
+    normalizeNotasVozFilters,
+    queryNotasVozRows,
+    type NotasVozOrderKey,
+} from "./reports-functions/notasVozReport";
+import {
+    buildCambiosUbicacionPuestoExcelConsolidado,
+    normalizeCambiosUbicacionPuestoFilters,
+    queryCambiosUbicacionPuestoRows,
+    type CambiosUbicacionPuestoOrderKey,
+} from "./reports-functions/cambiosUbicacionPuestoReport";
+import {
+    buildRegistroCapacitacionesExcelConsolidado,
+    normalizeRegistroCapacitacionesFilters,
+    queryRegistroCapacitacionesRows,
+    type RegistroCapacitacionesOrderKey,
+} from "./reports-functions/registroCapacitacionesReport";
+import { resolveMobileReportTipoFromRow } from "./mobileReportTipo";
+import {
+    buildRegistroInduccionGeneralExcelConsolidado,
+    buildRegistroInduccionGeneralIndividualZip,
+    normalizeRegistroInduccionGeneralFilters,
+    queryRegistroInduccionGeneralRows,
+    type RegistroInduccionGeneralOrderKey,
+} from "./reports-functions/registroInduccionGeneralReport";
+import {
+    buildTiempoAlmuerzoExcelConsolidado,
+    normalizeTiempoAlmuerzoFilters,
+    queryTiempoAlmuerzoRows,
+    type TiempoAlmuerzoOrderKey,
+} from "./reports-functions/tiempoAlmuerzoReport";
+import {
+    buildSolicitudesPermisoExcelConsolidado,
+    buildSolicitudesPermisoExcelIndividual,
+    normalizeSolicitudesPermisoFilters,
+    querySolicitudesPermisoRows,
+    type SolicitudesPermisoOrderKey,
+} from "./reports-functions/solicitudesPermisoReport";
+import {
+    buildVisitasVehiculosExcelConsolidado,
+    buildVisitasVehiculosIndividualZip,
+    normalizeVisitasVehiculosFilters,
+    queryVisitasVehiculosRows,
+    type VisitasVehiculosOrderKey,
+} from "./reports-functions/visitasVehiculosReport";
 
 type StoredFilters = {
     moduleKey?: string;
@@ -754,6 +825,99 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             return;
         }
 
+        if (moduleKey === "articulos_puesto") {
+            const mf = normalizeArticulosPuestoFilters(parsed.moduleFilters || {});
+            const apOrder = String(row.order_by || "empresa_id").trim() as ArticulosPuestoOrderKey;
+            const rows = await queryArticulosPuestoRows(prisma, mf, apOrder);
+            const buf = await buildArticulosPuestoExcelConsolidado(prisma, rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "mantenimiento_articulos") {
+            const mf = normalizeMantenimientoArticulosFilters(parsed.moduleFilters || {});
+            const maOrder = String(row.order_by || "puesto_id").trim() as MantenimientoArticulosOrderKey;
+            const rows = await queryMantenimientoArticulosRows(prisma, mf, maOrder);
+            const buf = await buildMantenimientoArticulosExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "registro_vehiculos_corporativos") {
+            const mf = normalizeRegistroVehiculosCorporativosFilters(parsed.moduleFilters || {});
+            const rvcOrder = String(row.order_by || "puesto_id").trim() as RegistroVehiculosCorporativosOrderKey;
+            const rows = await queryRegistroVehiculosCorporativosRows(prisma, mf, rvcOrder);
+            const buf = await buildRegistroVehiculosCorporativosExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "revision_vehiculos") {
+            const mf = normalizeRevisionVehiculosFilters(parsed.moduleFilters || {});
+            const revOrder = String(row.order_by || "puesto_id").trim() as RevisionVehiculosOrderKey;
+            const rows = await queryRevisionVehiculosRows(prisma, mf, revOrder);
+            const reportType = resolveMobileReportTipoFromRow(row);
+            const buf =
+                reportType === "Individual"
+                    ? await buildRevisionVehiculosExcelIndividual(rows, String(row.nombre ?? ""))
+                    : await buildRevisionVehiculosExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const tipoLabel = reportType === "Individual" ? "Individual" : "Consolidado";
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, tipoLabel, "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
         if (moduleKey === "registro_visitas") {
             const mf = normalizeRegistroVisitasFilters(parsed.moduleFilters || {});
             const rvOrder = String(row.order_by || "empresa_id").trim() as RegistroVisitasOrderKey;
@@ -769,6 +933,175 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
             const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, ext);
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "notas_voz") {
+            const mf = normalizeNotasVozFilters(parsed.moduleFilters || {});
+            const nvOrder = String(row.order_by || "empresa_id").trim() as NotasVozOrderKey;
+            const rows = await queryNotasVozRows(prisma, mf, nvOrder);
+            const buf = await buildNotasVozExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "cambios_ubicacion_puesto") {
+            const mf = normalizeCambiosUbicacionPuestoFilters(parsed.moduleFilters || {});
+            const cupOrder = String(row.order_by || "empresa_id").trim() as CambiosUbicacionPuestoOrderKey;
+            const rows = await queryCambiosUbicacionPuestoRows(prisma, mf, cupOrder);
+            const buf = await buildCambiosUbicacionPuestoExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "registro_capacitaciones") {
+            const mf = normalizeRegistroCapacitacionesFilters(parsed.moduleFilters || {});
+            const rcOrder = String(row.order_by || "empresa_id").trim() as RegistroCapacitacionesOrderKey;
+            const rows = await queryRegistroCapacitacionesRows(prisma, mf, rcOrder);
+            const buf = await buildRegistroCapacitacionesExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "registro_induccion_general") {
+            const mf = normalizeRegistroInduccionGeneralFilters(parsed.moduleFilters || {});
+            const rigOrder = String(row.order_by || "empresa_id").trim() as RegistroInduccionGeneralOrderKey;
+            const rows = await queryRegistroInduccionGeneralRows(prisma, mf, rigOrder);
+            const reportType = resolveMobileReportTipoFromRow(row);
+            const isIndividual = reportType === "Individual";
+            const ext = isIndividual ? "zip" : "xlsx";
+            const buf = isIndividual
+                ? await buildRegistroInduccionGeneralIndividualZip(rows, row.nombre)
+                : await buildRegistroInduccionGeneralExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "tiempo_almuerzo") {
+            const mf = normalizeTiempoAlmuerzoFilters(parsed.moduleFilters || {});
+            const taOrder = String(row.order_by || "empresa_id").trim() as TiempoAlmuerzoOrderKey;
+            const rows = await queryTiempoAlmuerzoRows(prisma, mf, taOrder);
+            const buf = await buildTiempoAlmuerzoExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "solicitudes_permiso") {
+            const mf = normalizeSolicitudesPermisoFilters(parsed.moduleFilters || {});
+            const spOrder = String(row.order_by || "empresa_id").trim() as SolicitudesPermisoOrderKey;
+            const rows = await querySolicitudesPermisoRows(prisma, mf, spOrder);
+            const reportType = resolveMobileReportTipoFromRow(row);
+            const isIndividual = reportType === "Individual";
+            const ext = isIndividual ? "xlsx" : "xlsx";
+            const buf = isIndividual
+                ? await buildSolicitudesPermisoExcelIndividual(rows, row.nombre)
+                : await buildSolicitudesPermisoExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "visitas_vehiculos") {
+            const mf = normalizeVisitasVehiculosFilters(parsed.moduleFilters || {});
+            const vvOrder = String(row.order_by || "empresa_id").trim() as VisitasVehiculosOrderKey;
+            const rows = await queryVisitasVehiculosRows(prisma, mf, vvOrder);
+            const reportType = resolveMobileReportTipoFromRow(row);
+            const isIndividual = reportType === "Individual";
+            const ext = isIndividual ? "zip" : "xlsx";
+            const buf = isIndividual
+                ? await buildVisitasVehiculosIndividualZip(rows, String(row.nombre ?? ""))
+                : await buildVisitasVehiculosExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({

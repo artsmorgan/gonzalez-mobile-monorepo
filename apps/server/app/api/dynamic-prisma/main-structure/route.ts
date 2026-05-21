@@ -86,6 +86,7 @@ function mapVehiculoCorporativoSummaryForBitacora(v: any) {
         prox_cambio_aceite: v.prox_cambio_aceite,
         modelo: v.modelo,
         anno: v.anno,
+        marca: v.marca,
         descripcion: v.descripcion,
         titulo_propiedad: v.titulo_propiedad,
         rtv: v.rtv,

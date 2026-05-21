@@ -4,6 +4,31 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import {
+  buildCorporateVehicleCreateFromBitacora,
+  canRegisterCorporateVehicleFromBitacora,
+  isTipoBicicleta,
+  normalizeMarca,
+} from "../../../utils/corporateVehiclePayload";
+import { hydrateBitacoraRevisionImagesFromMultipart } from "../../../utils/bitacoraRevisionImages";
+
+type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
+
+async function parseBitacoraRequestBody(req: NextRequest): Promise<{
+  body: Record<string, any>;
+  multipartForm: MultipartBody | null;
+}> {
+  const contentType = req.headers.get("content-type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    const formData = (await req.formData()) as unknown as MultipartBody;
+    const rawMeta = formData.get("metadata");
+    if (typeof rawMeta !== "string") {
+      throw new Error("metadata faltante o inválido");
+    }
+    return { body: JSON.parse(rawMeta), multipartForm: formData };
+  }
+  return { body: await req.json(), multipartForm: null };
+}
 
 function safeParseJson<T>(value: any, fallback: T): T {
   try {
@@ -157,7 +182,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
-    const body = await req.json();
+    let body: Record<string, any>;
+    let multipartForm: MultipartBody | null = null;
+    try {
+      const parsed = await parseBitacoraRequestBody(req);
+      body = parsed.body;
+      multipartForm = parsed.multipartForm;
+    } catch (parseErr) {
+      const msg = parseErr instanceof Error ? parseErr.message : "Cuerpo inválido";
+      return NextResponse.json({ status: false, message: msg }, { status: 200 });
+    }
     const {
       marca_id,
       empresa_id,
@@ -272,78 +306,82 @@ export async function POST(req: NextRequest) {
     let finalVehiculoId: number | null = vehiculo_id ? Number(vehiculo_id) : null;
     if (!finalVehiculoId && register_vehicle) {
       try {
-        const {
-          placa,
-          tipo: vehTipo,
-          tipo_autoria,
-          kilometraje,
-          prox_cambio_aceite,
-          modelo,
-          anno,
-          titulo_propiedad,
-          rtv,
-          marchamo,
-        } = register_vehicle as any;
+        const reg = register_vehicle as Record<string, unknown>;
+        const tipoVehiculoRaw = reg.tipo ?? (register_vehicle as any).tipo;
 
-        // Solo datos del vehículo en register_vehicle (no `tipo` de la bitácora).
-        const tipoVehiculoRaw = vehTipo ?? (register_vehicle as any).tipo;
-        if (isValidPlaca(placa) && isValidTipoVehiculo(tipoVehiculoRaw) && isValidTipoAutoriaVehiculo(tipo_autoria)) {
-
-          const placaNorm = normalizePlacaForMatch(placa);
+        if (canRegisterCorporateVehicleFromBitacora(reg)) {
           const tipoVehNorm = normalizeTipoVehiculoForMatch(tipoVehiculoRaw);
-          const tipoAutoriaNorm = normalizeTipoAutoriaVehiculoForMatch(tipo_autoria);
+          const tipoAutoriaNorm = normalizeTipoAutoriaVehiculoForMatch(reg.tipo_autoria);
+          const marcaNorm = normalizeMarca(reg.marca);
 
-          const corporateFleet = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "c_vehiculos_corporativos",
-              operation: "findMany",
-              where: { sucursal_id: sucursalId, placa: placa, tipo: tipoVehiculoRaw, tipo_autoria: tipoAutoriaNorm },
-            },
-          });
+          if (!isTipoBicicleta(tipoVehiculoRaw) && isValidPlaca(reg.placa) && isValidTipoAutoriaVehiculo(reg.tipo_autoria)) {
+            const placaNorm = normalizePlacaForMatch(reg.placa);
+            const corporateFleet = await callDynamicPrisma({
+              req,
+              data: {
+                action: "GET",
+                table: "c_vehiculos_corporativos",
+                operation: "findMany",
+                where: {
+                  sucursal_id: sucursalId,
+                  placa: String(reg.placa ?? ""),
+                  tipo: String(tipoVehiculoRaw ?? ""),
+                  tipo_autoria: tipoAutoriaNorm,
+                },
+              },
+            });
 
-          const existingVehicle = Array.isArray(corporateFleet)
-            ? (corporateFleet as any[]).find(
-                (v: any) =>
-                  normalizePlacaForMatch(v?.placa) === placaNorm &&
-                  normalizeTipoVehiculoForMatch(v?.tipo).toLowerCase() === tipoVehNorm.toLowerCase() &&
-                  normalizeTipoAutoriaVehiculoForMatch(v?.tipo_autoria).toLowerCase() === tipoAutoriaNorm.toLowerCase()
-              )
-            : null;
+            const existingVehicle = Array.isArray(corporateFleet)
+              ? (corporateFleet as any[]).find(
+                  (v: any) =>
+                    normalizePlacaForMatch(v?.placa) === placaNorm &&
+                    normalizeTipoVehiculoForMatch(v?.tipo).toLowerCase() === tipoVehNorm.toLowerCase() &&
+                    normalizeTipoAutoriaVehiculoForMatch(v?.tipo_autoria).toLowerCase() ===
+                      tipoAutoriaNorm.toLowerCase()
+                )
+              : null;
 
-            if (existingVehicle && existingVehicle.id != null) {
+            if (existingVehicle?.id != null) {
               finalVehiculoId = Number(existingVehicle.id);
             }
+          } else if (isTipoBicicleta(tipoVehiculoRaw) && marcaNorm) {
+            const corporateFleet = await callDynamicPrisma({
+              req,
+              data: {
+                action: "GET",
+                table: "c_vehiculos_corporativos",
+                operation: "findMany",
+                where: {
+                  sucursal_id: sucursalId,
+                  tipo: "Bicicleta",
+                  marca: marcaNorm,
+                  ...(tipoAutoriaNorm ? { tipo_autoria: tipoAutoriaNorm } : {}),
+                },
+              },
+            });
+            const existingBike = Array.isArray(corporateFleet) ? (corporateFleet as any[])[0] : null;
+            if (existingBike?.id != null) {
+              finalVehiculoId = Number(existingBike.id);
+            }
+          }
         }
 
-        if (!finalVehiculoId) {
+        if (!finalVehiculoId && canRegisterCorporateVehicleFromBitacora(reg)) {
+          const createData = buildCorporateVehicleCreateFromBitacora(reg, {
+            empresa_id: empresaId,
+            cliente_id: clienteId,
+            sucursal_id: sucursalId,
+            firma_responsable: String(firma_responsable ?? ""),
+            created_by: createdBy,
+            created_at: createdAt.toISOString(),
+          });
           const newVehicle = await callDynamicPrisma({
             req,
             data: {
               action: "POST",
               table: "c_vehiculos_corporativos",
               operation: "create",
-              data: {
-                empresa_id: empresaId,
-                cliente_id: clienteId,
-                sucursal_id: sucursalId,
-                placa: String(placa ?? ""),
-                tipo: String(tipoVehiculoRaw ?? ""),
-                tipo_autoria: String(tipo_autoria ?? ""),
-                estado: "Activo",
-                kilometraje: Number(kilometraje ?? 0),
-                prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
-                modelo: String(modelo ?? ""),
-                anno: Number(anno ?? 0),
-                descripcion: "-",
-                titulo_propiedad: Boolean(titulo_propiedad ?? true),
-                rtv: Boolean(rtv ?? true),
-                marchamo: Boolean(marchamo ?? true),
-                firma_responsable: String(firma_responsable ?? ""),
-                created_by: createdBy,
-                created_at: createdAt.toISOString(),
-              },
+              data: createData,
             },
           });
 
@@ -355,6 +393,8 @@ export async function POST(req: NextRequest) {
         console.error("Error creando vehículo corporativo desde bitácora:", vehError);
       }
     }
+
+    let revisionStrInitial = normalizeToStringifiedJson(informacion_revision);
 
     const created = await callDynamicPrisma({
       req,
@@ -373,7 +413,7 @@ export async function POST(req: NextRequest) {
           uso_id: uso_id ? Number(uso_id) : null,
           tipo: String(tipo),
           informacion_general: normalizeToStringifiedJson(informacion_general),
-          informacion_revision: normalizeToStringifiedJson(informacion_revision),
+          informacion_revision: revisionStrInitial,
           movimientos_vehiculos: normalizeToStringifiedJson(movimientos_vehiculos),
           observaciones: String(observaciones ?? "-"),
           firma_responsable: String(firma_responsable),
@@ -382,6 +422,31 @@ export async function POST(req: NextRequest) {
         }
       }
     });
+
+    if (created?.id && multipartForm) {
+      try {
+        const hydrated = await hydrateBitacoraRevisionImagesFromMultipart(
+          req,
+          Number(created.id),
+          revisionStrInitial,
+          multipartForm
+        );
+        if (hydrated !== revisionStrInitial) {
+          revisionStrInitial = hydrated;
+          await callDynamicPrisma({
+            req,
+            data: {
+              action: "UPDATE",
+              table: "c_bitacora_vehiculo_detenido",
+              where: { id: created.id },
+              data: { informacion_revision: revisionStrInitial },
+            },
+          });
+        }
+      } catch (imgErr) {
+        console.error("Error subiendo imágenes de revisión (bitácora create):", imgErr);
+      }
+    }
 
     // Vinculación: si viene `uso_id`, marcamos el uso con `bitacora_id = created.id`
     let description = "";

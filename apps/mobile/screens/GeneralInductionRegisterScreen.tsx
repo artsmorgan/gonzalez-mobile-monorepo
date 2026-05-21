@@ -75,6 +75,8 @@ type MainStructureTree = MainStructureEmpresaNode[];
 type TemaNode = { id: string; text: string; children?: TemaNode[] };
 type TemaFlatItem = { key: string; id: string; text: string; level: number; isLeaf: boolean };
 type TemaSelectedItem = { id: string; text: string };
+type TemaSectionLeafItem = { id: string; text: string; checked: boolean };
+type TemaSectionItem = { id: string; text: string; items: TemaSectionLeafItem[] };
 type TemaData = { flat: TemaFlatItem[]; leafTextById: Record<string, string> };
 
 type PersonaItem = {
@@ -172,6 +174,50 @@ const TEMAS_DIV_AYL: TemaNode[] = [
       { id: '6.8', text: 'Acoso Sexual y Laboral' },
     ],
   },
+  {
+    id: '7',
+    text: 'Tipo de contratación y modalidades de pago.',
+    children: [
+      { id: '7.1', text: 'Comodín' },
+      { id: '7.2', text: 'Fijo' },
+    ],
+  },
+  { id: '8', text: 'Importancia de asistencia a capacitaciones' },
+  {
+    id: '9',
+    text: 'Importancia de uso de equipo de protección personal (EPP) y medidas de seguridad en el trabajo:',
+    children: [
+      { id: '9.1', text: 'Lentes de seguridad' },
+      { id: '9.2', text: 'Mascarillas' },
+      { id: '9.3', text: 'Guantes' },
+      { id: '9.4', text: 'Zapatos Antideslizantes' },
+      { id: '9.5', text: 'Zapatos Seguridad' },
+      { id: '9.6', text: 'Fajas de Levantamiento de Peso (si aplica)' },
+      { id: '9.7', text: 'Batas/Gorrito/Cobertor zapatos hospitalario (si aplica)' },
+      { id: '9.8', text: 'Botas (si aplica)' },
+      { id: '9.9', text: 'Equipos de Trabajo en Altura' },
+      { id: '9.10', text: 'Equipos de Protección Jardinería' },
+      { id: '9.11', text: 'Rótulos Preventivos' },
+      { id: '9.12', text: 'Otros:' },
+    ],
+  },
+  {
+    id: '10',
+    text: 'Dilución y manipulación correcta de los químicos de limpieza',
+    children: [
+      { id: '10.1', text: 'Cloro / Sustituto de Cloro' },
+      { id: '10.2', text: 'Desinfectante' },
+      { id: '10.3', text: 'Multiuso' },
+      { id: '10.4', text: 'Loza Sanitaria' },
+      { id: '10.5', text: 'Otros químicos de limpieza (manipulación)' },
+    ],
+  },
+  { id: '11', text: 'Procedimientos y Protocolos de Limpieza' },
+  { id: '12', text: 'Procedimiento Limpieza Hospitalaria (si aplica)' },
+  { id: '13', text: 'Protocolos de Emergencia o en Casos de Crisis' },
+  { id: '14', text: 'Manejo y Levantamiento de Cargas y Movimiento Postural' },
+  { id: '15', text: 'Manejo de Desechos Biopeligrosos' },
+  { id: '16', text: 'Manejo y clasificación de Residuos (Reciclaje)' },
 ];
 
 const TEMAS_DIV_SEG: TemaNode[] = [
@@ -321,15 +367,152 @@ async function getConnectionStatus() {
   }
 }
 
+function buildTemasSectionsFromFlat(flat: TemaFlatItem[], checkedIds: Set<string>): TemaSectionItem[] {
+  const sections: TemaSectionItem[] = [];
+  let currentSection: TemaSectionItem | null = null;
+
+  for (const item of flat) {
+    if (!item.isLeaf) {
+      currentSection = { id: item.id, text: item.text, items: [] };
+      sections.push(currentSection);
+      continue;
+    }
+    const leaf: TemaSectionLeafItem = {
+      id: item.id,
+      text: item.text,
+      checked: checkedIds.has(item.id),
+    };
+    if (item.level === 0 || !currentSection) {
+      sections.push({ id: item.id, text: item.text, items: [leaf] });
+      currentSection = null;
+    } else {
+      currentSection.items.push(leaf);
+    }
+  }
+
+  return sections;
+}
+
+function parseTemasPayload(raw: unknown): {
+  selected: TemaSelectedItem[];
+  leafs: Array<{ id: string; text: string; checked?: boolean }> | null;
+  sections: TemaSectionItem[] | null;
+} {
+  const empty = { selected: [] as TemaSelectedItem[], leafs: null as null, sections: null as null };
+  if (!raw) return empty;
+  let obj: any = raw;
+  if (typeof raw === 'string') {
+    try {
+      obj = JSON.parse(raw);
+    } catch {
+      return empty;
+    }
+  }
+  if (Array.isArray(obj)) {
+    const selected = obj
+      .map((item) => {
+        if (typeof item === 'string') return { id: item, text: item };
+        if (item && typeof item === 'object') {
+          return { id: String((item as any).id || '').trim(), text: String((item as any).text || '').trim() };
+        }
+        return null;
+      })
+      .filter((x): x is TemaSelectedItem => !!x?.id);
+    return { selected, leafs: null, sections: null };
+  }
+  return {
+    selected: Array.isArray(obj?.selected) ? obj.selected : [],
+    leafs: Array.isArray(obj?.leafs) ? obj.leafs : null,
+    sections: Array.isArray(obj?.sections) ? obj.sections : null,
+  };
+}
+
+/** Restaura hojas marcadas para edición; ignora ids de sección que no son hoja del formulario actual. */
+function restoreSelectedTemasFromStoredPayload(
+  temasData: TemaData,
+  parsed: ReturnType<typeof parseTemasPayload>,
+): TemaSelectedItem[] {
+  const { leafTextById } = temasData;
+  const byId = new Map<string, TemaSelectedItem>();
+
+  const addIfLeaf = (id: string, text: string) => {
+    const sid = String(id || '').trim();
+    if (!sid || !leafTextById[sid]) return;
+    const displayText = leafTextById[sid] || String(text || '').trim();
+    if (!displayText) return;
+    if (!byId.has(sid)) byId.set(sid, { id: sid, text: displayText });
+  };
+
+  if (parsed.leafs && parsed.leafs.length > 0) {
+    for (const l of parsed.leafs) {
+      if (l?.checked) addIfLeaf(String(l.id), String(l.text));
+    }
+    return Array.from(byId.values());
+  }
+
+  if (parsed.sections && parsed.sections.length > 0) {
+    for (const sec of parsed.sections) {
+      const items = Array.isArray(sec?.items) ? sec.items : [];
+      const hasSubItems = items.length > 1 || (items.length === 1 && items[0]?.id !== sec?.id);
+      if (hasSubItems) {
+        for (const it of items) {
+          if (it?.checked) addIfLeaf(String(it.id), String(it.text));
+        }
+      } else if (items.length === 1 && items[0]?.checked) {
+        addIfLeaf(String(items[0].id), String(items[0].text || sec.text));
+      }
+    }
+    if (byId.size > 0) return Array.from(byId.values());
+  }
+
+  for (const s of parsed.selected) {
+    addIfLeaf(String(s.id), String(s.text));
+  }
+  return Array.from(byId.values());
+}
+
 // Funciones para formatear datos dinámicos para mostrar en cambios
 function formatTemasATratarForDisplay(temasJson: string, temasData: TemaData): string {
   try {
-    const temas: TemaSelectedItem[] = safeJsonParse<TemaSelectedItem[]>(temasJson, []);
-    if (!Array.isArray(temas) || temas.length === 0) return 'No hay temas seleccionados.';
-    return temas.map((t, idx) => {
-      const temaText = temasData.leafTextById[t.id] || t.text || t.id || '-';
-      return `${idx + 1}. ${temaText}`;
-    }).join('\n');
+    const { selected, leafs, sections } = parseTemasPayload(temasJson);
+    const lines: string[] = [];
+
+    if (sections && sections.length > 0) {
+      for (const sec of sections) {
+        const title = String(sec?.text || '').trim() || sec?.id || '—';
+        const items = Array.isArray(sec?.items) ? sec.items : [];
+        const hasSubItems = items.length > 1 || (items.length === 1 && items[0]?.id !== sec?.id);
+        if (hasSubItems) {
+          lines.push(title);
+          for (const it of items) {
+            if (!it?.checked) continue;
+            const leafText = temasData.leafTextById[it.id] || it.text || it.id || '—';
+            lines.push(`  • ${leafText}`);
+          }
+        } else if (items.length === 1 && items[0]?.checked) {
+          lines.push(title);
+        }
+      }
+      if (lines.length > 0) return lines.join('\n');
+    }
+
+    if (leafs && leafs.length > 0) {
+      const rebuilt = buildTemasSectionsFromFlat(
+        temasData.flat,
+        new Set(leafs.filter((l) => !!l?.checked).map((l) => String(l.id))),
+      );
+      if (rebuilt.length > 0) {
+        return formatTemasATratarForDisplay(JSON.stringify({ sections: rebuilt }), temasData);
+      }
+    }
+
+    if (!Array.isArray(selected) || selected.length === 0) return 'No hay temas seleccionados.';
+    return selected
+      .map((t, idx) => {
+        const temaText = temasData.leafTextById[t.id] || t.text || t.id || '-';
+        return `${idx + 1}. ${temaText}`;
+      })
+      .join('\n');
   } catch (e) {
     console.error('Error formatting temas a tratar for display:', e);
     return 'Error al formatear temas a tratar.';
@@ -654,6 +837,8 @@ export default function GeneralInductionRegisterScreen() {
   // form
   const [isCreating, setIsCreating] = useState(false);
   const [editingRecord, setEditingRecord] = useState<EditingRecord | null>(null);
+  const pendingEditTemasRef = useRef<ReturnType<typeof parseTemasPayload> | null>(null);
+  const editTemasRestoreDoneRef = useRef(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
@@ -662,7 +847,7 @@ export default function GeneralInductionRegisterScreen() {
 
   // Temas seleccionados: array de objetos {id, text} (se guarda en DB como string JSON)
   const [selectedTemas, setSelectedTemas] = useState<TemaSelectedItem[]>([]);
-  const [temasVisibleCount, setTemasVisibleCount] = useState(60);
+  const [temasVisibleCount, setTemasVisibleCount] = useState(100);
   const [colaboradoresList, setColaboradoresList] = useState<PersonaItem[]>([]);
   const [capacitadoresList, setCapacitadoresList] = useState<PersonaItem[]>([]);
   const [expandedColaboradores, setExpandedColaboradores] = useState<string[]>([]);
@@ -1424,9 +1609,24 @@ export default function GeneralInductionRegisterScreen() {
 
   useEffect(() => {
     // Reiniciar cantidad visible cuando cambie la división (formulario dinámico)
-    setTemasVisibleCount(60);
+    setTemasVisibleCount(100);
     if (!editingRecord) setSelectedTemas(allTemasLeafSelected);
   }, [divisionIdForTemas, editingRecord, allTemasLeafSelected]);
+
+  // Al editar: reaplicar temas guardados cuando el formulario de la división ya esté cargado
+  useEffect(() => {
+    if (!editingRecord) {
+      pendingEditTemasRef.current = null;
+      editTemasRestoreDoneRef.current = false;
+      return;
+    }
+    if (editTemasRestoreDoneRef.current || !pendingEditTemasRef.current) return;
+    if (temasFlat.length === 0) return;
+
+    const restored = restoreSelectedTemasFromStoredPayload(temasData, pendingEditTemasRef.current);
+    setSelectedTemas(restored);
+    editTemasRestoreDoneRef.current = true;
+  }, [editingRecord, divisionIdForTemas, temasData, temasFlat.length]);
 
   const handleEmpresaChange = (empresaId: number | null) => {
     setSelectedEmpresaId(empresaId);
@@ -1758,6 +1958,8 @@ export default function GeneralInductionRegisterScreen() {
     setImages([]);
     setPhotosDirty(false);
     setFirmaResponsableHash('');
+    pendingEditTemasRef.current = null;
+    editTemasRestoreDoneRef.current = false;
     setEditingRecord(null);
   };
 
@@ -1785,8 +1987,10 @@ export default function GeneralInductionRegisterScreen() {
 
       setFecha(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
 
-      const temasObj = safeJsonParse<any>(record.temas_a_tratar, null);
-      const meta = temasObj?.meta;
+      const temasParsed = parseTemasPayload(record.temas_a_tratar);
+      pendingEditTemasRef.current = temasParsed;
+      editTemasRestoreDoneRef.current = false;
+      const meta = safeJsonParse<any>(record.temas_a_tratar, null)?.meta ?? null;
 
       let structureArr: MainStructureTree =
         Array.isArray(structure) && structure.length > 0 ? structure : [];
@@ -1842,19 +2046,22 @@ export default function GeneralInductionRegisterScreen() {
         if (meta.puesto_id) setSelectedPuestoId(Number(meta.puesto_id));
       }
 
-      const selected = Array.isArray(temasObj?.selected) ? temasObj.selected : [];
-      const leafs = Array.isArray(temasObj?.leafs) ? temasObj.leafs : null;
-      if (leafs && leafs.length > 0) {
-        const normalizedFromLeafs: TemaSelectedItem[] = leafs
-          .filter((l: any) => !!l?.checked)
-          .map((l: any) => ({ id: String(l?.id || '').trim(), text: String(l?.text || '').trim() }))
-          .filter((s: any) => !!s.id && !!s.text);
-        setSelectedTemas(normalizedFromLeafs);
-      } else {
-        const normalized: TemaSelectedItem[] = selected
-          .map((s: any) => ({ id: String(s?.id || '').trim(), text: String(s?.text || '').trim() }))
-          .filter((s: any) => !!s.id && !!s.text);
-        setSelectedTemas(normalized);
+      const divisionIdFromRecord =
+        meta?.division_id != null
+          ? Number(meta.division_id)
+          : record.division_id != null
+            ? Number(record.division_id)
+            : null;
+      const temasDataForRestore =
+        divisionIdFromRecord === 5
+          ? TEMAS_DATA_AYL
+          : divisionIdFromRecord === 4
+            ? TEMAS_DATA_SEG
+            : temasData;
+      const restoredTemas = restoreSelectedTemasFromStoredPayload(temasDataForRestore, temasParsed);
+      if (temasDataForRestore.flat.length > 0) {
+        setSelectedTemas(restoredTemas);
+        editTemasRestoreDoneRef.current = true;
       }
 
       setColaboradoresList(safeJsonParse<PersonaItem[]>(record.colaboradores, []).map((p: any) => ({
@@ -1908,7 +2115,8 @@ export default function GeneralInductionRegisterScreen() {
         text: t.text,
         checked: selectedTemaIdSet.has(t.id),
       }));
-    return { meta, selected: selectedSafe, leafs };
+    const sections = buildTemasSectionsFromFlat(temasFlat, selectedTemaIdSet);
+    return { meta, selected: selectedSafe, leafs, sections };
   };
 
   type GirImageEntry = {
@@ -2686,9 +2894,10 @@ export default function GeneralInductionRegisterScreen() {
           const sucursalNombre = meta?.sucursal_nombre || 'N/A';
           const fechaTxt = r.fecha ? convertDateTimestampToLocalString(r.fecha, false) : 'N/A';
 
-          const temasObj = safeJsonParse<any>(r.temas_a_tratar, null);
-          const temasSelected = Array.isArray(temasObj?.selected) ? temasObj.selected : [];
-          const temasLeafs = Array.isArray(temasObj?.leafs) ? temasObj.leafs : null;
+          const temasParsed = parseTemasPayload(r.temas_a_tratar);
+          const temasSelected = temasParsed.selected;
+          const temasLeafs = temasParsed.leafs;
+          const temasSections = temasParsed.sections;
 
           const colaboradores = safeJsonParse<any[]>(r.colaboradores, []);
           const capacitadores = safeJsonParse<any[]>(r.capacitadores, []);
@@ -2730,7 +2939,44 @@ export default function GeneralInductionRegisterScreen() {
                 </TouchableOpacity>
                 {isTemasOpen && (
                   <ThemedView style={styles.collapsableContent}>
-                    {temasLeafs && temasLeafs.length > 0 ? (
+                    {temasSections && temasSections.length > 0 ? (
+                      temasSections.map((sec) => {
+                        const items = Array.isArray(sec?.items) ? sec.items : [];
+                        const hasSubItems = items.length > 1 || (items.length === 1 && items[0]?.id !== sec?.id);
+                        if (hasSubItems) {
+                          return (
+                            <ThemedView key={`sec-${sec.id}`} style={styles.temaSectionBlock}>
+                              <ThemedText style={styles.temaSectionTitle}>{String(sec.text || '').trim() || '—'}</ThemedText>
+                              {items.map((t) => {
+                                const checked = !!t?.checked;
+                                return (
+                                  <ThemedView key={String(t?.id)} style={styles.fullTemaRow}>
+                                    <Ionicons
+                                      name={checked ? 'checkmark-circle' : 'close-circle'}
+                                      size={18}
+                                      color={checked ? '#34C759' : '#FF3B30'}
+                                    />
+                                    <ThemedText style={styles.detailLine}>{String(t?.text || '').trim() || '—'}</ThemedText>
+                                  </ThemedView>
+                                );
+                              })}
+                            </ThemedView>
+                          );
+                        }
+                        const only = items[0];
+                        const checked = !!only?.checked;
+                        return (
+                          <ThemedView key={`sec-leaf-${sec.id}`} style={styles.fullTemaRow}>
+                            <Ionicons
+                              name={checked ? 'checkmark-circle' : 'close-circle'}
+                              size={18}
+                              color={checked ? '#34C759' : '#FF3B30'}
+                            />
+                            <ThemedText style={styles.detailLine}>{String(sec.text || '').trim() || '—'}</ThemedText>
+                          </ThemedView>
+                        );
+                      })
+                    ) : temasLeafs && temasLeafs.length > 0 ? (
                       temasLeafs.map((t: any) => {
                         const checked = !!t?.checked;
                         return (
@@ -3629,8 +3875,8 @@ export default function GeneralInductionRegisterScreen() {
                         </TouchableOpacity>
                       )}
 
-                      {temasVisibleCount > 60 && (
-                        <TouchableOpacity style={[styles.addButton, styles.addButtonGray]} onPress={() => setTemasVisibleCount(60)} activeOpacity={0.85}>
+                      {temasVisibleCount > 100 && (
+                        <TouchableOpacity style={[styles.addButton, styles.addButtonGray]} onPress={() => setTemasVisibleCount(100)} activeOpacity={0.85}>
                           <Ionicons name="remove-circle" size={24} color="#8E8E93" />
                           <ThemedText style={[styles.addButtonText, styles.addButtonTextGray]}>Mostrar menos</ThemedText>
                         </TouchableOpacity>
@@ -4367,6 +4613,8 @@ const styles = StyleSheet.create({
   collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
   detailLine: { marginBottom: 6, color: '#000' },
   fullTemaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  temaSectionBlock: { marginBottom: 10 },
+  temaSectionTitle: { fontWeight: '700', color: '#000', marginBottom: 6 },
   listImagesRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   listImageThumbWrap: {
     position: 'relative',

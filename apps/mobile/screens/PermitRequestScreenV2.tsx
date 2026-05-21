@@ -69,7 +69,8 @@ type PermitRecord = {
   fecha_inicio: string;
   fecha_fin: string;
   ejecutivo_cuenta: number;
-  comentarios?: string | null;
+  motivo?: string | null;
+  observaciones?: string | null;
   reemplazo_obligatorio?: number | null;
   turnos: Turno[];
   archivos?: PermitAttachment[];
@@ -282,11 +283,12 @@ export default function PermitRequestScreenV2() {
   const [fechaFin, setFechaFin] = useState(new Date());
   const [showDateInicio, setShowDateInicio] = useState(false);
   const [showDateFin, setShowDateFin] = useState(false);
-  const [comentarios, setComentarios] = useState('');
+  const [motivo, setMotivo] = useState('');
   const [turnosPreview, setTurnosPreview] = useState<Turno[]>([]);
   const [turnosMessage, setTurnosMessage] = useState('');
   const [attachedDocuments, setAttachedDocuments] = useState<AttachedDocument[]>([]);
   const [firmaResponsable, setFirmaResponsable] = useState('');
+  const [firmaEmpleadoManual, setFirmaEmpleadoManual] = useState('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -301,6 +303,7 @@ export default function PermitRequestScreenV2() {
   const [byTurnoCode, setByTurnoCode] = useState<Record<number, string>>({});
   const [firmaEjecutivoDigital, setFirmaEjecutivoDigital] = useState('');
   const [firmaEjecutivoManual, setFirmaEjecutivoManual] = useState('');
+  const [observacionesEjecutivo, setObservacionesEjecutivo] = useState('');
   const [isGeneratingFirmaEjecutivo, setIsGeneratingFirmaEjecutivo] = useState(false);
   const [isSavingComplete, setIsSavingComplete] = useState(false);
   const [rejectingRecordId, setRejectingRecordId] = useState<number | null>(null);
@@ -308,6 +311,7 @@ export default function PermitRequestScreenV2() {
   const [currentPuestoNombre, setCurrentPuestoNombre] = useState<string | null>(null);
 
   const [isDrawModalVisible, setIsDrawModalVisible] = useState(false);
+  const [signatureDrawTarget, setSignatureDrawTarget] = useState<'empleado' | 'ejecutivo'>('ejecutivo');
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
@@ -701,10 +705,11 @@ export default function PermitRequestScreenV2() {
     setTipo('');
     setFechaInicio(new Date(horaAccion));
     setFechaFin(new Date(horaAccion));
-    setComentarios('');
+    setMotivo('');
     setTurnosPreview([]);
     setTurnosMessage('');
     setFirmaResponsable('');
+    setFirmaEmpleadoManual('');
   };
 
   const onPlazaChange = (plazaId: number | null) => {
@@ -771,8 +776,9 @@ export default function PermitRequestScreenV2() {
         fecha_inicio: formatDateYMD(fechaInicio),
         fecha_fin: formatDateYMD(fechaFin),
         hora_accion: horaAccion,
-        comentarios: comentarios.trim() || undefined,
+        motivo: motivo.trim(),
         firma_responsable: firmaResponsable,
+        firma_empleado_manual: firmaEmpleadoManual,
         empresa_id: hierarchy.empresa_id,
         cliente_id: hierarchy.cliente_id,
         division_id: hierarchy.division_id,
@@ -808,7 +814,9 @@ export default function PermitRequestScreenV2() {
     if (!isOnline) return Alert.alert('Sin conexión', 'Este módulo funciona únicamente con internet');
     if (!selectedPlazaId) return Alert.alert('Error', 'Debes seleccionar una plaza');
     if (!tipo) return Alert.alert('Error', 'Debes seleccionar tipo de solicitud');
+    if (!motivo.trim()) return Alert.alert('Error', 'Debes indicar el motivo de la solicitud');
     if (!firmaResponsable) return Alert.alert('Error', 'Debes generar la firma responsable');
+    if (!firmaEmpleadoManual) return Alert.alert('Error', 'Debes dibujar tu firma manual');
     if (!turnosPreview.length) return Alert.alert('Error', 'Debes consultar un rango con turnos disponibles');
 
     Alert.alert(
@@ -830,6 +838,7 @@ export default function PermitRequestScreenV2() {
     setReemplazoObligatorioCode('');
     setFirmaEjecutivoDigital('');
     setFirmaEjecutivoManual('');
+    setObservacionesEjecutivo('');
     setSignatureKey((v) => v + 1);
     setIsCompleteModalOpen(true);
   };
@@ -934,7 +943,8 @@ export default function PermitRequestScreenV2() {
     });
   };
 
-  const openDrawModal = () => {
+  const openDrawModal = (target: 'empleado' | 'ejecutivo') => {
+    setSignatureDrawTarget(target);
     setIsDrawModalVisible(true);
     setSignatureKey((v) => v + 1);
     setIsReadingSignature(false);
@@ -953,7 +963,11 @@ export default function PermitRequestScreenV2() {
       Alert.alert('Error', 'Firma manual inválida');
       return;
     }
-    setFirmaEjecutivoManual(formatted);
+    if (signatureDrawTarget === 'empleado') {
+      setFirmaEmpleadoManual(formatted);
+    } else {
+      setFirmaEjecutivoManual(formatted);
+    }
     setIsReadingSignature(false);
     setIsDrawModalVisible(false);
   };
@@ -995,6 +1009,7 @@ export default function PermitRequestScreenV2() {
           body: JSON.stringify({
             reemplazo_obligatorio: reemplazoObligatorio,
             turnos: turnosComplete.map((t) => ({ id: t.id, reemplazo_id: t.reemplazo_id ?? null })),
+            observaciones: observacionesEjecutivo.trim() || undefined,
             firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
             firma_ejecutivo_cuenta_manual: firmaEjecutivoManual,
             hora_accion: horaAccion,
@@ -1355,6 +1370,16 @@ export default function PermitRequestScreenV2() {
                       <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>{r.tipo}
                       </ThemedText>
+                      {!!r.motivo && (
+                        <ThemedText style={styles.cardLine}>
+                          <ThemedText style={styles.cardLabel}>Motivo: </ThemedText>{r.motivo}
+                        </ThemedText>
+                      )}
+                      {!!r.observaciones && (
+                        <ThemedText style={styles.cardLine}>
+                          <ThemedText style={styles.cardLabel}>Observaciones: </ThemedText>{r.observaciones}
+                        </ThemedText>
+                      )}
                       <ThemedText style={styles.cardLine}>
                         <ThemedText style={styles.cardLabel}>Inicio: </ThemedText>{convertDateTimestampToLocalString(r.fecha_inicio, false)}
                       </ThemedText>
@@ -1554,14 +1579,14 @@ export default function PermitRequestScreenV2() {
                 </View>
               )}
 
-              <ThemedText style={styles.label}>Comentarios</ThemedText>
+              <ThemedText style={styles.label}>Motivo *</ThemedText>
               <TextInput
                 style={styles.textArea}
                 multiline
                 numberOfLines={4}
-                value={comentarios}
-                onChangeText={setComentarios}
-                placeholder="Opcional"
+                value={motivo}
+                onChangeText={setMotivo}
+                placeholder="Indique el motivo de la solicitud"
                 placeholderTextColor="#999"
               />
 
@@ -1658,6 +1683,29 @@ export default function PermitRequestScreenV2() {
                 </ThemedView>
               )}
 
+              <ThemedText style={styles.sectionTitle}>Firma manual empleado *</ThemedText>
+              <TouchableOpacity style={styles.secondaryAction} onPress={() => openDrawModal('empleado')}>
+                <ThemedText style={styles.secondaryActionText}>
+                  {firmaEmpleadoManual ? 'Firma manual lista (editar)' : 'Dibujar firma manual'}
+                </ThemedText>
+              </TouchableOpacity>
+              {firmaEmpleadoManual ? (
+                <View style={styles.firmaManualPreviewWrap}>
+                  <ThemedText style={styles.labelSmall}>Vista previa de la firma manual</ThemedText>
+                  <Image
+                    source={{ uri: `data:image/png;base64,${firmaEmpleadoManual}` }}
+                    style={styles.firmaManualPreviewImage}
+                    resizeMode="contain"
+                  />
+                  <TouchableOpacity style={styles.removeReemplazoButton} onPress={() => setFirmaEmpleadoManual('')} activeOpacity={0.85}>
+                    <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.removeReemplazoButtonText}>Borrar firma manual</ThemedText>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <ThemedText style={styles.signatureHintMuted}>Aún no hay firma manual del empleado.</ThemedText>
+              )}
+
               <View style={styles.rowButtons}>
                 <TouchableOpacity style={[styles.secondaryButton, { backgroundColor: '#8E8E93' }]} onPress={closeCreateFormAndReloadList}>
                   <ThemedText style={styles.secondaryButtonText}>Cancelar</ThemedText>
@@ -1747,6 +1795,17 @@ export default function PermitRequestScreenV2() {
                 </View>
               ))}
 
+              <ThemedText style={styles.label}>Observaciones</ThemedText>
+              <TextInput
+                style={styles.textArea}
+                multiline
+                numberOfLines={3}
+                value={observacionesEjecutivo}
+                onChangeText={setObservacionesEjecutivo}
+                placeholder="Opcional"
+                placeholderTextColor="#999"
+              />
+
               <ThemedText style={styles.sectionTitle}>Firma digital ejecutivo *</ThemedText>
               <ThemedView style={styles.signatureButtons}>
                 <TouchableOpacity
@@ -1797,7 +1856,7 @@ export default function PermitRequestScreenV2() {
                 </ThemedView>
               )}
 
-              <TouchableOpacity style={styles.secondaryAction} onPress={openDrawModal}>
+              <TouchableOpacity style={styles.secondaryAction} onPress={() => openDrawModal('ejecutivo')}>
                 <ThemedText style={styles.secondaryActionText}>
                   {firmaEjecutivoManual ? 'Firma manual lista (editar)' : 'Dibujar firma manual ejecutivo'}
                 </ThemedText>
@@ -1842,7 +1901,9 @@ export default function PermitRequestScreenV2() {
         <View style={styles.overlay}>
           <ThemedView style={styles.floatCard}>
             <View style={styles.floatHeader}>
-              <ThemedText style={styles.modalTitle}>Firma manual ejecutivo</ThemedText>
+              <ThemedText style={styles.modalTitle}>
+                {signatureDrawTarget === 'empleado' ? 'Firma manual empleado' : 'Firma manual ejecutivo'}
+              </ThemedText>
               <TouchableOpacity onPress={() => setIsDrawModalVisible(false)}>
                 <Ionicons name="close" size={22} color="#333" />
               </TouchableOpacity>

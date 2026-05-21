@@ -1638,22 +1638,30 @@ interface ListCorporateVehiclesByCorpoParams {
 
 interface CreateCorporateVehicleParams {
   requestData: {
+    empresa_id?: number;
     cliente_id: number;
     corpo_id: number; // sucursal_id
-    placa?: string;
+    division_id?: number;
+    contrato_id?: number;
+    puesto_id?: number;
+    placa?: string | null;
     tipo?: string;
-    kilometraje?: number;
-    prox_cambio_aceite?: number;
-    modelo?: string;
-    anno?: number;
-    descripcion?: string;
-    titulo_propiedad?: boolean;
-    rtv?: boolean;
-    marchamo?: boolean;
+    tipo_autoria?: string;
+    estado?: string;
+    kilometraje?: number | null;
+    prox_cambio_aceite?: number | null;
+    modelo?: string | null;
+    marca: string;
+    anno?: number | null;
+    descripcion?: string | null;
+    titulo_propiedad?: boolean | null;
+    rtv?: boolean | null;
+    marchamo?: boolean | null;
     firma_responsable?: string;
     imagenes?: Array<{
       extension: string;
       file_base64: string;
+      original_name?: string;
     }>;
   };
   refreshAccessToken: () => Promise<boolean>;

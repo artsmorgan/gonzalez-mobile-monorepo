@@ -582,7 +582,7 @@ export default function ActaEntregaProductosScreen() {
   const [showFechaRecibePicker, setShowFechaRecibePicker] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    //return false;
+    return false;
     const networkState = await Network.getNetworkStateAsync();
     return networkState.isConnected && networkState.isInternetReachable ? true : false;
   };

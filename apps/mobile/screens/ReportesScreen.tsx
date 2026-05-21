@@ -1,8 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   Linking,
   Modal,
@@ -48,6 +47,7 @@ import {
   previewDocumentosEntregados,
   previewEncuestaSatisfaccion,
   previewRegistroVisitas,
+  previewVisitasVehiculos,
   previewMutuosAcuerdos,
   previewAccionesPersonales,
   previewEntregaPuesto,
@@ -60,11 +60,26 @@ import {
   previewEvaluacionPersonal,
   previewProductoNoConforme,
   previewInduccionRecorrido,
+  previewNotasVoz,
+  previewCambiosUbicacionPuesto,
+  previewRegistroCapacitaciones,
+  previewRegistroInduccionGeneral,
+  previewTiempoAlmuerzo,
+  previewSolicitudesPermiso,
+  previewArticulosPuesto,
+  previewMantenimientoArticulos,
+  previewRegistroVehiculosCorporativos,
+  previewRevisionVehiculos,
   previewManualesPuesto,
+  purgeOldMobileReports,
   searchActaStructure,
+  searchCorporateVehicles,
+  searchAlmuerzoCedulas,
   searchEmployeesReportes,
+  type CedulaAlmuerzoLite,
   type EmpleadoLite,
   type StructureLite,
+  type VehiculoCorporativoLite,
 } from '../hooks/reportesFunctions';
 
 /** Ms desde `getHoraAccion` o reloj local si falta servidor (mismo criterio que ActaEntregaProductosScreen). */
@@ -118,18 +133,88 @@ const MODULO_PRODUCTO_NO_CONFORME = 'producto_no_conforme';
 const MODULO_REGISTRO_INDUCCION_RECORRIDO = 'registro_induccion_recorrido';
 /** Manuales de puesto (`e_manual_puesto`), solo Excel consolidado. */
 const MODULO_MANUALES_PUESTO = 'manuales_puesto';
+const MODULO_ARTICULOS_PUESTO = 'articulos_puesto';
+/** Tabla `c_articulo_mantenimiento`, solo Excel consolidado. */
+const MODULO_MANTENIMIENTO_ARTICULOS = 'mantenimiento_articulos';
+/** `c_vehiculos_corporativos` + usos y mantenimientos, solo Excel consolidado. */
+const MODULO_REGISTRO_VEHICULOS_CORPORATIVOS = 'registro_vehiculos_corporativos';
+/** `c_bitacora_vehiculo_detenido`, solo Excel consolidado. */
+const MODULO_REVISION_VEHICULOS = 'revision_vehiculos';
 /** `e_registro_personas` / `e_activo_visitante`. */
 const MODULO_REGISTRO_VISITAS = 'registro_visitas';
+const MODULO_NOTAS_VOZ = 'notas_voz';
+/** Tabla `c_ubicacion_puesto_registro_cambios`, solo Excel consolidado. */
+const MODULO_CAMBIOS_UBICACION_PUESTO = 'cambios_ubicacion_puesto';
+/** `e_registro_capacitaciones` + vínculos empleado/puesto, solo Excel consolidado. */
+const MODULO_REGISTRO_CAPACITACIONES = 'registro_capacitaciones';
+/** Tabla `c_registro_induccion_general` (Excel consolidado / ZIP de Word individual). */
+const MODULO_REGISTRO_INDUCCION_GENERAL = 'registro_induccion_general';
+/** Tabla `c_empleado_almuerzo` (solo Excel consolidado). */
+const MODULO_TIEMPO_ALMUERZO = 'tiempo_almuerzo';
+/** Tabla `c_solicitud_permiso` (Excel consolidado / individual). */
+const MODULO_SOLICITUDES_PERMISO = 'solicitudes_permiso';
+/** Tabla `e_registro_vehiculos` (Excel consolidado / ZIP individual). */
+const MODULO_VISITAS_VEHICULOS = 'visitas_vehiculos';
+
+type ReporteTipoSalida = 'Consolidado' | 'Individual';
+
+const MODULOS_TIPO_FORZADO_CONSOLIDADO = new Set<string>([
+  MODULO_INGRESOS,
+  MODULO_ACCIONES_PERSONALES,
+  MODULO_BITACORA_NOVEDADES,
+  MODULO_CHECKLIST_SUPERVISION,
+  MODULO_EVALUACION_PERSONAL,
+  MODULO_MANUALES_PUESTO,
+  MODULO_ARTICULOS_PUESTO,
+  MODULO_MANTENIMIENTO_ARTICULOS,
+  MODULO_REGISTRO_VEHICULOS_CORPORATIVOS,
+  MODULO_NOTAS_VOZ,
+  MODULO_CAMBIOS_UBICACION_PUESTO,
+  MODULO_REGISTRO_CAPACITACIONES,
+  MODULO_TIEMPO_ALMUERZO,
+]);
+
+const MODULOS_TIPO_DESDE_PICKER = new Set<string>([
+  MODULO_ACTA_ENTREGA,
+  MODULO_ENTREGA_PUESTO,
+  MODULO_AGENDA_MINUTA,
+  MODULO_APERTURA_CIERRE,
+  MODULO_VULNERABILIDAD,
+  MODULO_ACTIVIDADES,
+  MODULO_CONTROL_ASISTENCIA,
+  MODULO_DOCUMENTOS_ENTREGADOS,
+  MODULO_ENCUESTA_SATISFACCION,
+  MODULO_REGISTRO_VISITAS,
+  MODULO_VISITAS_VEHICULOS,
+  MODULO_MUTUOS_ACUERDOS,
+  MODULO_INCIDENTES,
+  MODULO_LLAVES,
+  MODULO_LLAVEROS,
+  MODULO_MAESTRO_QUEJAS,
+  MODULO_PRODUCTO_NO_CONFORME,
+  MODULO_REGISTRO_INDUCCION_RECORRIDO,
+  MODULO_REGISTRO_INDUCCION_GENERAL,
+  MODULO_SOLICITUDES_PERMISO,
+  MODULO_REVISION_VEHICULOS,
+]);
+
+function resolveTipoReporteForCreate(modulo: string, picked: ReporteTipoSalida): ReporteTipoSalida {
+  if (MODULOS_TIPO_FORZADO_CONSOLIDADO.has(modulo)) return 'Consolidado';
+  if (MODULOS_TIPO_DESDE_PICKER.has(modulo)) return picked;
+  return 'Consolidado';
+}
 
 /** Opciones del selector «Módulo» (listado y formulario), ordenadas alfabéticamente por etiqueta. */
 const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_ACCIONES_PERSONALES, label: 'Acciones de personal' },
   { value: MODULO_ACTA_ENTREGA, label: 'Acta de entrega de productos' },
   { value: MODULO_ACTIVIDADES, label: 'Actividades' },
+  { value: MODULO_ARTICULOS_PUESTO, label: 'Artículos del puesto' },
   { value: MODULO_AGENDA_MINUTA, label: 'Agenda minuta' },
   { value: MODULO_APERTURA_CIERRE, label: 'Apertura/Cierre de puesto' },
   { value: MODULO_VULNERABILIDAD, label: 'Apreciación de vulnerabilidad' },
   { value: MODULO_BITACORA_NOVEDADES, label: 'Bitácora de novedades' },
+  { value: MODULO_CAMBIOS_UBICACION_PUESTO, label: 'Cambios en ubicación del puesto' },
   { value: MODULO_CHECKLIST_SUPERVISION, label: 'Checklist de supervisión' },
   { value: MODULO_CONTROL_ASISTENCIA, label: 'Control de asistencia' },
   { value: MODULO_DOCUMENTOS_ENTREGADOS, label: 'Documentos entregados' },
@@ -142,10 +227,19 @@ const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_LLAVES, label: 'Llaves' },
   { value: MODULO_MAESTRO_QUEJAS, label: 'Maestro de quejas y reclamos' },
   { value: MODULO_MANUALES_PUESTO, label: 'Manuales de puesto' },
+  { value: MODULO_MANTENIMIENTO_ARTICULOS, label: 'Mantenimiento de artículos' },
+  { value: MODULO_NOTAS_VOZ, label: 'Notas de voz' },
   { value: MODULO_MUTUOS_ACUERDOS, label: 'Mutuos acuerdos' },
   { value: MODULO_PRODUCTO_NO_CONFORME, label: 'Producto no conforme' },
   { value: MODULO_REGISTRO_INDUCCION_RECORRIDO, label: 'Registro de inducción y recorrido' },
+  { value: MODULO_REGISTRO_INDUCCION_GENERAL, label: 'Registro de inducción general' },
+  { value: MODULO_REGISTRO_VEHICULOS_CORPORATIVOS, label: 'Registro de vehículos' },
+  { value: MODULO_REVISION_VEHICULOS, label: 'Revisión de vehículos' },
   { value: MODULO_REGISTRO_VISITAS, label: 'Registro de visitas' },
+  { value: MODULO_VISITAS_VEHICULOS, label: 'Visitas de vehículos' },
+  { value: MODULO_REGISTRO_CAPACITACIONES, label: 'Registro de capacitaciones' },
+  { value: MODULO_SOLICITUDES_PERMISO, label: 'Solicitudes de permiso' },
+  { value: MODULO_TIEMPO_ALMUERZO, label: 'Tiempo de almuerzo' },
 ].sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
 
 const ORDER_OPTIONS: { value: string; label: string }[] = [
@@ -214,6 +308,34 @@ const ORDER_OPTIONS_CONTROL_ASISTENCIA: { value: string; label: string }[] = [
   { value: 'puesto_id', label: 'Puesto' },
   { value: 'fecha', label: 'Fecha' },
 ];
+const ORDER_OPTIONS_NOTAS_VOZ: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+const ORDER_OPTIONS_CAMBIOS_UBICACION_PUESTO: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+const ORDER_OPTIONS_REGISTRO_CAPACITACIONES: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+
 const ORDER_OPTIONS_DOCUMENTOS: { value: string; label: string }[] = [
   { value: 'empresa_id', label: 'Empresa' },
   { value: 'cliente_id', label: 'Cliente' },
@@ -246,6 +368,16 @@ const ORDER_OPTIONS_REGISTRO_VISITAS: { value: string; label: string }[] = [
   { value: 'puesto_id', label: 'Puesto' },
   { value: 'created_at', label: 'Fecha' },
   { value: 'nombre', label: 'Visitante' },
+];
+
+const ORDER_OPTIONS_VISITAS_VEHICULOS: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
 ];
 
 const ORDER_OPTIONS_ACCIONES_PERSONALES: { value: string; label: string }[] = [
@@ -328,6 +460,27 @@ const ORDER_OPTIONS_EVALUACION_PERSONAL: { value: string; label: string }[] = [
   { value: 'created_at', label: 'Fecha' },
 ];
 
+const ORDER_OPTIONS_TIEMPO_ALMUERZO: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'inicio', label: 'Inicio' },
+  { value: 'fin', label: 'Fin' },
+];
+
+const ORDER_OPTIONS_SOLICITUDES_PERMISO: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+
 const ORDER_OPTIONS_PRODUCTO_NO_CONFORME: { value: string; label: string }[] = [
   { value: 'empresa_id', label: 'Empresa' },
   { value: 'cliente_id', label: 'Cliente' },
@@ -340,6 +493,44 @@ const ORDER_OPTIONS_PRODUCTO_NO_CONFORME: { value: string; label: string }[] = [
 ];
 
 const ORDER_OPTIONS_INDUCCION_RECORRIDO: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+
+const ORDER_OPTIONS_ARTICULOS_PUESTO: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+];
+
+const ORDER_OPTIONS_MANTENIMIENTO_ARTICULOS: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+];
+
+const ORDER_OPTIONS_REGISTRO_VEHICULOS_CORPORATIVOS: { value: string; label: string }[] = [
+  { value: 'empresa_id', label: 'Empresa' },
+  { value: 'cliente_id', label: 'Cliente' },
+  { value: 'division_id', label: 'División' },
+  { value: 'contrato_id', label: 'Contrato' },
+  { value: 'corpo_id', label: 'Sucursal' },
+  { value: 'puesto_id', label: 'Puesto' },
+  { value: 'created_at', label: 'Fecha' },
+];
+
+const ORDER_OPTIONS_REVISION_VEHICULOS: { value: string; label: string }[] = [
   { value: 'empresa_id', label: 'Empresa' },
   { value: 'cliente_id', label: 'Cliente' },
   { value: 'division_id', label: 'División' },
@@ -500,6 +691,24 @@ function formatFirmaTimestamp(ts: string) {
 }
 
 /** Etiqueta legible para `created_at` del listado (ISO o epoch). */
+function formatModuloLabel(modulo: string): string {
+  const opt = MODULO_PICKER_OPTIONS.find((o) => o.value === modulo);
+  return opt?.label ?? modulo;
+}
+
+function formatTipoReporteDisplay(raw: string | null | undefined): string {
+  const t = String(raw ?? '').trim();
+  if (!t) return '—';
+  if (t.toLowerCase() === 'grupal') return 'Consolidado';
+  return t;
+}
+
+function formatEstadoDisplay(raw: string | null | undefined): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '—';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function formatReportCreatedAt(raw: string | null | undefined): string {
   const s = String(raw ?? '').trim();
   if (!s) return '—';
@@ -544,6 +753,7 @@ type ReportRow = {
   modulo: string;
   tipo_reporte: string;
   created_by: number;
+  created_by_nombre?: string | null;
   estado: string;
   filters: string;
   order_by: string;
@@ -766,6 +976,13 @@ export default function ReportesScreen() {
     setListEjecutivoResults([]);
     setListEjecutivoSelected([]);
     setListMutEstado('todos');
+    setListSpTipoSalario('todos');
+    setListSpEstado('todos');
+    setListSpTipoTurnoPick('Diurno');
+    setListSpTiposTurnoSelected([]);
+    setListSpEmpleadoSearch('');
+    setListSpEmpleadoResults([]);
+    setListSpEmpleadoSelected([]);
     setShowListFrDd(false);
     setShowListFrDt(false);
     setShowListFrHd(false);
@@ -833,6 +1050,14 @@ export default function ReportesScreen() {
   const [listRvResponsableSearch, setListRvResponsableSearch] = useState('');
   const [listRvResponsableResults, setListRvResponsableResults] = useState<EmpleadoLite[]>([]);
   const [listRvResponsableSelected, setListRvResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [listVvCedulaVisitante, setListVvCedulaVisitante] = useState('');
+  const [listVvTipoPick, setListVvTipoPick] = useState<'Particular' | 'Institucional'>('Particular');
+  const [listVvTiposSelected, setListVvTiposSelected] = useState<string[]>([]);
+  const [listVvPlacaInput, setListVvPlacaInput] = useState('');
+  const [listVvPlacasSelected, setListVvPlacasSelected] = useState<string[]>([]);
+  const [listVvResponsableSearch, setListVvResponsableSearch] = useState('');
+  const [listVvResponsableResults, setListVvResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [listVvResponsableSelected, setListVvResponsableSelected] = useState<EmpleadoLite[]>([]);
   const [listMutAusenteSearch, setListMutAusenteSearch] = useState('');
   const [listMutAusenteResults, setListMutAusenteResults] = useState<EmpleadoLite[]>([]);
   const [listMutAusenteSelected, setListMutAusenteSelected] = useState<EmpleadoLite[]>([]);
@@ -854,11 +1079,41 @@ export default function ReportesScreen() {
   const [listIrResponsableSearch, setListIrResponsableSearch] = useState('');
   const [listIrResponsableResults, setListIrResponsableResults] = useState<EmpleadoLite[]>([]);
   const [listIrResponsableSelected, setListIrResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [listCupResponsableSearch, setListCupResponsableSearch] = useState('');
+  const [listCupResponsableResults, setListCupResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [listCupResponsableSelected, setListCupResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [listRcTipoCapacitacion, setListRcTipoCapacitacion] = useState<'todos' | 'Presencial' | 'Virtual'>('todos');
+  const [listRcCapEmpSearch, setListRcCapEmpSearch] = useState('');
+  const [listRcCapEmpResults, setListRcCapEmpResults] = useState<EmpleadoLite[]>([]);
+  const [listRcCapEmpSelected, setListRcCapEmpSelected] = useState<EmpleadoLite[]>([]);
+  const [listRcCapPuestoSearch, setListRcCapPuestoSearch] = useState('');
+  const [listRcCapPuestoResults, setListRcCapPuestoResults] = useState<StructureLite[]>([]);
+  const [listRcCapPuestoSelected, setListRcCapPuestoSelected] = useState<StructureLite[]>([]);
+  const [listRcResponsableSearch, setListRcResponsableSearch] = useState('');
+  const [listRcResponsableResults, setListRcResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [listRcResponsableSelected, setListRcResponsableSelected] = useState<EmpleadoLite[]>([]);
   const [listIrEmpleadoSearch, setListIrEmpleadoSearch] = useState('');
   const [listIrEmpleadoResults, setListIrEmpleadoResults] = useState<EmpleadoLite[]>([]);
   const [listIrEmpleadoSelected, setListIrEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [listIrParticipanteSearch, setListIrParticipanteSearch] = useState('');
   const [listIrParticipanteCedulas, setListIrParticipanteCedulas] = useState<string[]>([]);
+  const [listRigColaboradorSearch, setListRigColaboradorSearch] = useState('');
+  const [listRigColaboradorCedulas, setListRigColaboradorCedulas] = useState<string[]>([]);
+  const [listRigCapacitadorSearch, setListRigCapacitadorSearch] = useState('');
+  const [listRigCapacitadorCedulas, setListRigCapacitadorCedulas] = useState<string[]>([]);
+  const [listTaEmpleadoSearch, setListTaEmpleadoSearch] = useState('');
+  const [listTaEmpleadoResults, setListTaEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [listTaEmpleadoSelected, setListTaEmpleadoSelected] = useState<EmpleadoLite[]>([]);
+  const [listTaCedulaSearch, setListTaCedulaSearch] = useState('');
+  const [listTaCedulaResults, setListTaCedulaResults] = useState<CedulaAlmuerzoLite[]>([]);
+  const [listTaCedulasSelected, setListTaCedulasSelected] = useState<string[]>([]);
+  const [listSpTipoSalario, setListSpTipoSalario] = useState<'todos' | 'Con goce' | 'Sin goce'>('todos');
+  const [listSpEstado, setListSpEstado] = useState<'todos' | 'pendiente' | 'aprobado' | 'rechazado'>('todos');
+  const [listSpTipoTurnoPick, setListSpTipoTurnoPick] = useState<'Diurno' | 'Mixto' | 'Nocturno'>('Diurno');
+  const [listSpTiposTurnoSelected, setListSpTiposTurnoSelected] = useState<string[]>([]);
+  const [listSpEmpleadoSearch, setListSpEmpleadoSearch] = useState('');
+  const [listSpEmpleadoResults, setListSpEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [listSpEmpleadoSelected, setListSpEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [pncTiposCache, setPncTiposCache] = useState<{ id: number; nombre: string }[]>([]);
   const [listIncSolDesdeD, setListIncSolDesdeD] = useState<Date | null>(null);
   const [listIncSolDesdeT, setListIncSolDesdeT] = useState<Date | null>(null);
@@ -870,6 +1125,46 @@ export default function ReportesScreen() {
   const [listIncRealHastaT, setListIncRealHastaT] = useState<Date | null>(null);
   const [listIncClasificacion, setListIncClasificacion] = useState<string>('todos');
   const [listIncEstado, setListIncEstado] = useState<'todos' | 'solucionado' | 'no_solucionado'>('todos');
+  const [listMaEstadoPick, setListMaEstadoPick] = useState<'todos' | 'Bueno' | 'Malo' | 'No está'>('todos');
+  const [listMaEstadosSelected, setListMaEstadosSelected] = useState<string[]>([]);
+  const [listMaAccionPick, setListMaAccionPick] = useState<
+    'todos' | 'Reemplazar' | 'Rellenar' | 'Reparar en puesto' | 'Reparar en taller'
+  >('todos');
+  const [listMaAccionesSelected, setListMaAccionesSelected] = useState<string[]>([]);
+  const [listMaSolDesdeD, setListMaSolDesdeD] = useState<Date | null>(null);
+  const [listMaSolDesdeT, setListMaSolDesdeT] = useState<Date | null>(null);
+  const [listMaSolHastaD, setListMaSolHastaD] = useState<Date | null>(null);
+  const [listMaSolHastaT, setListMaSolHastaT] = useState<Date | null>(null);
+  const [modalMaEstadoPick, setModalMaEstadoPick] = useState<'todos' | 'Bueno' | 'Malo' | 'No está'>('todos');
+  const [modalMaEstadosSelected, setModalMaEstadosSelected] = useState<string[]>([]);
+  const [modalMaAccionPick, setModalMaAccionPick] = useState<
+    'todos' | 'Reemplazar' | 'Rellenar' | 'Reparar en puesto' | 'Reparar en taller'
+  >('todos');
+  const [modalMaAccionesSelected, setModalMaAccionesSelected] = useState<string[]>([]);
+  const [modalMaSolDesdeD, setModalMaSolDesdeD] = useState<Date | null>(null);
+  const [modalMaSolDesdeT, setModalMaSolDesdeT] = useState<Date | null>(null);
+  const [modalMaSolHastaD, setModalMaSolHastaD] = useState<Date | null>(null);
+  const [modalMaSolHastaT, setModalMaSolHastaT] = useState<Date | null>(null);
+  const [listRvcTipoVehiculoPick, setListRvcTipoVehiculoPick] = useState<'Vehículo' | 'Motocicleta' | 'Bicicleta'>('Vehículo');
+  const [listRvcTiposVehiculoSelected, setListRvcTiposVehiculoSelected] = useState<string[]>([]);
+  const [listRvcPlaca, setListRvcPlaca] = useState('');
+  const [listRvcAnno, setListRvcAnno] = useState('');
+  const [listRvcModelo, setListRvcModelo] = useState('');
+  const [listRvcTipoAutoriaPick, setListRvcTipoAutoriaPick] = useState<'Cliente' | 'Corporativo'>('Cliente');
+  const [listRvcTiposAutoriaSelected, setListRvcTiposAutoriaSelected] = useState<string[]>([]);
+  const [modalRvcTipoVehiculoPick, setModalRvcTipoVehiculoPick] = useState<'Vehículo' | 'Motocicleta' | 'Bicicleta'>('Vehículo');
+  const [modalRvcTiposVehiculoSelected, setModalRvcTiposVehiculoSelected] = useState<string[]>([]);
+  const [modalRvcPlaca, setModalRvcPlaca] = useState('');
+  const [modalRvcAnno, setModalRvcAnno] = useState('');
+  const [modalRvcModelo, setModalRvcModelo] = useState('');
+  const [modalRvcTipoAutoriaPick, setModalRvcTipoAutoriaPick] = useState<'Cliente' | 'Corporativo'>('Cliente');
+  const [modalRvcTiposAutoriaSelected, setModalRvcTiposAutoriaSelected] = useState<string[]>([]);
+  const [listRvdVehiculoSearch, setListRvdVehiculoSearch] = useState('');
+  const [listRvdVehiculoResults, setListRvdVehiculoResults] = useState<VehiculoCorporativoLite[]>([]);
+  const [listRvdVehiculoSelected, setListRvdVehiculoSelected] = useState<VehiculoCorporativoLite[]>([]);
+  const [modalRvdVehiculoSearch, setModalRvdVehiculoSearch] = useState('');
+  const [modalRvdVehiculoResults, setModalRvdVehiculoResults] = useState<VehiculoCorporativoLite[]>([]);
+  const [modalRvdVehiculoSelected, setModalRvdVehiculoSelected] = useState<VehiculoCorporativoLite[]>([]);
   const [listLlvEntregadoPor, setListLlvEntregadoPor] = useState('');
   const [listLlvRecibidoPor, setListLlvRecibidoPor] = useState('');
   const [listLlrEntregadoPor, setListLlrEntregadoPor] = useState('');
@@ -900,7 +1195,13 @@ export default function ReportesScreen() {
   const [formDescripcion, setFormDescripcion] = useState('');
   const [formModulo, setFormModulo] = useState(MODULO_INGRESOS);
   const [formOrder, setFormOrder] = useState('nombre_usuario');
-  const [formTipoReporte, setFormTipoReporte] = useState<'Consolidado' | 'Individual'>('Consolidado');
+  const [formTipoReporte, setFormTipoReporte] = useState<ReporteTipoSalida>('Consolidado');
+  const formTipoReporteRef = useRef<ReporteTipoSalida>('Consolidado');
+
+  const applyFormTipoReporte = useCallback((t: ReporteTipoSalida) => {
+    formTipoReporteRef.current = t;
+    setFormTipoReporte(t);
+  }, []);
   const [modalDesdeD, setModalDesdeD] = useState<Date | null>(null);
   const [modalDesdeT, setModalDesdeT] = useState<Date | null>(null);
   const [modalHastaD, setModalHastaD] = useState<Date | null>(null);
@@ -947,6 +1248,14 @@ export default function ReportesScreen() {
   const [modalRvResponsableSearch, setModalRvResponsableSearch] = useState('');
   const [modalRvResponsableResults, setModalRvResponsableResults] = useState<EmpleadoLite[]>([]);
   const [modalRvResponsableSelected, setModalRvResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [modalVvCedulaVisitante, setModalVvCedulaVisitante] = useState('');
+  const [modalVvTipoPick, setModalVvTipoPick] = useState<'Particular' | 'Institucional'>('Particular');
+  const [modalVvTiposSelected, setModalVvTiposSelected] = useState<string[]>([]);
+  const [modalVvPlacaInput, setModalVvPlacaInput] = useState('');
+  const [modalVvPlacasSelected, setModalVvPlacasSelected] = useState<string[]>([]);
+  const [modalVvResponsableSearch, setModalVvResponsableSearch] = useState('');
+  const [modalVvResponsableResults, setModalVvResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [modalVvResponsableSelected, setModalVvResponsableSelected] = useState<EmpleadoLite[]>([]);
   const [modalEvpEmpEvalSearch, setModalEvpEmpEvalSearch] = useState('');
   const [modalEvpEmpEvalResults, setModalEvpEmpEvalResults] = useState<EmpleadoLite[]>([]);
   const [modalEvpEmpEvalSelected, setModalEvpEmpEvalSelected] = useState<EmpleadoLite[]>([]);
@@ -958,11 +1267,41 @@ export default function ReportesScreen() {
   const [modalIrResponsableSearch, setModalIrResponsableSearch] = useState('');
   const [modalIrResponsableResults, setModalIrResponsableResults] = useState<EmpleadoLite[]>([]);
   const [modalIrResponsableSelected, setModalIrResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [modalCupResponsableSearch, setModalCupResponsableSearch] = useState('');
+  const [modalCupResponsableResults, setModalCupResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [modalCupResponsableSelected, setModalCupResponsableSelected] = useState<EmpleadoLite[]>([]);
+  const [modalRcTipoCapacitacion, setModalRcTipoCapacitacion] = useState<'todos' | 'Presencial' | 'Virtual'>('todos');
+  const [modalRcCapEmpSearch, setModalRcCapEmpSearch] = useState('');
+  const [modalRcCapEmpResults, setModalRcCapEmpResults] = useState<EmpleadoLite[]>([]);
+  const [modalRcCapEmpSelected, setModalRcCapEmpSelected] = useState<EmpleadoLite[]>([]);
+  const [modalRcCapPuestoSearch, setModalRcCapPuestoSearch] = useState('');
+  const [modalRcCapPuestoResults, setModalRcCapPuestoResults] = useState<StructureLite[]>([]);
+  const [modalRcCapPuestoSelected, setModalRcCapPuestoSelected] = useState<StructureLite[]>([]);
+  const [modalRcResponsableSearch, setModalRcResponsableSearch] = useState('');
+  const [modalRcResponsableResults, setModalRcResponsableResults] = useState<EmpleadoLite[]>([]);
+  const [modalRcResponsableSelected, setModalRcResponsableSelected] = useState<EmpleadoLite[]>([]);
   const [modalIrEmpleadoSearch, setModalIrEmpleadoSearch] = useState('');
   const [modalIrEmpleadoResults, setModalIrEmpleadoResults] = useState<EmpleadoLite[]>([]);
   const [modalIrEmpleadoSelected, setModalIrEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [modalIrParticipanteSearch, setModalIrParticipanteSearch] = useState('');
   const [modalIrParticipanteCedulas, setModalIrParticipanteCedulas] = useState<string[]>([]);
+  const [modalRigColaboradorSearch, setModalRigColaboradorSearch] = useState('');
+  const [modalRigColaboradorCedulas, setModalRigColaboradorCedulas] = useState<string[]>([]);
+  const [modalRigCapacitadorSearch, setModalRigCapacitadorSearch] = useState('');
+  const [modalRigCapacitadorCedulas, setModalRigCapacitadorCedulas] = useState<string[]>([]);
+  const [modalTaEmpleadoSearch, setModalTaEmpleadoSearch] = useState('');
+  const [modalTaEmpleadoResults, setModalTaEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [modalTaEmpleadoSelected, setModalTaEmpleadoSelected] = useState<EmpleadoLite[]>([]);
+  const [modalTaCedulaSearch, setModalTaCedulaSearch] = useState('');
+  const [modalTaCedulaResults, setModalTaCedulaResults] = useState<CedulaAlmuerzoLite[]>([]);
+  const [modalTaCedulasSelected, setModalTaCedulasSelected] = useState<string[]>([]);
+  const [modalSpTipoSalario, setModalSpTipoSalario] = useState<'todos' | 'Con goce' | 'Sin goce'>('todos');
+  const [modalSpEstado, setModalSpEstado] = useState<'todos' | 'pendiente' | 'aprobado' | 'rechazado'>('todos');
+  const [modalSpTipoTurnoPick, setModalSpTipoTurnoPick] = useState<'Diurno' | 'Mixto' | 'Nocturno'>('Diurno');
+  const [modalSpTiposTurnoSelected, setModalSpTiposTurnoSelected] = useState<string[]>([]);
+  const [modalSpEmpleadoSearch, setModalSpEmpleadoSearch] = useState('');
+  const [modalSpEmpleadoResults, setModalSpEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [modalSpEmpleadoSelected, setModalSpEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [modalMutAusenteSearch, setModalMutAusenteSearch] = useState('');
   const [modalMutAusenteResults, setModalMutAusenteResults] = useState<EmpleadoLite[]>([]);
   const [modalMutAusenteSelected, setModalMutAusenteSelected] = useState<EmpleadoLite[]>([]);
@@ -1041,7 +1380,9 @@ export default function ReportesScreen() {
     | 'listEncResponsable'
     | 'modalEncResponsable'
     | 'listRvResponsable'
+    | 'listVvResponsable'
     | 'modalRvResponsable'
+    | 'modalVvResponsable'
     | 'listEvpEmpEval'
     | 'listEvpEvaluador'
     | 'modalEvpEmpEval'
@@ -1050,6 +1391,14 @@ export default function ReportesScreen() {
     | 'listIrEmpleado'
     | 'modalIrResponsable'
     | 'modalIrEmpleado'
+    | 'listCupResponsable'
+    | 'modalCupResponsable'
+    | 'listRcCapEmpleado'
+    | 'modalRcCapEmpleado'
+    | 'listRcCapPuesto'
+    | 'modalRcCapPuesto'
+    | 'listRcResponsable'
+    | 'modalRcResponsable'
     | 'listMutAusente'
     | 'listMutReemplaza'
     | 'modalMutAusente'
@@ -1062,6 +1411,14 @@ export default function ReportesScreen() {
     | 'modalLlavero'
     | 'listEjecutivo'
     | 'modalEjecutivo'
+    | 'listTaEmpleado'
+    | 'modalTaEmpleado'
+    | 'listTaCedula'
+    | 'modalTaCedula'
+    | 'listSpEmpleado'
+    | 'modalSpEmpleado'
+    | 'listRvdVehiculo'
+    | 'modalRvdVehiculo'
   >(null);
   const [submitReportLoading, setSubmitReportLoading] = useState(false);
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
@@ -1074,6 +1431,14 @@ export default function ReportesScreen() {
   const [showListActaDt, setShowListActaDt] = useState(false);
   const [showListActaHd, setShowListActaHd] = useState(false);
   const [showListActaHt, setShowListActaHt] = useState(false);
+  const [showListMaSolDd, setShowListMaSolDd] = useState(false);
+  const [showListMaSolDt, setShowListMaSolDt] = useState(false);
+  const [showListMaSolHd, setShowListMaSolHd] = useState(false);
+  const [showListMaSolHt, setShowListMaSolHt] = useState(false);
+  const [showModalMaSolDd, setShowModalMaSolDd] = useState(false);
+  const [showModalMaSolDt, setShowModalMaSolDt] = useState(false);
+  const [showModalMaSolHd, setShowModalMaSolHd] = useState(false);
+  const [showModalMaSolHt, setShowModalMaSolHt] = useState(false);
   const [listFechaRepDesdeD, setListFechaRepDesdeD] = useState<Date | null>(null);
   const [listFechaRepDesdeT, setListFechaRepDesdeT] = useState<Date | null>(null);
   const [listFechaRepHastaD, setListFechaRepHastaD] = useState<Date | null>(null);
@@ -1104,7 +1469,7 @@ export default function ReportesScreen() {
     setFormDescripcion('');
     setFormModulo(MODULO_INGRESOS);
     setFormOrder('nombre_usuario');
-    setFormTipoReporte('Consolidado');
+    applyFormTipoReporte('Consolidado');
     setModalDesdeD(null);
     setModalDesdeT(null);
     setModalHastaD(null);
@@ -1151,6 +1516,14 @@ export default function ReportesScreen() {
     setModalRvResponsableSearch('');
     setModalRvResponsableResults([]);
     setModalRvResponsableSelected([]);
+    setModalVvCedulaVisitante('');
+    setModalVvTipoPick('Particular');
+    setModalVvTiposSelected([]);
+    setModalVvPlacaInput('');
+    setModalVvPlacasSelected([]);
+    setModalVvResponsableSearch('');
+    setModalVvResponsableResults([]);
+    setModalVvResponsableSelected([]);
     setModalEvpEmpEvalSearch('');
     setModalEvpEmpEvalResults([]);
     setModalEvpEmpEvalSelected([]);
@@ -1219,6 +1592,19 @@ export default function ReportesScreen() {
     setModalAccPlazaSearch('');
     setModalAccPlazaResults([]);
     setModalAccPlazaSelected([]);
+    setModalTaEmpleadoSearch('');
+    setModalTaEmpleadoResults([]);
+    setModalTaEmpleadoSelected([]);
+    setModalTaCedulaSearch('');
+    setModalTaCedulaResults([]);
+    setModalTaCedulasSelected([]);
+    setModalSpTipoSalario('todos');
+    setModalSpEstado('todos');
+    setModalSpTipoTurnoPick('Diurno');
+    setModalSpTiposTurnoSelected([]);
+    setModalSpEmpleadoSearch('');
+    setModalSpEmpleadoResults([]);
+    setModalSpEmpleadoSelected([]);
     setPreviewRows(null);
     setPreviewOpen(false);
     setFirmaModal('');
@@ -1255,6 +1641,7 @@ export default function ReportesScreen() {
       formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
       formModulo === MODULO_ENCUESTA_SATISFACCION ||
       formModulo === MODULO_REGISTRO_VISITAS ||
+      formModulo === MODULO_VISITAS_VEHICULOS ||
       formModulo === MODULO_MUTUOS_ACUERDOS ||
       formModulo === MODULO_CONTROL_ASISTENCIA ||
       formModulo === MODULO_ACCIONES_PERSONALES ||
@@ -1265,9 +1652,25 @@ export default function ReportesScreen() {
       formModulo === MODULO_CHECKLIST_SUPERVISION ||
       formModulo === MODULO_EVALUACION_PERSONAL ||
       formModulo === MODULO_PRODUCTO_NO_CONFORME ||
-      formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
+      formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
+      formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+      formModulo === MODULO_NOTAS_VOZ ||
+      formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+      formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+      formModulo === MODULO_TIEMPO_ALMUERZO ||
+      formModulo === MODULO_SOLICITUDES_PERMISO ||
+      formModulo === MODULO_ARTICULOS_PUESTO ||
+      formModulo === MODULO_MANTENIMIENTO_ARTICULOS ||
+      formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ||
+      formModulo === MODULO_REVISION_VEHICULOS
     ) {
-      setFormOrder('empresa_id');
+      setFormOrder(
+        formModulo === MODULO_MANTENIMIENTO_ARTICULOS ||
+        formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ||
+        formModulo === MODULO_REVISION_VEHICULOS
+          ? 'puesto_id'
+          : 'empresa_id',
+      );
     } else if (formModulo === MODULO_MANUALES_PUESTO) {
       setFormOrder('title');
     } else if (formModulo === MODULO_APERTURA_CIERRE) {
@@ -1286,6 +1689,7 @@ export default function ReportesScreen() {
       formModulo !== MODULO_DOCUMENTOS_ENTREGADOS &&
       formModulo !== MODULO_ENCUESTA_SATISFACCION &&
       formModulo !== MODULO_REGISTRO_VISITAS &&
+      formModulo !== MODULO_VISITAS_VEHICULOS &&
       formModulo !== MODULO_MUTUOS_ACUERDOS &&
       formModulo !== MODULO_INCIDENTES &&
       formModulo !== MODULO_LLAVES &&
@@ -1293,11 +1697,21 @@ export default function ReportesScreen() {
       formModulo !== MODULO_MAESTRO_QUEJAS &&
       formModulo !== MODULO_PRODUCTO_NO_CONFORME &&
       formModulo !== MODULO_REGISTRO_INDUCCION_RECORRIDO &&
-      formModulo !== MODULO_MANUALES_PUESTO
+      formModulo !== MODULO_REGISTRO_INDUCCION_GENERAL &&
+      formModulo !== MODULO_MANUALES_PUESTO &&
+      formModulo !== MODULO_ARTICULOS_PUESTO &&
+      formModulo !== MODULO_MANTENIMIENTO_ARTICULOS &&
+      formModulo !== MODULO_REGISTRO_VEHICULOS_CORPORATIVOS &&
+      formModulo !== MODULO_REVISION_VEHICULOS &&
+      formModulo !== MODULO_SOLICITUDES_PERMISO
     ) {
       setFormTipoReporte('Consolidado');
     }
   }, [formModulo]);
+
+  useEffect(() => {
+    formTipoReporteRef.current = formTipoReporte;
+  }, [formTipoReporte]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1346,6 +1760,17 @@ export default function ReportesScreen() {
     })();
   }, []);
 
+  useEffect(() => {
+    if (isOnline !== true) return;
+    void (async () => {
+      try {
+        await purgeOldMobileReports({ refreshAccessToken, logout });
+      } catch {
+        /* limpieza en segundo plano; no bloquear la pantalla */
+      }
+    })();
+  }, [isOnline, refreshAccessToken, logout]);
+
   const getOnline = useCallback(async () => {
     const s = await Network.getNetworkStateAsync();
     if (!s.isConnected) return false;
@@ -1383,12 +1808,24 @@ export default function ReportesScreen() {
       | 'listMutReemplaza'
       | 'modalMutAusente'
       | 'modalMutReemplaza'
-      | 'listIrResponsable'
-      | 'listIrEmpleado'
-      | 'modalIrResponsable'
-      | 'modalIrEmpleado'
+    | 'listIrResponsable'
+    | 'listIrEmpleado'
+    | 'modalIrResponsable'
+    | 'modalIrEmpleado'
+    | 'listCupResponsable'
+    | 'modalCupResponsable'
+    | 'listRcCapEmpleado'
+    | 'modalRcCapEmpleado'
+    | 'listRcResponsable'
+    | 'modalRcResponsable'
       | 'listRvResponsable'
-      | 'modalRvResponsable',
+      | 'listVvResponsable'
+      | 'modalRvResponsable'
+      | 'modalVvResponsable'
+      | 'listTaEmpleado'
+      | 'modalTaEmpleado'
+      | 'listSpEmpleado'
+      | 'modalSpEmpleado',
   ) => {
     const ok = await getOnline();
     if (!ok) {
@@ -1415,7 +1852,9 @@ export default function ReportesScreen() {
       if (mode === 'listEncResponsable') setListEncResponsableResults(rows);
       if (mode === 'modalEncResponsable') setModalEncResponsableResults(rows);
       if (mode === 'listRvResponsable') setListRvResponsableResults(rows);
+      if (mode === 'listVvResponsable') setListVvResponsableResults(rows);
       if (mode === 'modalRvResponsable') setModalRvResponsableResults(rows);
+      if (mode === 'modalVvResponsable') setModalVvResponsableResults(rows);
       if (mode === 'listEvpEmpEval') setListEvpEmpEvalResults(rows);
       if (mode === 'listEvpEvaluador') setListEvpEvaluadorResults(rows);
       if (mode === 'modalEvpEmpEval') setModalEvpEmpEvalResults(rows);
@@ -1428,6 +1867,44 @@ export default function ReportesScreen() {
       if (mode === 'listIrEmpleado') setListIrEmpleadoResults(rows);
       if (mode === 'modalIrResponsable') setModalIrResponsableResults(rows);
       if (mode === 'modalIrEmpleado') setModalIrEmpleadoResults(rows);
+      if (mode === 'listCupResponsable') setListCupResponsableResults(rows);
+      if (mode === 'modalCupResponsable') setModalCupResponsableResults(rows);
+      if (mode === 'listRcCapEmpleado') setListRcCapEmpResults(rows);
+      if (mode === 'modalRcCapEmpleado') setModalRcCapEmpResults(rows);
+      if (mode === 'listRcResponsable') setListRcResponsableResults(rows);
+      if (mode === 'modalRcResponsable') setModalRcResponsableResults(rows);
+      if (mode === 'listTaEmpleado') setListTaEmpleadoResults(rows);
+      if (mode === 'modalTaEmpleado') setModalTaEmpleadoResults(rows);
+      if (mode === 'listSpEmpleado') setListSpEmpleadoResults(rows);
+      if (mode === 'modalSpEmpleado') setModalSpEmpleadoResults(rows);
+    } finally {
+      setEmployeeSearchMode(null);
+    }
+  };
+
+  const runSearchAlmuerzoCedulas = async (
+    q: string,
+    mode: 'listTaCedula' | 'modalTaCedula',
+  ) => {
+    const ok = await getOnline();
+    if (!ok) {
+      Alert.alert('Sin conexión', 'Esta pantalla requiere internet.');
+      return;
+    }
+    if (!q.trim()) {
+      Alert.alert('Buscar', 'Escriba una cédula.');
+      return;
+    }
+    setEmployeeSearchMode(mode);
+    try {
+      const res = await searchAlmuerzoCedulas({ q: q.trim(), refreshAccessToken, logout });
+      if (!res.status) {
+        Alert.alert('Error', res.message || 'No se pudo buscar');
+        return;
+      }
+      const rows = res.data || [];
+      if (mode === 'listTaCedula') setListTaCedulaResults(rows);
+      if (mode === 'modalTaCedula') setModalTaCedulaResults(rows);
     } finally {
       setEmployeeSearchMode(null);
     }
@@ -1447,6 +1924,7 @@ export default function ReportesScreen() {
       | 'listAccPlaza'
       | 'listEjecutivo'
       | 'listMutEjecutivo'
+      | 'listRcCapPuesto'
       | 'modalEmpresa'
       | 'modalCliente'
       | 'modalDivision'
@@ -1456,7 +1934,8 @@ export default function ReportesScreen() {
       | 'modalLlavero'
       | 'modalAccPlaza'
       | 'modalEjecutivo'
-      | 'modalMutEjecutivo',
+      | 'modalMutEjecutivo'
+      | 'modalRcCapPuesto',
   ) => {
     const ok = await getOnline();
     if (!ok) {
@@ -1495,6 +1974,8 @@ export default function ReportesScreen() {
       if (mode === 'listMutEjecutivo') setListMutEjecutivoResults(rows);
       if (mode === 'modalEjecutivo') setModalEjecutivoResults(rows);
       if (mode === 'modalMutEjecutivo') setModalMutEjecutivoResults(rows);
+      if (mode === 'listRcCapPuesto') setListRcCapPuestoResults(rows);
+      if (mode === 'modalRcCapPuesto') setModalRcCapPuestoResults(rows);
     } finally {
       setEmployeeSearchMode(null);
     }
@@ -1664,6 +2145,42 @@ export default function ReportesScreen() {
     setListIrResponsableSearch('');
   };
   const removeListIrResponsable = (id: number) => setListIrResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickListCupResponsable = (e: EmpleadoLite) => {
+    setListCupResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListCupResponsableResults([]);
+    setListCupResponsableSearch('');
+  };
+  const removeListCupResponsable = (id: number) => setListCupResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalCupResponsable = (e: EmpleadoLite) => {
+    setModalCupResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalCupResponsableResults([]);
+    setModalCupResponsableSearch('');
+  };
+  const removeModalCupResponsable = (id: number) => setModalCupResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickListRcCapEmp = (e: EmpleadoLite) => {
+    setListRcCapEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListRcCapEmpResults([]);
+    setListRcCapEmpSearch('');
+  };
+  const removeListRcCapEmp = (id: number) => setListRcCapEmpSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalRcCapEmp = (e: EmpleadoLite) => {
+    setModalRcCapEmpSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalRcCapEmpResults([]);
+    setModalRcCapEmpSearch('');
+  };
+  const removeModalRcCapEmp = (id: number) => setModalRcCapEmpSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickListRcResponsable = (e: EmpleadoLite) => {
+    setListRcResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListRcResponsableResults([]);
+    setListRcResponsableSearch('');
+  };
+  const removeListRcResponsable = (id: number) => setListRcResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalRcResponsable = (e: EmpleadoLite) => {
+    setModalRcResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalRcResponsableResults([]);
+    setModalRcResponsableSearch('');
+  };
+  const removeModalRcResponsable = (id: number) => setModalRcResponsableSelected((prev) => prev.filter((x) => x.id !== id));
   const pickListIrEmpleado = (e: EmpleadoLite) => {
     setListIrEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
     setListIrEmpleadoResults([]);
@@ -1705,6 +2222,235 @@ export default function ReportesScreen() {
   };
   const removeModalIrParticipanteCedula = (ced: string) =>
     setModalIrParticipanteCedulas((prev) => prev.filter((x) => x !== ced));
+
+  const addListRigColaboradorCedula = () => {
+    const t = listRigColaboradorSearch.trim().replace(/\s+/g, '');
+    if (!t) {
+      Alert.alert('Colaboradores', 'Escriba una cédula.');
+      return;
+    }
+    setListRigColaboradorCedulas((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setListRigColaboradorSearch('');
+  };
+  const removeListRigColaboradorCedula = (ced: string) =>
+    setListRigColaboradorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addListRigCapacitadorCedula = () => {
+    const t = listRigCapacitadorSearch.trim().replace(/\s+/g, '');
+    if (!t) {
+      Alert.alert('Capacitadores', 'Escriba una cédula.');
+      return;
+    }
+    setListRigCapacitadorCedulas((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setListRigCapacitadorSearch('');
+  };
+  const removeListRigCapacitadorCedula = (ced: string) =>
+    setListRigCapacitadorCedulas((prev) => prev.filter((x) => x !== ced));
+
+  const addModalRigColaboradorCedula = () => {
+    const t = modalRigColaboradorSearch.trim().replace(/\s+/g, '');
+    if (!t) {
+      Alert.alert('Colaboradores', 'Escriba una cédula.');
+      return;
+    }
+    setModalRigColaboradorCedulas((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setModalRigColaboradorSearch('');
+  };
+  const removeModalRigColaboradorCedula = (ced: string) =>
+    setModalRigColaboradorCedulas((prev) => prev.filter((x) => x !== ced));
+  const addModalRigCapacitadorCedula = () => {
+    const t = modalRigCapacitadorSearch.trim().replace(/\s+/g, '');
+    if (!t) {
+      Alert.alert('Capacitadores', 'Escriba una cédula.');
+      return;
+    }
+    setModalRigCapacitadorCedulas((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setModalRigCapacitadorSearch('');
+  };
+  const removeModalRigCapacitadorCedula = (ced: string) =>
+    setModalRigCapacitadorCedulas((prev) => prev.filter((x) => x !== ced));
+
+  const pickListTaEmpleado = (e: EmpleadoLite) => {
+    setListTaEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListTaEmpleadoResults([]);
+    setListTaEmpleadoSearch('');
+  };
+  const removeListTaEmpleado = (id: number) => setListTaEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickListTaCedula = (c: CedulaAlmuerzoLite) => {
+    const t = String(c.cedula || '').trim();
+    if (!t) return;
+    setListTaCedulasSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setListTaCedulaResults([]);
+    setListTaCedulaSearch('');
+  };
+  const removeListTaCedula = (ced: string) => setListTaCedulasSelected((prev) => prev.filter((x) => x !== ced));
+  const pickModalTaEmpleado = (e: EmpleadoLite) => {
+    setModalTaEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalTaEmpleadoResults([]);
+    setModalTaEmpleadoSearch('');
+  };
+  const removeModalTaEmpleado = (id: number) => setModalTaEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalTaCedula = (c: CedulaAlmuerzoLite) => {
+    const t = String(c.cedula || '').trim();
+    if (!t) return;
+    setModalTaCedulasSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+    setModalTaCedulaResults([]);
+    setModalTaCedulaSearch('');
+  };
+  const removeModalTaCedula = (ced: string) => setModalTaCedulasSelected((prev) => prev.filter((x) => x !== ced));
+
+  const pickListSpEmpleado = (e: EmpleadoLite) => {
+    setListSpEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListSpEmpleadoResults([]);
+    setListSpEmpleadoSearch('');
+  };
+  const removeListSpEmpleado = (id: number) => setListSpEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  const addListSpTipoTurno = () => {
+    const t = listSpTipoTurnoPick.trim();
+    if (!t) return;
+    setListSpTiposTurnoSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  };
+  const removeListSpTipoTurno = (tipo: string) => setListSpTiposTurnoSelected((prev) => prev.filter((x) => x !== tipo));
+  const addListMaEstado = () => {
+    if (listMaEstadoPick === 'todos') return;
+    setListMaEstadosSelected((prev) => (prev.includes(listMaEstadoPick) ? prev : [...prev, listMaEstadoPick]));
+  };
+  const removeListMaEstado = (estado: string) => setListMaEstadosSelected((prev) => prev.filter((x) => x !== estado));
+  const addListMaAccion = () => {
+    if (listMaAccionPick === 'todos') return;
+    setListMaAccionesSelected((prev) => (prev.includes(listMaAccionPick) ? prev : [...prev, listMaAccionPick]));
+  };
+  const removeListMaAccion = (accion: string) => setListMaAccionesSelected((prev) => prev.filter((x) => x !== accion));
+  const addModalMaEstado = () => {
+    if (modalMaEstadoPick === 'todos') return;
+    setModalMaEstadosSelected((prev) => (prev.includes(modalMaEstadoPick) ? prev : [...prev, modalMaEstadoPick]));
+  };
+  const removeModalMaEstado = (estado: string) => setModalMaEstadosSelected((prev) => prev.filter((x) => x !== estado));
+  const addModalMaAccion = () => {
+    if (modalMaAccionPick === 'todos') return;
+    setModalMaAccionesSelected((prev) => (prev.includes(modalMaAccionPick) ? prev : [...prev, modalMaAccionPick]));
+  };
+  const removeModalMaAccion = (accion: string) => setModalMaAccionesSelected((prev) => prev.filter((x) => x !== accion));
+  const addListRvcTipoVehiculo = () => {
+    const t = listRvcTipoVehiculoPick;
+    setListRvcTiposVehiculoSelected((prev) => (prev.includes(t) ? prev : [...prev, t]));
+  };
+  const removeListRvcTipoVehiculo = (tipo: string) => setListRvcTiposVehiculoSelected((prev) => prev.filter((x) => x !== tipo));
+  const addListRvcTipoAutoria = () => {
+    const t = listRvcTipoAutoriaPick;
+    setListRvcTiposAutoriaSelected((prev) => (prev.includes(t) ? prev : [...prev, t]));
+  };
+  const removeListRvcTipoAutoria = (tipo: string) => setListRvcTiposAutoriaSelected((prev) => prev.filter((x) => x !== tipo));
+  const addModalRvcTipoVehiculo = () => {
+    const t = modalRvcTipoVehiculoPick;
+    setModalRvcTiposVehiculoSelected((prev) => (prev.includes(t) ? prev : [...prev, t]));
+  };
+  const removeModalRvcTipoVehiculo = (tipo: string) => setModalRvcTiposVehiculoSelected((prev) => prev.filter((x) => x !== tipo));
+  const addModalRvcTipoAutoria = () => {
+    const t = modalRvcTipoAutoriaPick;
+    setModalRvcTiposAutoriaSelected((prev) => (prev.includes(t) ? prev : [...prev, t]));
+  };
+  const removeModalRvcTipoAutoria = (tipo: string) => setModalRvcTiposAutoriaSelected((prev) => prev.filter((x) => x !== tipo));
+
+  const formatVehiculoLite = (v: VehiculoCorporativoLite) => {
+    const placa = v.placa || 'Sin placa';
+    const desc = [v.marca, v.modelo].filter(Boolean).join(' ').trim();
+    const tipo = v.tipo || '';
+    const corpo = v.corpo_nombre || '';
+    return `${placa}${desc ? ` — ${desc}` : ''}${tipo ? ` (${tipo})` : ''}${corpo ? ` · ${corpo}` : ''}`;
+  };
+
+  const runSearchCorporateVehicles = async (
+    q: string,
+    mode: 'listRvdVehiculo' | 'modalRvdVehiculo',
+  ) => {
+    const ok = await getOnline();
+    if (!ok) {
+      Alert.alert('Sin conexión', 'Esta pantalla requiere internet.');
+      return;
+    }
+    if (!q.trim()) {
+      Alert.alert('Buscar', 'Escriba placa, marca o modelo.');
+      return;
+    }
+    setEmployeeSearchMode(mode);
+    try {
+      const res = await searchCorporateVehicles({ q: q.trim(), refreshAccessToken, logout });
+      if (!res.status) {
+        Alert.alert('Error', res.message || 'No se pudo buscar');
+        return;
+      }
+      const rows = res.data || [];
+      if (mode === 'listRvdVehiculo') setListRvdVehiculoResults(rows);
+      if (mode === 'modalRvdVehiculo') setModalRvdVehiculoResults(rows);
+    } finally {
+      setEmployeeSearchMode(null);
+    }
+  };
+
+  const pickListRvdVehiculo = (v: VehiculoCorporativoLite) => {
+    setListRvdVehiculoSelected((prev) => (prev.some((x) => x.id === v.id) ? prev : [...prev, v]));
+    setListRvdVehiculoResults([]);
+    setListRvdVehiculoSearch('');
+  };
+  const removeListRvdVehiculo = (id: number) => setListRvdVehiculoSelected((prev) => prev.filter((x) => x.id !== id));
+  const pickModalRvdVehiculo = (v: VehiculoCorporativoLite) => {
+    setModalRvdVehiculoSelected((prev) => (prev.some((x) => x.id === v.id) ? prev : [...prev, v]));
+    setModalRvdVehiculoResults([]);
+    setModalRvdVehiculoSearch('');
+  };
+  const removeModalRvdVehiculo = (id: number) => setModalRvdVehiculoSelected((prev) => prev.filter((x) => x.id !== id));
+
+  const pickModalSpEmpleado = (e: EmpleadoLite) => {
+    setModalSpEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalSpEmpleadoResults([]);
+    setModalSpEmpleadoSearch('');
+  };
+  const removeModalSpEmpleado = (id: number) => setModalSpEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  const addModalSpTipoTurno = () => {
+    const t = modalSpTipoTurnoPick.trim();
+    if (!t) return;
+    setModalSpTiposTurnoSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  };
+  const removeModalSpTipoTurno = (tipo: string) => setModalSpTiposTurnoSelected((prev) => prev.filter((x) => x !== tipo));
+
+  const pickListVvResponsable = (e: EmpleadoLite) => {
+    setListVvResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListVvResponsableResults([]);
+    setListVvResponsableSearch('');
+  };
+  const removeListVvResponsable = (id: number) => setListVvResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const addListVvTipo = () => {
+    const t = listVvTipoPick.trim();
+    if (!t) return;
+    setListVvTiposSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  };
+  const removeListVvTipo = (tipo: string) => setListVvTiposSelected((prev) => prev.filter((x) => x !== tipo));
+  const addListVvPlaca = () => {
+    const p = listVvPlacaInput.trim();
+    if (!p) return;
+    setListVvPlacasSelected((prev) => (prev.some((x) => x.toLowerCase() === p.toLowerCase()) ? prev : [...prev, p]));
+    setListVvPlacaInput('');
+  };
+  const removeListVvPlaca = (placa: string) => setListVvPlacasSelected((prev) => prev.filter((x) => x !== placa));
+  const pickModalVvResponsable = (e: EmpleadoLite) => {
+    setModalVvResponsableSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalVvResponsableResults([]);
+    setModalVvResponsableSearch('');
+  };
+  const removeModalVvResponsable = (id: number) => setModalVvResponsableSelected((prev) => prev.filter((x) => x.id !== id));
+  const addModalVvTipo = () => {
+    const t = modalVvTipoPick.trim();
+    if (!t) return;
+    setModalVvTiposSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
+  };
+  const removeModalVvTipo = (tipo: string) => setModalVvTiposSelected((prev) => prev.filter((x) => x !== tipo));
+  const addModalVvPlaca = () => {
+    const p = modalVvPlacaInput.trim();
+    if (!p) return;
+    setModalVvPlacasSelected((prev) => (prev.some((x) => x.toLowerCase() === p.toLowerCase()) ? prev : [...prev, p]));
+    setModalVvPlacaInput('');
+  };
+  const removeModalVvPlaca = (placa: string) => setModalVvPlacasSelected((prev) => prev.filter((x) => x !== placa));
 
   const loadLista = async () => {
     if (loadingList) return;
@@ -1801,6 +2547,20 @@ export default function ReportesScreen() {
           q.listRvResponsableIds = listRvResponsableSelected.map((x) => String(x.id)).join(',');
         if (listRvCedulaVisitante.trim()) q.listRvCedulaVisitante = listRvCedulaVisitante.trim();
         if (listRvTipoVisitante !== 'todos') q.listRvTipoVisitante = listRvTipoVisitante;
+      } else if (modulo === MODULO_VISITAS_VEHICULOS) {
+        if (listActaDesdeD && listActaDesdeT) q.listVvCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listVvCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listVvEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listVvClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listVvDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listVvContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listVvCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listVvPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listVvResponsableSelected.length)
+          q.listVvResponsableIds = listVvResponsableSelected.map((x) => String(x.id)).join(',');
+        if (listVvCedulaVisitante.trim()) q.listVvCedulaVisitante = listVvCedulaVisitante.trim();
+        if (listVvTiposSelected.length) q.listVvTiposVehiculo = listVvTiposSelected.join(',');
+        if (listVvPlacasSelected.length) q.listVvPlacas = listVvPlacasSelected.join(',');
       } else if (modulo === MODULO_MUTUOS_ACUERDOS) {
         if (listActaDesdeD && listActaDesdeT) q.listMutFechaReporteDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
         if (listActaHastaD && listActaHastaT) q.listMutFechaReporteHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
@@ -1853,6 +2613,74 @@ export default function ReportesScreen() {
           q.listIrResponsableEmpleadoIds = listIrResponsableSelected.map((x) => String(x.id)).join(',');
         if (listIrEmpleadoSelected.length) q.listIrEmpleadoIds = listIrEmpleadoSelected.map((x) => String(x.id)).join(',');
         if (listIrParticipanteCedulas.length) q.listIrParticipanteCedulas = listIrParticipanteCedulas.join(',');
+      } else if (modulo === MODULO_NOTAS_VOZ) {
+        if (listActaDesdeD && listActaDesdeT) q.listNvCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listNvCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listNvEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listNvClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listNvDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listNvContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listNvCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listNvPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+      } else if (modulo === MODULO_CAMBIOS_UBICACION_PUESTO) {
+        if (listActaDesdeD && listActaDesdeT) q.listCupCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listCupCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listCupEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listCupClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listCupDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listCupContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listCupCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listCupPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listCupResponsableSelected.length) q.listCupResponsableIds = listCupResponsableSelected.map((x) => String(x.id)).join(',');
+      } else if (modulo === MODULO_REGISTRO_CAPACITACIONES) {
+        if (listActaDesdeD && listActaDesdeT) q.listRcCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listRcCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listRcEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listRcClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listRcDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listRcContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listRcCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listRcPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listRcTipoCapacitacion !== 'todos') q.listRcTipoCapacitacion = listRcTipoCapacitacion;
+        if (listRcCapEmpSelected.length) q.listRcCapacitacionEmpleadoIds = listRcCapEmpSelected.map((x) => String(x.id)).join(',');
+        if (listRcCapPuestoSelected.length) q.listRcCapacitacionPuestoIds = listRcCapPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listRcResponsableSelected.length) q.listRcResponsableIds = listRcResponsableSelected.map((x) => String(x.id)).join(',');
+      } else if (modulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
+        if (listActaDesdeD && listActaDesdeT) q.listRigCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listRigCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listRigEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listRigClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listRigDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listRigContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listRigCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listRigPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listRigColaboradorCedulas.length) q.listRigColaboradorCedulas = listRigColaboradorCedulas.join(',');
+        if (listRigCapacitadorCedulas.length) q.listRigCapacitadorCedulas = listRigCapacitadorCedulas.join(',');
+      } else if (modulo === MODULO_TIEMPO_ALMUERZO) {
+        if (listActaDesdeD && listActaDesdeT) q.listTaInicioDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listTaFinHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listTaEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listTaClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listTaDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listTaContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listTaCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listTaPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listTaEmpleadoSelected.length) q.listTaEmpleadoIds = listTaEmpleadoSelected.map((x) => String(x.id)).join(',');
+        if (listTaCedulasSelected.length) q.listTaCedulas = listTaCedulasSelected.join(',');
+      } else if (modulo === MODULO_SOLICITUDES_PERMISO) {
+        if (listActaDesdeD && listActaDesdeT) q.listSpCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listSpCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listSpEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listSpClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listSpDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listSpContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listSpCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listSpPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listSpEmpleadoSelected.length) q.listSpEmpleadoIds = listSpEmpleadoSelected.map((x) => String(x.id)).join(',');
+        if (listEjecutivoSelected.length) q.listSpEjecutivoIds = listEjecutivoSelected.map((x) => String(x.id)).join(',');
+        if (listSpTiposTurnoSelected.length) q.listSpTiposTurno = listSpTiposTurnoSelected.join(',');
+        if (listSpTipoSalario !== 'todos') q.listSpTipoSalario = listSpTipoSalario;
+        if (listSpEstado !== 'todos') q.listSpEstado = listSpEstado;
       } else if (modulo === MODULO_MANUALES_PUESTO) {
         if (listActaDesdeD && listActaDesdeT) q.listMpCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
         if (listActaHastaD && listActaHastaT) q.listMpCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
@@ -1862,6 +2690,50 @@ export default function ReportesScreen() {
         if (listContratoSelected.length) q.listMpContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
         if (listCorpoSelected.length) q.listMpCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
         if (listPuestoSelected.length) q.listMpPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+      } else if (modulo === MODULO_ARTICULOS_PUESTO) {
+        if (listEmpresaSelected.length) q.listApEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listApClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listApDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listApContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listApCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listApPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+      } else if (modulo === MODULO_MANTENIMIENTO_ARTICULOS) {
+        if (listActaDesdeD && listActaDesdeT) q.listMaCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listMaCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listMaSolDesdeD && listMaSolDesdeT) q.listMaSolucionadoDesde = combineDateAndTime(ymd(listMaSolDesdeD), hm(listMaSolDesdeT));
+        if (listMaSolHastaD && listMaSolHastaT) q.listMaSolucionadoHasta = combineDateAndTime(ymd(listMaSolHastaD), hm(listMaSolHastaT));
+        if (listEmpresaSelected.length) q.listMaEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listMaClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listMaDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listMaContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listMaCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listMaPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listMaEstadosSelected.length) q.listMaEstados = listMaEstadosSelected.join(',');
+        if (listMaAccionesSelected.length) q.listMaAcciones = listMaAccionesSelected.join(',');
+      } else if (modulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS) {
+        if (listActaDesdeD && listActaDesdeT) q.listRvcCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listRvcCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listRvcEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listRvcClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listRvcDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listRvcContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listRvcCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listRvcPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listRvcTiposVehiculoSelected.length) q.listRvcTiposVehiculo = listRvcTiposVehiculoSelected.join(',');
+        if (listRvcTiposAutoriaSelected.length) q.listRvcTiposAutoria = listRvcTiposAutoriaSelected.join(',');
+        if (listRvcPlaca.trim()) q.listRvcPlaca = listRvcPlaca.trim();
+        if (listRvcAnno.trim()) q.listRvcAnno = listRvcAnno.trim();
+        if (listRvcModelo.trim()) q.listRvcModelo = listRvcModelo.trim();
+      } else if (modulo === MODULO_REVISION_VEHICULOS) {
+        if (listActaDesdeD && listActaDesdeT) q.listRevCreadoDesde = combineDateAndTime(ymd(listActaDesdeD), hm(listActaDesdeT));
+        if (listActaHastaD && listActaHastaT) q.listRevCreadoHasta = combineDateAndTime(ymd(listActaHastaD), hm(listActaHastaT));
+        if (listEmpresaSelected.length) q.listRevEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
+        if (listClienteSelected.length) q.listRevClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
+        if (listDivisionSelected.length) q.listRevDivisionIds = listDivisionSelected.map((x) => String(x.id)).join(',');
+        if (listContratoSelected.length) q.listRevContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
+        if (listCorpoSelected.length) q.listRevCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
+        if (listPuestoSelected.length) q.listRevPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listRvdVehiculoSelected.length) q.listRevVehiculoIds = listRvdVehiculoSelected.map((x) => String(x.id)).join(',');
       } else if (modulo === MODULO_INCIDENTES) {
         if (listFechaRepDesdeD && listFechaRepDesdeT)
           q.listIncFechaReporteDesde = combineDateAndTime(ymd(listFechaRepDesdeD), hm(listFechaRepDesdeT));
@@ -2133,6 +3005,98 @@ export default function ReportesScreen() {
           refreshAccessToken,
           logout,
         });
+      } else if (formModulo === MODULO_ARTICULOS_PUESTO) {
+        const mf: Record<string, unknown> = {
+          empresaIds: modalEmpresaSelected.map((x) => x.id),
+          clienteIds: modalClienteSelected.map((x) => x.id),
+          divisionIds: modalDivisionSelected.map((x) => x.id),
+          contratoIds: modalContratoSelected.map((x) => x.id),
+          corpoIds: modalCorpoSelected.map((x) => x.id),
+          puestoIds: modalPuestoSelected.map((x) => x.id),
+        };
+        res = await previewArticulosPuesto({
+          moduleFilters: mf,
+          order_by: formOrder,
+          refreshAccessToken,
+          logout,
+        });
+      } else if (formModulo === MODULO_MANTENIMIENTO_ARTICULOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        const mf: Record<string, unknown> = {
+          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
+          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+          empresaIds: modalEmpresaSelected.map((x) => x.id),
+          clienteIds: modalClienteSelected.map((x) => x.id),
+          divisionIds: modalDivisionSelected.map((x) => x.id),
+          contratoIds: modalContratoSelected.map((x) => x.id),
+          corpoIds: modalCorpoSelected.map((x) => x.id),
+          puestoIds: modalPuestoSelected.map((x) => x.id),
+        };
+        if (modalMaEstadosSelected.length) mf.estados = [...modalMaEstadosSelected];
+        if (modalMaAccionesSelected.length) mf.tiposAccion = [...modalMaAccionesSelected];
+        if (modalMaSolDesdeD && modalMaSolDesdeT) {
+          mf.solucionadoDesde = combineDateAndTime(ymd(modalMaSolDesdeD), hm(modalMaSolDesdeT));
+        }
+        if (modalMaSolHastaD && modalMaSolHastaT) {
+          mf.solucionadoHasta = combineDateAndTime(ymd(modalMaSolHastaD), hm(modalMaSolHastaT));
+        }
+        res = await previewMantenimientoArticulos({
+          moduleFilters: mf,
+          order_by: formOrder,
+          refreshAccessToken,
+          logout,
+        });
+      } else if (formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        const mf: Record<string, unknown> = {
+          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
+          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+          empresaIds: modalEmpresaSelected.map((x) => x.id),
+          clienteIds: modalClienteSelected.map((x) => x.id),
+          divisionIds: modalDivisionSelected.map((x) => x.id),
+          contratoIds: modalContratoSelected.map((x) => x.id),
+          corpoIds: modalCorpoSelected.map((x) => x.id),
+          puestoIds: modalPuestoSelected.map((x) => x.id),
+        };
+        if (modalRvcTiposVehiculoSelected.length) mf.tiposVehiculo = [...modalRvcTiposVehiculoSelected];
+        if (modalRvcTiposAutoriaSelected.length) mf.tiposAutoria = [...modalRvcTiposAutoriaSelected];
+        if (modalRvcPlaca.trim()) mf.placaContains = modalRvcPlaca.trim();
+        if (modalRvcAnno.trim()) mf.anno = Number(modalRvcAnno.trim());
+        if (modalRvcModelo.trim()) mf.modeloContains = modalRvcModelo.trim();
+        res = await previewRegistroVehiculosCorporativos({
+          moduleFilters: mf,
+          order_by: formOrder,
+          refreshAccessToken,
+          logout,
+        });
+      } else if (formModulo === MODULO_REVISION_VEHICULOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        const mfRev: Record<string, unknown> = {
+          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
+          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+          empresaIds: modalEmpresaSelected.map((x) => x.id),
+          clienteIds: modalClienteSelected.map((x) => x.id),
+          divisionIds: modalDivisionSelected.map((x) => x.id),
+          contratoIds: modalContratoSelected.map((x) => x.id),
+          corpoIds: modalCorpoSelected.map((x) => x.id),
+          puestoIds: modalPuestoSelected.map((x) => x.id),
+        };
+        if (modalRvdVehiculoSelected.length) mfRev.vehiculoIds = modalRvdVehiculoSelected.map((x) => x.id);
+        res = await previewRevisionVehiculos({
+          moduleFilters: mfRev,
+          order_by: formOrder,
+          refreshAccessToken,
+          logout,
+        });
       } else if (
         formModulo === MODULO_ACTA_ENTREGA ||
         formModulo === MODULO_ENTREGA_PUESTO ||
@@ -2144,10 +3108,17 @@ export default function ReportesScreen() {
         formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
         formModulo === MODULO_ENCUESTA_SATISFACCION ||
         formModulo === MODULO_REGISTRO_VISITAS ||
+      formModulo === MODULO_VISITAS_VEHICULOS ||
         formModulo === MODULO_MUTUOS_ACUERDOS ||
         formModulo === MODULO_EVALUACION_PERSONAL ||
         formModulo === MODULO_PRODUCTO_NO_CONFORME ||
         formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
+        formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+        formModulo === MODULO_NOTAS_VOZ ||
+        formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+        formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+        formModulo === MODULO_TIEMPO_ALMUERZO ||
+        formModulo === MODULO_SOLICITUDES_PERMISO ||
         formModulo === MODULO_MANUALES_PUESTO ||
         formModulo === MODULO_INCIDENTES ||
         formModulo === MODULO_LLAVES ||
@@ -2176,16 +3147,29 @@ export default function ReportesScreen() {
                 ejecutivoCuentaIds: modalMutEjecutivoSelected.map((x) => x.id),
                 ...(modalMutEstado !== 'todos' ? { estado: modalMutEstado } : {}),
               }
-            : {
-                creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-                creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
-                empresaIds: modalEmpresaSelected.map((x) => x.id),
-                clienteIds: modalClienteSelected.map((x) => x.id),
-                divisionIds: modalDivisionSelected.map((x) => x.id),
-                contratoIds: modalContratoSelected.map((x) => x.id),
-                corpoIds: modalCorpoSelected.map((x) => x.id),
-                puestoIds: modalPuestoSelected.map((x) => x.id),
-              };
+            : formModulo === MODULO_TIEMPO_ALMUERZO
+              ? {
+                  inicioDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
+                  finHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+                  empresaIds: modalEmpresaSelected.map((x) => x.id),
+                  clienteIds: modalClienteSelected.map((x) => x.id),
+                  divisionIds: modalDivisionSelected.map((x) => x.id),
+                  contratoIds: modalContratoSelected.map((x) => x.id),
+                  corpoIds: modalCorpoSelected.map((x) => x.id),
+                  puestoIds: modalPuestoSelected.map((x) => x.id),
+                  empleadoIds: modalTaEmpleadoSelected.map((x) => x.id),
+                  cedulas: [...modalTaCedulasSelected],
+                }
+              : {
+                  creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
+                  creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+                  empresaIds: modalEmpresaSelected.map((x) => x.id),
+                  clienteIds: modalClienteSelected.map((x) => x.id),
+                  divisionIds: modalDivisionSelected.map((x) => x.id),
+                  contratoIds: modalContratoSelected.map((x) => x.id),
+                  corpoIds: modalCorpoSelected.map((x) => x.id),
+                  puestoIds: modalPuestoSelected.map((x) => x.id),
+                };
         if (formModulo === MODULO_AGENDA_MINUTA) {
           mf.estadoMinuta = modalAgendaEstado;
         }
@@ -2209,6 +3193,12 @@ export default function ReportesScreen() {
           if (modalRvTipoVisitante !== 'todos') mf.tipoVisitante = modalRvTipoVisitante;
           if (modalRvResponsableSelected.length > 0) mf.responsableIds = modalRvResponsableSelected.map((e) => Number(e.id));
         }
+        if (formModulo === MODULO_VISITAS_VEHICULOS) {
+          if (modalVvCedulaVisitante.trim() !== '') mf.cedulaVisitante = modalVvCedulaVisitante.trim();
+          if (modalVvTiposSelected.length) mf.tiposVehiculo = [...modalVvTiposSelected];
+          if (modalVvPlacasSelected.length) mf.placas = [...modalVvPlacasSelected];
+          if (modalVvResponsableSelected.length > 0) mf.responsableIds = modalVvResponsableSelected.map((e) => Number(e.id));
+        }
         if (formModulo === MODULO_EVALUACION_PERSONAL) {
           if (modalEvpEmpEvalSelected.length > 0) mf.empleadoEvaluadoIds = modalEvpEmpEvalSelected.map((e) => Number(e.id));
           if (modalEvpEvaluadorSelected.length > 0) mf.evaluadorIds = modalEvpEvaluadorSelected.map((e) => Number(e.id));
@@ -2221,6 +3211,30 @@ export default function ReportesScreen() {
           if (modalIrResponsableSelected.length > 0) mf.responsableEmpleadoIds = modalIrResponsableSelected.map((e) => Number(e.id));
           if (modalIrEmpleadoSelected.length > 0) mf.empleadoIds = modalIrEmpleadoSelected.map((e) => Number(e.id));
           if (modalIrParticipanteCedulas.length > 0) mf.participanteCedulas = [...modalIrParticipanteCedulas];
+        }
+        if (formModulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
+          if (modalRigColaboradorCedulas.length > 0) mf.colaboradorCedulas = [...modalRigColaboradorCedulas];
+          if (modalRigCapacitadorCedulas.length > 0) mf.capacitadorCedulas = [...modalRigCapacitadorCedulas];
+        }
+        if (formModulo === MODULO_TIEMPO_ALMUERZO) {
+          if (modalTaEmpleadoSelected.length > 0) mf.empleadoIds = modalTaEmpleadoSelected.map((e) => Number(e.id));
+          if (modalTaCedulasSelected.length > 0) mf.cedulas = [...modalTaCedulasSelected];
+        }
+        if (formModulo === MODULO_SOLICITUDES_PERMISO) {
+          if (modalSpEmpleadoSelected.length) mf.empleadoIds = modalSpEmpleadoSelected.map((e) => Number(e.id));
+          if (modalEjecutivoSelected.length) mf.ejecutivoCuentaIds = modalEjecutivoSelected.map((x) => x.id);
+          if (modalSpTiposTurnoSelected.length) mf.tiposTurno = [...modalSpTiposTurnoSelected];
+          if (modalSpTipoSalario !== 'todos') mf.tipoSalario = modalSpTipoSalario;
+          if (modalSpEstado !== 'todos') mf.estado = modalSpEstado;
+        }
+        if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO && modalCupResponsableSelected.length > 0) {
+          mf.responsableIds = modalCupResponsableSelected.map((e) => Number(e.id));
+        }
+        if (formModulo === MODULO_REGISTRO_CAPACITACIONES) {
+          if (modalRcTipoCapacitacion !== 'todos') mf.tipoCapacitacion = modalRcTipoCapacitacion;
+          if (modalRcCapEmpSelected.length > 0) mf.capacitacionEmpleadoIds = modalRcCapEmpSelected.map((e) => Number(e.id));
+          if (modalRcCapPuestoSelected.length > 0) mf.capacitacionPuestoIds = modalRcCapPuestoSelected.map((x) => x.id);
+          if (modalRcResponsableSelected.length > 0) mf.responsableIds = modalRcResponsableSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_INCIDENTES) {
           if (modalIncSolDesdeD && modalIncSolDesdeT) mf.solucionadoDesde = combineDateAndTime(ymd(modalIncSolDesdeD), hm(modalIncSolDesdeT));
@@ -2329,6 +3343,13 @@ export default function ReportesScreen() {
             refreshAccessToken,
             logout,
           });
+        } else if (formModulo === MODULO_VISITAS_VEHICULOS) {
+          res = await previewVisitasVehiculos({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
         } else if (formModulo === MODULO_EVALUACION_PERSONAL) {
           res = await previewEvaluacionPersonal({
             moduleFilters: mf,
@@ -2345,6 +3366,48 @@ export default function ReportesScreen() {
           });
         } else if (formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO) {
           res = await previewInduccionRecorrido({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_NOTAS_VOZ) {
+          res = await previewNotasVoz({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO) {
+          res = await previewCambiosUbicacionPuesto({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_REGISTRO_CAPACITACIONES) {
+          res = await previewRegistroCapacitaciones({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
+          res = await previewRegistroInduccionGeneral({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_TIEMPO_ALMUERZO) {
+          res = await previewTiempoAlmuerzo({
+            moduleFilters: mf,
+            order_by: formOrder,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (formModulo === MODULO_SOLICITUDES_PERMISO) {
+          res = await previewSolicitudesPermiso({
             moduleFilters: mf,
             order_by: formOrder,
             refreshAccessToken,
@@ -2463,6 +3526,66 @@ export default function ReportesScreen() {
         moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
         moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
         moduleFilters.plazaIds = modalAccPlazaSelected.map((x) => x.id);
+      } else if (formModulo === MODULO_ARTICULOS_PUESTO) {
+        moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
+        moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
+        moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
+        moduleFilters.contratoIds = modalContratoSelected.map((x) => x.id);
+        moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
+        moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
+      } else if (formModulo === MODULO_MANTENIMIENTO_ARTICULOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
+        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
+        moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
+        moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
+        moduleFilters.contratoIds = modalContratoSelected.map((x) => x.id);
+        moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
+        moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
+        if (modalMaEstadosSelected.length) moduleFilters.estados = [...modalMaEstadosSelected];
+        if (modalMaAccionesSelected.length) moduleFilters.tiposAccion = [...modalMaAccionesSelected];
+        if (modalMaSolDesdeD && modalMaSolDesdeT) {
+          moduleFilters.solucionadoDesde = combineDateAndTime(ymd(modalMaSolDesdeD), hm(modalMaSolDesdeT));
+        }
+        if (modalMaSolHastaD && modalMaSolHastaT) {
+          moduleFilters.solucionadoHasta = combineDateAndTime(ymd(modalMaSolHastaD), hm(modalMaSolHastaT));
+        }
+      } else if (formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
+        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
+        moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
+        moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
+        moduleFilters.contratoIds = modalContratoSelected.map((x) => x.id);
+        moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
+        moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
+        if (modalRvcTiposVehiculoSelected.length) moduleFilters.tiposVehiculo = [...modalRvcTiposVehiculoSelected];
+        if (modalRvcTiposAutoriaSelected.length) moduleFilters.tiposAutoria = [...modalRvcTiposAutoriaSelected];
+        if (modalRvcPlaca.trim()) moduleFilters.placaContains = modalRvcPlaca.trim();
+        if (modalRvcAnno.trim()) moduleFilters.anno = Number(modalRvcAnno.trim());
+        if (modalRvcModelo.trim()) moduleFilters.modeloContains = modalRvcModelo.trim();
+      } else if (formModulo === MODULO_REVISION_VEHICULOS) {
+        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
+          return;
+        }
+        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
+        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
+        moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
+        moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
+        moduleFilters.contratoIds = modalContratoSelected.map((x) => x.id);
+        moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
+        moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
+        if (modalRvdVehiculoSelected.length) moduleFilters.vehiculoIds = modalRvdVehiculoSelected.map((x) => x.id);
       } else if (
         formModulo === MODULO_ACTA_ENTREGA ||
         formModulo === MODULO_ENTREGA_PUESTO ||
@@ -2474,10 +3597,17 @@ export default function ReportesScreen() {
         formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
         formModulo === MODULO_ENCUESTA_SATISFACCION ||
         formModulo === MODULO_REGISTRO_VISITAS ||
+      formModulo === MODULO_VISITAS_VEHICULOS ||
         formModulo === MODULO_MUTUOS_ACUERDOS ||
         formModulo === MODULO_EVALUACION_PERSONAL ||
         formModulo === MODULO_PRODUCTO_NO_CONFORME ||
         formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
+        formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+        formModulo === MODULO_NOTAS_VOZ ||
+        formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+        formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+        formModulo === MODULO_TIEMPO_ALMUERZO ||
+        formModulo === MODULO_SOLICITUDES_PERMISO ||
         formModulo === MODULO_MANUALES_PUESTO ||
         formModulo === MODULO_INCIDENTES ||
         formModulo === MODULO_LLAVES ||
@@ -2508,6 +3638,21 @@ export default function ReportesScreen() {
           moduleFilters.ejecutivoCuentaIds = modalMutEjecutivoSelected.map((x) => x.id);
           if (modalMutEstado !== 'todos') moduleFilters.estado = modalMutEstado;
         }
+        if (formModulo === MODULO_TIEMPO_ALMUERZO) {
+          moduleFilters.inicioDesde = moduleFilters.creadoDesde;
+          moduleFilters.finHasta = moduleFilters.creadoHasta;
+          delete moduleFilters.creadoDesde;
+          delete moduleFilters.creadoHasta;
+          if (modalTaEmpleadoSelected.length > 0) moduleFilters.empleadoIds = modalTaEmpleadoSelected.map((e) => Number(e.id));
+          if (modalTaCedulasSelected.length > 0) moduleFilters.cedulas = [...modalTaCedulasSelected];
+        }
+        if (formModulo === MODULO_SOLICITUDES_PERMISO) {
+          if (modalSpEmpleadoSelected.length) moduleFilters.empleadoIds = modalSpEmpleadoSelected.map((e) => Number(e.id));
+          if (modalEjecutivoSelected.length) moduleFilters.ejecutivoCuentaIds = modalEjecutivoSelected.map((x) => x.id);
+          if (modalSpTiposTurnoSelected.length) moduleFilters.tiposTurno = [...modalSpTiposTurnoSelected];
+          if (modalSpTipoSalario !== 'todos') moduleFilters.tipoSalario = modalSpTipoSalario;
+          if (modalSpEstado !== 'todos') moduleFilters.estado = modalSpEstado;
+        }
         if (formModulo === MODULO_AGENDA_MINUTA) {
           moduleFilters.estadoMinuta = modalAgendaEstado;
         }
@@ -2531,6 +3676,12 @@ export default function ReportesScreen() {
           if (modalRvTipoVisitante !== 'todos') moduleFilters.tipoVisitante = modalRvTipoVisitante;
           if (modalRvResponsableSelected.length > 0) moduleFilters.responsableIds = modalRvResponsableSelected.map((e) => Number(e.id));
         }
+        if (formModulo === MODULO_VISITAS_VEHICULOS) {
+          if (modalVvCedulaVisitante.trim() !== '') moduleFilters.cedulaVisitante = modalVvCedulaVisitante.trim();
+          if (modalVvTiposSelected.length) moduleFilters.tiposVehiculo = [...modalVvTiposSelected];
+          if (modalVvPlacasSelected.length) moduleFilters.placas = [...modalVvPlacasSelected];
+          if (modalVvResponsableSelected.length > 0) moduleFilters.responsableIds = modalVvResponsableSelected.map((e) => Number(e.id));
+        }
         if (formModulo === MODULO_EVALUACION_PERSONAL) {
           if (modalEvpEmpEvalSelected.length > 0) moduleFilters.empleadoEvaluadoIds = modalEvpEmpEvalSelected.map((e) => Number(e.id));
           if (modalEvpEvaluadorSelected.length > 0) moduleFilters.evaluadorIds = modalEvpEvaluadorSelected.map((e) => Number(e.id));
@@ -2544,6 +3695,20 @@ export default function ReportesScreen() {
             moduleFilters.responsableEmpleadoIds = modalIrResponsableSelected.map((e) => Number(e.id));
           if (modalIrEmpleadoSelected.length > 0) moduleFilters.empleadoIds = modalIrEmpleadoSelected.map((e) => Number(e.id));
           if (modalIrParticipanteCedulas.length > 0) moduleFilters.participanteCedulas = [...modalIrParticipanteCedulas];
+        }
+        if (formModulo === MODULO_REGISTRO_INDUCCION_GENERAL) {
+          if (modalRigColaboradorCedulas.length > 0) moduleFilters.colaboradorCedulas = [...modalRigColaboradorCedulas];
+          if (modalRigCapacitadorCedulas.length > 0) moduleFilters.capacitadorCedulas = [...modalRigCapacitadorCedulas];
+          moduleFilters.reportOutputType = formTipoReporteRef.current;
+        }
+        if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO && modalCupResponsableSelected.length > 0) {
+          moduleFilters.responsableIds = modalCupResponsableSelected.map((e) => Number(e.id));
+        }
+        if (formModulo === MODULO_REGISTRO_CAPACITACIONES) {
+          if (modalRcTipoCapacitacion !== 'todos') moduleFilters.tipoCapacitacion = modalRcTipoCapacitacion;
+          if (modalRcCapEmpSelected.length > 0) moduleFilters.capacitacionEmpleadoIds = modalRcCapEmpSelected.map((e) => Number(e.id));
+          if (modalRcCapPuestoSelected.length > 0) moduleFilters.capacitacionPuestoIds = modalRcCapPuestoSelected.map((x) => x.id);
+          if (modalRcResponsableSelected.length > 0) moduleFilters.responsableIds = modalRcResponsableSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_INCIDENTES) {
           if (modalIncSolDesdeD && modalIncSolDesdeT)
@@ -2604,6 +3769,8 @@ export default function ReportesScreen() {
         }
       }
 
+      const tipoReporte = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
+
       const res = await createReportJob({
         body: {
           nombre: formNombre.trim(),
@@ -2611,33 +3778,7 @@ export default function ReportesScreen() {
           nomenclatura: formNomenclatura.trim(),
           descripcion: formDescripcion.trim(),
           modulo: formModulo,
-          tipo_reporte:
-            formModulo === MODULO_INGRESOS ||
-            formModulo === MODULO_ACCIONES_PERSONALES ||
-            formModulo === MODULO_BITACORA_NOVEDADES ||
-            formModulo === MODULO_CHECKLIST_SUPERVISION ||
-            formModulo === MODULO_EVALUACION_PERSONAL ||
-            formModulo === MODULO_MANUALES_PUESTO
-              ? 'Consolidado' // Consolidado
-              : formModulo === MODULO_ACTA_ENTREGA ||
-                  formModulo === MODULO_ENTREGA_PUESTO ||
-                  formModulo === MODULO_AGENDA_MINUTA ||
-                  formModulo === MODULO_APERTURA_CIERRE ||
-                  formModulo === MODULO_VULNERABILIDAD ||
-                  formModulo === MODULO_ACTIVIDADES ||
-                  formModulo === MODULO_CONTROL_ASISTENCIA ||
-                  formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
-                  formModulo === MODULO_ENCUESTA_SATISFACCION ||
-                  formModulo === MODULO_REGISTRO_VISITAS ||
-                  formModulo === MODULO_MUTUOS_ACUERDOS ||
-                  formModulo === MODULO_INCIDENTES ||
-                  formModulo === MODULO_LLAVES ||
-                  formModulo === MODULO_LLAVEROS ||
-                  formModulo === MODULO_MAESTRO_QUEJAS ||
-                  formModulo === MODULO_PRODUCTO_NO_CONFORME ||
-                  formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
-                ? formTipoReporte
-                : 'Consolidado', // Consolidado
+          tipo_reporte: tipoReporte,
           order_by: formOrder,
           firma_responsable: firmaModal.trim(),
           moduleFilters,
@@ -2682,10 +3823,17 @@ export default function ReportesScreen() {
         formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
         formModulo === MODULO_ENCUESTA_SATISFACCION ||
         formModulo === MODULO_REGISTRO_VISITAS ||
+      formModulo === MODULO_VISITAS_VEHICULOS ||
         formModulo === MODULO_MUTUOS_ACUERDOS ||
         formModulo === MODULO_EVALUACION_PERSONAL ||
         formModulo === MODULO_PRODUCTO_NO_CONFORME ||
         formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
+        formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+        formModulo === MODULO_NOTAS_VOZ ||
+        formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+        formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+        formModulo === MODULO_TIEMPO_ALMUERZO ||
+        formModulo === MODULO_SOLICITUDES_PERMISO ||
         formModulo === MODULO_MANUALES_PUESTO ||
         formModulo === MODULO_INCIDENTES ||
         formModulo === MODULO_LLAVES ||
@@ -2756,44 +3904,39 @@ export default function ReportesScreen() {
     } catch {
       filtersPretty = { raw: item.filters };
     }
+    const createdByLabel =
+      item.created_by_nombre?.trim() ||
+      (item.created_by > 0 ? `Empleado #${item.created_by}` : '-');
+    const reportFields: { label: string; value: string }[] = [
+      { label: 'Número', value: item.numero || '-' },
+      { label: 'Nomenclatura', value: item.nomenclatura || '-' },
+      { label: 'Descripción', value: item.descripcion?.trim() || '-' },
+      { label: 'Módulo', value: formatModuloLabel(item.modulo) || '-' },
+      { label: 'Tipo de reporte', value: formatTipoReporteDisplay(item.tipo_reporte) },
+      { label: 'Estado', value: formatEstadoDisplay(item.estado) },
+      { label: 'Creado por', value: createdByLabel },
+      { label: 'Fecha de creación', value: formatReportCreatedAt(item.created_at) },
+    ];
     return (
       <ThemedView style={styles.card}>
-        <TouchableOpacity onPress={() => toggleExpand(item.id)} activeOpacity={0.85}>
-          <ThemedText style={styles.cardTitle}>
-            {item.nombre} · {item.estado}
+        <ThemedText style={styles.cardTitle}>{item.nombre}</ThemedText>
+
+        {reportFields.map((field) => (
+          <ThemedText key={field.label} style={styles.cardLine}>
+            <ThemedText style={styles.cardLabel}>{field.label}: </ThemedText>
+            <ThemedText style={styles.cardValue}>{field.value}</ThemedText>
           </ThemedText>
-          <ThemedText style={styles.mutedSmall}>
-            #{item.numero} · {item.nomenclatura}
-          </ThemedText>
-        </TouchableOpacity>
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Módulo: </ThemedText>
-          <ThemedText style={styles.cardValue}>{item.modulo}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Tipo: </ThemedText>
-          <ThemedText style={styles.cardValue}>{item.tipo_reporte}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Orden: </ThemedText>
-          <ThemedText style={styles.cardValue}>{item.order_by}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.cardLine}>
-          <ThemedText style={styles.cardLabel}>Creado: </ThemedText>
-          <ThemedText style={styles.cardValue}>{formatReportCreatedAt(item.created_at)}</ThemedText>
-        </ThemedText>
-        {item.descripcion ? (
-          <ThemedText style={styles.cardLine}>
-            <ThemedText style={styles.cardLabel}>Descripción: </ThemedText>
-            <ThemedText style={styles.cardValue}>{item.descripcion}</ThemedText>
-          </ThemedText>
-        ) : null}
+        ))}
+
         <TouchableOpacity style={styles.collapseButton} onPress={() => toggleExpand(item.id)} activeOpacity={0.85}>
-          <ThemedText style={styles.collapseButtonText}>Filtros (JSON)</ThemedText>
+          <ThemedText style={styles.collapseButtonText}>
+            {open ? 'Ocultar filtros' : 'Ver filtros'}
+          </ThemedText>
           <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
         </TouchableOpacity>
+
         {open ? (
-          <ThemedView style={styles.collapseContent}>
+          <ThemedView style={styles.collapsableContent}>
             {Object.entries(filtersPretty).map(([k, v]) => (
               <ThemedText key={k} style={styles.detailText}>
                 {k}: {typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v)}
@@ -2801,10 +3944,15 @@ export default function ReportesScreen() {
             ))}
           </ThemedView>
         ) : null}
+
         {item.estado === 'completado' ? (
-          <TouchableOpacity style={[styles.actionBtn, styles.downloadBtn]} onPress={() => void openDownload(item)} activeOpacity={0.85}>
+          <TouchableOpacity
+            style={[styles.downloadBtn, styles.downloadBtnCard]}
+            onPress={() => void openDownload(item)}
+            activeOpacity={0.85}
+          >
             <Ionicons name="download-outline" size={20} color="#fff" />
-            <ThemedText style={styles.actionBtnText}>Descargar archivo</ThemedText>
+            <ThemedText style={styles.downloadBtnText}>Descargar archivo</ThemedText>
           </TouchableOpacity>
         ) : null}
       </ThemedView>
@@ -3295,6 +4443,7 @@ export default function ReportesScreen() {
                 modulo === MODULO_DOCUMENTOS_ENTREGADOS ||
                 modulo === MODULO_ENCUESTA_SATISFACCION ||
                 modulo === MODULO_REGISTRO_VISITAS ||
+                modulo === MODULO_VISITAS_VEHICULOS ||
                 modulo === MODULO_MUTUOS_ACUERDOS ||
                 modulo === MODULO_EVALUACION_PERSONAL ||
                 modulo === MODULO_INCIDENTES ||
@@ -3305,7 +4454,17 @@ export default function ReportesScreen() {
                 modulo === MODULO_CHECKLIST_SUPERVISION ||
                 modulo === MODULO_PRODUCTO_NO_CONFORME ||
                 modulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
-                modulo === MODULO_MANUALES_PUESTO ? (
+                modulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+                modulo === MODULO_NOTAS_VOZ ||
+                modulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+                modulo === MODULO_REGISTRO_CAPACITACIONES ||
+                modulo === MODULO_TIEMPO_ALMUERZO ||
+                modulo === MODULO_SOLICITUDES_PERMISO ||
+                modulo === MODULO_MANUALES_PUESTO ||
+                modulo === MODULO_ARTICULOS_PUESTO ||
+                modulo === MODULO_MANTENIMIENTO_ARTICULOS ||
+                modulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ||
+                modulo === MODULO_REVISION_VEHICULOS ? (
                   <ThemedView style={styles.formCard}>
                     <ThemedText style={styles.sectionTitle}>
                       {modulo === MODULO_AGENDA_MINUTA
@@ -3324,14 +4483,36 @@ export default function ReportesScreen() {
                                     ? 'Filtros — Encuestas de satisfacción'
                                     : modulo === MODULO_REGISTRO_VISITAS
                                       ? 'Filtros — Registro de visitas'
+                                    : modulo === MODULO_VISITAS_VEHICULOS
+                                      ? 'Filtros — Visitas de vehículos'
                                     : modulo === MODULO_MUTUOS_ACUERDOS
                                       ? 'Filtros — Mutuos acuerdos'
                                     : modulo === MODULO_EVALUACION_PERSONAL
                                       ? 'Filtros — Evaluación de personal'
                                     : modulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
                                       ? 'Filtros — Registro de inducción y recorrido'
+                                    : modulo === MODULO_REGISTRO_INDUCCION_GENERAL
+                                      ? 'Filtros — Registro de inducción general'
+                                    : modulo === MODULO_NOTAS_VOZ
+                                      ? 'Filtros — Notas de voz'
+                                    : modulo === MODULO_CAMBIOS_UBICACION_PUESTO
+                                      ? 'Filtros — Cambios en ubicación del puesto'
+                                    : modulo === MODULO_REGISTRO_CAPACITACIONES
+                                      ? 'Filtros — Registro de capacitaciones'
+                                    : modulo === MODULO_TIEMPO_ALMUERZO
+                                      ? 'Filtros — Tiempo de almuerzo'
+                                    : modulo === MODULO_SOLICITUDES_PERMISO
+                                      ? 'Filtros — Solicitudes de permiso'
                                     : modulo === MODULO_MANUALES_PUESTO
                                       ? 'Filtros — Manuales de puesto'
+                                    : modulo === MODULO_ARTICULOS_PUESTO
+                                      ? 'Filtros — Artículos del puesto'
+                                    : modulo === MODULO_MANTENIMIENTO_ARTICULOS
+                                      ? 'Filtros — Mantenimiento de artículos'
+                                    : modulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS
+                                      ? 'Filtros — Registro de vehículos'
+                                    : modulo === MODULO_REVISION_VEHICULOS
+                                      ? 'Filtros — Revisión de vehículos'
                                     : modulo === MODULO_PRODUCTO_NO_CONFORME
                                       ? 'Filtros — Producto no conforme'
                                   : modulo === MODULO_INCIDENTES
@@ -3421,9 +4602,11 @@ export default function ReportesScreen() {
                           )}
                         </View>
                       </>
-                    ) : (
+                    ) : modulo === MODULO_ARTICULOS_PUESTO ? null : (
                       <>
-                        <ThemedText style={styles.label}>Creado desde (fecha y hora)</ThemedText>
+                        <ThemedText style={styles.label}>
+                          {modulo === MODULO_TIEMPO_ALMUERZO ? 'Inicio desde (fecha y hora)' : 'Creado desde (fecha y hora)'}
+                        </ThemedText>
                         <View style={styles.dateRow}>
                           <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListActaDd(true)} activeOpacity={0.85}>
                             <ThemedText style={styles.dateButtonText}>{listActaDesdeD ? formatDateOnlyLabel(listActaDesdeD) : 'Fecha'}</ThemedText>
@@ -3434,7 +4617,9 @@ export default function ReportesScreen() {
                             <Ionicons name="time-outline" size={18} color="#007AFF" />
                           </TouchableOpacity>
                         </View>
-                        <ThemedText style={styles.label}>Creado hasta (fecha y hora)</ThemedText>
+                        <ThemedText style={styles.label}>
+                          {modulo === MODULO_TIEMPO_ALMUERZO ? 'Fin hasta (fecha y hora)' : 'Creado hasta (fecha y hora)'}
+                        </ThemedText>
                         <View style={styles.dateRow}>
                           <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListActaHd(true)} activeOpacity={0.85}>
                             <ThemedText style={styles.dateButtonText}>{listActaHastaD ? formatDateOnlyLabel(listActaHastaD) : 'Fecha'}</ThemedText>
@@ -3525,7 +4710,506 @@ export default function ReportesScreen() {
                         </ThemedView>
                       ),
                     )}
-                    {modulo === MODULO_INCIDENTES || modulo === MODULO_CHECKLIST_SUPERVISION ? (
+                    {modulo === MODULO_MANTENIMIENTO_ARTICULOS ? (
+                      <>
+                        <ThemedText style={styles.label}>Estado</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listMaEstadoPick}
+                              onValueChange={(v) => setListMaEstadoPick(String(v) as typeof listMaEstadoPick)}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Todos" value="todos" color="#000000" />
+                              <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                              <Picker.Item label="Malo" value="Malo" color="#000000" />
+                              <Picker.Item label="No está" value="No está" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListMaEstado} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listMaEstadosSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más estados.</ThemedText>
+                          ) : (
+                            listMaEstadosSelected.map((estado) => (
+                              <ThemedView key={`list-ma-est-${estado}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{estado}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListMaEstado(estado)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Tipo de acción</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listMaAccionPick}
+                              onValueChange={(v) => setListMaAccionPick(String(v) as typeof listMaAccionPick)}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Todos" value="todos" color="#000000" />
+                              <Picker.Item label="Reemplazar" value="Reemplazar" color="#000000" />
+                              <Picker.Item label="Rellenar" value="Rellenar" color="#000000" />
+                              <Picker.Item label="Reparar en puesto" value="Reparar en puesto" color="#000000" />
+                              <Picker.Item label="Reparar en taller" value="Reparar en taller" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListMaAccion} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listMaAccionesSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más tipos de acción.</ThemedText>
+                          ) : (
+                            listMaAccionesSelected.map((accion) => (
+                              <ThemedView key={`list-ma-acc-${accion}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{accion}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListMaAccion(accion)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Solucionado desde (fecha y hora)</ThemedText>
+                        <View style={styles.dateRow}>
+                          {Platform.OS === 'web' ? (
+                            <>
+                              <TextInput
+                                style={[styles.input, styles.inputFlex, styles.epWebDtInput]}
+                                value={listMaSolDesdeD ? ymd(listMaSolDesdeD) : ''}
+                                onChangeText={(v) => setListMaSolDesdeD(ymdOkStr(v) ? parseYmdToLocalDate(v) : null)}
+                                placeholder="AAAA-MM-DD"
+                                placeholderTextColor="#999"
+                                {...({ type: 'date' } as object)}
+                              />
+                              <TextInput
+                                style={[styles.input, styles.inputFlex, styles.epWebDtInput]}
+                                value={listMaSolDesdeT ? hm(listMaSolDesdeT) : ''}
+                                onChangeText={(v) => setListMaSolDesdeT(hmOkStr(v) ? parseHmToLocalDate(v) : null)}
+                                placeholder="HH:mm"
+                                placeholderTextColor="#999"
+                                {...({ type: 'time' } as object)}
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListMaSolDd(true)} activeOpacity={0.85}>
+                                <ThemedText style={styles.dateButtonText}>{listMaSolDesdeD ? formatDateOnlyLabel(listMaSolDesdeD) : 'Fecha'}</ThemedText>
+                                <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListMaSolDt(true)} activeOpacity={0.85}>
+                                <ThemedText style={styles.dateButtonText}>{listMaSolDesdeT ? hm(listMaSolDesdeT) : 'Hora'}</ThemedText>
+                                <Ionicons name="time-outline" size={18} color="#007AFF" />
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                        <ThemedText style={styles.label}>Solucionado hasta (fecha y hora)</ThemedText>
+                        <View style={styles.dateRow}>
+                          {Platform.OS === 'web' ? (
+                            <>
+                              <TextInput
+                                style={[styles.input, styles.inputFlex, styles.epWebDtInput]}
+                                value={listMaSolHastaD ? ymd(listMaSolHastaD) : ''}
+                                onChangeText={(v) => setListMaSolHastaD(ymdOkStr(v) ? parseYmdToLocalDate(v) : null)}
+                                placeholder="AAAA-MM-DD"
+                                placeholderTextColor="#999"
+                                {...({ type: 'date' } as object)}
+                              />
+                              <TextInput
+                                style={[styles.input, styles.inputFlex, styles.epWebDtInput]}
+                                value={listMaSolHastaT ? hm(listMaSolHastaT) : ''}
+                                onChangeText={(v) => setListMaSolHastaT(hmOkStr(v) ? parseHmToLocalDate(v) : null)}
+                                placeholder="HH:mm"
+                                placeholderTextColor="#999"
+                                {...({ type: 'time' } as object)}
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListMaSolHd(true)} activeOpacity={0.85}>
+                                <ThemedText style={styles.dateButtonText}>{listMaSolHastaD ? formatDateOnlyLabel(listMaSolHastaD) : 'Fecha'}</ThemedText>
+                                <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                              </TouchableOpacity>
+                              <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowListMaSolHt(true)} activeOpacity={0.85}>
+                                <ThemedText style={styles.dateButtonText}>{listMaSolHastaT ? hm(listMaSolHastaT) : 'Hora'}</ThemedText>
+                                <Ionicons name="time-outline" size={18} color="#007AFF" />
+                              </TouchableOpacity>
+                            </>
+                          )}
+                        </View>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ? (
+                      <>
+                        <ThemedText style={styles.label}>Tipo de vehículo</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listRvcTipoVehiculoPick}
+                              onValueChange={(v) => setListRvcTipoVehiculoPick(String(v) as typeof listRvcTipoVehiculoPick)}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Vehículo" value="Vehículo" color="#000000" />
+                              <Picker.Item label="Motocicleta" value="Motocicleta" color="#000000" />
+                              <Picker.Item label="Bicicleta" value="Bicicleta" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRvcTipoVehiculo} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRvcTiposVehiculoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más tipos de vehículo.</ThemedText>
+                          ) : (
+                            listRvcTiposVehiculoSelected.map((tipo) => (
+                              <ThemedView key={`list-rvc-tv-${tipo}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRvcTipoVehiculo(tipo)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Placa</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={listRvcPlaca}
+                          onChangeText={setListRvcPlaca}
+                          placeholder="Opcional"
+                          placeholderTextColor="#999"
+                          autoCapitalize="characters"
+                        />
+                        <ThemedText style={styles.label}>Año</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={listRvcAnno}
+                          onChangeText={setListRvcAnno}
+                          placeholder="Opcional"
+                          placeholderTextColor="#999"
+                          keyboardType="number-pad"
+                        />
+                        <ThemedText style={styles.label}>Modelo</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={listRvcModelo}
+                          onChangeText={setListRvcModelo}
+                          placeholder="Opcional"
+                          placeholderTextColor="#999"
+                        />
+                        <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listRvcTipoAutoriaPick}
+                              onValueChange={(v) => setListRvcTipoAutoriaPick(String(v) as typeof listRvcTipoAutoriaPick)}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Cliente" value="Cliente" color="#000000" />
+                              <Picker.Item label="Corporativo" value="Corporativo" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRvcTipoAutoria} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRvcTiposAutoriaSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más tipos de autoría.</ThemedText>
+                          ) : (
+                            listRvcTiposAutoriaSelected.map((tipo) => (
+                              <ThemedView key={`list-rvc-ta-${tipo}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRvcTipoAutoria(tipo)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_REVISION_VEHICULOS ? (
+                      <>
+                        <ThemedText style={styles.label}>Vehículo</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRvdVehiculoSearch}
+                            onChangeText={setListRvdVehiculoSearch}
+                            placeholder="Placa, marca o modelo"
+                            placeholderTextColor="#999"
+                            autoCapitalize="characters"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchCorporateVehicles(listRvdVehiculoSearch, 'listRvdVehiculo')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRvdVehiculo'}
+                          >
+                            {employeeSearchMode === 'listRvdVehiculo' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRvdVehiculoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRvdVehiculoResults.map((v) => (
+                              <TouchableOpacity key={`list-rvd-v-${v.id}`} style={styles.resultItem} onPress={() => pickListRvdVehiculo(v)}>
+                                <ThemedText>{formatVehiculoLite(v)}</ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRvdVehiculoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más vehículos.</ThemedText>
+                          ) : (
+                            listRvdVehiculoSelected.map((v) => (
+                              <ThemedView key={`list-rvd-v-sel-${v.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{formatVehiculoLite(v)}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRvdVehiculo(v.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_CAMBIOS_UBICACION_PUESTO ? (
+                      <>
+                        <ThemedText style={styles.label}>Responsable (creador del registro)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listCupResponsableSearch}
+                            onChangeText={setListCupResponsableSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listCupResponsableSearch, 'listCupResponsable')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listCupResponsable'}
+                          >
+                            {employeeSearchMode === 'listCupResponsable' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listCupResponsableResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listCupResponsableResults.map((e) => (
+                              <TouchableOpacity key={`list-cup-r-${e.id}`} style={styles.resultItem} onPress={() => pickListCupResponsable(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listCupResponsableSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                          ) : (
+                            listCupResponsableSelected.map((e) => (
+                              <ThemedView key={`list-cup-r-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListCupResponsable(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_REGISTRO_CAPACITACIONES ? (
+                      <>
+                        <ThemedText style={styles.label}>Tipo de capacitación</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={listRcTipoCapacitacion}
+                            onValueChange={(v) => setListRcTipoCapacitacion(String(v) as 'todos' | 'Presencial' | 'Virtual')}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Todos" value="todos" color="#000000" />
+                            <Picker.Item label="Presencial" value="Presencial" color="#000000" />
+                            <Picker.Item label="Virtual" value="Virtual" color="#000000" />
+                          </Picker>
+                        </View>
+                        <ThemedText style={styles.label}>Empleados de la capacitación</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRcCapEmpSearch}
+                            onChangeText={setListRcCapEmpSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listRcCapEmpSearch, 'listRcCapEmpleado')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRcCapEmpleado'}
+                          >
+                            {employeeSearchMode === 'listRcCapEmpleado' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRcCapEmpResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRcCapEmpResults.map((e) => (
+                              <TouchableOpacity key={`list-rc-emp-${e.id}`} style={styles.resultItem} onPress={() => pickListRcCapEmp(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRcCapEmpSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                          ) : (
+                            listRcCapEmpSelected.map((e) => (
+                              <ThemedView key={`list-rc-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRcCapEmp(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Puestos de la capacitación</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRcCapPuestoSearch}
+                            onChangeText={setListRcCapPuestoSearch}
+                            placeholder="Código o nombre de puesto"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchActaStructure(listRcCapPuestoSearch, 'puesto', 'listRcCapPuesto')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRcCapPuesto'}
+                          >
+                            {employeeSearchMode === 'listRcCapPuesto' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRcCapPuestoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRcCapPuestoResults.map((it) => (
+                              <TouchableOpacity
+                                key={`list-rc-pto-${it.id}`}
+                                style={styles.resultItem}
+                                onPress={() => pickStructureLite(it, setListRcCapPuestoSelected, setListRcCapPuestoResults, setListRcCapPuestoSearch)}
+                              >
+                                <ThemedText>{formatStructureLite(it)}</ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRcCapPuestoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más puestos vinculados.</ThemedText>
+                          ) : (
+                            listRcCapPuestoSelected.map((it) => (
+                              <ThemedView key={`list-rc-pto-sel-${it.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{formatStructureLite(it)}</ThemedText>
+                                <TouchableOpacity
+                                  style={styles.removeUserButton}
+                                  onPress={() => removeStructureLite(it.id, setListRcCapPuestoSelected)}
+                                >
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Responsable</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRcResponsableSearch}
+                            onChangeText={setListRcResponsableSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listRcResponsableSearch, 'listRcResponsable')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listRcResponsable'}
+                          >
+                            {employeeSearchMode === 'listRcResponsable' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listRcResponsableResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listRcResponsableResults.map((e) => (
+                              <TouchableOpacity key={`list-rc-r-${e.id}`} style={styles.resultItem} onPress={() => pickListRcResponsable(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listRcResponsableSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                          ) : (
+                            listRcResponsableSelected.map((e) => (
+                              <ThemedView key={`list-rc-r-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRcResponsable(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_INCIDENTES ||
+                    modulo === MODULO_CHECKLIST_SUPERVISION ||
+                    modulo === MODULO_SOLICITUDES_PERMISO ? (
                       <ThemedView style={{ marginBottom: 8 }}>
                         <ThemedText style={styles.label}>Ejecutivo de cuenta</ThemedText>
                         <View style={styles.row}>
@@ -3761,6 +5445,125 @@ export default function ReportesScreen() {
                                   {e.codigo} — {formatEmpleadoNombre(e)}
                                 </ThemedText>
                                 <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRvResponsable(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_VISITAS_VEHICULOS ? (
+                      <>
+                        <ThemedText style={styles.label}>Cédula del visitante</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={listVvCedulaVisitante}
+                          onChangeText={setListVvCedulaVisitante}
+                          placeholder="Opcional"
+                          placeholderTextColor="#999"
+                        />
+                        <ThemedText style={styles.label}>Tipo de vehículo</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listVvTipoPick}
+                              onValueChange={(v) => setListVvTipoPick(String(v) as 'Particular' | 'Institucional')}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Particular" value="Particular" color="#000000" />
+                              <Picker.Item label="Institucional" value="Institucional" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListVvTipo} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listVvTiposSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más tipos.</ThemedText>
+                          ) : (
+                            listVvTiposSelected.map((tipo) => (
+                              <ThemedView key={`list-vv-tipo-${tipo}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListVvTipo(tipo)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Placa de vehículo</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listVvPlacaInput}
+                            onChangeText={setListVvPlacaInput}
+                            placeholder="Placa"
+                            placeholderTextColor="#999"
+                            autoCapitalize="characters"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListVvPlaca} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listVvPlacasSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: una o más placas.</ThemedText>
+                          ) : (
+                            listVvPlacasSelected.map((placa) => (
+                              <ThemedView key={`list-vv-placa-${placa}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{placa}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListVvPlaca(placa)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Responsable</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listVvResponsableSearch}
+                            onChangeText={setListVvResponsableSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listVvResponsableSearch, 'listVvResponsable')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listVvResponsable'}
+                          >
+                            {employeeSearchMode === 'listVvResponsable' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listVvResponsableResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listVvResponsableResults.map((e) => (
+                              <TouchableOpacity key={`list-vv-r-${e.id}`} style={styles.resultItem} onPress={() => pickListVvResponsable(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listVvResponsableSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                          ) : (
+                            listVvResponsableSelected.map((e) => (
+                              <ThemedView key={`list-vv-sel-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListVvResponsable(e.id)}>
                                   <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                                 </TouchableOpacity>
                               </ThemedView>
@@ -4024,6 +5827,281 @@ export default function ReportesScreen() {
                               <ThemedView key={`list-ir-p-${ced}`} style={styles.assignedUserItem}>
                                 <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                                 <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListIrParticipanteCedula(ced)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_TIEMPO_ALMUERZO ? (
+                      <>
+                        <ThemedText style={styles.label}>Empleado</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listTaEmpleadoSearch}
+                            onChangeText={setListTaEmpleadoSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listTaEmpleadoSearch, 'listTaEmpleado')}
+                            disabled={employeeSearchMode === 'listTaEmpleado'}
+                          >
+                            {employeeSearchMode === 'listTaEmpleado' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listTaEmpleadoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listTaEmpleadoResults.map((e) => (
+                              <TouchableOpacity key={`list-ta-e-${e.id}`} style={styles.resultItem} onPress={() => pickListTaEmpleado(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listTaEmpleadoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                          ) : (
+                            listTaEmpleadoSelected.map((e) => (
+                              <ThemedView key={`list-ta-emp-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListTaEmpleado(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Cédula</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listTaCedulaSearch}
+                            onChangeText={setListTaCedulaSearch}
+                            placeholder="Cédula del empleado"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchAlmuerzoCedulas(listTaCedulaSearch, 'listTaCedula')}
+                            disabled={employeeSearchMode === 'listTaCedula'}
+                          >
+                            {employeeSearchMode === 'listTaCedula' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listTaCedulaResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listTaCedulaResults.map((c) => (
+                              <TouchableOpacity
+                                key={`list-ta-ced-${c.cedula}`}
+                                style={styles.resultItem}
+                                onPress={() => pickListTaCedula(c)}
+                              >
+                                <ThemedText>
+                                  {c.cedula}
+                                  {c.empleado_nombre ? ` — ${c.empleado_nombre}` : ''}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listTaCedulasSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                          ) : (
+                            listTaCedulasSelected.map((ced) => (
+                              <ThemedView key={`list-ta-ced-sel-${ced}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListTaCedula(ced)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_SOLICITUDES_PERMISO ? (
+                      <>
+                        <ThemedText style={styles.label}>Tipo de turno</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listSpTipoTurnoPick}
+                              onValueChange={(v) =>
+                                setListSpTipoTurnoPick(String(v) as 'Diurno' | 'Mixto' | 'Nocturno')
+                              }
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Diurno" value="Diurno" color="#000000" />
+                              <Picker.Item label="Mixto" value="Mixto" color="#000000" />
+                              <Picker.Item label="Nocturno" value="Nocturno" color="#000000" />
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListSpTipoTurno} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listSpTiposTurnoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más tipos de turno.</ThemedText>
+                          ) : (
+                            listSpTiposTurnoSelected.map((tipo) => (
+                              <ThemedView key={`list-sp-tt-${tipo}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListSpTipoTurno(tipo)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Tipo de salario</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={listSpTipoSalario}
+                            onValueChange={(v) =>
+                              setListSpTipoSalario(String(v) as 'todos' | 'Con goce' | 'Sin goce')
+                            }
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Todos" value="todos" color="#000000" />
+                            <Picker.Item label="Con goce" value="Con goce" color="#000000" />
+                            <Picker.Item label="Sin goce" value="Sin goce" color="#000000" />
+                          </Picker>
+                        </View>
+                        <ThemedText style={styles.label}>Estado</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={listSpEstado}
+                            onValueChange={(v) =>
+                              setListSpEstado(String(v) as 'todos' | 'pendiente' | 'aprobado' | 'rechazado')
+                            }
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Todos" value="todos" color="#000000" />
+                            <Picker.Item label="Pendiente" value="pendiente" color="#000000" />
+                            <Picker.Item label="Aprobado" value="aprobado" color="#000000" />
+                            <Picker.Item label="Rechazado" value="rechazado" color="#000000" />
+                          </Picker>
+                        </View>
+                        <ThemedText style={styles.label}>Empleado</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listSpEmpleadoSearch}
+                            onChangeText={setListSpEmpleadoSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listSpEmpleadoSearch, 'listSpEmpleado')}
+                            disabled={employeeSearchMode === 'listSpEmpleado'}
+                          >
+                            {employeeSearchMode === 'listSpEmpleado' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listSpEmpleadoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listSpEmpleadoResults.map((e) => (
+                              <TouchableOpacity key={`list-sp-e-${e.id}`} style={styles.resultItem} onPress={() => pickListSpEmpleado(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listSpEmpleadoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                          ) : (
+                            listSpEmpleadoSelected.map((e) => (
+                              <ThemedView key={`list-sp-emp-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListSpEmpleado(e.id)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_REGISTRO_INDUCCION_GENERAL ? (
+                      <>
+                        <ThemedText style={styles.label}>Colaboradores (cédula)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigColaboradorSearch}
+                            onChangeText={setListRigColaboradorSearch}
+                            placeholder="Cédula"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRigColaboradorCedula} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRigColaboradorCedulas.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                          ) : (
+                            listRigColaboradorCedulas.map((ced) => (
+                              <ThemedView key={`list-rig-col-${ced}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigColaboradorCedula(ced)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+                        <ThemedText style={styles.label}>Capacitadores (cédula)</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listRigCapacitadorSearch}
+                            onChangeText={setListRigCapacitadorSearch}
+                            placeholder="Cédula"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListRigCapacitadorCedula} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listRigCapacitadorCedulas.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                          ) : (
+                            listRigCapacitadorCedulas.map((ced) => (
+                              <ThemedView key={`list-rig-cap-${ced}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListRigCapacitadorCedula(ced)}>
                                   <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                                 </TouchableOpacity>
                               </ThemedView>
@@ -4523,17 +6601,17 @@ export default function ReportesScreen() {
           </TouchableOpacity>
 
           <ThemedText style={styles.sectionTitle}>Resultados</ThemedText>
-          <FlatList
-            data={reportes}
-            keyExtractor={(x) => String(x.id)}
-            renderItem={renderReportItem}
-            scrollEnabled={false}
-            ListEmptyComponent={
+          <ThemedView style={styles.listContainer}>
+            {reportes.length === 0 ? (
               <ThemedText style={styles.emptyText}>
                 {loadingList ? 'Cargando lista…' : 'Sin datos. Abra filtros y pulse Buscar reportes.'}
               </ThemedText>
-            }
-          />
+            ) : (
+              reportes.map((item) => (
+                <React.Fragment key={String(item.id)}>{renderReportItem({ item })}</React.Fragment>
+              ))
+            )}
+          </ThemedView>
         </ThemedView>
       </ScrollView>
 
@@ -4631,6 +6709,50 @@ export default function ReportesScreen() {
           onChange={(_, d) => {
             setShowListActaHt(Platform.OS === 'ios');
             if (d) setListActaHastaT(d);
+          }}
+        />
+      )}
+      {showListMaSolDd && (
+        <DateTimePicker
+          value={listMaSolDesdeD || horaAccionPickerBase}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowListMaSolDd(Platform.OS === 'ios');
+            if (d) setListMaSolDesdeD(d);
+          }}
+        />
+      )}
+      {showListMaSolDt && (
+        <DateTimePicker
+          value={listMaSolDesdeT || new Date(2000, 0, 1, 0, 0)}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowListMaSolDt(Platform.OS === 'ios');
+            if (d) setListMaSolDesdeT(d);
+          }}
+        />
+      )}
+      {showListMaSolHd && (
+        <DateTimePicker
+          value={listMaSolHastaD || horaAccionPickerBase}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowListMaSolHd(Platform.OS === 'ios');
+            if (d) setListMaSolHastaD(d);
+          }}
+        />
+      )}
+      {showListMaSolHt && (
+        <DateTimePicker
+          value={listMaSolHastaT || new Date(2000, 0, 1, 23, 59)}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowListMaSolHt(Platform.OS === 'ios');
+            if (d) setListMaSolHastaT(d);
           }}
         />
       )}
@@ -4764,6 +6886,50 @@ export default function ReportesScreen() {
           onChange={(_, d) => {
             setShowModalActaHt(Platform.OS === 'ios');
             if (d) setModalActaHastaT(d);
+          }}
+        />
+      )}
+      {modalVisible && showModalMaSolDd && (
+        <DateTimePicker
+          value={modalMaSolDesdeD || horaAccionPickerBase}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowModalMaSolDd(Platform.OS === 'ios');
+            if (d) setModalMaSolDesdeD(d);
+          }}
+        />
+      )}
+      {modalVisible && showModalMaSolDt && (
+        <DateTimePicker
+          value={modalMaSolDesdeT || new Date(2000, 0, 1, 0, 0)}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowModalMaSolDt(Platform.OS === 'ios');
+            if (d) setModalMaSolDesdeT(d);
+          }}
+        />
+      )}
+      {modalVisible && showModalMaSolHd && (
+        <DateTimePicker
+          value={modalMaSolHastaD || horaAccionPickerBase}
+          mode="date"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowModalMaSolHd(Platform.OS === 'ios');
+            if (d) setModalMaSolHastaD(d);
+          }}
+        />
+      )}
+      {modalVisible && showModalMaSolHt && (
+        <DateTimePicker
+          value={modalMaSolHastaT || new Date(2000, 0, 1, 23, 59)}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={(_, d) => {
+            setShowModalMaSolHt(Platform.OS === 'ios');
+            if (d) setModalMaSolHastaT(d);
           }}
         />
       )}
@@ -5202,11 +7368,22 @@ export default function ReportesScreen() {
               formModulo === MODULO_DOCUMENTOS_ENTREGADOS ||
               formModulo === MODULO_ENCUESTA_SATISFACCION ||
               formModulo === MODULO_REGISTRO_VISITAS ||
+              formModulo === MODULO_VISITAS_VEHICULOS ||
               formModulo === MODULO_MUTUOS_ACUERDOS ||
               formModulo === MODULO_EVALUACION_PERSONAL ||
               formModulo === MODULO_PRODUCTO_NO_CONFORME ||
               formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO ||
+              formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ||
+              formModulo === MODULO_NOTAS_VOZ ||
+              formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+              formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+              formModulo === MODULO_TIEMPO_ALMUERZO ||
+              formModulo === MODULO_SOLICITUDES_PERMISO ||
               formModulo === MODULO_MANUALES_PUESTO ||
+              formModulo === MODULO_ARTICULOS_PUESTO ||
+              formModulo === MODULO_MANTENIMIENTO_ARTICULOS ||
+              formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ||
+              formModulo === MODULO_REVISION_VEHICULOS ||
               formModulo === MODULO_INCIDENTES ||
               formModulo === MODULO_LLAVES ||
               formModulo === MODULO_LLAVEROS ||
@@ -5231,14 +7408,36 @@ export default function ReportesScreen() {
                                   ? 'Filtros — Encuestas de satisfacción'
                                   : formModulo === MODULO_REGISTRO_VISITAS
                                     ? 'Filtros — Registro de visitas'
+                                  : formModulo === MODULO_VISITAS_VEHICULOS
+                                    ? 'Filtros — Visitas de vehículos'
                                   : formModulo === MODULO_MUTUOS_ACUERDOS
                                     ? 'Filtros — Mutuos acuerdos'
                                 : formModulo === MODULO_EVALUACION_PERSONAL
                                   ? 'Filtros — Evaluación de personal'
                                 : formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
                                   ? 'Filtros — Registro de inducción y recorrido'
+                                : formModulo === MODULO_REGISTRO_INDUCCION_GENERAL
+                                  ? 'Filtros — Registro de inducción general'
+                                : formModulo === MODULO_NOTAS_VOZ
+                                  ? 'Filtros — Notas de voz'
+                                : formModulo === MODULO_CAMBIOS_UBICACION_PUESTO
+                                  ? 'Filtros — Cambios en ubicación del puesto'
+                                : formModulo === MODULO_REGISTRO_CAPACITACIONES
+                                  ? 'Filtros — Registro de capacitaciones'
+                                : formModulo === MODULO_TIEMPO_ALMUERZO
+                                  ? 'Filtros — Tiempo de almuerzo'
+                                : formModulo === MODULO_SOLICITUDES_PERMISO
+                                  ? 'Filtros — Solicitudes de permiso'
                                 : formModulo === MODULO_MANUALES_PUESTO
                                   ? 'Filtros — Manuales de puesto'
+                                : formModulo === MODULO_ARTICULOS_PUESTO
+                                  ? 'Filtros — Artículos del puesto'
+                                : formModulo === MODULO_MANTENIMIENTO_ARTICULOS
+                                  ? 'Filtros — Mantenimiento de artículos'
+                                : formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS
+                                  ? 'Filtros — Registro de vehículos'
+                                : formModulo === MODULO_REVISION_VEHICULOS
+                                  ? 'Filtros — Revisión de vehículos'
                                 : formModulo === MODULO_PRODUCTO_NO_CONFORME
                                   ? 'Filtros — Producto no conforme'
                                 : formModulo === MODULO_INCIDENTES
@@ -5257,28 +7456,36 @@ export default function ReportesScreen() {
                                   ? 'Filtros — Entrega de puesto'
                       : 'Filtros del módulo'}
                   </ThemedText>
-                  <ThemedText style={styles.label}>Creado desde</ThemedText>
-                  <View style={styles.dateRow}>
-                    <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDd(true)} activeOpacity={0.85}>
-                      <ThemedText style={styles.dateButtonText}>{modalActaDesdeD ? formatDateOnlyLabel(modalActaDesdeD) : 'Fecha'}</ThemedText>
-                      <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDt(true)} activeOpacity={0.85}>
-                      <ThemedText style={styles.dateButtonText}>{modalActaDesdeT ? hm(modalActaDesdeT) : 'Hora'}</ThemedText>
-                      <Ionicons name="time-outline" size={18} color="#007AFF" />
-                    </TouchableOpacity>
-                  </View>
-                  <ThemedText style={styles.label}>Creado hasta</ThemedText>
-                  <View style={styles.dateRow}>
-                    <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHd(true)} activeOpacity={0.85}>
-                      <ThemedText style={styles.dateButtonText}>{modalActaHastaD ? formatDateOnlyLabel(modalActaHastaD) : 'Fecha'}</ThemedText>
-                      <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHt(true)} activeOpacity={0.85}>
-                      <ThemedText style={styles.dateButtonText}>{modalActaHastaT ? hm(modalActaHastaT) : 'Hora'}</ThemedText>
-                      <Ionicons name="time-outline" size={18} color="#007AFF" />
-                    </TouchableOpacity>
-                  </View>
+                  {formModulo !== MODULO_ARTICULOS_PUESTO ? (
+                    <>
+                      <ThemedText style={styles.label}>
+                        {formModulo === MODULO_TIEMPO_ALMUERZO ? 'Inicio desde' : 'Creado desde'}
+                      </ThemedText>
+                      <View style={styles.dateRow}>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDd(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalActaDesdeD ? formatDateOnlyLabel(modalActaDesdeD) : 'Fecha'}</ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDt(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalActaDesdeT ? hm(modalActaDesdeT) : 'Hora'}</ThemedText>
+                          <Ionicons name="time-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedText style={styles.label}>
+                        {formModulo === MODULO_TIEMPO_ALMUERZO ? 'Fin hasta' : 'Creado hasta'}
+                      </ThemedText>
+                      <View style={styles.dateRow}>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHd(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalActaHastaD ? formatDateOnlyLabel(modalActaHastaD) : 'Fecha'}</ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHt(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalActaHastaT ? hm(modalActaHastaT) : 'Hora'}</ThemedText>
+                          <Ionicons name="time-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : null}
 
                   {[
                     ['Empresa', modalEmpresaSearch, setModalEmpresaSearch, 'empresa', 'modalEmpresa', modalEmpresaResults, modalEmpresaSelected, setModalEmpresaSelected, setModalEmpresaResults],
@@ -5358,7 +7565,465 @@ export default function ReportesScreen() {
                     ),
                   )}
 
-                  {formModulo === MODULO_INCIDENTES || formModulo === MODULO_CHECKLIST_SUPERVISION ? (
+                  {formModulo === MODULO_MANTENIMIENTO_ARTICULOS ? (
+                    <>
+                      <ThemedText style={styles.label}>Estado</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalMaEstadoPick}
+                            onValueChange={(v) => setModalMaEstadoPick(String(v) as typeof modalMaEstadoPick)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Todos" value="todos" color="#000000" />
+                            <Picker.Item label="Bueno" value="Bueno" color="#000000" />
+                            <Picker.Item label="Malo" value="Malo" color="#000000" />
+                            <Picker.Item label="No está" value="No está" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalMaEstado} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalMaEstadosSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más estados.</ThemedText>
+                        ) : (
+                          modalMaEstadosSelected.map((estado) => (
+                            <ThemedView key={`modal-ma-est-${estado}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{estado}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalMaEstado(estado)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Tipo de acción</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalMaAccionPick}
+                            onValueChange={(v) => setModalMaAccionPick(String(v) as typeof modalMaAccionPick)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Todos" value="todos" color="#000000" />
+                            <Picker.Item label="Reemplazar" value="Reemplazar" color="#000000" />
+                            <Picker.Item label="Rellenar" value="Rellenar" color="#000000" />
+                            <Picker.Item label="Reparar en puesto" value="Reparar en puesto" color="#000000" />
+                            <Picker.Item label="Reparar en taller" value="Reparar en taller" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalMaAccion} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalMaAccionesSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más tipos de acción.</ThemedText>
+                        ) : (
+                          modalMaAccionesSelected.map((accion) => (
+                            <ThemedView key={`modal-ma-acc-${accion}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{accion}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalMaAccion(accion)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Solucionado desde (fecha y hora)</ThemedText>
+                      <View style={styles.dateRow}>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolDd(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalMaSolDesdeD ? formatDateOnlyLabel(modalMaSolDesdeD) : 'Fecha'}</ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolDt(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalMaSolDesdeT ? hm(modalMaSolDesdeT) : 'Hora'}</ThemedText>
+                          <Ionicons name="time-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedText style={styles.label}>Solucionado hasta (fecha y hora)</ThemedText>
+                      <View style={styles.dateRow}>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolHd(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalMaSolHastaD ? formatDateOnlyLabel(modalMaSolHastaD) : 'Fecha'}</ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolHt(true)} activeOpacity={0.85}>
+                          <ThemedText style={styles.dateButtonText}>{modalMaSolHastaT ? hm(modalMaSolHastaT) : 'Hora'}</ThemedText>
+                          <Ionicons name="time-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ? (
+                    <>
+                      <ThemedText style={styles.label}>Tipo de vehículo</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalRvcTipoVehiculoPick}
+                            onValueChange={(v) => setModalRvcTipoVehiculoPick(String(v) as typeof modalRvcTipoVehiculoPick)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Vehículo" value="Vehículo" color="#000000" />
+                            <Picker.Item label="Motocicleta" value="Motocicleta" color="#000000" />
+                            <Picker.Item label="Bicicleta" value="Bicicleta" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRvcTipoVehiculo} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRvcTiposVehiculoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más tipos de vehículo.</ThemedText>
+                        ) : (
+                          modalRvcTiposVehiculoSelected.map((tipo) => (
+                            <ThemedView key={`modal-rvc-tv-${tipo}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRvcTipoVehiculo(tipo)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Placa</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={modalRvcPlaca}
+                        onChangeText={setModalRvcPlaca}
+                        placeholder="Opcional"
+                        placeholderTextColor="#999"
+                        autoCapitalize="characters"
+                      />
+                      <ThemedText style={styles.label}>Año</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={modalRvcAnno}
+                        onChangeText={setModalRvcAnno}
+                        placeholder="Opcional"
+                        placeholderTextColor="#999"
+                        keyboardType="number-pad"
+                      />
+                      <ThemedText style={styles.label}>Modelo</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={modalRvcModelo}
+                        onChangeText={setModalRvcModelo}
+                        placeholder="Opcional"
+                        placeholderTextColor="#999"
+                      />
+                      <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalRvcTipoAutoriaPick}
+                            onValueChange={(v) => setModalRvcTipoAutoriaPick(String(v) as typeof modalRvcTipoAutoriaPick)}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Cliente" value="Cliente" color="#000000" />
+                            <Picker.Item label="Corporativo" value="Corporativo" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRvcTipoAutoria} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRvcTiposAutoriaSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más tipos de autoría.</ThemedText>
+                        ) : (
+                          modalRvcTiposAutoriaSelected.map((tipo) => (
+                            <ThemedView key={`modal-rvc-ta-${tipo}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRvcTipoAutoria(tipo)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_REVISION_VEHICULOS ? (
+                    <>
+                      <ThemedText style={styles.label}>Vehículo</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRvdVehiculoSearch}
+                          onChangeText={setModalRvdVehiculoSearch}
+                          placeholder="Placa, marca o modelo"
+                          placeholderTextColor="#999"
+                          autoCapitalize="characters"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchCorporateVehicles(modalRvdVehiculoSearch, 'modalRvdVehiculo')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRvdVehiculo'}
+                        >
+                          {employeeSearchMode === 'modalRvdVehiculo' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRvdVehiculoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRvdVehiculoResults.map((v) => (
+                            <TouchableOpacity key={`modal-rvd-v-${v.id}`} style={styles.resultItem} onPress={() => pickModalRvdVehiculo(v)}>
+                              <ThemedText>{formatVehiculoLite(v)}</ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRvdVehiculoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más vehículos.</ThemedText>
+                        ) : (
+                          modalRvdVehiculoSelected.map((v) => (
+                            <ThemedView key={`modal-rvd-v-sel-${v.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{formatVehiculoLite(v)}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRvdVehiculo(v.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ? (
+                    <>
+                      <ThemedText style={styles.label}>Responsable (creador del registro)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalCupResponsableSearch}
+                          onChangeText={setModalCupResponsableSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalCupResponsableSearch, 'modalCupResponsable')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalCupResponsable'}
+                        >
+                          {employeeSearchMode === 'modalCupResponsable' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalCupResponsableResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalCupResponsableResults.map((e) => (
+                            <TouchableOpacity key={`modal-cup-r-${e.id}`} style={styles.resultItem} onPress={() => pickModalCupResponsable(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalCupResponsableSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                        ) : (
+                          modalCupResponsableSelected.map((e) => (
+                            <ThemedView key={`modal-cup-r-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalCupResponsable(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_REGISTRO_CAPACITACIONES ? (
+                    <>
+                      <ThemedText style={styles.label}>Tipo de capacitación</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={modalRcTipoCapacitacion}
+                          onValueChange={(v) => setModalRcTipoCapacitacion(String(v) as 'todos' | 'Presencial' | 'Virtual')}
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="todos" color="#000000" />
+                          <Picker.Item label="Presencial" value="Presencial" color="#000000" />
+                          <Picker.Item label="Virtual" value="Virtual" color="#000000" />
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.label}>Empleados de la capacitación</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRcCapEmpSearch}
+                          onChangeText={setModalRcCapEmpSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalRcCapEmpSearch, 'modalRcCapEmpleado')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRcCapEmpleado'}
+                        >
+                          {employeeSearchMode === 'modalRcCapEmpleado' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRcCapEmpResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRcCapEmpResults.map((e) => (
+                            <TouchableOpacity key={`modal-rc-emp-${e.id}`} style={styles.resultItem} onPress={() => pickModalRcCapEmp(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRcCapEmpSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                        ) : (
+                          modalRcCapEmpSelected.map((e) => (
+                            <ThemedView key={`modal-rc-emp-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRcCapEmp(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Puestos de la capacitación</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRcCapPuestoSearch}
+                          onChangeText={setModalRcCapPuestoSearch}
+                          placeholder="Código o nombre de puesto"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchActaStructure(modalRcCapPuestoSearch, 'puesto', 'modalRcCapPuesto')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRcCapPuesto'}
+                        >
+                          {employeeSearchMode === 'modalRcCapPuesto' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRcCapPuestoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRcCapPuestoResults.map((it) => (
+                            <TouchableOpacity
+                              key={`modal-rc-pto-${it.id}`}
+                              style={styles.resultItem}
+                              onPress={() => pickStructureLite(it, setModalRcCapPuestoSelected, setModalRcCapPuestoResults, setModalRcCapPuestoSearch)}
+                            >
+                              <ThemedText>{formatStructureLite(it)}</ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRcCapPuestoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más puestos vinculados.</ThemedText>
+                        ) : (
+                          modalRcCapPuestoSelected.map((it) => (
+                            <ThemedView key={`modal-rc-pto-sel-${it.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{formatStructureLite(it)}</ThemedText>
+                              <TouchableOpacity
+                                style={styles.removeUserButton}
+                                onPress={() => removeStructureLite(it.id, setModalRcCapPuestoSelected)}
+                              >
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Responsable</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRcResponsableSearch}
+                          onChangeText={setModalRcResponsableSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalRcResponsableSearch, 'modalRcResponsable')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalRcResponsable'}
+                        >
+                          {employeeSearchMode === 'modalRcResponsable' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalRcResponsableResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalRcResponsableResults.map((e) => (
+                            <TouchableOpacity key={`modal-rc-r-${e.id}`} style={styles.resultItem} onPress={() => pickModalRcResponsable(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalRcResponsableSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                        ) : (
+                          modalRcResponsableSelected.map((e) => (
+                            <ThemedView key={`modal-rc-r-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRcResponsable(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_INCIDENTES ||
+                  formModulo === MODULO_CHECKLIST_SUPERVISION ||
+                  formModulo === MODULO_SOLICITUDES_PERMISO ? (
                     <ThemedView style={{ marginBottom: 8 }}>
                       <ThemedText style={styles.label}>Ejecutivo de cuenta</ThemedText>
                       <View style={styles.row}>
@@ -5646,6 +8311,125 @@ export default function ReportesScreen() {
                       </ThemedView>
                     </>
                   ) : null}
+                  {formModulo === MODULO_VISITAS_VEHICULOS ? (
+                    <>
+                      <ThemedText style={styles.label}>Cédula del visitante</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={modalVvCedulaVisitante}
+                        onChangeText={setModalVvCedulaVisitante}
+                        placeholder="Opcional"
+                        placeholderTextColor="#999"
+                      />
+                      <ThemedText style={styles.label}>Tipo de vehículo</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalVvTipoPick}
+                            onValueChange={(v) => setModalVvTipoPick(String(v) as 'Particular' | 'Institucional')}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Particular" value="Particular" color="#000000" />
+                            <Picker.Item label="Institucional" value="Institucional" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalVvTipo} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalVvTiposSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más tipos.</ThemedText>
+                        ) : (
+                          modalVvTiposSelected.map((tipo) => (
+                            <ThemedView key={`modal-vv-tipo-${tipo}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalVvTipo(tipo)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Placa de vehículo</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalVvPlacaInput}
+                          onChangeText={setModalVvPlacaInput}
+                          placeholder="Placa"
+                          placeholderTextColor="#999"
+                          autoCapitalize="characters"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalVvPlaca} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalVvPlacasSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: una o más placas.</ThemedText>
+                        ) : (
+                          modalVvPlacasSelected.map((placa) => (
+                            <ThemedView key={`modal-vv-placa-${placa}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{placa}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalVvPlaca(placa)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Responsable</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalVvResponsableSearch}
+                          onChangeText={setModalVvResponsableSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalVvResponsableSearch, 'modalVvResponsable')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalVvResponsable'}
+                        >
+                          {employeeSearchMode === 'modalVvResponsable' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalVvResponsableResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalVvResponsableResults.map((e) => (
+                            <TouchableOpacity key={`modal-vv-r-${e.id}`} style={styles.resultItem} onPress={() => pickModalVvResponsable(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalVvResponsableSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más responsables.</ThemedText>
+                        ) : (
+                          modalVvResponsableSelected.map((e) => (
+                            <ThemedView key={`modal-vv-sel-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalVvResponsable(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
                   {formModulo === MODULO_EVALUACION_PERSONAL ? (
                     <>
                       <ThemedText style={styles.label}>Empleado evaluado</ThemedText>
@@ -5901,6 +8685,277 @@ export default function ReportesScreen() {
                             <ThemedView key={`modal-ir-p-${ced}`} style={styles.assignedUserItem}>
                               <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
                               <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalIrParticipanteCedula(ced)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+                  {formModulo === MODULO_TIEMPO_ALMUERZO ? (
+                    <>
+                      <ThemedText style={styles.label}>Empleado</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalTaEmpleadoSearch}
+                          onChangeText={setModalTaEmpleadoSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalTaEmpleadoSearch, 'modalTaEmpleado')}
+                          disabled={employeeSearchMode === 'modalTaEmpleado'}
+                        >
+                          {employeeSearchMode === 'modalTaEmpleado' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalTaEmpleadoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalTaEmpleadoResults.map((e) => (
+                            <TouchableOpacity key={`modal-ta-e-${e.id}`} style={styles.resultItem} onPress={() => pickModalTaEmpleado(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalTaEmpleadoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                        ) : (
+                          modalTaEmpleadoSelected.map((e) => (
+                            <ThemedView key={`modal-ta-emp-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalTaEmpleado(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Cédula</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalTaCedulaSearch}
+                          onChangeText={setModalTaCedulaSearch}
+                          placeholder="Cédula del empleado"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchAlmuerzoCedulas(modalTaCedulaSearch, 'modalTaCedula')}
+                          disabled={employeeSearchMode === 'modalTaCedula'}
+                        >
+                          {employeeSearchMode === 'modalTaCedula' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalTaCedulaResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalTaCedulaResults.map((c) => (
+                            <TouchableOpacity key={`modal-ta-ced-${c.cedula}`} style={styles.resultItem} onPress={() => pickModalTaCedula(c)}>
+                              <ThemedText>
+                                {c.cedula}
+                                {c.empleado_nombre ? ` — ${c.empleado_nombre}` : ''}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalTaCedulasSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                        ) : (
+                          modalTaCedulasSelected.map((ced) => (
+                            <ThemedView key={`modal-ta-ced-sel-${ced}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalTaCedula(ced)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+                  {formModulo === MODULO_SOLICITUDES_PERMISO ? (
+                    <>
+                      <ThemedText style={styles.label}>Tipo de turno</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalSpTipoTurnoPick}
+                            onValueChange={(v) =>
+                              setModalSpTipoTurnoPick(String(v) as 'Diurno' | 'Mixto' | 'Nocturno')
+                            }
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Diurno" value="Diurno" color="#000000" />
+                            <Picker.Item label="Mixto" value="Mixto" color="#000000" />
+                            <Picker.Item label="Nocturno" value="Nocturno" color="#000000" />
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalSpTipoTurno} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalSpTiposTurnoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más tipos de turno.</ThemedText>
+                        ) : (
+                          modalSpTiposTurnoSelected.map((tipo) => (
+                            <ThemedView key={`modal-sp-tt-${tipo}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{tipo}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalSpTipoTurno(tipo)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Tipo de salario</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={modalSpTipoSalario}
+                          onValueChange={(v) =>
+                            setModalSpTipoSalario(String(v) as 'todos' | 'Con goce' | 'Sin goce')
+                          }
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="todos" color="#000000" />
+                          <Picker.Item label="Con goce" value="Con goce" color="#000000" />
+                          <Picker.Item label="Sin goce" value="Sin goce" color="#000000" />
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.label}>Estado</ThemedText>
+                      <View style={styles.pickerWrapper}>
+                        <Picker
+                          selectedValue={modalSpEstado}
+                          onValueChange={(v) =>
+                            setModalSpEstado(String(v) as 'todos' | 'pendiente' | 'aprobado' | 'rechazado')
+                          }
+                          style={styles.picker}
+                        >
+                          <Picker.Item label="Todos" value="todos" color="#000000" />
+                          <Picker.Item label="Pendiente" value="pendiente" color="#000000" />
+                          <Picker.Item label="Aprobado" value="aprobado" color="#000000" />
+                          <Picker.Item label="Rechazado" value="rechazado" color="#000000" />
+                        </Picker>
+                      </View>
+                      <ThemedText style={styles.label}>Empleado</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalSpEmpleadoSearch}
+                          onChangeText={setModalSpEmpleadoSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalSpEmpleadoSearch, 'modalSpEmpleado')}
+                          disabled={employeeSearchMode === 'modalSpEmpleado'}
+                        >
+                          {employeeSearchMode === 'modalSpEmpleado' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalSpEmpleadoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalSpEmpleadoResults.map((e) => (
+                            <TouchableOpacity key={`modal-sp-e-${e.id}`} style={styles.resultItem} onPress={() => pickModalSpEmpleado(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalSpEmpleadoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados.</ThemedText>
+                        ) : (
+                          modalSpEmpleadoSelected.map((e) => (
+                            <ThemedView key={`modal-sp-emp-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalSpEmpleado(e.id)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                    </>
+                  ) : null}
+                  {formModulo === MODULO_REGISTRO_INDUCCION_GENERAL ? (
+                    <>
+                      <ThemedText style={styles.label}>Colaboradores (cédula)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigColaboradorSearch}
+                          onChangeText={setModalRigColaboradorSearch}
+                          placeholder="Cédula"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRigColaboradorCedula} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigColaboradorCedulas.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                        ) : (
+                          modalRigColaboradorCedulas.map((ced) => (
+                            <ThemedView key={`modal-rig-col-${ced}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigColaboradorCedula(ced)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+                      <ThemedText style={styles.label}>Capacitadores (cédula)</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalRigCapacitadorSearch}
+                          onChangeText={setModalRigCapacitadorSearch}
+                          placeholder="Cédula"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalRigCapacitadorCedula} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalRigCapacitadorCedulas.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: una o más cédulas.</ThemedText>
+                        ) : (
+                          modalRigCapacitadorCedulas.map((ced) => (
+                            <ThemedView key={`modal-rig-cap-${ced}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{ced}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalRigCapacitadorCedula(ced)}>
                                 <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                               </TouchableOpacity>
                             </ThemedView>
@@ -6595,6 +9650,8 @@ export default function ReportesScreen() {
                                   ? ORDER_OPTIONS_ENCUESTA_SATISFACCION
                                   : formModulo === MODULO_REGISTRO_VISITAS
                                     ? ORDER_OPTIONS_REGISTRO_VISITAS
+                                  : formModulo === MODULO_VISITAS_VEHICULOS
+                                    ? ORDER_OPTIONS_VISITAS_VEHICULOS
                                   : formModulo === MODULO_MUTUOS_ACUERDOS
                                     ? ORDER_OPTIONS_MUTUOS_ACUERDOS
                                 : formModulo === MODULO_EVALUACION_PERSONAL
@@ -6603,8 +9660,28 @@ export default function ReportesScreen() {
                                   ? ORDER_OPTIONS_PRODUCTO_NO_CONFORME
                                 : formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
                                   ? ORDER_OPTIONS_INDUCCION_RECORRIDO
+                                : formModulo === MODULO_REGISTRO_INDUCCION_GENERAL
+                                  ? ORDER_OPTIONS_INDUCCION_RECORRIDO
+                                : formModulo === MODULO_NOTAS_VOZ
+                                  ? ORDER_OPTIONS_NOTAS_VOZ
+                                : formModulo === MODULO_CAMBIOS_UBICACION_PUESTO
+                                  ? ORDER_OPTIONS_CAMBIOS_UBICACION_PUESTO
+                                : formModulo === MODULO_REGISTRO_CAPACITACIONES
+                                  ? ORDER_OPTIONS_REGISTRO_CAPACITACIONES
+                                : formModulo === MODULO_TIEMPO_ALMUERZO
+                                  ? ORDER_OPTIONS_TIEMPO_ALMUERZO
+                                : formModulo === MODULO_SOLICITUDES_PERMISO
+                                  ? ORDER_OPTIONS_SOLICITUDES_PERMISO
                                 : formModulo === MODULO_MANUALES_PUESTO
                                   ? ORDER_OPTIONS_MANUALES_PUESTO
+                                : formModulo === MODULO_ARTICULOS_PUESTO
+                                  ? ORDER_OPTIONS_ARTICULOS_PUESTO
+                                : formModulo === MODULO_MANTENIMIENTO_ARTICULOS
+                                  ? ORDER_OPTIONS_MANTENIMIENTO_ARTICULOS
+                                : formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS
+                                  ? ORDER_OPTIONS_REGISTRO_VEHICULOS_CORPORATIVOS
+                                : formModulo === MODULO_REVISION_VEHICULOS
+                                  ? ORDER_OPTIONS_REVISION_VEHICULOS
                                 : formModulo === MODULO_INCIDENTES
                                   ? ORDER_OPTIONS_INCIDENTES
                                   : formModulo === MODULO_CHECKLIST_SUPERVISION
@@ -6631,17 +9708,36 @@ export default function ReportesScreen() {
                         formModulo === MODULO_BITACORA_NOVEDADES ||
                         formModulo === MODULO_CHECKLIST_SUPERVISION ||
                         formModulo === MODULO_EVALUACION_PERSONAL ||
-                        formModulo === MODULO_MANUALES_PUESTO
-                          ? 'Consolidado' // Consolidado
+                        formModulo === MODULO_MANUALES_PUESTO ||
+                        formModulo === MODULO_ARTICULOS_PUESTO ||
+                        formModulo === MODULO_MANTENIMIENTO_ARTICULOS ||
+                        formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ||
+                        formModulo === MODULO_NOTAS_VOZ ||
+                        formModulo === MODULO_CAMBIOS_UBICACION_PUESTO ||
+                        formModulo === MODULO_REGISTRO_CAPACITACIONES ||
+                        formModulo === MODULO_TIEMPO_ALMUERZO
+                          ? 'Consolidado'
                           : formTipoReporte
                       }
                       enabled={
                         formModulo !== MODULO_BITACORA_NOVEDADES &&
                         formModulo !== MODULO_CHECKLIST_SUPERVISION &&
                         formModulo !== MODULO_EVALUACION_PERSONAL &&
-                        formModulo !== MODULO_MANUALES_PUESTO
+                        formModulo !== MODULO_MANUALES_PUESTO &&
+                        formModulo !== MODULO_ARTICULOS_PUESTO &&
+                        formModulo !== MODULO_MANTENIMIENTO_ARTICULOS &&
+                        formModulo !== MODULO_REGISTRO_VEHICULOS_CORPORATIVOS &&
+                        formModulo !== MODULO_NOTAS_VOZ &&
+                        formModulo !== MODULO_CAMBIOS_UBICACION_PUESTO &&
+                        formModulo !== MODULO_REGISTRO_CAPACITACIONES &&
+                        formModulo !== MODULO_TIEMPO_ALMUERZO
                       }
-                      onValueChange={(v) => setFormTipoReporte(String(v) as 'Consolidado' | 'Individual')}
+                      onValueChange={(v) => {
+                        const t = String(v).trim() as ReporteTipoSalida;
+                        if (t === 'Consolidado' || t === 'Individual') {
+                          applyFormTipoReporte(t);
+                        }
+                      }}
                       style={styles.picker}
                     >
                       <Picker.Item label="Consolidado" value="Consolidado" color="#000000" />
@@ -6801,6 +9897,25 @@ export default function ReportesScreen() {
                                     </ThemedText>
                                   </ThemedView>
                                 ))
+                            : formModulo === MODULO_VISITAS_VEHICULOS
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-vv-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.placa ?? '—'} · {row.tipo ?? '—'} · {row.nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empresa_nombre ?? '—'} · {row.e_estructura_cliente?.nombre ?? '—'} · {row.division_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.contrato_nombre ?? '—'} · {row.e_estructura_sucursal?.nombre ?? '—'} ·{' '}
+                                      {row.e_estructura_puesto?.nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Entrada: {row.hora_entrada ?? '—'} · Salida: {row.hora_salida ?? '—'} · Responsable:{' '}
+                                      {row.responsable_label ?? '—'}
+                                    </ThemedText>
+                                  </ThemedView>
+                                ))
                             : formModulo === MODULO_EVALUACION_PERSONAL
                               ? previewRows.map((row, idx) => (
                                   <ThemedView key={`prev-evp-${idx}`} style={{ marginBottom: 12 }}>
@@ -6831,6 +9946,74 @@ export default function ReportesScreen() {
                                         resizeMode="contain"
                                       />
                                     ) : null}
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_ARTICULOS_PUESTO
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-ap-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>{row.puesto_txt ?? '—'}</ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · Artículos: {row.articulos_count ?? 0}
+                                    </ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_MANTENIMIENTO_ARTICULOS
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-ma-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      #{row.id ?? '—'} · {row.articulo_nombre ?? '—'} · {row.estado ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.puesto_txt ?? '—'} · {row.origen ?? '—'} · Acción: {row.accion ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Creado: {row.created_at_txt ?? '—'} · Solucionado: {row.fecha_solucion_txt ?? '—'}
+                                    </ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-rvc-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.placa || 'Sin placa'} · {row.tipo ?? '—'} · {row.tipo_autoria ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.marca ?? '—'} · {row.modelo ?? '—'} · Año: {row.anno ?? '—'} · {row.estado ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · {row.puesto_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Creado: {row.created_at_txt ?? '—'} · Usos: {row.usos_count ?? 0} · Mantenimientos:{' '}
+                                      {row.mantenimientos_count ?? 0}
+                                    </ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_REVISION_VEHICULOS
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-rev-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      #{row.id ?? '—'} · {row.tipo ?? '—'} · {row.vehiculo_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · {row.puesto_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Creado: {row.created_at_txt ?? '—'} · Info. general: {row.info_general_count ?? 0} · Revisión:{' '}
+                                      {row.info_revision_count ?? 0} · Movimientos: {row.movimientos_count ?? 0}
+                                    </ThemedText>
                                   </ThemedView>
                                 ))
                             : formModulo === MODULO_MANUALES_PUESTO
@@ -6886,6 +10069,149 @@ export default function ReportesScreen() {
                                           uri: signatureUri(row.firma_persona_origino_pnc_data_uri || row.firma_persona_origino_pnc) as string,
                                         }}
                                         style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
+                                        resizeMode="contain"
+                                      />
+                                    ) : null}
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_NOTAS_VOZ
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-nv-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>Título: {row.titulo ?? '—'}</ThemedText>
+                                    {row.descripcion != null && String(row.descripcion).trim() !== '' ? (
+                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
+                                        {String(row.descripcion)}
+                                      </ThemedText>
+                                    ) : null}
+                                    {row.transcripcion != null && String(row.transcripcion).trim() !== '' ? (
+                                      <ThemedText selectable style={styles.helperText} numberOfLines={4}>
+                                        Transcripción: {String(row.transcripcion)}
+                                      </ThemedText>
+                                    ) : null}
+                                    <ThemedText style={styles.helperText}>Creado por: {row.creador_nombre ?? '—'}</ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_CAMBIOS_UBICACION_PUESTO
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-cup-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Lat: {row.latitud_anterior_txt || '—'} / {row.longitud_anterior_txt || '—'} →{' '}
+                                      {row.latitud_nueva_txt || '—'} / {row.longitud_nueva_txt || '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>Responsable: {row.responsable_nombre ?? '—'}</ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_REGISTRO_CAPACITACIONES
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-rc-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Tipo: {row.tipo ?? '—'} · Título: {row.titulo ?? '—'}
+                                    </ThemedText>
+                                    {row.empleados_cap_txt ? (
+                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
+                                        Empleados: {String(row.empleados_cap_txt)}
+                                      </ThemedText>
+                                    ) : null}
+                                    {row.puestos_cap_txt ? (
+                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
+                                        Puestos: {String(row.puestos_cap_txt)}
+                                      </ThemedText>
+                                    ) : null}
+                                    <ThemedText style={styles.helperText}>Responsable: {row.responsable_nombre ?? '—'}</ThemedText>
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_TIEMPO_ALMUERZO
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-ta-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.empleado_nombre ?? '—'} · Cédula: {row.cedula_empleado ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Inicio: {row.inicio_txt ?? '—'} · Fin: {row.fin_txt ?? '—'} · Minutos:{' '}
+                                      {row.minutos_almuerzo ?? '—'} · Manual: {row.es_manual ? 'Sí' : 'No'}
+                                    </ThemedText>
+                                    {(row.pausas_list || []).length > 0 ? (
+                                      <ThemedText style={styles.helperText}>
+                                        Pausas: {(row.pausas_list as any[]).length}
+                                      </ThemedText>
+                                    ) : null}
+                                  </ThemedView>
+                                ))
+                            : formModulo === MODULO_SOLICITUDES_PERMISO
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-sp-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Empleado: {row.empleado_nombre ?? '—'} ({row.empleado_codigo ?? '—'}) · Ejecutivo:{' '}
+                                      {row.ejecutivo_cuenta_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.fecha_inicio_txt ?? '—'} — {row.fecha_fin_txt ?? '—'} · Días: {row.dias_permiso ?? '—'} ·
+                                      Salario: {row.tipo ?? '—'} · Estado: {row.estado ?? '—'}
+                                    </ThemedText>
+                                    {row.motivo_txt || row.motivo ? (
+                                      <ThemedText style={styles.helperText}>Motivo: {row.motivo_txt ?? row.motivo}</ThemedText>
+                                    ) : null}
+                                    {row.observaciones_txt || row.observaciones ? (
+                                      <ThemedText style={styles.helperText}>
+                                        Observaciones: {row.observaciones_txt ?? row.observaciones}
+                                      </ThemedText>
+                                    ) : null}
+                                    <ThemedText style={styles.helperText}>Firma empleado (manual)</ThemedText>
+                                    {signatureUri(row.firma_empleado_manual_data_uri || row.firma_empleado_manual) ? (
+                                      <Image
+                                        source={{
+                                          uri: signatureUri(
+                                            row.firma_empleado_manual_data_uri || row.firma_empleado_manual,
+                                          ) as string,
+                                        }}
+                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
+                                        resizeMode="contain"
+                                      />
+                                    ) : null}
+                                    <ThemedText style={styles.helperText}>Firma ejecutivo (manual)</ThemedText>
+                                    {signatureUri(row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual) ? (
+                                      <Image
+                                        source={{
+                                          uri: signatureUri(
+                                            row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual,
+                                          ) as string,
+                                        }}
+                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD', marginTop: 4 }}
                                         resizeMode="contain"
                                       />
                                     ) : null}
@@ -6947,6 +10273,59 @@ export default function ReportesScreen() {
                                     </ThemedView>
                                   );
                                 })
+                            : formModulo === MODULO_REGISTRO_INDUCCION_GENERAL
+                              ? previewRows.map((row, idx) => (
+                                  <ThemedView key={`prev-rig-${idx}`} style={{ marginBottom: 12 }}>
+                                    <ThemedText style={styles.detailText}>
+                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
+                                      {row.puesto_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>
+                                      Creador: {row.empleado_creador_nombre ?? '—'}
+                                    </ThemedText>
+                                    <ThemedText style={styles.helperText}>Firma responsable</ThemedText>
+                                    {signatureUri(row.firma_responsable_data_uri || row.firma_responsable) ? (
+                                      <Image
+                                        source={{
+                                          uri: signatureUri(row.firma_responsable_data_uri || row.firma_responsable) as string,
+                                        }}
+                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
+                                        resizeMode="contain"
+                                      />
+                                    ) : null}
+                                    {(row.colaboradores_preview || []).map((p: any, j: number) => (
+                                      <ThemedView key={`prev-rig-col-${idx}-${j}`} style={{ marginTop: 8 }}>
+                                        <ThemedText style={styles.detailText}>
+                                          Colaborador: {String(p?.nombre ?? '—')} — {String(p?.cedula ?? '')}
+                                        </ThemedText>
+                                        {signatureUri(p?.firma_data_uri || p?.firma) ? (
+                                          <Image
+                                            source={{ uri: signatureUri(p.firma_data_uri || p.firma) as string }}
+                                            style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
+                                            resizeMode="contain"
+                                          />
+                                        ) : null}
+                                      </ThemedView>
+                                    ))}
+                                    {(row.capacitadores_preview || []).map((p: any, j: number) => (
+                                      <ThemedView key={`prev-rig-cap-${idx}-${j}`} style={{ marginTop: 8 }}>
+                                        <ThemedText style={styles.detailText}>
+                                          Capacitador: {String(p?.nombre ?? '—')} — {String(p?.cedula ?? '')}
+                                        </ThemedText>
+                                        {signatureUri(p?.firma_data_uri || p?.firma) ? (
+                                          <Image
+                                            source={{ uri: signatureUri(p.firma_data_uri || p.firma) as string }}
+                                            style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
+                                            resizeMode="contain"
+                                          />
+                                        ) : null}
+                                      </ThemedView>
+                                    ))}
+                                  </ThemedView>
+                                ))
                             : formModulo === MODULO_MUTUOS_ACUERDOS
                               ? previewRows.map((row, idx) => (
                                   <ThemedView key={`prev-mut-${idx}`} style={{ marginBottom: 12 }}>
@@ -7187,9 +10566,9 @@ export default function ReportesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollView: { flex: 1 },
-  scrollContent: { padding: 16, paddingBottom: 120 },
-  content: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+  scrollView: { flex: 1, overflow: 'visible' as const },
+  scrollContent: { padding: 16, paddingBottom: 120, flexGrow: 1 },
+  content: { width: '100%', maxWidth: 800, alignSelf: 'center', overflow: 'visible' as const },
 
   titleContainer: {
     alignItems: 'center',
@@ -7334,21 +10713,40 @@ const styles = StyleSheet.create({
 
   emptyText: { fontSize: 14, opacity: 0.6, textAlign: 'center', color: '#000', marginVertical: 12 },
 
+  listContainer: {
+    width: '100%',
+    overflow: 'visible' as const,
+  },
   card: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 8,
+    borderRadius: 12,
     padding: 16,
-    marginBottom: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.1,
     shadowRadius: 4,
-    elevation: 2,
+    elevation: 3,
   },
-  cardTitle: { fontSize: 16, fontWeight: '800', marginBottom: 10, color: '#000' },
-  cardLine: { marginBottom: 6, color: '#000' },
-  cardLabel: { fontWeight: '700', color: '#333' },
-  cardValue: { color: '#000' },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 12,
+    color: '#000',
+  },
+  cardLine: {
+    marginBottom: 8,
+    fontSize: 14,
+  },
+  cardLabel: {
+    fontWeight: '600',
+    color: '#666',
+  },
+  cardValue: {
+    color: '#000',
+  },
   mutedSmall: { opacity: 0.6, fontSize: 12 },
 
   collapseButton: {
@@ -7363,8 +10761,23 @@ const styles = StyleSheet.create({
     marginTop: 8,
     backgroundColor: '#FAFAFA',
   },
-  collapseButtonText: { fontSize: 13, fontWeight: '700', color: '#007AFF' },
-  collapseContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  collapseButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  collapsableContent: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  collapseContent: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8F9FA',
+  },
   detailText: { marginBottom: 6, color: '#000', fontSize: 12 },
 
   actionsRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'flex-start', gap: 12, flexWrap: 'wrap' },
@@ -7376,7 +10789,19 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     gap: 8,
   },
-  downloadBtn: { backgroundColor: '#34C759', marginTop: 10, alignSelf: 'stretch' },
+  downloadBtn: { backgroundColor: '#34C759' },
+  downloadBtnCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 8,
+    alignSelf: 'stretch',
+  },
+  downloadBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
   actionBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 
   resultList: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', marginTop: 4 },
