@@ -179,19 +179,20 @@ type VehicleRecord = {
   contrato_id?: number;
   puesto_id?: number;
 
-  placa: string;
+  placa: string | null;
   tipo: string;
   tipo_autoria: string;
   estado?: string;
-  kilometraje: number;
-  prox_cambio_aceite: number;
-  modelo: string;
-  anno: number;
-  descripcion: string;
+  kilometraje: number | null;
+  prox_cambio_aceite: number | null;
+  modelo: string | null;
+  anno: number | null;
+  marca: string;
+  descripcion: string | null;
 
-  titulo_propiedad: boolean;
-  rtv: boolean;
-  marchamo: boolean;
+  titulo_propiedad: boolean | null;
+  rtv: boolean | null;
+  marchamo: boolean | null;
 
   firma_responsable: string;
   created_by?: number;
@@ -340,6 +341,30 @@ const isoToTime = (iso?: string) => {
 const COMBUSTIBLE_OPTIONS = ['Vacío', 'Un cuarto', 'Medio', 'Tres cuartos', 'Lleno'];
 
 type TipoBitacora = 'Vehículo' | 'Bicicleta' | 'Motocicleta';
+
+function isTipoBicicleta(tipo: string): boolean {
+  return String(tipo || '').trim() === 'Bicicleta';
+}
+
+function clearCamposNoAplicanBicicleta(setters: {
+  setPlaca: (v: string) => void;
+  setKilometraje: (v: string) => void;
+  setProxCambioAceite: (v: string) => void;
+  setModelo: (v: string) => void;
+  setAnno: (v: string) => void;
+  setTituloPropiedad: (v: boolean) => void;
+  setRtv: (v: boolean) => void;
+  setMarchamo: (v: boolean) => void;
+}) {
+  setters.setPlaca('');
+  setters.setKilometraje('');
+  setters.setProxCambioAceite('');
+  setters.setModelo('');
+  setters.setAnno('');
+  setters.setTituloPropiedad(false);
+  setters.setRtv(false);
+  setters.setMarchamo(false);
+}
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
 
@@ -866,6 +891,7 @@ export default function CorporateVehiclesScreen() {
   const [tipoAutoria, setTipoAutoria] = useState('');
   const [modelo, setModelo] = useState('');
   const [anno, setAnno] = useState('');
+  const [marca, setMarca] = useState('');
   const [descripcion, setDescripcion] = useState('');
   const [tituloPropiedad, setTituloPropiedad] = useState(true);
   const [rtv, setRtv] = useState(true);
@@ -1491,6 +1517,7 @@ export default function CorporateVehiclesScreen() {
                         'kilometraje',
                         'prox_cambio_aceite',
                         'modelo',
+                        'marca',
                         'anno',
                         'descripcion',
                         'titulo_propiedad',
@@ -1846,6 +1873,7 @@ export default function CorporateVehiclesScreen() {
     setTipoAutoria('');
     setModelo('');
     setAnno('');
+    setMarca('');
     setDescripcion('');
     setTituloPropiedad(true);
     setRtv(true);
@@ -3400,21 +3428,35 @@ export default function CorporateVehiclesScreen() {
       setSelectedPuestoId(null);
     }
 
-    setPlaca(r.placa || '');
-    // Normaliza por si existen registros viejos con valores no soportados
     const allowedTipos = new Set(['Vehículo', 'Bicicleta', 'Motocicleta']);
     const allowedEstados = new Set(['Activo', 'Inactivo']);
-    setTipo(allowedTipos.has(String(r.tipo || '')) ? String(r.tipo) : '');
+    const loadedTipo = allowedTipos.has(String(r.tipo || '')) ? String(r.tipo) : '';
+    setTipo(loadedTipo);
     setEstado(allowedEstados.has(String((r as any)?.estado || '')) ? (String((r as any).estado) as any) : 'Activo');
-    setKilometraje(String(r.kilometraje ?? ''));
-    setProxCambioAceite(String(r.prox_cambio_aceite ?? ''));
     setTipoAutoria(r.tipo_autoria || '');
-    setModelo(r.modelo || '');
-    setAnno(String(r.anno ?? ''));
-    setDescripcion(r.descripcion || '');
-    setTituloPropiedad(!!r.titulo_propiedad);
-    setRtv(!!r.rtv);
-    setMarchamo(!!r.marchamo);
+    setMarca(r.marca || '');
+    setDescripcion(r.descripcion ?? '');
+    if (isTipoBicicleta(loadedTipo)) {
+      clearCamposNoAplicanBicicleta({
+        setPlaca,
+        setKilometraje,
+        setProxCambioAceite,
+        setModelo,
+        setAnno,
+        setTituloPropiedad,
+        setRtv,
+        setMarchamo,
+      });
+    } else {
+      setPlaca(r.placa ?? '');
+      setKilometraje(r.kilometraje != null ? String(r.kilometraje) : '');
+      setProxCambioAceite(r.prox_cambio_aceite != null ? String(r.prox_cambio_aceite) : '');
+      setModelo(r.modelo ?? '');
+      setAnno(r.anno != null ? String(r.anno) : '');
+      setTituloPropiedad(!!r.titulo_propiedad);
+      setRtv(!!r.rtv);
+      setMarchamo(!!r.marchamo);
+    }
     setFirmaResponsable(decodeFirmaHash(r.firma_responsable) as any);
 
     setImageFiles([]);
@@ -3454,8 +3496,8 @@ export default function CorporateVehiclesScreen() {
       if (!selectedContratoId) return 'Contrato es obligatorio';
       if (!selectedPuestoId || selectedPuestoId <= 0) return 'Puesto es obligatorio';
     }
-    if (!placa.trim()) return 'Placa es requerida';
     if (!tipo.trim()) return 'Tipo es requerido';
+    if (!marca.trim()) return 'Marca es requerida';
     if (!tipoAutoria.trim()) return 'Tipo de autoría es requerido';
     if (!getVehicleFirmaHashForSave().trim()) return 'Firma del responsable (QR o Generar) es requerida';
     return null;
@@ -3719,6 +3761,18 @@ export default function CorporateVehiclesScreen() {
         ? Number(marcaPuestoId ?? 0)
         : Number(selectedPuestoId ?? 0);
 
+    const esBicicleta = isTipoBicicleta(tipo);
+    const numOrNull = (raw: string): number | null => {
+      const s = raw.trim();
+      if (!s) return null;
+      const n = Number(s);
+      return Number.isFinite(n) ? n : null;
+    };
+    const strOrNull = (raw: string): string | null => {
+      const s = raw.trim();
+      return s ? s : null;
+    };
+
     return {
       empresa_id: Number(empresaId),
       cliente_id: Number(clienteId),
@@ -3726,20 +3780,38 @@ export default function CorporateVehiclesScreen() {
       division_id: divisionId,
       contrato_id: contratoId,
       puesto_id: puestoId,
-      placa: placa.trim(),
+      placa: esBicicleta ? null : strOrNull(placa),
       tipo: tipo.trim(),
       tipo_autoria: tipoAutoria.trim(),
       estado: String(estado || 'Activo'),
-      kilometraje: Number(kilometraje || 0),
-      prox_cambio_aceite: Number(proxCambioAceite || 0),
-      modelo: modelo.trim(),
-      anno: Number(anno || 0),
-      descripcion: descripcion.trim(),
-      titulo_propiedad: !!tituloPropiedad,
-      rtv: !!rtv,
-      marchamo: !!marchamo,
+      kilometraje: esBicicleta ? null : numOrNull(kilometraje),
+      prox_cambio_aceite: esBicicleta ? null : numOrNull(proxCambioAceite),
+      modelo: esBicicleta ? null : strOrNull(modelo),
+      marca: marca.trim(),
+      anno: esBicicleta ? null : numOrNull(anno),
+      descripcion: strOrNull(descripcion),
+      titulo_propiedad: esBicicleta ? null : tituloPropiedad,
+      rtv: esBicicleta ? null : rtv,
+      marchamo: esBicicleta ? null : marchamo,
       firma_responsable: firmaHash,
     };
+  };
+
+  const handleTipoChange = (v: string) => {
+    const next = String(v || '');
+    setTipo(next);
+    if (isTipoBicicleta(next)) {
+      clearCamposNoAplicanBicicleta({
+        setPlaca,
+        setKilometraje,
+        setProxCambioAceite,
+        setModelo,
+        setAnno,
+        setTituloPropiedad,
+        setRtv,
+        setMarchamo,
+      });
+    }
   };
 
   const handleSaveRecord = () => {
@@ -3878,6 +3950,7 @@ export default function CorporateVehiclesScreen() {
             prox_cambio_aceite: requestData.prox_cambio_aceite,
             modelo: requestData.modelo,
             anno: requestData.anno,
+            marca: requestData.marca,
             descripcion: requestData.descripcion,
             titulo_propiedad: requestData.titulo_propiedad,
             rtv: requestData.rtv,
@@ -4534,19 +4607,24 @@ export default function CorporateVehiclesScreen() {
               ) : null}
 
               <ThemedText style={styles.sectionTitle}>Datos del vehículo</ThemedText>
-              <ThemedText style={styles.label}>Placa</ThemedText>
-              <TextInput value={placa} onChangeText={setPlaca} style={styles.input} placeholder="Placa" placeholderTextColor="#999" />
 
-              <ThemedText style={styles.label}>Tipo</ThemedText>
+              <ThemedText style={styles.label}>Tipo *</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
-                <Picker selectedValue={tipo} onValueChange={(v) => setTipo(String(v || ''))} style={styles.picker}>
+                <Picker selectedValue={tipo} onValueChange={(v) => handleTipoChange(String(v || ''))} style={styles.picker}>
                   <Picker.Item label="Seleccione..." value="" color="#000000" />
                   <Picker.Item label="Vehículo" value="Vehículo" color="#000000" />
                   <Picker.Item label="Bicicleta" value="Bicicleta" color="#000000" />
                   <Picker.Item label="Motocicleta" value="Motocicleta" color="#000000" />
                 </Picker>
               </ThemedView>
-              
+
+              {!isTipoBicicleta(tipo) ? (
+                <>
+                  <ThemedText style={styles.label}>Placa</ThemedText>
+                  <TextInput value={placa} onChangeText={setPlaca} style={styles.input} placeholder="Placa" placeholderTextColor="#999" />
+                </>
+              ) : null}
+
               <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
               <ThemedView style={styles.pickerWrapper}>
                 <Picker
@@ -4568,17 +4646,24 @@ export default function CorporateVehiclesScreen() {
                 </Picker>
               </ThemedView>
 
-              <ThemedText style={styles.label}>Kilometraje</ThemedText>
-              <TextInput value={kilometraje} onChangeText={setKilometraje} style={styles.input} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
+              {!isTipoBicicleta(tipo) ? (
+                <>
+                  <ThemedText style={styles.label}>Kilometraje</ThemedText>
+                  <TextInput value={kilometraje} onChangeText={setKilometraje} style={styles.input} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
 
-              <ThemedText style={styles.label}>Próximo cambio de aceite</ThemedText>
-              <TextInput value={proxCambioAceite} onChangeText={setProxCambioAceite} style={styles.input} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
+                  <ThemedText style={styles.label}>Próximo cambio de aceite</ThemedText>
+                  <TextInput value={proxCambioAceite} onChangeText={setProxCambioAceite} style={styles.input} placeholder="0" keyboardType="numeric" placeholderTextColor="#999" />
 
-              <ThemedText style={styles.label}>Modelo</ThemedText>
-              <TextInput value={modelo} onChangeText={setModelo} style={styles.input} placeholder="Modelo" placeholderTextColor="#999" />
+                  <ThemedText style={styles.label}>Modelo</ThemedText>
+                  <TextInput value={modelo} onChangeText={setModelo} style={styles.input} placeholder="Modelo" placeholderTextColor="#999" />
 
-              <ThemedText style={styles.label}>Año</ThemedText>
-              <TextInput value={anno} onChangeText={setAnno} style={styles.input} placeholder="2026" keyboardType="numeric" placeholderTextColor="#999" />
+                  <ThemedText style={styles.label}>Año</ThemedText>
+                  <TextInput value={anno} onChangeText={setAnno} style={styles.input} placeholder="2026" keyboardType="numeric" placeholderTextColor="#999" />
+                </>
+              ) : null}
+
+              <ThemedText style={styles.label}>Marca *</ThemedText>
+              <TextInput value={marca} onChangeText={setMarca} style={styles.input} placeholder="Marca" placeholderTextColor="#999" />
 
               <ThemedText style={styles.label}>Descripción</ThemedText>
               <TextInput
@@ -4590,21 +4675,25 @@ export default function CorporateVehiclesScreen() {
                 multiline
               />
 
-              <ThemedText style={styles.sectionTitle}>Documentos</ThemedText>
-              <ThemedView style={styles.switchRow}>
-                <TouchableOpacity style={[styles.switchBtn, tituloPropiedad && styles.switchBtnOn]} onPress={() => setTituloPropiedad((p) => !p)} activeOpacity={0.85}>
-                  <Ionicons name={tituloPropiedad ? 'checkbox' : 'square-outline'} size={18} color={tituloPropiedad ? '#34C759' : '#666'} />
-                  <ThemedText style={styles.switchText}>Título propiedad</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.switchBtn, rtv && styles.switchBtnOn]} onPress={() => setRtv((p) => !p)} activeOpacity={0.85}>
-                  <Ionicons name={rtv ? 'checkbox' : 'square-outline'} size={18} color={rtv ? '#34C759' : '#666'} />
-                  <ThemedText style={styles.switchText}>RTV</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity style={[styles.switchBtn, marchamo && styles.switchBtnOn]} onPress={() => setMarchamo((p) => !p)} activeOpacity={0.85}>
-                  <Ionicons name={marchamo ? 'checkbox' : 'square-outline'} size={18} color={marchamo ? '#34C759' : '#666'} />
-                  <ThemedText style={styles.switchText}>Marchamo</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
+              {!isTipoBicicleta(tipo) ? (
+                <>
+                  <ThemedText style={styles.sectionTitle}>Documentos</ThemedText>
+                  <ThemedView style={styles.switchRow}>
+                    <TouchableOpacity style={[styles.switchBtn, tituloPropiedad && styles.switchBtnOn]} onPress={() => setTituloPropiedad((p) => !p)} activeOpacity={0.85}>
+                      <Ionicons name={tituloPropiedad ? 'checkbox' : 'square-outline'} size={18} color={tituloPropiedad ? '#34C759' : '#666'} />
+                      <ThemedText style={styles.switchText}>Título propiedad</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.switchBtn, rtv && styles.switchBtnOn]} onPress={() => setRtv((p) => !p)} activeOpacity={0.85}>
+                      <Ionicons name={rtv ? 'checkbox' : 'square-outline'} size={18} color={rtv ? '#34C759' : '#666'} />
+                      <ThemedText style={styles.switchText}>RTV</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[styles.switchBtn, marchamo && styles.switchBtnOn]} onPress={() => setMarchamo((p) => !p)} activeOpacity={0.85}>
+                      <Ionicons name={marchamo ? 'checkbox' : 'square-outline'} size={18} color={marchamo ? '#34C759' : '#666'} />
+                      <ThemedText style={styles.switchText}>Marchamo</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </>
+              ) : null}
 
               <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
               {firmaResponsable ? (

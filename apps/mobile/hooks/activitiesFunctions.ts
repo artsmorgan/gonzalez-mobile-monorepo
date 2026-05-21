@@ -141,6 +141,60 @@ export const updateCreatedActivity = async ({
   }
 };
 
+export const duplicateCreatedActivity = async ({
+  activityId,
+  refreshAccessToken,
+  logout,
+}: {
+  activityId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse & { actividad?: any; actividad_id?: number; puestos_duplicados?: number }> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/${activityId}/duplicate`,
+      init: { method: 'POST' },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    return await response.json();
+  } catch (error) {
+    console.error('Error duplicating created activity:', error);
+    return { status: false, message: 'Error al duplicar actividad' };
+  }
+};
+
+export const unlinkCreatedActivityPuesto = async ({
+  activityId,
+  puestoId,
+  refreshAccessToken,
+  logout,
+}: {
+  activityId: number;
+  puestoId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<ApiResponse & { actividad_id?: number; puesto_id?: number }> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) throw new Error('Server URL not configured');
+    const response = await authedFetch({
+      url: `${apiUrl}/api/activities/created/${activityId}/puestos/${puestoId}`,
+      init: { method: 'DELETE' },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) throw new Error('Sesión expirada');
+    return await response.json();
+  } catch (error) {
+    console.error('Error unlinking created activity puesto:', error);
+    return { status: false, message: 'Error al desvincular puesto' };
+  }
+};
+
 export const deleteCreatedActivity = async ({
   activityId,
   refreshAccessToken,

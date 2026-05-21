@@ -191,6 +191,7 @@ export function mapVehiculoCorporativoSummaryForBitacora(v: any): any {
     kilometraje: v.kilometraje,
     prox_cambio_aceite: v.prox_cambio_aceite,
     modelo: v.modelo,
+    marca: v.marca,
     anno: v.anno,
     descripcion: v.descripcion,
     titulo_propiedad: v.titulo_propiedad,

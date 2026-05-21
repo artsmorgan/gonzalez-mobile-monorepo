@@ -33,21 +33,34 @@ import type {
 
 /** Igual que `CreateCorporateVehicleParams['requestData']` en evaluationFunctions (payload tras hidratar imágenes). */
 type CorporateVehicleRequestBody = {
+  empresa_id?: number;
   cliente_id: number;
   corpo_id: number;
-  placa?: string;
+  division_id?: number;
+  contrato_id?: number;
+  puesto_id?: number;
+  placa?: string | null;
   tipo?: string;
-  kilometraje?: number;
-  prox_cambio_aceite?: number;
-  modelo?: string;
-  anno?: number;
-  descripcion?: string;
-  titulo_propiedad?: boolean;
-  rtv?: boolean;
-  marchamo?: boolean;
+  tipo_autoria?: string;
+  estado?: string;
+  kilometraje?: number | null;
+  prox_cambio_aceite?: number | null;
+  modelo?: string | null;
+  marca: string;
+  anno?: number | null;
+  descripcion?: string | null;
+  titulo_propiedad?: boolean | null;
+  rtv?: boolean | null;
+  marchamo?: boolean | null;
   firma_responsable?: string;
-  imagenes?: Array<{ extension: string; file_base64: string }>;
+  imagenes?: Array<{ extension: string; file_base64: string; original_name?: string }>;
 };
+
+function normalizeCorporateVehicleRequestBody(payload: Record<string, any>): CorporateVehicleRequestBody {
+  const next = { ...payload };
+  next.marca = String(next.marca ?? '').trim();
+  return next as CorporateVehicleRequestBody;
+}
 
 export const CORPORATE_EVALUATION_TYPES = new Set<string>([
   'corporate_vehicle',
@@ -620,7 +633,31 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
     createBitacoraVehiculoDetenido,
     updateBitacoraVehiculoDetenido,
     deleteBitacoraVehiculoDetenido,
+    deleteBitacoraRevisionImage,
   } = await import('@/hooks/bitacoraVehiculoDetenidoFunctions');
+  const { buildBitacoraRevisionForSubmit, deleteBitacoraRevLocalImageFiles } = await import(
+    '@/hooks/bitacoraRevisionMediaSync'
+  );
+
+  const hydrateRevisionPayloadForApi = (payload: Record<string, any>) => {
+    const next = JSON.parse(JSON.stringify(payload || {}));
+    const rawRev = next.informacion_revision;
+    let revArr: any[] = [];
+    if (Array.isArray(rawRev)) revArr = rawRev;
+    else if (typeof rawRev === 'string' && rawRev.trim()) {
+      try {
+        const parsed = JSON.parse(rawRev);
+        revArr = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        revArr = [];
+      }
+    }
+    if (revArr.length === 0) return next;
+    const { informacion_revision, fileSlots } = buildBitacoraRevisionForSubmit(revArr);
+    next.informacion_revision = informacion_revision;
+    if (fileSlots.length > 0) next._bitacoraRevFileSlots = fileSlots;
+    return next;
+  };
 
   for (let guard = 0; guard < 30; guard++) {
     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
@@ -628,7 +665,10 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
     const pending = all.filter(
       (a) =>
         a.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
-        (a.action === 'create' || a.action === 'update' || a.action === 'delete')
+        (a.action === 'create' ||
+          a.action === 'update' ||
+          a.action === 'delete' ||
+          a.action === 'delete_image')
     );
     if (pending.length === 0) break;
 
@@ -642,8 +682,48 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
       );
       if (!stillThere) continue;
 
+      if (action.action === 'delete_image') {
+        const bid = Number(action.id);
+        if (!Number.isFinite(bid) || bid <= 0) {
+          const next = removeActionFromQueue(fresh, action);
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
+          progressed = true;
+          continue;
+        }
+        const p = action.payload || {};
+        const resImg = await deleteBitacoraRevisionImage({
+          id: bid,
+          imageName: String(p.imageName || ''),
+          revisionKey: String(p.revisionKey || ''),
+          refreshAccessToken,
+          logout,
+        });
+        if (!resImg.status) continue;
+        const nextRev = resImg.data?.informacion_revision;
+        if (Array.isArray(nextRev)) {
+          const { upsertBitacoraDetenidoRowInMainStructure, readBitacorasForSucursalFromMainStructure } =
+            await import('./bitacoraMainStructureCache');
+          const corpoId = Number(p.sucursal_id ?? 0);
+          if (corpoId > 0) {
+            const list = await readBitacorasForSucursalFromMainStructure(corpoId);
+            const row = list.find((b: any) => Number(b.id) === bid);
+            if (row) {
+              await upsertBitacoraDetenidoRowInMainStructure(
+                { ...row, informacion_revision: nextRev },
+                corpoId,
+                null
+              );
+            }
+          }
+        }
+        const next = removeActionFromQueue(fresh, action);
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
+        progressed = true;
+        continue;
+      }
+
       if (action.action === 'update') {
-        const payloadUp = JSON.parse(JSON.stringify(action.payload || {}));
+        const payloadUp = hydrateRevisionPayloadForApi(JSON.parse(JSON.stringify(action.payload || {})));
         const bid = Number(action.id);
         if (!Number.isFinite(bid) || bid <= 0) {
           const next = removeActionFromQueue(fresh, action);
@@ -658,6 +738,21 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
           logout,
         });
         if (!resUp.status) continue;
+        try {
+          const rawRev = action.payload?.informacion_revision;
+          let revArr: any[] = [];
+          if (Array.isArray(rawRev)) revArr = rawRev;
+          else if (typeof rawRev === 'string' && rawRev.trim()) {
+            try {
+              revArr = JSON.parse(rawRev);
+            } catch {
+              revArr = [];
+            }
+          }
+          await deleteBitacoraRevLocalImageFiles(revArr);
+        } catch {
+          /* noop */
+        }
         const next = removeActionFromQueue(fresh, action);
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
         progressed = true;
@@ -682,7 +777,7 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
         continue;
       }
 
-      const payload = JSON.parse(JSON.stringify(action.payload || {}));
+      const payload = hydrateRevisionPayloadForApi(JSON.parse(JSON.stringify(action.payload || {})));
       delete payload.bitacora_action_local_id;
 
       const vehKey = extractLocalEntityKey(payload.vehiculo_id, payload.vehiculo_id_local) || null;
@@ -720,6 +815,22 @@ async function processBitacoraVehiculoDetenidoActions(deps: {
       try {
         const result = await createBitacoraVehiculoDetenido({ requestData: payload, refreshAccessToken, logout });
         if (!result.status) continue;
+
+        try {
+          const rawRev = action.payload?.informacion_revision;
+          let revArr: any[] = [];
+          if (Array.isArray(rawRev)) revArr = rawRev;
+          else if (typeof rawRev === 'string' && rawRev.trim()) {
+            try {
+              revArr = JSON.parse(rawRev);
+            } catch {
+              revArr = [];
+            }
+          }
+          await deleteBitacoraRevLocalImageFiles(revArr);
+        } catch {
+          /* noop */
+        }
 
         const next = removeActionFromQueue(fresh, action);
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(next));
@@ -1077,7 +1188,7 @@ async function processOneCorporateAction(
     const payload = await hydrateCorporateVehicleImagenesInPayload({ ...(action.payload || {}) });
     delete payload.id_local;
     const result = await createCorporateVehicle({
-      requestData: payload as CorporateVehicleRequestBody,
+      requestData: normalizeCorporateVehicleRequestBody(payload),
       refreshAccessToken,
       logout,
     });
@@ -1254,7 +1365,7 @@ async function processOneCorporateAction(
     const requestData = await hydrateCorporateVehicleImagenesInPayload({ ...(action.payload || {}) });
     const result = await updateCorporateVehicle({
       id: action.id,
-      requestData: requestData as CorporateVehicleRequestBody,
+      requestData: normalizeCorporateVehicleRequestBody(requestData),
       refreshAccessToken,
       logout,
     });

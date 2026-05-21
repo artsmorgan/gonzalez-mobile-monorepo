@@ -6,6 +6,10 @@ import fs from "fs";
 import path from "path";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import {
+  buildCorporateVehicleOptionalFields,
+  normalizeMarca,
+} from "../../../utils/corporateVehiclePayload";
 
 export const runtime = "nodejs";
 
@@ -158,6 +162,7 @@ export async function POST(req: NextRequest) {
       prox_cambio_aceite,
       modelo,
       anno,
+      marca,
       descripcion,
       titulo_propiedad,
       rtv,
@@ -186,6 +191,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const marcaNorm = normalizeMarca(marca);
+    if (!marcaNorm) {
+      return NextResponse.json({ status: false, message: "Marca es requerida" }, { status: 400 });
+    }
+
+    const optionalFields = buildCorporateVehicleOptionalFields({
+      tipo,
+      placa,
+      kilometraje,
+      prox_cambio_aceite,
+      modelo,
+      anno,
+      descripcion,
+      titulo_propiedad,
+      rtv,
+      marchamo,
+    });
+
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
     const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
 
@@ -203,18 +226,11 @@ export async function POST(req: NextRequest) {
           contrato_id: contratoIdNum > 0 ? contratoIdNum : 0,
           puesto_id: puestoIdNum > 0 ? puestoIdNum : 0,
           isActive: true,
-          placa: String(placa ?? ""),
+          ...optionalFields,
           tipo: String(tipo ?? ""),
           tipo_autoria: String(tipo_autoria ?? ""),
           estado: String(estado ?? "Activo"),
-          kilometraje: Number(kilometraje ?? 0),
-          prox_cambio_aceite: Number(prox_cambio_aceite ?? 0),
-          modelo: String(modelo ?? ""),
-          anno: Number(anno ?? 0),
-          descripcion: String(descripcion ?? ""),
-          titulo_propiedad: Boolean(titulo_propiedad ?? true),
-          rtv: Boolean(rtv ?? true),
-          marchamo: Boolean(marchamo ?? true),
+          marca: marcaNorm,
           firma_responsable: String(firma_responsable ?? ""),
           created_by: createdBy,
           created_at: createdAt.toISOString(),
@@ -337,6 +353,7 @@ export async function POST(req: NextRequest) {
               prox_cambio_aceite: newRecordObj.prox_cambio_aceite,
               modelo: newRecordObj.modelo,
               anno: newRecordObj.anno,
+              marca: newRecordObj.marca,
               descripcion: newRecordObj.descripcion,
               titulo_propiedad: newRecordObj.titulo_propiedad,
               rtv: newRecordObj.rtv,

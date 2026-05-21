@@ -480,6 +480,116 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
         if (ceds.length > 0) out.participanteCedulas = [...new Set(ceds)];
     }
 
+    const nvDesde = searchParams.get("listNvCreadoDesde");
+    const nvHasta = searchParams.get("listNvCreadoHasta");
+    if (nvDesde) out.creadoDesde = nvDesde;
+    if (nvHasta) out.creadoHasta = nvHasta;
+    const mapNvIds: Array<[string, string]> = [
+        ["listNvEmpresaIds", "empresaIds"],
+        ["listNvClienteIds", "clienteIds"],
+        ["listNvDivisionIds", "divisionIds"],
+        ["listNvContratoIds", "contratoIds"],
+        ["listNvCorpoIds", "corpoIds"],
+        ["listNvPuestoIds", "puestoIds"],
+    ];
+    for (const [paramKey, outKey] of mapNvIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+
+    const cupDesde = searchParams.get("listCupCreadoDesde");
+    const cupHasta = searchParams.get("listCupCreadoHasta");
+    if (cupDesde) out.creadoDesde = cupDesde;
+    if (cupHasta) out.creadoHasta = cupHasta;
+    const mapCupIds: Array<[string, string]> = [
+        ["listCupEmpresaIds", "empresaIds"],
+        ["listCupClienteIds", "clienteIds"],
+        ["listCupDivisionIds", "divisionIds"],
+        ["listCupContratoIds", "contratoIds"],
+        ["listCupCorpoIds", "corpoIds"],
+        ["listCupPuestoIds", "puestoIds"],
+        ["listCupResponsableIds", "responsableIds"],
+    ];
+    for (const [paramKey, outKey] of mapCupIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+
+    const rcDesde = searchParams.get("listRcCreadoDesde");
+    const rcHasta = searchParams.get("listRcCreadoHasta");
+    if (rcDesde) out.creadoDesde = rcDesde;
+    if (rcHasta) out.creadoHasta = rcHasta;
+    const rcTipo = searchParams.get("listRcTipoCapacitacion");
+    if (rcTipo && rcTipo.trim() !== "" && rcTipo !== "todos") out.tipoCapacitacion = rcTipo.trim();
+    const mapRcIds: Array<[string, string]> = [
+        ["listRcEmpresaIds", "empresaIds"],
+        ["listRcClienteIds", "clienteIds"],
+        ["listRcDivisionIds", "divisionIds"],
+        ["listRcContratoIds", "contratoIds"],
+        ["listRcCorpoIds", "corpoIds"],
+        ["listRcPuestoIds", "puestoIds"],
+        ["listRcCapacitacionEmpleadoIds", "capacitacionEmpleadoIds"],
+        ["listRcCapacitacionPuestoIds", "capacitacionPuestoIds"],
+        ["listRcResponsableIds", "responsableIds"],
+    ];
+    for (const [paramKey, outKey] of mapRcIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+
+    const rigDesde = searchParams.get("listRigCreadoDesde");
+    const rigHasta = searchParams.get("listRigCreadoHasta");
+    if (rigDesde) out.creadoDesde = rigDesde;
+    if (rigHasta) out.creadoHasta = rigHasta;
+    const mapRigIds: Array<[string, string]> = [
+        ["listRigEmpresaIds", "empresaIds"],
+        ["listRigClienteIds", "clienteIds"],
+        ["listRigDivisionIds", "divisionIds"],
+        ["listRigContratoIds", "contratoIds"],
+        ["listRigCorpoIds", "corpoIds"],
+        ["listRigPuestoIds", "puestoIds"],
+    ];
+    for (const [paramKey, outKey] of mapRigIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const rigCol = searchParams.get("listRigColaboradorCedulas");
+    if (rigCol && rigCol.trim() !== "") {
+        const ceds = rigCol
+            .split(",")
+            .map((s) => s.trim().replace(/\s+/g, ""))
+            .filter((s) => s.length > 0);
+        if (ceds.length > 0) out.colaboradorCedulas = [...new Set(ceds)];
+    }
+    const rigCap = searchParams.get("listRigCapacitadorCedulas");
+    if (rigCap && rigCap.trim() !== "") {
+        const ceds = rigCap
+            .split(",")
+            .map((s) => s.trim().replace(/\s+/g, ""))
+            .filter((s) => s.length > 0);
+        if (ceds.length > 0) out.capacitadorCedulas = [...new Set(ceds)];
+    }
+
     const mpDesde = searchParams.get("listMpCreadoDesde");
     const mpHasta = searchParams.get("listMpCreadoHasta");
     if (mpDesde) out.creadoDesde = mpDesde;
@@ -493,6 +603,136 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
         ["listMpPuestoIds", "puestoIds"],
     ];
     for (const [paramKey, outKey] of mapMpIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+
+    const mapApIds: Array<[string, string]> = [
+        ["listApEmpresaIds", "empresaIds"],
+        ["listApClienteIds", "clienteIds"],
+        ["listApDivisionIds", "divisionIds"],
+        ["listApContratoIds", "contratoIds"],
+        ["listApCorpoIds", "corpoIds"],
+        ["listApPuestoIds", "puestoIds"],
+    ];
+    for (const [paramKey, outKey] of mapApIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+
+    const maDesde = searchParams.get("listMaCreadoDesde");
+    const maHasta = searchParams.get("listMaCreadoHasta");
+    if (maDesde) out.creadoDesde = maDesde;
+    if (maHasta) out.creadoHasta = maHasta;
+    const maSolDesde = searchParams.get("listMaSolucionadoDesde");
+    const maSolHasta = searchParams.get("listMaSolucionadoHasta");
+    if (maSolDesde) out.solucionadoDesde = maSolDesde;
+    if (maSolHasta) out.solucionadoHasta = maSolHasta;
+    const mapMaIds: Array<[string, string]> = [
+        ["listMaEmpresaIds", "empresaIds"],
+        ["listMaClienteIds", "clienteIds"],
+        ["listMaDivisionIds", "divisionIds"],
+        ["listMaContratoIds", "contratoIds"],
+        ["listMaCorpoIds", "corpoIds"],
+        ["listMaPuestoIds", "puestoIds"],
+    ];
+    for (const [paramKey, outKey] of mapMaIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const maEstados = searchParams.get("listMaEstados");
+    if (maEstados && maEstados.trim() !== "") {
+        const ee = maEstados
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (ee.length > 0) out.estados = [...new Set(ee)];
+    }
+    const maAcciones = searchParams.get("listMaAcciones");
+    if (maAcciones && maAcciones.trim() !== "") {
+        const aa = maAcciones
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (aa.length > 0) out.tiposAccion = [...new Set(aa)];
+    }
+
+    const rvcDesde = searchParams.get("listRvcCreadoDesde");
+    const rvcHasta = searchParams.get("listRvcCreadoHasta");
+    if (rvcDesde) out.creadoDesde = rvcDesde;
+    if (rvcHasta) out.creadoHasta = rvcHasta;
+    const mapRvcIds: Array<[string, string]> = [
+        ["listRvcEmpresaIds", "empresaIds"],
+        ["listRvcClienteIds", "clienteIds"],
+        ["listRvcDivisionIds", "divisionIds"],
+        ["listRvcContratoIds", "contratoIds"],
+        ["listRvcCorpoIds", "corpoIds"],
+        ["listRvcPuestoIds", "puestoIds"],
+    ];
+    for (const [paramKey, outKey] of mapRvcIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const rvcTipos = searchParams.get("listRvcTiposVehiculo");
+    if (rvcTipos && rvcTipos.trim() !== "") {
+        const tt = rvcTipos
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (tt.length > 0) out.tiposVehiculo = [...new Set(tt)];
+    }
+    const rvcAutoria = searchParams.get("listRvcTiposAutoria");
+    if (rvcAutoria && rvcAutoria.trim() !== "") {
+        const ta = rvcAutoria
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (ta.length > 0) out.tiposAutoria = [...new Set(ta)];
+    }
+    const rvcPlaca = searchParams.get("listRvcPlaca");
+    if (rvcPlaca && rvcPlaca.trim() !== "") out.placaContains = rvcPlaca.trim();
+    const rvcAnno = searchParams.get("listRvcAnno");
+    if (rvcAnno && rvcAnno.trim() !== "") {
+        const n = Number(rvcAnno.trim());
+        if (Number.isFinite(n)) out.anno = n;
+    }
+    const rvcModelo = searchParams.get("listRvcModelo");
+    if (rvcModelo && rvcModelo.trim() !== "") out.modeloContains = rvcModelo.trim();
+
+    const revDesde = searchParams.get("listRevCreadoDesde");
+    const revHasta = searchParams.get("listRevCreadoHasta");
+    if (revDesde) out.creadoDesde = revDesde;
+    if (revHasta) out.creadoHasta = revHasta;
+    const mapRevIds: Array<[string, string]> = [
+        ["listRevEmpresaIds", "empresaIds"],
+        ["listRevClienteIds", "clienteIds"],
+        ["listRevDivisionIds", "divisionIds"],
+        ["listRevContratoIds", "contratoIds"],
+        ["listRevCorpoIds", "corpoIds"],
+        ["listRevPuestoIds", "puestoIds"],
+        ["listRevVehiculoIds", "vehiculoIds"],
+    ];
+    for (const [paramKey, outKey] of mapRevIds) {
         const raw = searchParams.get(paramKey);
         if (!raw || raw.trim() === "") continue;
         const ids = raw
@@ -536,6 +776,114 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
             .map((s) => Number(s.trim()))
             .filter((n) => Number.isFinite(n) && n > 0);
         if (ids.length > 0) out.ejecutivoCuentaIds = [...new Set(ids)];
+    }
+
+    const taInicioDesde = searchParams.get("listTaInicioDesde");
+    const taFinHasta = searchParams.get("listTaFinHasta");
+    if (taInicioDesde) out.inicioDesde = taInicioDesde;
+    if (taFinHasta) out.finHasta = taFinHasta;
+    const mapTaIds: Array<[string, string]> = [
+        ["listTaEmpresaIds", "empresaIds"],
+        ["listTaClienteIds", "clienteIds"],
+        ["listTaDivisionIds", "divisionIds"],
+        ["listTaContratoIds", "contratoIds"],
+        ["listTaCorpoIds", "corpoIds"],
+        ["listTaPuestoIds", "puestoIds"],
+        ["listTaEmpleadoIds", "empleadoIds"],
+    ];
+    for (const [paramKey, outKey] of mapTaIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const taCed = searchParams.get("listTaCedulas");
+    if (taCed && taCed.trim() !== "") {
+        const ceds = taCed
+            .split(",")
+            .map((s) => s.trim().replace(/\s+/g, ""))
+            .filter((s) => s.length > 0);
+        if (ceds.length > 0) out.cedulas = [...new Set(ceds)];
+    }
+
+    const spDesde = searchParams.get("listSpCreadoDesde");
+    const spHasta = searchParams.get("listSpCreadoHasta");
+    if (spDesde) out.creadoDesde = spDesde;
+    if (spHasta) out.creadoHasta = spHasta;
+    const mapSpIds: Array<[string, string]> = [
+        ["listSpEmpresaIds", "empresaIds"],
+        ["listSpClienteIds", "clienteIds"],
+        ["listSpDivisionIds", "divisionIds"],
+        ["listSpContratoIds", "contratoIds"],
+        ["listSpCorpoIds", "corpoIds"],
+        ["listSpPuestoIds", "puestoIds"],
+        ["listSpEmpleadoIds", "empleadoIds"],
+        ["listSpEjecutivoIds", "ejecutivoCuentaIds"],
+    ];
+    for (const [paramKey, outKey] of mapSpIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const spTurnos = searchParams.get("listSpTiposTurno");
+    if (spTurnos && spTurnos.trim() !== "") {
+        const tt = spTurnos
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (tt.length > 0) out.tiposTurno = [...new Set(tt)];
+    }
+    const spTipoSal = searchParams.get("listSpTipoSalario");
+    if (spTipoSal && spTipoSal.trim() !== "" && spTipoSal !== "todos") out.tipoSalario = spTipoSal;
+    const spEst = searchParams.get("listSpEstado");
+    if (spEst && spEst.trim() !== "" && spEst !== "todos") out.estado = spEst;
+
+    const vvDesde = searchParams.get("listVvCreadoDesde");
+    const vvHasta = searchParams.get("listVvCreadoHasta");
+    if (vvDesde) out.creadoDesde = vvDesde;
+    if (vvHasta) out.creadoHasta = vvHasta;
+    const mapVvIds: Array<[string, string]> = [
+        ["listVvEmpresaIds", "empresaIds"],
+        ["listVvClienteIds", "clienteIds"],
+        ["listVvDivisionIds", "divisionIds"],
+        ["listVvContratoIds", "contratoIds"],
+        ["listVvCorpoIds", "corpoIds"],
+        ["listVvPuestoIds", "puestoIds"],
+        ["listVvResponsableIds", "responsableIds"],
+    ];
+    for (const [paramKey, outKey] of mapVvIds) {
+        const raw = searchParams.get(paramKey);
+        if (!raw || raw.trim() === "") continue;
+        const ids = raw
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out[outKey] = [...new Set(ids)];
+    }
+    const vvCedula = searchParams.get("listVvCedulaVisitante");
+    if (vvCedula && vvCedula.trim() !== "") out.cedulaVisitante = vvCedula.trim();
+    const vvTipos = searchParams.get("listVvTiposVehiculo");
+    if (vvTipos && vvTipos.trim() !== "") {
+        const tt = vvTipos
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (tt.length > 0) out.tiposVehiculo = [...new Set(tt)];
+    }
+    const vvPlacas = searchParams.get("listVvPlacas");
+    if (vvPlacas && vvPlacas.trim() !== "") {
+        const pp = vvPlacas
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (pp.length > 0) out.placas = [...new Set(pp)];
     }
 
     return Object.keys(out).length ? out : undefined;

@@ -208,7 +208,9 @@ export default function MutuosAcuerdosScreen() {
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
   const [signingRecordId, setSigningRecordId] = useState<number | null>(null);
   const [firmaEjecutivoDigital, setFirmaEjecutivoDigital] = useState('');
+  const [firmaEjecutivoManual, setFirmaEjecutivoManual] = useState('');
   const [isGeneratingFirmaEjecutivoDigital, setIsGeneratingFirmaEjecutivoDigital] = useState(false);
+  const [executiveDrawModalVisible, setExecutiveDrawModalVisible] = useState(false);
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [signatureKey, setSignatureKey] = useState(0);
   const signatureRef = useRef<any>(null);
@@ -533,7 +535,7 @@ export default function MutuosAcuerdosScreen() {
     if (!eid || !did || !cid || !pid) {
       Alert.alert(
         'Error',
-        'La marca del empleado ausente no incluye jerarquía completa (empresa, división, contrato, puesto). Vuelva a cargar las marcas.'
+        'La marca del primer turno no incluye jerarquía completa (empresa, división, contrato, puesto). Vuelva a cargar las marcas.'
       );
       return;
     }
@@ -724,8 +726,8 @@ export default function MutuosAcuerdosScreen() {
 
   const submitParticipantAccept = () => {
     if (participantIsReadingSig || acceptingMutuoKey) return;
-    const label = participantSigRole === 'ausente' ? 'empleado ausente' : 'empleado reemplaza';
-    Alert.alert('Confirmar', `¿Registrar la aceptación como ${label} con la firma dibujada?`, [
+    const label = participantSigRole === 'ausente' ? 'primer turno' : 'segundo turno';
+    Alert.alert('Confirmar', `¿Registrar la aceptación como usuario del ${label} con la firma dibujada?`, [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Aceptar', onPress: () => void submitParticipantAcceptReadCanvas() },
     ]);
@@ -785,14 +787,35 @@ export default function MutuosAcuerdosScreen() {
     if (participantSigModalVisible) return;
     setSigningRecordId(recordId);
     setFirmaEjecutivoDigital('');
+    setFirmaEjecutivoManual('');
+    setExecutiveDrawModalVisible(false);
     setSignatureKey((k) => k + 1);
     setSignatureModalVisible(true);
   };
 
   const closeSignatureModal = () => {
     setSignatureModalVisible(false);
+    setExecutiveDrawModalVisible(false);
     setSigningRecordId(null);
     setFirmaEjecutivoDigital('');
+    setFirmaEjecutivoManual('');
+    setIsReadingSignature(false);
+  };
+
+  const openExecutiveDrawModal = () => {
+    setSignatureKey((k) => k + 1);
+    setIsReadingSignature(false);
+    setExecutiveDrawModalVisible(true);
+  };
+
+  const closeExecutiveDrawModal = () => {
+    setExecutiveDrawModalVisible(false);
+    setIsReadingSignature(false);
+  };
+
+  const clearExecutiveDrawModal = () => {
+    signatureRef.current?.clearSignature?.();
+    setSignatureKey((k) => k + 1);
     setIsReadingSignature(false);
   };
 
@@ -811,11 +834,21 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const submitSignatureReadCanvas = () => {
-    if (!firmaEjecutivoDigital) {
-      Alert.alert('Error', 'Primero debes generar la firma digital');
+  const onExecutiveManualSignatureCaptured = (signature: string) => {
+    const formatted = String(signature || '').includes('base64,')
+      ? String(signature).split('base64,')[1]
+      : String(signature || '');
+    if (!formatted || formatted.length < 20) {
+      setIsReadingSignature(false);
+      Alert.alert('Error', 'La firma manual está vacía');
       return;
     }
+    setFirmaEjecutivoManual(formatted);
+    setIsReadingSignature(false);
+    closeExecutiveDrawModal();
+  };
+
+  const runAcceptExecutiveDraw = () => {
     try {
       setIsReadingSignature(true);
       signatureRef.current?.readSignature?.();
@@ -825,28 +858,39 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
+  const requestConfirmExecutiveDraw = () => {
+    Alert.alert('Confirmar firma', '¿Deseas guardar esta firma manual?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => runAcceptExecutiveDraw() },
+    ]);
+  };
+
   const submitSignature = () => {
     if (isSigning || isReadingSignature) return;
     if (!firmaEjecutivoDigital) {
       Alert.alert('Error', 'Primero debes generar la firma digital');
       return;
     }
+    if (!firmaEjecutivoManual) {
+      Alert.alert('Error', 'Debes dibujar la firma manual del ejecutivo');
+      return;
+    }
     Alert.alert('Confirmar', '¿Desea aprobar este mutuo acuerdo con las firmas indicadas?', [
       { text: 'Cancelar', style: 'cancel' },
-      { text: 'Aceptar', onPress: () => submitSignatureReadCanvas() },
+      { text: 'Aceptar', onPress: () => void finalizeExecutiveApproval() },
     ]);
   };
 
-  const onManualSignatureRead = async (signature: string) => {
+  const finalizeExecutiveApproval = async () => {
     try {
       if (!signingRecordId) {
         Alert.alert('Error', 'No hay registro seleccionado para firmar');
         return;
       }
-      const formatted = String(signature || '').startsWith('data:')
-        ? String(signature)
-        : `data:image/png;base64,${String(signature || '')}`;
-      if (!getBase64Only(formatted)) {
+      const manualFormatted = firmaEjecutivoManual.startsWith('data:')
+        ? firmaEjecutivoManual
+        : `data:image/png;base64,${firmaEjecutivoManual}`;
+      if (!getBase64Only(manualFormatted)) {
         Alert.alert('Error', 'La firma manual está vacía');
         return;
       }
@@ -858,7 +902,7 @@ export default function MutuosAcuerdosScreen() {
       setIsSigning(true);
       const response = await signMutuoAcuerdoEjecutivo({
         id: signingRecordId,
-        firma_ejecutivo_cuenta_manual: formatted,
+        firma_ejecutivo_cuenta_manual: manualFormatted,
         firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
         hora_accion: new Date(horaAccion).toISOString(),
         refreshAccessToken,
@@ -874,7 +918,6 @@ export default function MutuosAcuerdosScreen() {
     } catch (e: any) {
       Alert.alert('Error', e?.message || 'No se pudieron guardar las firmas');
     } finally {
-      setIsReadingSignature(false);
       setIsSigning(false);
     }
   };
@@ -999,8 +1042,8 @@ export default function MutuosAcuerdosScreen() {
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>Nuevo registro</ThemedText>
 
-              {renderEmployeeSection('ausente', 'Empleado ausente', ausente)}
-              {renderEmployeeSection('reemplaza', 'Empleado reemplaza', reemplaza)}
+              {renderEmployeeSection('ausente', 'Primer turno', ausente)}
+              {renderEmployeeSection('reemplaza', 'Segundo turno', reemplaza)}
 
               <ThemedText style={styles.label}>Motivo *</ThemedText>
               <TextInput
@@ -1162,7 +1205,7 @@ export default function MutuosAcuerdosScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Nombre del solicitante (ausente o reemplaza):</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Nombre del solicitante (Primer o Segundo turno):</ThemedText>
                       <TextInput
                         style={styles.input}
                         value={filterNombreSolicitante}
@@ -1173,7 +1216,7 @@ export default function MutuosAcuerdosScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Fecha empleado ausente:</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Fecha primer turno:</ThemedText>
                       <TouchableOpacity
                         style={styles.dateButton}
                         onPress={() => setShowFilterFechaAusentePicker(true)}
@@ -1208,7 +1251,7 @@ export default function MutuosAcuerdosScreen() {
                     </ThemedView>
 
                     <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>Fecha empleado reemplaza:</ThemedText>
+                      <ThemedText style={styles.filterLabel}>Fecha del segundo turno:</ThemedText>
                       <TouchableOpacity
                         style={styles.dateButton}
                         onPress={() => setShowFilterFechaReemplazaPicker(true)}
@@ -1221,7 +1264,7 @@ export default function MutuosAcuerdosScreen() {
                       </TouchableOpacity>
                       {filterFechaReemplaza ? (
                         <TouchableOpacity onPress={() => setFilterFechaReemplaza(null)} activeOpacity={0.85}>
-                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha reemplaza</ThemedText>
+                          <ThemedText style={styles.filterClearText}>Quitar filtro de fecha del segundo turno</ThemedText>
                         </TouchableOpacity>
                       ) : null}
                       {showFilterFechaReemplazaPicker ? (
@@ -1286,7 +1329,7 @@ export default function MutuosAcuerdosScreen() {
                       <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Estado: </ThemedText>{String(r.estado || 'pendiente')}</ThemedText>
                       <ThemedText style={styles.cardLine}><ThemedText style={styles.cardLabel}>Motivo: </ThemedText>{r.motivo || '-'}</ThemedText>
 
-                      <ThemedText style={styles.sectionTitle}>Empleado ausente</ThemedText>
+                      <ThemedText style={styles.sectionTitle}>Empleado del primer turno</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_ausente_nombre || `ID ${r.empleadoAusente_id}`}</ThemedText>
                       <ThemedText style={styles.cardLine}>Puesto: {r.marca_ausente?.puesto || r.puesto_ausente_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
@@ -1301,7 +1344,7 @@ export default function MutuosAcuerdosScreen() {
                       ) : null}
                       {signatureDataUri(r.firma_ausente_manual) ? (
                         <ThemedView style={styles.signaturePreviewBlock}>
-                          <ThemedText style={styles.cardLabel}>Firma manual (ausente)</ThemedText>
+                          <ThemedText style={styles.cardLabel}>Firma manual (Empleado del primer turno)</ThemedText>
                           <Image
                             source={{ uri: signatureDataUri(r.firma_ausente_manual) as string }}
                             style={styles.signaturePreviewImage}
@@ -1310,7 +1353,7 @@ export default function MutuosAcuerdosScreen() {
                         </ThemedView>
                       ) : null}
 
-                      <ThemedText style={styles.sectionTitle}>Empleado reemplaza</ThemedText>
+                      <ThemedText style={styles.sectionTitle}>Empleado del segundo turno</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_reemplaza_nombre || `ID ${r.empleadoReemplaza_id}`}</ThemedText>
                       <ThemedText style={styles.cardLine}>Puesto: {r.marca_reemplaza?.puesto || r.puesto_reemplaza_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
@@ -1325,7 +1368,7 @@ export default function MutuosAcuerdosScreen() {
                       ) : null}
                       {signatureDataUri(r.firma_reemplaza_manual) ? (
                         <ThemedView style={styles.signaturePreviewBlock}>
-                          <ThemedText style={styles.cardLabel}>Firma manual (reemplaza)</ThemedText>
+                          <ThemedText style={styles.cardLabel}>Firma manual (Empleado del segundo turno)</ThemedText>
                           <Image
                             source={{ uri: signatureDataUri(r.firma_reemplaza_manual) as string }}
                             style={styles.signaturePreviewImage}
@@ -1351,7 +1394,7 @@ export default function MutuosAcuerdosScreen() {
                             ) : (
                               <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
                             )}
-                            <ThemedText style={styles.actionBtnText}>Aceptar (ausente)</ThemedText>
+                            <ThemedText style={styles.actionBtnText}>Aceptar (Primer turno)</ThemedText>
                           </TouchableOpacity>
                         ) : null}
                         {r.can_accept_reemplaza ? (
@@ -1370,7 +1413,7 @@ export default function MutuosAcuerdosScreen() {
                             ) : (
                               <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
                             )}
-                            <ThemedText style={styles.actionBtnText}>Aceptar (reemplaza)</ThemedText>
+                            <ThemedText style={styles.actionBtnText}>Aceptar (Segundo turno)</ThemedText>
                           </TouchableOpacity>
                         ) : null}
                         {r.can_sign_ejecutivo ? (
@@ -1490,49 +1533,120 @@ export default function MutuosAcuerdosScreen() {
                 </ThemedView>
               </Collapsible>
 
-              <ThemedView style={styles.signatureContainer}>
-                <SignatureScreen
-                  ref={signatureRef}
-                  onOK={onManualSignatureRead}
-                  onEmpty={() => {
-                    setIsReadingSignature(false);
-                    Alert.alert('Error', 'La firma manual está vacía');
-                  }}
-                  onClear={() => {
-                    setIsReadingSignature(false);
-                  }}
-                  descriptionText=""
-                  clearText="Limpiar"
-                  confirmText="Aceptar"
-                  webStyle={signatureWebStyle}
-                  key={signatureKey}
-                />
-              </ThemedView>
+              <Collapsible title="Firma manual ejecutivo">
+                <ThemedView style={styles.modalDigitalRow}>
+                  <TouchableOpacity
+                    style={styles.signatureBlueButton}
+                    onPress={openExecutiveDrawModal}
+                    activeOpacity={0.85}
+                    disabled={isSigning}
+                  >
+                    <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureBlueButtonText}>
+                      {firmaEjecutivoManual ? 'Firma manual lista (editar)' : 'Dibujar firma manual'}
+                    </ThemedText>
+                  </TouchableOpacity>
+                  {!firmaEjecutivoManual ? (
+                    <ThemedText style={styles.signatureHintMuted}>Aún no hay firma manual del ejecutivo.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.signaturePreviewBlock}>
+                      <ThemedText style={styles.label}>Vista previa de la firma manual</ThemedText>
+                      <Image
+                        source={{ uri: signatureDataUri(firmaEjecutivoManual) as string }}
+                        style={styles.signaturePreviewImage}
+                        resizeMode="contain"
+                      />
+                      <TouchableOpacity
+                        style={styles.firmaClearManualButton}
+                        onPress={() => setFirmaEjecutivoManual('')}
+                        activeOpacity={0.85}
+                        disabled={isSigning}
+                      >
+                        <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.firmaClearManualButtonText}>Borrar firma manual</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </Collapsible>
 
               <ThemedView style={styles.modalActions}>
                 <TouchableOpacity
-                  style={[styles.modalClearBtn, isSigning && styles.buttonDisabled]}
-                  onPress={() => {
-                    signatureRef.current?.clearSignature?.();
-                    setSignatureKey((k) => k + 1);
-                  }}
+                  style={[styles.modalAcceptBtn, isSigning && styles.buttonDisabled]}
+                  onPress={submitSignature}
                   activeOpacity={0.85}
                   disabled={isSigning}
                 >
-                  <Ionicons name="refresh" size={18} color="#000" />
-                  <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalAcceptBtn, (isSigning || isReadingSignature) && styles.buttonDisabled]}
-                  onPress={submitSignature}
-                  activeOpacity={0.85}
-                  disabled={isSigning || isReadingSignature}
-                >
-                  {(isSigning || isReadingSignature) ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
-                  <ThemedText style={styles.modalAcceptBtnText}>Aceptar</ThemedText>
+                  {isSigning ? <ActivityIndicator size="small" color="#000" /> : <Ionicons name="checkmark" size={18} color="#000" />}
+                  <ThemedText style={styles.modalAcceptBtnText}>Aprobar mutuo acuerdo</ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={executiveDrawModalVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={closeExecutiveDrawModal}
+      >
+        <View style={styles.overlay}>
+          <ThemedView style={styles.floatCard}>
+            <View style={styles.floatHeader}>
+              <ThemedText style={styles.modalTitle}>Firma manual ejecutivo</ThemedText>
+              <TouchableOpacity onPress={closeExecutiveDrawModal} disabled={isReadingSignature}>
+                <Ionicons name="close" size={22} color="#333" />
+              </TouchableOpacity>
+            </View>
+            <ThemedText style={[styles.signatureHintMuted, { paddingHorizontal: 16, paddingTop: 10 }]}>
+              Dibuje su firma en el recuadro y pulse Aceptar para guardarla en el formulario de aprobación.
+            </ThemedText>
+            <ThemedView style={styles.signatureContainer}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={onExecutiveManualSignatureCaptured}
+                onEmpty={() => {
+                  setIsReadingSignature(false);
+                  Alert.alert('Error', 'La firma manual está vacía');
+                }}
+                onClear={() => {
+                  setIsReadingSignature(false);
+                }}
+                descriptionText=""
+                clearText="Limpiar"
+                confirmText="Aceptar"
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+                autoClear={false}
+                imageType="image/png"
+              />
+            </ThemedView>
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity
+                style={[styles.modalClearBtn, isReadingSignature && styles.buttonDisabled]}
+                onPress={clearExecutiveDrawModal}
+                activeOpacity={0.85}
+                disabled={isReadingSignature}
+              >
+                <Ionicons name="refresh" size={18} color="#000" />
+                <ThemedText style={styles.modalClearBtnText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalAcceptBtn, isReadingSignature && styles.buttonDisabled]}
+                onPress={requestConfirmExecutiveDraw}
+                activeOpacity={0.85}
+                disabled={isReadingSignature}
+              >
+                {isReadingSignature ? (
+                  <ActivityIndicator size="small" color="#000" />
+                ) : (
+                  <Ionicons name="checkmark" size={18} color="#000" />
+                )}
+                <ThemedText style={styles.modalAcceptBtnText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
           </ThemedView>
         </View>
       </Modal>
@@ -1547,7 +1661,7 @@ export default function MutuosAcuerdosScreen() {
           <ThemedView style={styles.floatCard}>
             <View style={styles.floatHeader}>
               <ThemedText style={styles.modalTitle}>
-                {participantSigRole === 'reemplaza' ? 'Aceptar (empleado reemplaza)' : 'Aceptar (empleado ausente)'}
+                {participantSigRole === 'reemplaza' ? 'Aceptar (Segundo turno)' : 'Aceptar (Primer turno)'}
               </ThemedText>
               <TouchableOpacity onPress={closeParticipantAcceptModal} disabled={!!acceptingMutuoKey}>
                 <Ionicons name="close" size={22} color="#333" />
@@ -1830,6 +1944,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#FAFAFA',
   },
+  firmaClearManualButton: {
+    marginTop: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#FF3B30',
+  },
+  firmaClearManualButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', padding: 16, gap: 12, backgroundColor: '#FFFFFF' },
   modalClearBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 12, borderRadius: 10, backgroundColor: '#EDEDED', gap: 8 },
   modalClearBtnText: { fontWeight: '800', color: '#000' },

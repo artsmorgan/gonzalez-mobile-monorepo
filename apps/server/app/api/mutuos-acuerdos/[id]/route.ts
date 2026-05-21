@@ -52,13 +52,13 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
     if (role === "ausente") {
       if (Number(existing.empleadoAusente_id) !== currentEmployeeId) {
-        return NextResponse.json({ status: false, message: "No autorizado para aceptar como ausente" }, { status: 403 });
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como primer turno" }, { status: 403 });
       }
       if (existing.ausente_acepta) {
-        return NextResponse.json({ status: true, message: "El ausente ya había aceptado", data: existing }, { status: 200 });
+        return NextResponse.json({ status: true, message: "El primer turno ya había aceptado", data: existing }, { status: 200 });
       }
       if (!firmaAusenteNorm || firmaAusenteNorm.length < 80) {
-        return NextResponse.json({ status: false, message: "La firma manual del ausente es obligatoria" }, { status: 400 });
+        return NextResponse.json({ status: false, message: "La firma manual del primer turno es obligatoria" }, { status: 400 });
       }
       updateData = { ausente_acepta: true, ausente_acepta_at: now, firma_ausente_manual: firmaAusenteNorm };
       cambios = [
@@ -68,13 +68,13 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       ];
     } else {
       if (Number(existing.empleadoReemplaza_id) !== currentEmployeeId) {
-        return NextResponse.json({ status: false, message: "No autorizado para aceptar como reemplaza" }, { status: 403 });
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como segundo turno" }, { status: 403 });
       }
       if (existing.reemplaza_acepta) {
-        return NextResponse.json({ status: true, message: "El reemplaza ya había aceptado", data: existing }, { status: 200 });
+        return NextResponse.json({ status: true, message: "El segundo turno ya había aceptado", data: existing }, { status: 200 });
       }
       if (!firmaReemplazaNorm || firmaReemplazaNorm.length < 80) {
-        return NextResponse.json({ status: false, message: "La firma manual del reemplaza es obligatoria" }, { status: 400 });
+        return NextResponse.json({ status: false, message: "La firma manual del segundo turno es obligatoria" }, { status: 400 });
       }
       updateData = { reemplaza_acepta: true, reemplaza_acepta_at: now, firma_reemplaza_manual: firmaReemplazaNorm };
       cambios = [

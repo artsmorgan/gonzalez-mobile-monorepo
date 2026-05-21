@@ -357,9 +357,15 @@ export default function VehiclesScreen() {
       return;
     }
     const baseDate = new Date(horaAccion);
-    const h = parseInt(hours || '0', 10);
-    const m = parseInt(minutes || '0', 10);
-    baseDate.setHours(isNaN(h) ? 0 : h, isNaN(m) ? 0 : m, 0, 0);
+    const hRaw = String(hours || '').trim();
+    const mRaw = String(minutes || '').trim();
+    if (hRaw !== '' && mRaw !== '') {
+      const h = parseInt(hRaw, 10);
+      const m = parseInt(mRaw, 10);
+      if (!Number.isNaN(h) && !Number.isNaN(m)) {
+        baseDate.setHours(h, m, 0, 0);
+      }
+    }
     return baseDate;
   };
 
@@ -369,8 +375,13 @@ export default function VehiclesScreen() {
     return `${date}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:00.000Z`;
   };
 
-  const openFechaEntradaPicker = () => {
-    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : new Date();
+  const openFechaEntradaPicker = () => async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : new Date(horaAccion);
     setFechaEntradaPickerValue(baseDate);
     setShowFechaEntradaPicker(true);
   };
@@ -386,8 +397,13 @@ export default function VehiclesScreen() {
     setFechaEntradaPickerValue(selectedDate);
   };
 
-  const openFechaSalidaPicker = () => {
-    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : new Date();
+  const openFechaSalidaPicker = () => async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : new Date(horaAccion);
     setFechaSalidaPickerValue(baseDate);
     setShowFechaSalidaPicker(true);
   };
@@ -2407,7 +2423,7 @@ export default function VehiclesScreen() {
       return;
     }
 
-    const baseDateEntrada = await buildDateFromParts('', '');
+    const baseDateEntrada = await buildDateFromParts(hours, minutes);
     if (!baseDateEntrada) {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;

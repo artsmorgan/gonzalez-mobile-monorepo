@@ -43,7 +43,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         console.log("currentDate", currentDate);
         console.log("currentTime", currentTime);
 
-        const proximasMarcas = await callDynamicPrisma({
+        let proximasMarcas = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
@@ -91,6 +91,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
         });
 
+        // Eliminar aquellas marcas donde "empleadoReemplaza_id" sea diferente de null y diferente a "empleado.id"
+        proximasMarcas = proximasMarcas.filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null));
         let marcaDia = null;
         if (Array.isArray(proximasMarcas)) {
             for (const marca of proximasMarcas) {
@@ -107,7 +109,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (!marcaDia) {
-            const ultimasMarcas = await callDynamicPrisma({
+            let ultimasMarcas = await callDynamicPrisma({
                 req,
                 data: {
                     action: "GET",
@@ -130,6 +132,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     take: 24,
                 }
             });
+
+            // Eliminar aquellas marcas donde "empleadoReemplaza_id" sea diferente de null y diferente a "empleado.id"
+            ultimasMarcas = ultimasMarcas.filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null));
 
             if (Array.isArray(ultimasMarcas)) {
                 for (const marca of ultimasMarcas) {

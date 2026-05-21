@@ -134,15 +134,36 @@ export async function createBitacoraVehiculoDetenido({
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
+    const { _bitacoraRevFileSlots, ...rest } = requestData as any;
+    const slots = _bitacoraRevFileSlots as
+      | { index: number; uri: string; name: string; type: string }[]
+      | undefined;
+    const useMultipart = Array.isArray(slots) && slots.length > 0;
+
+    const init: RequestInit = useMultipart
+      ? (() => {
+          const formData = new FormData();
+          formData.append('metadata', JSON.stringify(rest));
+          for (const s of slots!) {
+            formData.append(`file_${s.index}`, {
+              uri: s.uri,
+              name: s.name || `image_${s.index}.jpg`,
+              type: s.type || 'image/jpeg',
+            } as any);
+          }
+          return { method: 'POST' as const, body: formData };
+        })()
+      : {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(rest),
+        };
+
     const response = await authedFetch({
       url: `${apiUrl}/api/bitacora-vehiculo-detenido`,
-      init: {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestData),
-      },
+      init,
       refreshAccessToken: refresh,
       logout: doLogout,
     });
@@ -167,15 +188,36 @@ export async function updateBitacoraVehiculoDetenido({ id, requestData, refreshA
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
 
+    const { _bitacoraRevFileSlots, ...rest } = requestData as any;
+    const slots = _bitacoraRevFileSlots as
+      | { index: number; uri: string; name: string; type: string }[]
+      | undefined;
+    const useMultipart = Array.isArray(slots) && slots.length > 0;
+
+    const init: RequestInit = useMultipart
+      ? (() => {
+          const formData = new FormData();
+          formData.append('metadata', JSON.stringify(rest));
+          for (const s of slots!) {
+            formData.append(`file_${s.index}`, {
+              uri: s.uri,
+              name: s.name || `image_${s.index}.jpg`,
+              type: s.type || 'image/jpeg',
+            } as any);
+          }
+          return { method: 'PUT' as const, body: formData };
+        })()
+      : {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(rest),
+        };
+
     const response = await authedFetch({
       url: `${apiUrl}/api/bitacora-vehiculo-detenido/${id}`,
-      init: {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestData),
-      },
+      init,
       refreshAccessToken: refresh,
       logout: doLogout,
     });
@@ -216,6 +258,48 @@ export async function deleteBitacoraVehiculoDetenido({ id, refreshAccessToken, l
   } catch (error: any) {
     console.error('Error deleting bitacora vehiculo detenido:', error);
     return { status: false, message: error.message || 'Error al eliminar bitácora' };
+  }
+}
+
+type DeleteRevisionImageParams = {
+  id: number;
+  imageName: string;
+  revisionKey: string;
+  refreshAccessToken?: () => Promise<boolean>;
+  logout?: () => Promise<any>;
+};
+
+export async function deleteBitacoraRevisionImage({
+  id,
+  imageName,
+  revisionKey,
+  refreshAccessToken,
+  logout,
+}: DeleteRevisionImageParams): Promise<BasicResponse & { data?: { informacion_revision?: any[] } }> {
+  try {
+    const apiUrl = getApiUrl();
+    const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+    const params = new URLSearchParams({ revisionKey });
+    const response = await authedFetch({
+      url: `${apiUrl}/api/bitacora-vehiculo-detenido/${id}/image/${encodeURIComponent(imageName)}?${params.toString()}`,
+      init: {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken: refresh,
+      logout: doLogout,
+    });
+
+    if (!response) return { status: false, message: 'Sesión expirada' };
+
+    const data: any = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.message || `HTTP error! status: ${response.status}`);
+    return data;
+  } catch (error: any) {
+    console.error('Error deleting bitacora revision image:', error);
+    return { status: false, message: error.message || 'Error al eliminar imagen' };
   }
 }
 

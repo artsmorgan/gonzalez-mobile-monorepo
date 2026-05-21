@@ -16,6 +16,11 @@ export type StructureLite = {
   numero?: string | null;
 };
 
+export type CedulaAlmuerzoLite = {
+  cedula: string;
+  empleado_nombre: string;
+};
+
 export function formatEmpleadoNombre(e: EmpleadoLite): string {
   return [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(' ').trim() || String(e.codigo);
 }
@@ -120,6 +125,70 @@ export async function searchActaStructure(params: {
   const j = await res.json().catch(() => ({}));
   if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
   return { status: true, data: j.data };
+}
+
+export type VehiculoCorporativoLite = {
+  id: number;
+  placa?: string | null;
+  marca?: string | null;
+  modelo?: string | null;
+  tipo?: string | null;
+  sucursal_id?: number | null;
+  corpo_nombre?: string | null;
+};
+
+export async function searchCorporateVehicles(params: {
+  q: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: VehiculoCorporativoLite[]; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'searchCorporateVehicles',
+        q: params.q,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data };
+}
+
+export async function previewRevisionVehiculos(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewRevisionVehiculos',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
 }
 
 export async function previewAgendaMinuta(params: {
@@ -333,6 +402,34 @@ export async function previewRegistroVisitas(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operation: 'previewRegistroVisitas',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewVisitasVehiculos(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewVisitasVehiculos',
         moduleFilters: params.moduleFilters,
         order_by: params.order_by,
       }),
@@ -626,6 +723,169 @@ export async function previewProductoNoConforme(params: {
   return { status: true, data: j.data, count: j.count };
 }
 
+export async function previewRegistroCapacitaciones(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewRegistroCapacitaciones',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewRegistroInduccionGeneral(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewRegistroInduccionGeneral',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function searchAlmuerzoCedulas(params: {
+  q: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: CedulaAlmuerzoLite[]; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'searchAlmuerzoCedulas', q: params.q }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data };
+}
+
+export async function previewTiempoAlmuerzo(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewTiempoAlmuerzo',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewCambiosUbicacionPuesto(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewCambiosUbicacionPuesto',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewNotasVoz(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewNotasVoz',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
 export async function previewInduccionRecorrido(params: {
   moduleFilters: Record<string, unknown>;
   order_by: string;
@@ -641,6 +901,90 @@ export async function previewInduccionRecorrido(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operation: 'previewInduccionRecorrido',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewArticulosPuesto(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewArticulosPuesto',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewRegistroVehiculosCorporativos(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewRegistroVehiculosCorporativos',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export async function previewMantenimientoArticulos(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewMantenimientoArticulos',
         moduleFilters: params.moduleFilters,
         order_by: params.order_by,
       }),
@@ -725,6 +1069,65 @@ export async function previewLlaveros(params: {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operation: 'previewLlaveros',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
+export type PurgeOldMobileReportsResult = {
+  cutoff: string;
+  recordsFound: number;
+  recordsDeleted: number;
+  filesDeleted: number;
+  fileDeleteErrors: number;
+};
+
+/** Limpia reportes móviles con más de 6 meses de antigüedad (registro + archivo en disco). */
+export async function purgeOldMobileReports(params: {
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: PurgeOldMobileReportsResult; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'purgeOldReports' }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data as PurgeOldMobileReportsResult };
+}
+
+export async function previewSolicitudesPermiso(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewSolicitudesPermiso',
         moduleFilters: params.moduleFilters,
         order_by: params.order_by,
       }),

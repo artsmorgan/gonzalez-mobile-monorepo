@@ -19,6 +19,11 @@ import {
     type UserLoginOrderKey,
 } from "../../../../utils/reports-functions/userLogin";
 import { runMobileReportJob } from "../../../../utils/runMobileReportJob";
+import { purgeOldMobileReports } from "../../../../utils/purgeOldMobileReports";
+import {
+    normalizeMobileReportTipo,
+    resolveMobileReportTipoFromModuleFilters,
+} from "../../../../utils/mobileReportTipo";
 import {
     filtersMatchAgendaListQuery,
     hasAgendaListModuleFiltersContent,
@@ -176,12 +181,90 @@ import {
     type ManualesPuestoOrderKey,
 } from "../../../../utils/reports-functions/manualesPuestoReport";
 import {
+    filtersMatchArticulosPuestoListQuery,
+    hasArticulosPuestoListModuleFiltersContent,
+    normalizeArticulosPuestoFilters,
+    queryArticulosPuestoRows,
+    type ArticulosPuestoOrderKey,
+} from "../../../../utils/reports-functions/articulosPuestoReport";
+import {
+    filtersMatchMantenimientoArticulosListQuery,
+    hasMantenimientoArticulosListModuleFiltersContent,
+    normalizeMantenimientoArticulosFilters,
+    queryMantenimientoArticulosRows,
+    type MantenimientoArticulosOrderKey,
+} from "../../../../utils/reports-functions/mantenimientoArticulosReport";
+import {
+    filtersMatchRegistroVehiculosCorporativosListQuery,
+    hasRegistroVehiculosCorporativosListModuleFiltersContent,
+    normalizeRegistroVehiculosCorporativosFilters,
+    queryRegistroVehiculosCorporativosRows,
+    type RegistroVehiculosCorporativosOrderKey,
+} from "../../../../utils/reports-functions/registroVehiculosCorporativosReport";
+import {
+    filtersMatchRevisionVehiculosListQuery,
+    hasRevisionVehiculosListModuleFiltersContent,
+    normalizeRevisionVehiculosFilters,
+    queryRevisionVehiculosRows,
+    searchCorporateVehiclesForReport,
+    type RevisionVehiculosOrderKey,
+} from "../../../../utils/reports-functions/revisionVehiculosReport";
+import {
     filtersMatchRegistroVisitasListQuery,
     hasRegistroVisitasListModuleFiltersContent,
     normalizeRegistroVisitasFilters,
     queryRegistroVisitasRows,
     type RegistroVisitasOrderKey,
 } from "../../../../utils/reports-functions/registroVisitasReport";
+import {
+    filtersMatchNotasVozListQuery,
+    hasNotasVozListModuleFiltersContent,
+    normalizeNotasVozFilters,
+    queryNotasVozRows,
+    type NotasVozOrderKey,
+} from "../../../../utils/reports-functions/notasVozReport";
+import {
+    filtersMatchCambiosUbicacionPuestoListQuery,
+    hasCambiosUbicacionPuestoListModuleFiltersContent,
+    normalizeCambiosUbicacionPuestoFilters,
+    queryCambiosUbicacionPuestoRows,
+    type CambiosUbicacionPuestoOrderKey,
+} from "../../../../utils/reports-functions/cambiosUbicacionPuestoReport";
+import {
+    filtersMatchRegistroCapacitacionesListQuery,
+    hasRegistroCapacitacionesListModuleFiltersContent,
+    normalizeRegistroCapacitacionesFilters,
+    queryRegistroCapacitacionesRows,
+    type RegistroCapacitacionesOrderKey,
+} from "../../../../utils/reports-functions/registroCapacitacionesReport";
+import {
+    filtersMatchRegistroInduccionGeneralListQuery,
+    hasRegistroInduccionGeneralListModuleFiltersContent,
+    normalizeRegistroInduccionGeneralFilters,
+    queryRegistroInduccionGeneralRows,
+    type RegistroInduccionGeneralOrderKey,
+} from "../../../../utils/reports-functions/registroInduccionGeneralReport";
+import {
+    filtersMatchTiempoAlmuerzoListQuery,
+    hasTiempoAlmuerzoListModuleFiltersContent,
+    normalizeTiempoAlmuerzoFilters,
+    queryTiempoAlmuerzoRows,
+    type TiempoAlmuerzoOrderKey,
+} from "../../../../utils/reports-functions/tiempoAlmuerzoReport";
+import {
+    filtersMatchSolicitudesPermisoListQuery,
+    hasSolicitudesPermisoListModuleFiltersContent,
+    normalizeSolicitudesPermisoFilters,
+    querySolicitudesPermisoRows,
+    type SolicitudesPermisoOrderKey,
+} from "../../../../utils/reports-functions/solicitudesPermisoReport";
+import {
+    filtersMatchVisitasVehiculosListQuery,
+    hasVisitasVehiculosListModuleFiltersContent,
+    normalizeVisitasVehiculosFilters,
+    queryVisitasVehiculosRows,
+    type VisitasVehiculosOrderKey,
+} from "../../../../utils/reports-functions/visitasVehiculosReport";
 
 type ReportesPayload = {
     token?: string;
@@ -278,6 +361,52 @@ function getJwtPayload(req: NextRequest, payload: ReportesPayload) {
         return { ok: false as const, status: 403, message: "Token sin id de empleado" };
     }
     return { ok: true as const, empleadoId: Number(id), payload: tokenValidation.payload };
+}
+
+function formatEmpleadoNombre(e: {
+    nombre?: string | null;
+    primer_apellido?: string | null;
+    segundo_apellido?: string | null;
+    codigo?: string | null;
+}): string {
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(
+        (p) => p != null && String(p).trim() !== "",
+    );
+    const name = parts.map((p) => String(p).trim()).join(" ").trim();
+    if (name) return name;
+    const cod = e.codigo != null ? String(e.codigo).trim() : "";
+    return cod || "—";
+}
+
+async function enrichReportRowsWithCreatorNames<
+    T extends { created_by: number; created_at: Date | string },
+>(rows: T[]) {
+    const creatorIds = [
+        ...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0)),
+    ];
+    const empleados =
+        creatorIds.length > 0
+            ? await prisma.c_empleado.findMany({
+                  where: { id: { in: creatorIds } },
+                  select: {
+                      id: true,
+                      nombre: true,
+                      primer_apellido: true,
+                      segundo_apellido: true,
+                      codigo: true,
+                  },
+              })
+            : [];
+    const byId = new Map(empleados.map((e) => [e.id, e]));
+    return rows.map((r) => {
+        const emp = byId.get(Number(r.created_by));
+        const createdAt = r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at;
+        return {
+            ...r,
+            created_at: createdAt,
+            created_by_nombre: emp ? formatEmpleadoNombre(emp) : null,
+        };
+    });
 }
 
 function parseDayStart(s?: string): Date | undefined {
@@ -447,6 +576,11 @@ export async function POST(req: NextRequest) {
         }
 
         const op = String(payload.operation || "").trim();
+
+        if (op === "purgeOldReports") {
+            const result = await purgeOldMobileReports(prisma);
+            return NextResponse.json({ status: true, data: result }, { status: 200 });
+        }
 
         if (op === "searchEmployees") {
             const q = String(payload.q || "").trim();
@@ -630,6 +764,35 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: `entity no soportada: ${entity}` }, { status: 400 });
         }
 
+        if (op === "searchAlmuerzoCedulas") {
+            const q = String(payload.q || "").trim();
+            if (q.length < 1) {
+                return NextResponse.json({ status: true, data: [] }, { status: 200 });
+            }
+            const rows = await prisma.c_empleado_almuerzo.findMany({
+                where: {
+                    isActive: true,
+                    cedula_empleado: { contains: q },
+                },
+                take: 200,
+                select: { cedula_empleado: true, empleado_nombre: true },
+                orderBy: { cedula_empleado: "asc" },
+            });
+            const seen = new Set<string>();
+            const data: { cedula: string; empleado_nombre: string }[] = [];
+            for (const r of rows) {
+                const cedula = String(r.cedula_empleado || "").trim();
+                if (!cedula || seen.has(cedula)) continue;
+                seen.add(cedula);
+                data.push({
+                    cedula,
+                    empleado_nombre: String(r.empleado_nombre || "").trim(),
+                });
+                if (data.length >= 50) break;
+            }
+            return NextResponse.json({ status: true, data }, { status: 200 });
+        }
+
         if (op === "previewUserLoginRefreshTokens") {
             const mf = normalizeUserLoginModuleFilters(coerceModuleFiltersInput(payload.moduleFilters));
             const orderKey = (payload.order_by || "nombre_usuario") as UserLoginOrderKey;
@@ -794,11 +957,106 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: true, data: rows, count: rows.length }, { status: 200 });
         }
 
+        if (op === "previewArticulosPuesto") {
+            const mf = normalizeArticulosPuestoFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as ArticulosPuestoOrderKey;
+            const rows = await queryArticulosPuestoRows(prisma, mf, orderKey);
+            return NextResponse.json(
+                { status: true, data: rows.slice(0, 100), count: rows.length },
+                { status: 200 },
+            );
+        }
+
+        if (op === "previewMantenimientoArticulos") {
+            const mf = normalizeMantenimientoArticulosFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "puesto_id") as MantenimientoArticulosOrderKey;
+            const rows = await queryMantenimientoArticulosRows(prisma, mf, orderKey);
+            return NextResponse.json(
+                { status: true, data: rows.slice(0, 100), count: rows.length },
+                { status: 200 },
+            );
+        }
+
+        if (op === "previewRegistroVehiculosCorporativos") {
+            const mf = normalizeRegistroVehiculosCorporativosFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "puesto_id") as RegistroVehiculosCorporativosOrderKey;
+            const rows = await queryRegistroVehiculosCorporativosRows(prisma, mf, orderKey);
+            return NextResponse.json(
+                { status: true, data: rows.slice(0, 100), count: rows.length },
+                { status: 200 },
+            );
+        }
+
+        if (op === "previewRevisionVehiculos") {
+            const mf = normalizeRevisionVehiculosFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "puesto_id") as RevisionVehiculosOrderKey;
+            const rows = await queryRevisionVehiculosRows(prisma, mf, orderKey);
+            return NextResponse.json(
+                { status: true, data: rows.slice(0, 100), count: rows.length },
+                { status: 200 },
+            );
+        }
+
+        if (op === "searchCorporateVehicles") {
+            const q = String(payload.q || "").trim();
+            if (!q) {
+                return NextResponse.json({ status: true, data: [] }, { status: 200 });
+            }
+            const rows = await searchCorporateVehiclesForReport(prisma, q);
+            return NextResponse.json({ status: true, data: rows }, { status: 200 });
+        }
+
         if (op === "previewRegistroVisitas") {
             const mf = normalizeRegistroVisitasFilters(coerceModuleFiltersInput(payload.moduleFilters));
             const orderKey = (payload.order_by || "empresa_id") as RegistroVisitasOrderKey;
             const rows = await queryRegistroVisitasRows(prisma, mf, orderKey, { take: 100 });
             return NextResponse.json({ status: true, data: rows, count: rows.length }, { status: 200 });
+        }
+
+        if (op === "previewVisitasVehiculos") {
+            const mf = normalizeVisitasVehiculosFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as VisitasVehiculosOrderKey;
+            const rows = await queryVisitasVehiculosRows(prisma, mf, orderKey, { take: 100 });
+            return NextResponse.json({ status: true, data: rows, count: rows.length }, { status: 200 });
+        }
+        if (op === "previewNotasVoz") {
+            const mf = normalizeNotasVozFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as NotasVozOrderKey;
+            const rows = await queryNotasVozRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+        if (op === "previewCambiosUbicacionPuesto") {
+            const mf = normalizeCambiosUbicacionPuestoFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as CambiosUbicacionPuestoOrderKey;
+            const rows = await queryCambiosUbicacionPuestoRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+        if (op === "previewRegistroCapacitaciones") {
+            const mf = normalizeRegistroCapacitacionesFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as RegistroCapacitacionesOrderKey;
+            const rows = await queryRegistroCapacitacionesRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+
+        if (op === "previewRegistroInduccionGeneral") {
+            const mf = normalizeRegistroInduccionGeneralFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as RegistroInduccionGeneralOrderKey;
+            const rows = await queryRegistroInduccionGeneralRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+
+        if (op === "previewTiempoAlmuerzo") {
+            const mf = normalizeTiempoAlmuerzoFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as TiempoAlmuerzoOrderKey;
+            const rows = await queryTiempoAlmuerzoRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+
+        if (op === "previewSolicitudesPermiso") {
+            const mf = normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "empresa_id") as SolicitudesPermisoOrderKey;
+            const rows = await querySolicitudesPermisoRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
         }
 
         if (op === "listReports") {
@@ -1104,6 +1362,56 @@ export async function POST(req: NextRequest) {
                         }
                     });
                 }
+            } else if (payload.modulo === "articulos_puesto") {
+                const listAp = normalizeArticulosPuestoFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasArticulosPuestoListModuleFiltersContent(listAp)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchArticulosPuestoListQuery(p, listAp);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "mantenimiento_articulos") {
+                const listMa = normalizeMantenimientoArticulosFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasMantenimientoArticulosListModuleFiltersContent(listMa)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchMantenimientoArticulosListQuery(p, listMa);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "registro_vehiculos_corporativos") {
+                const listRvc = normalizeRegistroVehiculosCorporativosFilters(
+                    coerceModuleFiltersInput(payload.listModuleFilters),
+                );
+                if (hasRegistroVehiculosCorporativosListModuleFiltersContent(listRvc)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchRegistroVehiculosCorporativosListQuery(p, listRvc);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "revision_vehiculos") {
+                const listRev = normalizeRevisionVehiculosFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasRevisionVehiculosListModuleFiltersContent(listRev)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchRevisionVehiculosListQuery(p, listRev);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
             } else if (payload.modulo === "registro_visitas") {
                 const listRv = normalizeRegistroVisitasFilters(coerceModuleFiltersInput(payload.listModuleFilters));
                 if (hasRegistroVisitasListModuleFiltersContent(listRv)) {
@@ -1116,9 +1424,94 @@ export async function POST(req: NextRequest) {
                         }
                     });
                 }
+            } else if (payload.modulo === "notas_voz") {
+                const listNv = normalizeNotasVozFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasNotasVozListModuleFiltersContent(listNv)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchNotasVozListQuery(p, listNv);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "cambios_ubicacion_puesto") {
+                const listCup = normalizeCambiosUbicacionPuestoFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasCambiosUbicacionPuestoListModuleFiltersContent(listCup)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchCambiosUbicacionPuestoListQuery(p, listCup);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "registro_capacitaciones") {
+                const listRc = normalizeRegistroCapacitacionesFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasRegistroCapacitacionesListModuleFiltersContent(listRc)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchRegistroCapacitacionesListQuery(p, listRc);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "registro_induccion_general") {
+                const listRig = normalizeRegistroInduccionGeneralFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasRegistroInduccionGeneralListModuleFiltersContent(listRig)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchRegistroInduccionGeneralListQuery(p, listRig);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "tiempo_almuerzo") {
+                const listTa = normalizeTiempoAlmuerzoFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasTiempoAlmuerzoListModuleFiltersContent(listTa)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchTiempoAlmuerzoListQuery(p, listTa);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "solicitudes_permiso") {
+                const listSp = normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasSolicitudesPermisoListModuleFiltersContent(listSp)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchSolicitudesPermisoListQuery(p, listSp);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
+            } else if (payload.modulo === "visitas_vehiculos") {
+                const listVv = normalizeVisitasVehiculosFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasVisitasVehiculosListModuleFiltersContent(listVv)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchVisitasVehiculosListQuery(p, listVv);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
             }
 
-            return NextResponse.json({ status: true, data: rows }, { status: 200 });
+            const data = await enrichReportRowsWithCreatorNames(rows);
+            return NextResponse.json({ status: true, data }, { status: 200 });
         }
 
         if (op === "createReportJob") {
@@ -1138,16 +1531,34 @@ export async function POST(req: NextRequest) {
                 );
             }
 
-            let tipo = String(payload.tipo_reporte || "Grupal").trim();
+            const rawModuleFilters = coerceModuleFiltersInput(payload.moduleFilters) as Record<string, unknown>;
+            let tipo =
+                normalizeMobileReportTipo(payload.tipo_reporte) ??
+                normalizeMobileReportTipo((payload as { tipoReporte?: string }).tipoReporte) ??
+                "Grupal";
+            const fromFilters = resolveMobileReportTipoFromModuleFilters(rawModuleFilters);
+            if (fromFilters === "Individual" || fromFilters === "Consolidado") {
+                tipo = fromFilters;
+            }
             if (
                 modulo === "ingresos_usuario" ||
                 modulo === "acciones_personales" ||
                 modulo === "bitacora_novedades" ||
                 modulo === "checklist_supervision" ||
                 modulo === "evaluacion_personal" ||
-                modulo === "manuales_puesto"
+                modulo === "manuales_puesto" ||
+                modulo === "notas_voz" ||
+                modulo === "cambios_ubicacion_puesto" ||
+                modulo === "registro_capacitaciones" ||
+                modulo === "tiempo_almuerzo"
             ) {
                 tipo = "Grupal";
+            }
+            if (modulo === "articulos_puesto" || modulo === "mantenimiento_articulos" || modulo === "registro_vehiculos_corporativos") {
+                tipo = "Consolidado";
+            }
+            if (modulo === "revision_vehiculos" && tipo !== "Individual") {
+                tipo = "Consolidado";
             }
 
             const orderByVal =
@@ -1163,7 +1574,19 @@ export async function POST(req: NextRequest) {
                 modulo === "producto_no_conforme" ||
                 modulo === "registro_induccion_recorrido" ||
                 modulo === "registro_visitas" ||
+                modulo === "visitas_vehiculos" ||
+                modulo === "notas_voz" ||
+                modulo === "cambios_ubicacion_puesto" ||
+                modulo === "registro_capacitaciones" ||
+                modulo === "registro_induccion_general" ||
+                modulo === "tiempo_almuerzo" ||
+                modulo === "solicitudes_permiso" ||
+                modulo === "visitas_vehiculos" ||
                 modulo === "manuales_puesto" ||
+                modulo === "articulos_puesto" ||
+                modulo === "mantenimiento_articulos" ||
+                modulo === "registro_vehiculos_corporativos" ||
+                modulo === "revision_vehiculos" ||
                 modulo === "acciones_personales" ||
                 modulo === "incidentes" ||
                 modulo === "llaves" ||
@@ -1208,6 +1631,20 @@ export async function POST(req: NextRequest) {
                                   ? normalizeEncuestaSatisfaccionFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "registro_visitas"
                                     ? normalizeRegistroVisitasFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "visitas_vehiculos"
+                                    ? normalizeVisitasVehiculosFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "notas_voz"
+                                    ? normalizeNotasVozFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "cambios_ubicacion_puesto"
+                                    ? normalizeCambiosUbicacionPuestoFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "registro_capacitaciones"
+                                    ? normalizeRegistroCapacitacionesFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "registro_induccion_general"
+                                    ? normalizeRegistroInduccionGeneralFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "tiempo_almuerzo"
+                                    ? normalizeTiempoAlmuerzoFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "solicitudes_permiso"
+                                    ? normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "mutuos_acuerdos"
                                     ? normalizeMutuosAcuerdosFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                     : modulo === "evaluacion_personal"
@@ -1218,6 +1655,16 @@ export async function POST(req: NextRequest) {
                                   ? normalizeInduccionRecorridoFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "manuales_puesto"
                                     ? normalizeManualesPuestoFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "articulos_puesto"
+                                    ? normalizeArticulosPuestoFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "mantenimiento_articulos"
+                                    ? normalizeMantenimientoArticulosFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "registro_vehiculos_corporativos"
+                                    ? normalizeRegistroVehiculosCorporativosFilters(
+                                          coerceModuleFiltersInput(payload.moduleFilters),
+                                      )
+                                  : modulo === "revision_vehiculos"
+                                    ? normalizeRevisionVehiculosFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                 : modulo === "acciones_personales"
                                   ? normalizeAccionesPersonalesFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                     : modulo === "incidentes"
@@ -1242,6 +1689,7 @@ export async function POST(req: NextRequest) {
                     nomenclatura,
                     descripcion: payload.descripcion ?? "",
                     tipo_reporte: tipo,
+                    reportOutputType: tipo,
                 },
             };
 

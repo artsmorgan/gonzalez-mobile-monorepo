@@ -7766,13 +7766,7 @@ function AppContent() {
   const getUpdatedHoraAccion = async () => {
     const connectivity = await resolveAppConnectivity();
     console.log('Intentando actualizar hora de acción...');
-    if (connectivity.ok) {
-      console.log('Conectado, actualizando hora de acción...');
-      await updateServerTime();
-    } else {
-      console.log('Sin conexión, actualizando hora de acción...');
-      await setDisconnectedTime();
-    }
+    await updateServerTime();
 
     // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
     // Se evita redirigir cuando ya estamos en esa pantalla.

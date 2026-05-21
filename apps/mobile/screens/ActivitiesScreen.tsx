@@ -22,7 +22,7 @@ import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, listCreatedActivitiesByPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
+import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, duplicateCreatedActivity, listCreatedActivitiesByPuesto, unlinkCreatedActivityPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
@@ -731,6 +731,12 @@ const resolveDivisionIdInStructure = (
   return null;
 };
 
+interface CreatedActivityPuestoVinculado {
+  id: number;
+  nombre: string;
+  codigo: string | null;
+}
+
 interface CreatedActivityItem {
   id: number;
   nombre_actividad: string;
@@ -740,6 +746,7 @@ interface CreatedActivityItem {
   frecuencia: string;
   es_revision_equipo: boolean;
   firma_responsable: string;
+  puestos_vinculados?: CreatedActivityPuestoVinculado[];
 }
 
 interface SignatureData {
@@ -910,6 +917,9 @@ export default function ActivitiesScreen() {
   const [createdActivities, setCreatedActivities] = useState<CreatedActivityItem[]>([]);
   const [isLoadingCreatedActivities, setIsLoadingCreatedActivities] = useState(false);
   const [deletingCreatedActivityId, setDeletingCreatedActivityId] = useState<number | null>(null);
+  const [duplicatingCreatedActivityId, setDuplicatingCreatedActivityId] = useState<number | null>(null);
+  const [expandedCreatedActivityPuestosIds, setExpandedCreatedActivityPuestosIds] = useState<number[]>([]);
+  const [unlinkingCreatedActivityPuestoKey, setUnlinkingCreatedActivityPuestoKey] = useState<string | null>(null);
 
   /** Modal: añadir puestos vinculados (no elimina asignaciones previas) */
   const [isUpdPuestosModalVisible, setIsUpdPuestosModalVisible] = useState(false);
@@ -3398,6 +3408,7 @@ export default function ActivitiesScreen() {
       const data = await listCreatedActivitiesByPuesto({ puestoId, refreshAccessToken, logout });
       if (data.status) {
         setCreatedActivities(Array.isArray(data.actividades) ? data.actividades : []);
+        setExpandedCreatedActivityPuestosIds([]);
       } else {
         Alert.alert('Error', data.message || 'No se pudo cargar la lista de actividades creadas.');
       }
@@ -3405,6 +3416,100 @@ export default function ActivitiesScreen() {
       setIsLoadingCreatedActivities(false);
     }
   }, [getConnectionStatus, logout, refreshAccessToken]);
+
+  const toggleCreatedActivityPuestosExpanded = (activityId: number) => {
+    setExpandedCreatedActivityPuestosIds((prev) =>
+      prev.includes(activityId) ? prev.filter((id) => id !== activityId) : [...prev, activityId],
+    );
+  };
+
+  const createdActivityPuestoUnlinkKey = (activityId: number, puestoId: number) => `${activityId}-${puestoId}`;
+
+  const handleUnlinkCreatedActivityPuesto = (
+    activityId: number,
+    puesto: CreatedActivityPuestoVinculado,
+  ) => {
+    Alert.alert(
+      'Desvincular puesto',
+      `¿Deseas quitar el puesto "${puesto.nombre}" de esta actividad?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: async () => {
+            const isConnected = await getConnectionStatus();
+            if (!isConnected) {
+              Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+              return;
+            }
+            const unlinkKey = createdActivityPuestoUnlinkKey(activityId, puesto.id);
+            try {
+              setUnlinkingCreatedActivityPuestoKey(unlinkKey);
+              const response = await unlinkCreatedActivityPuesto({
+                activityId,
+                puestoId: puesto.id,
+                refreshAccessToken,
+                logout,
+              });
+              if (!response.status) {
+                Alert.alert('Error', response.message || 'No se pudo desvincular el puesto.');
+                return;
+              }
+              if (selectedPuestoFilterId) {
+                await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+              } else {
+                setCreatedActivities((prev) =>
+                  prev.map((act) =>
+                    act.id === activityId
+                      ? {
+                          ...act,
+                          puestos_vinculados: (act.puestos_vinculados ?? []).filter(
+                            (p) => p.id !== puesto.id,
+                          ),
+                        }
+                      : act,
+                  ),
+                );
+              }
+            } finally {
+              setUnlinkingCreatedActivityPuestoKey((prev) => (prev === unlinkKey ? null : prev));
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const handleDuplicateCreatedActivity = async (activityId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Este submódulo funciona exclusivamente con internet.');
+      return;
+    }
+    Alert.alert('Duplicar actividad', '¿Deseas duplicar esta actividad y sus puestos vinculados?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Duplicar',
+        onPress: async () => {
+          try {
+            setDuplicatingCreatedActivityId(activityId);
+            const response = await duplicateCreatedActivity({ activityId, refreshAccessToken, logout });
+            if (!response.status) {
+              Alert.alert('Error', response.message || 'No se pudo duplicar la actividad.');
+              return;
+            }
+            Alert.alert('Éxito', response.message || 'Actividad duplicada correctamente.');
+            if (selectedPuestoFilterId) {
+              await fetchCreatedActivitiesByPuesto(selectedPuestoFilterId);
+            }
+          } finally {
+            setDuplicatingCreatedActivityId((prev) => (prev === activityId ? null : prev));
+          }
+        },
+      },
+    ]);
+  };
 
   const handleDeleteCreatedActivity = async (activityId: number) => {
     const isConnected = await getConnectionStatus();
@@ -3963,6 +4068,8 @@ export default function ActivitiesScreen() {
               ) : (
                 createdActivities.map((item) => {
                   const createdScheduleLbl = formatScheduleUiLabel(parseScheduleFromFrecuenciaJsonStore(item.frecuencia));
+                  const puestosVinculados = Array.isArray(item.puestos_vinculados) ? item.puestos_vinculados : [];
+                  const isPuestosExpanded = expandedCreatedActivityPuestosIds.includes(item.id);
                   return (
                   <ThemedView key={item.id} style={styles.assignedItem}>
                     <ThemedText style={styles.assignedTitle}>{item.nombre_actividad}</ThemedText>
@@ -3972,6 +4079,60 @@ export default function ActivitiesScreen() {
                         {createdScheduleLbl}
                       </ThemedText>
                     ) : null}
+                    <ThemedView style={styles.collapsableSection}>
+                      <TouchableOpacity
+                        style={styles.collapsableHeader}
+                        onPress={() => toggleCreatedActivityPuestosExpanded(item.id)}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: isPuestosExpanded }}
+                      >
+                        <ThemedText style={styles.collapsableHeaderText}>
+                          {isPuestosExpanded
+                            ? 'Ocultar puestos vinculados'
+                            : `Puestos vinculados (${puestosVinculados.length})`}
+                        </ThemedText>
+                        <Ionicons
+                          name={isPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                          size={20}
+                          color="#007AFF"
+                        />
+                      </TouchableOpacity>
+                      {isPuestosExpanded ? (
+                        <ThemedView style={styles.collapsableContent}>
+                          {puestosVinculados.length === 0 ? (
+                            <ThemedText style={styles.helperText}>No hay puestos vinculados.</ThemedText>
+                          ) : (
+                            puestosVinculados.map((puesto) => {
+                              const unlinkKey = createdActivityPuestoUnlinkKey(item.id, puesto.id);
+                              const isUnlinking = unlinkingCreatedActivityPuestoKey === unlinkKey;
+                              return (
+                              <ThemedView key={`${item.id}-puesto-${puesto.id}`} style={styles.linkedPuestoRow}>
+                                <ThemedView style={styles.linkedPuestoInfo}>
+                                  <ThemedText style={styles.linkedPuestoName}>{puesto.nombre}</ThemedText>
+                                  {puesto.codigo ? (
+                                    <ThemedText style={styles.linkedPuestoCode}>{puesto.codigo}</ThemedText>
+                                  ) : null}
+                                </ThemedView>
+                                <TouchableOpacity
+                                  style={styles.linkedPuestoDeleteButton}
+                                  onPress={() => handleUnlinkCreatedActivityPuesto(item.id, puesto)}
+                                  disabled={isUnlinking}
+                                  accessibilityRole="button"
+                                  accessibilityLabel={`Desvincular puesto ${puesto.nombre}`}
+                                >
+                                  {isUnlinking ? (
+                                    <ActivityIndicator size="small" color="#F44336" />
+                                  ) : (
+                                    <Ionicons name="trash-outline" size={20} color="#F44336" />
+                                  )}
+                                </TouchableOpacity>
+                              </ThemedView>
+                              );
+                            })
+                          )}
+                        </ThemedView>
+                      ) : null}
+                    </ThemedView>
                     <View style={[styles.modalButtons, { flexWrap: 'wrap' }]}>
                       <ScalePressButton
                         style={[styles.editButton, styles.createdActionButton]}
@@ -3987,12 +4148,31 @@ export default function ActivitiesScreen() {
                       </ScalePressButton>
                       <ScalePressButton
                         style={[
+                          styles.duplicateButton,
+                          styles.createdActionButton,
+                          duplicatingCreatedActivityId === item.id && styles.modalButtonDisabled,
+                        ]}
+                        onPress={() => handleDuplicateCreatedActivity(item.id)}
+                        disabled={
+                          duplicatingCreatedActivityId === item.id || deletingCreatedActivityId === item.id
+                        }
+                      >
+                        {duplicatingCreatedActivityId === item.id ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <Ionicons name="copy-outline" size={18} color="#FFFFFF" />
+                        )}
+                      </ScalePressButton>
+                      <ScalePressButton
+                        style={[
                           styles.deleteButton,
                           styles.createdActionButton,
                           deletingCreatedActivityId === item.id && styles.modalButtonDisabled,
                         ]}
                         onPress={() => handleDeleteCreatedActivity(item.id)}
-                        disabled={deletingCreatedActivityId === item.id}
+                        disabled={
+                          deletingCreatedActivityId === item.id || duplicatingCreatedActivityId === item.id
+                        }
                       >
                         {deletingCreatedActivityId === item.id ? (
                           <ActivityIndicator size="small" color="#FFFFFF" />
@@ -6067,7 +6247,70 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
   },
-  
+  duplicateButton: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#FF9500',
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  collapsableSection: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  collapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  collapsableHeaderText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    marginRight: 8,
+  },
+  collapsableContent: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  linkedPuestoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  linkedPuestoInfo: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  linkedPuestoDeleteButton: {
+    padding: 8,
+    minWidth: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkedPuestoName: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  linkedPuestoCode: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
+  },
   deleteButton: {
     marginTop: 8,
     flexDirection: 'row',

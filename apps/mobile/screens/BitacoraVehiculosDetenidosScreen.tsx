@@ -27,6 +27,7 @@ import SignatureScreen from 'react-native-signature-canvas';
 import { jwtDecode } from 'jwt-decode';
 import Constants from 'expo-constants';
 
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
@@ -41,6 +42,7 @@ import authedFetch from '@/hooks/authedFetch';
 import {
   BitacoraVehiculoDetenidoItem,
   createBitacoraVehiculoDetenido,
+  deleteBitacoraRevisionImage,
   deleteBitacoraVehiculoDetenido,
   listBitacoraVehiculoDetenido,
   updateBitacoraVehiculoDetenido,
@@ -66,10 +68,45 @@ import {
   getFirstPuestoIdFromSucursalInTree,
 } from '@/hooks/llavesMainStructureHelpers';
 import { readCorporateVehiclesForSucursalFromMainStructure } from '@/hooks/corporateVehiclesMainStructure';
+import {
+  bitacoraRevMakeLocalImageRef,
+  bitacoraRevParseLocalImageRef,
+  buildBitacoraRevisionForSubmit,
+  mergeRevisionImagesIntoArray,
+  mergeNewRevisionImagesWithExisting,
+  deleteBitacoraRevLocalImageFilesFromMap,
+  removeImageFromRevisionArray,
+  resolveBitacoraRevImageDisplayUri,
+  saveCameraPhotoToBitacoraRevFile,
+  type BitacoraRevisionEntry,
+} from '@/hooks/bitacoraRevisionMediaSync';
+import { deleteFile } from '@/hooks/fileStorage';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>;
 
 type TipoBitacora = 'Vehículo' | 'Bicicleta' | 'Motocicleta';
+
+function isTipoBicicleta(tipo: string): boolean {
+  return String(tipo || '').trim() === 'Bicicleta';
+}
+
+function clearVehiculoInfoCamposNoBicicleta(setters: {
+  setVehKilometraje: (v: string) => void;
+  setVehProxCambioAceite: (v: string) => void;
+  setVehModelo: (v: string) => void;
+  setVehAnno: (v: string) => void;
+  setVehTituloPropiedad: (v: boolean | null) => void;
+  setVehRTV: (v: boolean | null) => void;
+  setVehMarchamo: (v: boolean | null) => void;
+}) {
+  setters.setVehKilometraje('');
+  setters.setVehProxCambioAceite('');
+  setters.setVehModelo('');
+  setters.setVehAnno('');
+  setters.setVehTituloPropiedad(null);
+  setters.setVehRTV(null);
+  setters.setVehMarchamo(null);
+}
 type ReviewStatus = 'Bueno' | 'Malo' | 'No existe';
 type YesNo = 'Sí' | 'No';
 
@@ -91,6 +128,49 @@ type MarcaSnapshot = {
   filterContratoId: number | null;
   filterSucursalId: number | null;
 };
+
+function buildBitacoraListFetchKey(
+  snap: MarcaSnapshot | null,
+  filterSucursalId: number | null
+): string | null {
+  if (!snap) return null;
+  const sid = snap.isOperativo ? snap.marcaCorpoId : filterSucursalId ?? snap.marcaCorpoId;
+  if (sid == null || Number(sid) <= 0) {
+    return snap.isOperativo ? 'op:pending' : 'filt:pending';
+  }
+  return snap.isOperativo ? `op:${sid}` : `filt:${sid}`;
+}
+
+type BitacoraRevisionThumbnailProps = {
+  uri: string;
+  onDelete: () => void;
+  variant: 'list' | 'form';
+};
+
+const BitacoraRevisionThumbnail = React.memo(function BitacoraRevisionThumbnail({
+  uri,
+  onDelete,
+  variant,
+}: BitacoraRevisionThumbnailProps) {
+  if (!uri) return null;
+  const isList = variant === 'list';
+  return (
+    <ThemedView style={isList ? styles.revisionImageWrap : styles.revisionFormImageWrap}>
+      <Image
+        source={{ uri }}
+        style={isList ? styles.revisionImagePreview : styles.revisionImagePreviewForm}
+        resizeMode={isList ? 'contain' : 'cover'}
+        {...(Platform.OS === 'android' ? { resizeMethod: 'resize' as const } : {})}
+      />
+      <TouchableOpacity
+        style={isList ? styles.revisionImageDeleteBtn : styles.revisionImageDeleteBtnForm}
+        onPress={onDelete}
+      >
+        <Ionicons name="trash" size={isList ? 20 : 14} color={isList ? '#FFFFFF' : '#FF3B30'} />
+      </TouchableOpacity>
+    </ThemedView>
+  );
+});
 
 function numOrNull(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return null;
@@ -299,7 +379,7 @@ const buildGeneralConfig = (tipo: TipoBitacora): GeneralEntry[] => {
       { key: 'fecha', label: 'Fecha', kind: 'date', required: true },
       { key: 'hora', label: 'Hora', kind: 'time', required: true },
       { key: 'codigo', label: 'Código', kind: 'text', required: true },
-      { key: 'numero_placa', label: 'Número de placa', kind: 'text', required: true },
+      { key: 'numero_placa', label: 'Número de placa', kind: 'text', required: false },
       { key: 'marca', label: 'Marca', kind: 'text', required: true },
       { key: 'color', label: 'Color', kind: 'text', required: true },
       { key: 'nombre_oficial_transito', label: 'Nombre de oficial de tránsito', kind: 'text', required: true },
@@ -378,7 +458,7 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
       'Patilla de frenos',
       'Asiento',
       'Batería',
-      'Pinto',
+      'Pito',
       'Carburador',
     ];
     const base: RevisionEntry[] = motoItems.map((label) => ({
@@ -559,7 +639,18 @@ const buildRevisionConfig = (tipo: TipoBitacora): RevisionEntry[] => {
 export default function BitacoraVehiculosDetenidosScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProp<RootStackParamList, 'BitacoraVehiculosDetenidos'>>();
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<any>(null);
+  const [cameraVisible, setCameraVisible] = useState(false);
+  const [currentRevisionKey, setCurrentRevisionKey] = useState<string | null>(null);
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   const prefill = route.params?.prefill;
@@ -619,6 +710,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const filterSucursalIdRef = useRef<number | null>(null);
   const filterEmpresaIdRef = useRef<number | null>(null);
   const filterClienteIdRef = useRef<number | null>(null);
+  const lastBitacoraListFetchKeyRef = useRef<string | null>(null);
+  const bitacoraListFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const listFocusSessionRef = useRef(0);
+  const serverRevisionImageUrlCacheRef = useRef<Map<string, string>>(new Map());
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
@@ -661,6 +756,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const [generalValues, setGeneralValues] = useState<Record<string, any>>({});
   const [revisionValues, setRevisionValues] = useState<Record<string, any>>({});
   const [revisionObs, setRevisionObs] = useState<Record<string, string>>({});
+  const [revisionImages, setRevisionImages] = useState<Record<string, string[]>>({});
   const [movimientos, setMovimientos] = useState<MovimientoVehiculo[]>([]);
   const [observaciones, setObservaciones] = useState<string>('');
 
@@ -712,6 +808,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const generalConfig = useMemo(() => buildGeneralConfig(tipo), [tipo]);
   const revisionConfig = useMemo(() => buildRevisionConfig(tipo), [tipo]);
+  const isEditingBitacoraRecord = useMemo(
+    () => !!(editing && ((Number(editing.id) || 0) > 0 || editing.id_local)),
+    [editing],
+  );
 
 
   const handleMenuPress = () => setIsMenuVisible(true);
@@ -941,7 +1041,22 @@ export default function BitacoraVehiculosDetenidosScreen() {
   };
 
   const runFetchBitacoras = useCallback(
-    async (snap: MarcaSnapshot | null) => {
+    async (snap: MarcaSnapshot | null, opts?: { force?: boolean }) => {
+      const fetchKey = buildBitacoraListFetchKey(snap, filterSucursalIdRef.current);
+      if (
+        !opts?.force &&
+        fetchKey &&
+        fetchKey === lastBitacoraListFetchKeyRef.current &&
+        bitacoraListFetchInFlightRef.current
+      ) {
+        await bitacoraListFetchInFlightRef.current;
+        return;
+      }
+      if (!opts?.force && fetchKey && fetchKey === lastBitacoraListFetchKeyRef.current) {
+        return;
+      }
+
+      const run = async () => {
       try {
         setIsLoading(true);
         setError(null);
@@ -952,7 +1067,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
         }
 
         if (!snap) {
-          console.log(1);
           setBitacoras([]);
           setIsLoading(false);
           return;
@@ -970,7 +1084,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
         const isConnected = await getConnectionStatus();
 
         if (!isConnected) {
-          console.log(2);
           setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
           if (!sid) {
             setError(
@@ -980,13 +1093,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
             );
           } else {
             setError(null);
+            if (fetchKey) lastBitacoraListFetchKeyRef.current = fetchKey;
           }
           setIsLoading(false);
           return;
         }
 
         if (!sid || sid <= 0) {
-          console.log(3);
           setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
           setError(
             isOperativo
@@ -1016,7 +1129,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
         });
 
         if (!res.status) {
-          console.log(4);
           setError(res.message || 'Error al cargar bitácoras');
           setBitacoras(fromMain as BitacoraVehiculoDetenidoItem[]);
           setIsLoading(false);
@@ -1035,8 +1147,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
           serverRows: serverList,
         });
         const merged = await readBitacorasForSucursalFromMainStructure(sid);
-        console.log(5);
         setBitacoras(merged as BitacoraVehiculoDetenidoItem[]);
+        if (fetchKey) lastBitacoraListFetchKeyRef.current = fetchKey;
       } catch (e: any) {
         setError(e.message || 'Error al cargar bitácoras');
         try {
@@ -1047,10 +1159,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
             : filterSucursalIdRef.current ?? snap2?.marcaCorpoId;
           if (cid) {
             const rows = await readBitacorasForSucursalFromMainStructure(Number(cid));
-            console.log(6);
             setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
           } else {
-            console.log(7);
             setBitacoras([]);
           }
         } catch {
@@ -1059,6 +1169,17 @@ export default function BitacoraVehiculosDetenidosScreen() {
       } finally {
         setIsLoading(false);
       }
+      };
+
+      const promise = run();
+      bitacoraListFetchInFlightRef.current = promise;
+      try {
+        await promise;
+      } finally {
+        if (bitacoraListFetchInFlightRef.current === promise) {
+          bitacoraListFetchInFlightRef.current = null;
+        }
+      }
     },
     [isPrefillMode, refreshAccessToken, logout, syncMarcaFromStorage]
   );
@@ -1066,11 +1187,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const fetchRecords = useCallback(async () => {
     const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
     if (!snap && !isPrefillMode) {
-      console.log(8);
       setBitacoras([]);
       return;
     }
-    await runFetchBitacoras(snap);
+    await runFetchBitacoras(snap, { force: true });
   }, [syncMarcaFromStorage, runFetchBitacoras, isPrefillMode]);
 
   useEffect(() => {
@@ -1173,6 +1293,280 @@ export default function BitacoraVehiculosDetenidosScreen() {
   }, [bitacoras, filterTipo, filterFecha, filterSearch]);
 
   const [expandedBitacoras, setExpandedBitacoras] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    serverRevisionImageUrlCacheRef.current.clear();
+  }, [accessToken]);
+
+  const getBitacoraServerImageUrl = useCallback(
+    (bitacoraId: number, fileName: string) => {
+      const cacheKey = `${bitacoraId}:${fileName}`;
+      const cached = serverRevisionImageUrlCacheRef.current.get(cacheKey);
+      if (cached) return cached;
+      const url = appendTokenToUrl(
+        `${Constants.expoConfig?.extra?.API_SERVER}/api/bitacora-vehiculo-detenido/${bitacoraId}/get-image/${encodeURIComponent(fileName)}`
+      );
+      serverRevisionImageUrlCacheRef.current.set(cacheKey, url);
+      return url;
+    },
+    [appendTokenToUrl]
+  );
+
+  const resolveFormRevisionImageUri = useCallback(
+    (raw: string, bitacoraId = 0, hasIdLocal = false) =>
+      resolveBitacoraRevImageDisplayUri(raw, {
+        bitacoraId,
+        hasIdLocal,
+        getServerImageUrl: (name) => getBitacoraServerImageUrl(bitacoraId, name),
+      }),
+    [getBitacoraServerImageUrl]
+  );
+
+  const appendRevisionImage = (revisionKey: string, ref: string) => {
+    setRevisionImages((prev) => {
+      const list = Array.isArray(prev[revisionKey]) ? prev[revisionKey].slice() : [];
+      list.push(ref);
+      return { ...prev, [revisionKey]: list };
+    });
+  };
+
+  const removeRevisionImageFromForm = async (revisionKey: string, index: number) => {
+    const list = revisionImages[revisionKey] || [];
+    const target = list[index];
+    if (!target) return;
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const localName = bitacoraRevParseLocalImageRef(target);
+          if (localName) {
+            try {
+              await deleteFile(localName);
+            } catch {
+              /* idempotente */
+            }
+          }
+
+          setRevisionImages((prev) => {
+            const curr = Array.isArray(prev[revisionKey]) ? prev[revisionKey].slice() : [];
+            curr.splice(index, 1);
+            const next = { ...prev };
+            if (curr.length === 0) delete next[revisionKey];
+            else next[revisionKey] = curr;
+            return next;
+          });
+        },
+      },
+    ]);
+  };
+
+  const openCameraForRevision = async (revisionKey: string) => {
+    if (!permission) {
+      const perm = await requestPermission();
+      if (!perm.granted) {
+        Alert.alert('Permiso', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    } else if (!permission.granted) {
+      const perm = await requestPermission();
+      if (!perm.granted) {
+        Alert.alert('Permiso', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    }
+    setCurrentRevisionKey(revisionKey);
+    setCameraVisible(true);
+  };
+
+  const takePictureForRevision = async () => {
+    if (!cameraRef.current || !currentRevisionKey) {
+      setCameraVisible(false);
+      return;
+    }
+    try {
+      const photo: any = await cameraRef.current.takePictureAsync({
+        quality: Platform.OS === 'android' ? 0.5 : 0.6,
+        skipProcessing: true,
+      });
+      setCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la imagen');
+        return;
+      }
+      const fileName = await saveCameraPhotoToBitacoraRevFile(photo.uri);
+      appendRevisionImage(currentRevisionKey, bitacoraRevMakeLocalImageRef(fileName));
+    } catch (error) {
+      console.error('Error capturing revision image:', error);
+      setCameraVisible(false);
+      Alert.alert('Error', 'No se pudo capturar la imagen');
+    }
+  };
+
+  const upsertBitacoraRevisionInCache = async (
+    row: BitacoraVehiculoDetenidoItem,
+    nextRevision: BitacoraRevisionEntry[]
+  ) => {
+    const sid = numOrNull(row.sucursal_id ?? (row as any).corpo_id) ?? 0;
+    const updated = { ...row, informacion_revision: nextRevision };
+    if (sid > 0) {
+      await upsertBitacoraDetenidoRowInMainStructure(updated, sid, row.id_local || null);
+    }
+    setBitacoras((prev) =>
+      prev.map((x) => {
+        const same =
+          (row.id_local && x.id_local === row.id_local) ||
+          (row.id > 0 && x.id === row.id);
+        return same ? updated : x;
+      })
+    );
+  };
+
+  const updateOfflineBitacoraQueueRevision = async (
+    localKey: string,
+    nextRevision: BitacoraRevisionEntry[]
+  ) => {
+    const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+    const actions = actionsStr ? JSON.parse(actionsStr) : [];
+    const idx = actions.findIndex(
+      (a: any) =>
+        a.action === 'create' &&
+        a.type === BITACORA_VEHICULO_DETENIDO_EVAL_TYPE &&
+        String(a.id) === String(localKey)
+    );
+    if (idx === -1) return;
+    actions[idx] = {
+      ...actions[idx],
+      payload: { ...(actions[idx].payload || {}), informacion_revision: nextRevision },
+    };
+    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+  };
+
+  const removeImageFromBitacoraRecord = async (
+    record: BitacoraVehiculoDetenidoItem,
+    revisionKey: string,
+    imageRef: string
+  ) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const infoR = safeParse<BitacoraRevisionEntry[]>(record.informacion_revision, []);
+          const nextRevision = removeImageFromRevisionArray(infoR, revisionKey, imageRef);
+          const localName = bitacoraRevParseLocalImageRef(imageRef);
+          const serverImageName =
+            !localName && typeof imageRef === 'string' && imageRef.trim() && !imageRef.startsWith('data:')
+              ? imageRef.trim()
+              : null;
+          const bitacoraId = Number(record.id || 0);
+          const isServerImage = bitacoraId > 0 && !!serverImageName;
+
+          if (isServerImage) {
+            const isConnected = await getConnectionStatus();
+            if (isConnected) {
+              const res = await deleteBitacoraRevisionImage({
+                id: bitacoraId,
+                imageName: serverImageName!,
+                revisionKey,
+                refreshAccessToken,
+                logout,
+              });
+              if (!res.status) {
+                Alert.alert('Error', res.message || 'No se pudo eliminar la imagen');
+                return;
+              }
+              const fromServer = res.data?.informacion_revision;
+              await upsertBitacoraRevisionInCache(
+                record,
+                Array.isArray(fromServer) ? fromServer : nextRevision
+              );
+            } else {
+              const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+              const actions = actionsStr ? JSON.parse(actionsStr) : [];
+              actions.push({
+                id: bitacoraId,
+                action: 'delete_image',
+                type: BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
+                payload: {
+                  revisionKey,
+                  imageName: serverImageName,
+                  sucursal_id: record.sucursal_id,
+                  informacion_revision: nextRevision,
+                },
+              });
+              await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+              await upsertBitacoraRevisionInCache(record, nextRevision);
+            }
+          } else {
+            if (localName) {
+              try {
+                await deleteFile(localName);
+              } catch {
+                /* noop */
+              }
+            }
+            await upsertBitacoraRevisionInCache(record, nextRevision);
+            if (record.id_local) {
+              await updateOfflineBitacoraQueueRevision(record.id_local, nextRevision);
+            }
+          }
+        },
+      },
+    ]);
+  };
+
+  const prepareBitacoraRequestForApi = (requestData: any) => {
+    const revArr = Array.isArray(requestData.informacion_revision)
+      ? (requestData.informacion_revision as BitacoraRevisionEntry[])
+      : [];
+    const { informacion_revision, fileSlots } = buildBitacoraRevisionForSubmit(revArr);
+    const { informacion_revision: _arr, ...rest } = requestData;
+    return {
+      ...rest,
+      informacion_revision,
+      ...(fileSlots.length > 0 ? { _bitacoraRevFileSlots: fileSlots } : {}),
+    };
+  };
+
+  const renderRevisionPhotoSection = (revisionKey: string) => {
+    const imgs = revisionImages[revisionKey] || [];
+    const editingId = Number(editing?.id || 0);
+    const hasIdLocal = !!(editing?.id_local && String(editing.id_local).length > 0);
+    const cameraLabel = isEditingBitacoraRecord
+      ? imgs.length > 0
+        ? 'Agregar otra foto nueva'
+        : 'Agregar foto nueva (opcional)'
+      : imgs.length > 0
+        ? 'Agregar otra imagen'
+        : 'Tomar imagen (opcional)';
+    return (
+      <ThemedView style={styles.revisionPhotoSection}>
+        <TouchableOpacity
+          style={styles.cameraSmallButton}
+          onPress={() => openCameraForRevision(revisionKey)}
+        >
+          <Ionicons name="camera" size={18} color="#007AFF" />
+          <ThemedText style={styles.cameraSmallButtonText}>{cameraLabel}</ThemedText>
+        </TouchableOpacity>
+        {imgs.length > 0 ? (
+          <ThemedView style={styles.revisionImagesRow}>
+            {imgs.map((uri, idx) => (
+              <BitacoraRevisionThumbnail
+                key={`${revisionKey}-form-img-${idx}-${uri}`}
+                uri={resolveFormRevisionImageUri(uri, editingId, hasIdLocal)}
+                variant="form"
+                onDelete={() => removeRevisionImageFromForm(revisionKey, idx)}
+              />
+            ))}
+          </ThemedView>
+        ) : null}
+      </ThemedView>
+    );
+  };
+
   const toggleBitacoraExpanded = (key: string) => {
     setExpandedBitacoras((prev) => {
       const next = new Set(prev);
@@ -1193,6 +1587,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
           : `bit-${index}`;
     const isExpanded = expandedBitacoras.has(key);
     const infoArr = safeParse<any[]>(b.informacion_general, []);
+    const infoRevArr = safeParse<BitacoraRevisionEntry[]>(b.informacion_revision, []);
     const map: Record<string, any> = {};
     for (const f of infoArr) map[String(f.key)] = f.value;
     const placa = String(map.numero_placa ?? map.numero_de_placa ?? '');
@@ -1200,12 +1595,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
     const colorStr = String(map.color ?? '');
     const fecha = formatDateDMY(b.created_at, '');
     const firmaInfo = decodeFirmaHash(b.firma_responsable);
+    const hasIdLocal = !!(b.id_local && String(b.id_local).length > 0);
+    const bitacoraIdForImages = Number(b.id || 0);
 
-    // mostramos algunos campos informativos extra solo en el collapse
-    const details = infoArr
-      .filter((f) => f && f.label && f.value != null && String(f.value).trim() !== '')
-      .filter((f) => String(f.kind || '') !== 'signature')
-      .slice(0, 10);
+    const generalDetails = infoArr.filter(
+      (f) => f && f.label && f.value != null && String(f.value).trim() !== '' && String(f.kind || '') !== 'signature'
+    );
+    const revisionDetails = infoRevArr.filter((f) => f && f.kind !== 'heading');
 
     return (
       <ThemedView key={key} style={styles.bitacoraCard}>
@@ -1236,15 +1632,60 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
         {isExpanded && (
           <ThemedView style={styles.collapsableContent}>
-            {details.length === 0 ? (
-              <ThemedText style={styles.emptyText}>No hay detalles disponibles</ThemedText>
+            <ThemedText style={styles.subSectionTitle}>Información general</ThemedText>
+            {generalDetails.length === 0 ? (
+              <ThemedText style={styles.emptyText}>No hay información general</ThemedText>
             ) : (
-              details.map((f: any, i: number) => (
-                <ThemedText key={`${key}-d-${i}`} style={styles.bitLine}>
+              generalDetails.map((f: any, i: number) => (
+                <ThemedText key={`${key}-g-${i}`} style={styles.bitLine}>
                   <ThemedText style={styles.bitLabel}>{String(f.label)}: </ThemedText>
                   <ThemedText style={styles.bitValue}>{String(f.value)}</ThemedText>
                 </ThemedText>
               ))
+            )}
+
+            <ThemedText style={[styles.subSectionTitle, { marginTop: 12 }]}>Información de revisión</ThemedText>
+            {revisionDetails.length === 0 ? (
+              <ThemedText style={styles.emptyText}>No hay información de revisión</ThemedText>
+            ) : (
+              revisionDetails.map((f, i) => {
+                const imgs = Array.isArray(f.images) ? f.images : [];
+                return (
+                  <ThemedView key={`${key}-r-${i}`} style={styles.revisionDetailBlock}>
+                    <ThemedText style={styles.bitLine}>
+                      <ThemedText style={styles.bitLabel}>{String(f.label || f.key)}: </ThemedText>
+                      <ThemedText style={styles.bitValue}>{String(f.value ?? '-')}</ThemedText>
+                    </ThemedText>
+                    {f.observation ? (
+                      <ThemedText style={styles.bitLine}>
+                        <ThemedText style={styles.bitLabel}>Obs.: </ThemedText>
+                        <ThemedText style={styles.bitValue}>{String(f.observation)}</ThemedText>
+                      </ThemedText>
+                    ) : null}
+                    {imgs.length > 0 ? (
+                      <ThemedView style={styles.revisionImagesRow}>
+                        {imgs.map((imgRef, imgIdx) => {
+                          const uri = resolveFormRevisionImageUri(
+                            String(imgRef),
+                            bitacoraIdForImages,
+                            hasIdLocal
+                          );
+                          return (
+                            <BitacoraRevisionThumbnail
+                              key={`${key}-ri-${i}-${imgIdx}-${String(imgRef)}`}
+                              uri={uri}
+                              variant="list"
+                              onDelete={() =>
+                                removeImageFromBitacoraRecord(b, String(f.key), String(imgRef))
+                              }
+                            />
+                          );
+                        })}
+                      </ThemedView>
+                    ) : null}
+                  </ThemedView>
+                );
+              })
             )}
 
             {/* Firma responsable */}
@@ -1604,6 +2045,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
           setVehProxCambioAceite(String(vehiculo?.prox_cambio_aceite ?? ''));
           setVehModelo(String(vehiculo?.modelo ?? ''));
           setVehAnno(String(vehiculo?.anno ?? ''));
+          if (vehiculo?.marca != null && String(vehiculo.marca).trim() !== '') {
+            setGeneralValues((prev) => ({ ...prev, marca: String(vehiculo.marca) }));
+          }
           setVehTipoAutoria(String(vehiculo?.tipo_autoria ?? ''));
           setVehTituloPropiedad(vehiculo?.titulo_propiedad ?? false);
           setVehRTV(vehiculo?.rtv ?? false);
@@ -1799,35 +2243,49 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setPrefillVehicleInfo({ vehiculo: vehicle || undefined, uso: uso || undefined });
   }, [isPrefillMode, prefill, corporateVehicles, tempVehicle]);
 
+  const runFetchBitacorasRef = useRef(runFetchBitacoras);
+  runFetchBitacorasRef.current = runFetchBitacoras;
+  const fetchMainStructureRef = useRef(fetchMainStructure);
+  fetchMainStructureRef.current = fetchMainStructure;
+  const loadMarcaContextRef = useRef(loadMarcaContext);
+  loadMarcaContextRef.current = loadMarcaContext;
+  const syncMarcaFromStorageRef = useRef(syncMarcaFromStorage);
+  syncMarcaFromStorageRef.current = syncMarcaFromStorage;
+  const isPrefillModeRef = useRef(isPrefillMode);
+  isPrefillModeRef.current = isPrefillMode;
+
   useFocusEffect(
     useCallback(() => {
+      const session = ++listFocusSessionRef.current;
       let cancelled = false;
       void (async () => {
         const firstLoad = !listFiltersSyncedFromMarcaOnceRef.current;
-        const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: firstLoad });
-        if (cancelled) return;
+        const snap = await syncMarcaFromStorageRef.current({ applyFiltersFromMarca: firstLoad });
+        if (cancelled || session !== listFocusSessionRef.current) return;
         listFiltersSyncedFromMarcaOnceRef.current = true;
-        await fetchMainStructure();
-        await loadMarcaContext();
+        await Promise.all([fetchMainStructureRef.current(), loadMarcaContextRef.current()]);
+        if (cancelled || session !== listFocusSessionRef.current) return;
         if (!snap) {
-          if (!isPrefillMode) setBitacoras([]);
+          if (!isPrefillModeRef.current) setBitacoras([]);
           return;
         }
         const selectedSucursal = filterSucursalIdRef.current ?? snap.marcaCorpoId;
-        const shouldFetchList = snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
+        const shouldFetchList =
+          snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
         if (shouldFetchList) {
-          await runFetchBitacoras(snap);
+          await runFetchBitacorasRef.current(snap);
         } else {
           setBitacoras([]);
         }
       })();
       const handler = () => {
         void (async () => {
-          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          const snap = await syncMarcaFromStorageRef.current({ applyFiltersFromMarca: false });
           if (!snap) return;
           const selectedSucursal = filterSucursalIdRef.current ?? snap.marcaCorpoId;
-          const shouldFetchList = snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
-          if (shouldFetchList) await runFetchBitacoras(snap);
+          const shouldFetchList =
+            snap.isOperativo || (selectedSucursal != null && Number(selectedSucursal) > 0);
+          if (shouldFetchList) await runFetchBitacorasRef.current(snap, { force: true });
         })();
       };
       eventBus.on('connectionRestored', handler);
@@ -1835,7 +2293,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [syncMarcaFromStorage, fetchMainStructure, runFetchBitacoras, loadMarcaContext, isPrefillMode])
+    }, [])
   );
 
   useFocusEffect(
@@ -1972,12 +2430,33 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
     setRevisionValues(baseRev);
     setRevisionObs(baseObs);
+    setRevisionImages({});
 
     setMovimientos([
       { movimiento: '', fecha: dateToLocalString(now), hora: timeToHHmm(now), realizado_por: '', autorizado_por: '', _expanded: true },
     ]);
     setObservaciones('');
     setFirmaResponsable('');
+
+    setVehKilometraje('');
+    setVehProxCambioAceite('');
+    setVehModelo('');
+    setVehAnno('');
+    setVehTipoAutoria('');
+    setVehTituloPropiedad(null);
+    setVehRTV(null);
+    setVehMarchamo(null);
+    if (isTipoBicicleta(tipoNext)) {
+      clearVehiculoInfoCamposNoBicicleta({
+        setVehKilometraje,
+        setVehProxCambioAceite,
+        setVehModelo,
+        setVehAnno,
+        setVehTituloPropiedad,
+        setVehRTV,
+        setVehMarchamo,
+      });
+    }
 
     await requestLocation();
   };
@@ -2033,6 +2512,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
     setRevisionValues(rMap);
     setRevisionObs(oMap);
+    setRevisionImages({});
 
     setMovimientos(movs as any);
     setObservaciones(item.observaciones || '');
@@ -2226,6 +2706,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setVehTituloPropiedad((prev) => (tituloParsed !== null ? tituloParsed : prev));
     setVehRTV((prev) => (rtvParsed !== null ? rtvParsed : prev));
     setVehMarchamo((prev) => (marchamoParsed !== null ? marchamoParsed : prev));
+
+    if (isTipoBicicleta(tipoVal)) {
+      setGeneralValues((prev) => ({ ...prev, numero_placa: '' }));
+      clearVehiculoInfoCamposNoBicicleta({
+        setVehKilometraje,
+        setVehProxCambioAceite,
+        setVehModelo,
+        setVehAnno,
+        setVehTituloPropiedad,
+        setVehRTV,
+        setVehMarchamo,
+      });
+    }
   };
 
   const cancelCreating = () => {
@@ -2351,32 +2844,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
       return false;
     }
 
-    if (vehTituloPropiedad === null) {
-      setVehTituloPropiedad(false);
-    }
-    if (vehRTV === null) {
-      setVehRTV(false);
-    }
-    if (vehMarchamo === null) {
-      setVehMarchamo(false);
-    }
-
-    // Validación específica cuando se desea registrar un vehículo nuevo
+    // Validación al registrar vehículo nuevo: marca viene de Información general
     if (!selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal && shouldRegisterVehicle) {
-      if (
-        !vehKilometraje.trim() ||
-        !vehProxCambioAceite.trim() ||
-        !vehModelo.trim() ||
-        !vehAnno.trim() ||
-        vehTituloPropiedad === null ||
-        vehRTV === null ||
-        vehMarchamo === null ||
-        generalValues.numero_placa?.trim() === ''
-      ) {
-        Alert.alert(
-          'Error',
-          'Para registrar un nuevo vehículo debes completar Kilometraje, Próximo cambio de aceite, Modelo, Año y Número de placa.'
-        );
+      if (!String(generalValues.marca ?? '').trim()) {
+        Alert.alert('Error', 'Marca es requerida para registrar el vehículo (Información general)');
         return false;
       }
     }
@@ -2532,16 +3003,27 @@ export default function BitacoraVehiculosDetenidosScreen() {
       }
     );
 
-    const infoRevisionArr: any[] = [];
+    const infoRevisionArr: BitacoraRevisionEntry[] = [];
     for (const r of revisionConfig) {
       if (r.kind === 'heading') {
         infoRevisionArr.push({ key: r.key, label: r.label, kind: 'heading' });
         continue;
       }
-      const entry: any = { key: r.key, label: r.label, value: revisionValues[r.key] ?? '', kind: r.kind };
+      const entry: BitacoraRevisionEntry = {
+        key: r.key,
+        label: r.label,
+        value: revisionValues[r.key] ?? '',
+        kind: r.kind,
+      };
       if (r.withObservation) entry.observation = revisionObs[`${r.key}__obs`] ?? '';
       infoRevisionArr.push(entry);
     }
+    const existingRevisionForMerge = editing
+      ? safeParse<BitacoraRevisionEntry[]>(editing.informacion_revision, [])
+      : [];
+    const infoRevisionMerged = isEditingBitacoraRecord
+      ? mergeNewRevisionImagesWithExisting(existingRevisionForMerge, infoRevisionArr, revisionImages)
+      : mergeRevisionImagesIntoArray(infoRevisionArr, revisionImages);
 
     const movs = movimientos.map((m) => ({
       movimiento: m.movimiento,
@@ -2554,19 +3036,30 @@ export default function BitacoraVehiculosDetenidosScreen() {
     // Datos para registro opcional de vehículo nuevo (cuando no hay vehiculo_id seleccionado)
     let registerVehiclePayload: any = undefined;
     if (!selectedCorporateVehicleId && !selectedCorporateVehicleIdLocal && shouldRegisterVehicle) {
-      const placa = generalValues.numero_placa || "";
-      const tipoVeh = generalValues.tipo_vehiculo || tipoRef.current || "";
+      const tipoVeh = tipoRef.current || "";
+      const esBicicleta = isTipoBicicleta(tipoVeh);
+      const numOrNull = (raw: string): number | null => {
+        const s = raw.trim();
+        if (!s) return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+      const strOrNull = (raw: string): string | null => {
+        const s = raw.trim();
+        return s ? s : null;
+      };
       registerVehiclePayload = {
-        placa,
+        placa: esBicicleta ? null : strOrNull(String(generalValues.numero_placa ?? '')),
         tipo: tipoVeh,
-        tipo_autoria: vehTipoAutoria.trim(),
-        kilometraje: Number(vehKilometraje || 0),
-        prox_cambio_aceite: Number(vehProxCambioAceite || 0),
-        modelo: vehModelo || "",
-        anno: Number(vehAnno || 0),
-        titulo_propiedad: vehTituloPropiedad === true,
-        rtv: vehRTV === true,
-        marchamo: vehMarchamo === true,
+        tipo_autoria: vehTipoAutoria.trim() || null,
+        kilometraje: esBicicleta ? null : numOrNull(vehKilometraje),
+        prox_cambio_aceite: esBicicleta ? null : numOrNull(vehProxCambioAceite),
+        modelo: esBicicleta ? null : strOrNull(vehModelo),
+        anno: esBicicleta ? null : numOrNull(vehAnno),
+        marca: String(generalValues.marca ?? '').trim(),
+        titulo_propiedad: esBicicleta ? null : vehTituloPropiedad,
+        rtv: esBicicleta ? null : vehRTV,
+        marchamo: esBicicleta ? null : vehMarchamo,
       };
     }
 
@@ -2634,7 +3127,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
       ...(uso_id_local ? { uso_id_local } : {}),
       tipo: tipoRef.current,
       informacion_general: infoGeneralArr,
-      informacion_revision: infoRevisionArr,
+      informacion_revision: infoRevisionMerged,
       movimientos_vehiculos: movs,
       observaciones,
       firma_responsable: firmaResponsable,
@@ -2691,10 +3184,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
             : filterSucursalIdRef.current ?? snapV?.marcaCorpoId);
         if (listSid != null && listSid > 0) {
           const rows = await readBitacorasForSucursalFromMainStructure(Number(listSid));
-          console.log(9);
           setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
         } else {
-          console.log(10);
           setBitacoras([]);
         }
       };
@@ -2771,8 +3262,14 @@ export default function BitacoraVehiculosDetenidosScreen() {
         }
 
         if (isConnected) {
-          const res = await createBitacoraVehiculoDetenido({ requestData, refreshAccessToken, logout });
+          const apiPayload = prepareBitacoraRequestForApi(requestData);
+          const res = await createBitacoraVehiculoDetenido({ requestData: apiPayload, refreshAccessToken, logout });
           if (!res.status) throw new Error(res.message || 'No se pudo crear');
+          try {
+            await deleteBitacoraRevLocalImageFilesFromMap(revisionImages);
+          } catch {
+            /* noop */
+          }
 
           const newBitId = numOrNull((res as any).id ?? (res as any).data?.id);
           const linkNew = bitacoraLinkFromRequestPayload(sidForPayload, requestData);
@@ -2913,13 +3410,19 @@ export default function BitacoraVehiculosDetenidosScreen() {
       };
 
       if (isConnected) {
+        const apiPayload = prepareBitacoraRequestForApi(requestData);
         const res = await updateBitacoraVehiculoDetenido({
           id: editing.id,
-          requestData,
+          requestData: apiPayload,
           refreshAccessToken,
           logout,
         });
         if (!res.status) throw new Error(res.message || 'No se pudo actualizar');
+        try {
+          await deleteBitacoraRevLocalImageFilesFromMap(revisionImages);
+        } catch {
+          /* noop */
+        }
         await moveBitacoraOnMainStructureCache({
           oldLink: oldLinkUp,
           newLink: newLinkUp,
@@ -3030,10 +3533,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
           : filterSucursalIdRef.current ?? snapD?.marcaCorpoId;
         if (listSidD != null && listSidD > 0) {
           const rows = await readBitacorasForSucursalFromMainStructure(Number(listSidD));
-          console.log(11);
           setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
         } else {
-          console.log(12);
           setBitacoras([]);
         }
 
@@ -3092,10 +3593,8 @@ export default function BitacoraVehiculosDetenidosScreen() {
         : filterSucursalIdRef.current ?? snapD?.marcaCorpoId;
       if (listSidD != null && listSidD > 0) {
         const rows = await readBitacorasForSucursalFromMainStructure(Number(listSidD));
-        console.log(13);
         setBitacoras(rows as BitacoraVehiculoDetenidoItem[]);
       } else {
-        console.log(14);
         setBitacoras([]);
       }
       Alert.alert('Modo offline', 'Registro eliminado localmente. Se sincronizará cuando haya conexión.');
@@ -3705,6 +4204,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           const proxAceiteVal = selectedVehicle.prox_cambio_aceite;
                           const modeloVal = selectedVehicle.modelo;
                           const annoVal = selectedVehicle.anno;
+                          const marcaVal = selectedVehicle.marca;
                           const tipoAutoriaVal = selectedVehicle.tipo_autoria;
 
                             setVehKilometraje(
@@ -3721,6 +4221,9 @@ export default function BitacoraVehiculosDetenidosScreen() {
                             setVehAnno(
                               annoVal !== null && annoVal !== undefined ? String(annoVal) : ''
                             );
+                            if (marcaVal !== null && marcaVal !== undefined && String(marcaVal).trim() !== '') {
+                              setGeneralValues((prev) => ({ ...prev, marca: String(marcaVal) }));
+                            }
                           if (tipoAutoriaVal === 'Cliente' || tipoAutoriaVal === 'Corporativo') {
                             setVehTipoAutoria(String(tipoAutoriaVal));
                           } else {
@@ -3782,6 +4285,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
                         )}
                       </Picker>
                   </ThemedView>
+                  {!isLoadingVehicles &&
+                    !!(formSucursalId || marcaCorpoId) &&
+                    corporateVehicles.length === 0 &&
+                    !tempVehicle && (
+                      <ThemedText style={styles.pickerEmptyHint}>No hay vehículos disponibles</ThemedText>
+                    )}
 
                   <ThemedText style={styles.label}>Uso (solo sin bitácora)</ThemedText>
                   <ThemedView style={styles.pickerContainer}>
@@ -3836,6 +4345,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
                       })}
                     </Picker>
                   </ThemedView>
+                  {(selectedCorporateVehicleId || selectedCorporateVehicleIdLocal) &&
+                    availableCorporateUses.length === 0 && (
+                      <ThemedText style={styles.pickerEmptyHint}>
+                        No hay registros de uso disponibles
+                      </ThemedText>
+                    )}
                 </>
               )}
 
@@ -3848,9 +4363,20 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     if (selectedCorporateVehicleId || selectedCorporateVehicleIdLocal) return;
                     const next = v as TipoBitacora;
                     if (editing) {
-                      // no recreamos completamente en edición, solo cambiamos config (pero mantiene valores)
                       setTipo(next);
                       tipoRef.current = next;
+                      if (isTipoBicicleta(next)) {
+                        setGeneralValues((prev) => ({ ...prev, numero_placa: '' }));
+                        clearVehiculoInfoCamposNoBicicleta({
+                          setVehKilometraje,
+                          setVehProxCambioAceite,
+                          setVehModelo,
+                          setVehAnno,
+                          setVehTituloPropiedad,
+                          setVehRTV,
+                          setVehMarchamo,
+                        });
+                      }
                       return;
                     }
                     resetForm(next);
@@ -3884,54 +4410,60 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   </TouchableOpacity>
                 )}
 
-                <ThemedText style={styles.sectionSubtitle}>Información del vehículo (opcional)</ThemedText>
+                <ThemedText style={styles.sectionSubtitle}>
+                  Información del vehículo{shouldRegisterVehicle ? '' : ' (opcional)'}
+                </ThemedText>
 
-                <ThemedView style={styles.row}>
-                  <ThemedText style={styles.label}>Kilometraje</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    value={vehKilometraje}
-                    onChangeText={setVehKilometraje}
-                    placeholder="Kilometraje"
-                    placeholderTextColor="#999"
-                    keyboardType="numeric"
-                  />
-                </ThemedView>
+                {!isTipoBicicleta(tipo) ? (
+                  <>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Kilometraje</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehKilometraje}
+                        onChangeText={setVehKilometraje}
+                        placeholder="Kilometraje"
+                        placeholderTextColor="#999"
+                        keyboardType="numeric"
+                      />
+                    </ThemedView>
 
-                <ThemedView style={styles.row}>
-                  <ThemedText style={styles.label}>Próximo cambio de aceite</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    value={vehProxCambioAceite}
-                    onChangeText={setVehProxCambioAceite}
-                    placeholder="Próximo cambio de aceite"
-                    placeholderTextColor="#999"
-                    keyboardType="numeric"
-                  />
-                </ThemedView>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Próximo cambio de aceite</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehProxCambioAceite}
+                        onChangeText={setVehProxCambioAceite}
+                        placeholder="Próximo cambio de aceite"
+                        placeholderTextColor="#999"
+                        keyboardType="numeric"
+                      />
+                    </ThemedView>
 
-                <ThemedView style={styles.row}>
-                  <ThemedText style={styles.label}>Modelo</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    value={vehModelo}
-                    onChangeText={setVehModelo}
-                    placeholder="Modelo"
-                    placeholderTextColor="#999"
-                  />
-                </ThemedView>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Modelo</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehModelo}
+                        onChangeText={setVehModelo}
+                        placeholder="Modelo"
+                        placeholderTextColor="#999"
+                      />
+                    </ThemedView>
 
-                <ThemedView style={styles.row}>
-                  <ThemedText style={styles.label}>Año</ThemedText>
-                  <TextInput
-                    style={styles.input}
-                    value={vehAnno}
-                    onChangeText={setVehAnno}
-                    placeholder="Año"
-                    placeholderTextColor="#999"
-                    keyboardType="numeric"
-                  />
-                </ThemedView>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>Año</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={vehAnno}
+                        onChangeText={setVehAnno}
+                        placeholder="Año"
+                        placeholderTextColor="#999"
+                        keyboardType="numeric"
+                      />
+                    </ThemedView>
+                  </>
+                ) : null}
 
                 <ThemedView style={styles.row}>
                   <ThemedText style={styles.label}>Tipo de autoría</ThemedText>
@@ -3948,56 +4480,63 @@ export default function BitacoraVehiculosDetenidosScreen() {
                   </ThemedView>
                 </ThemedView>
 
-                <ThemedText style={styles.sectionSubtitle}>Documentos (opcional)</ThemedText>
+                {!isTipoBicicleta(tipo) ? (
+                  <>
+                    <ThemedText style={styles.sectionSubtitle}>Documentos (opcional)</ThemedText>
 
-                <ThemedView style={styles.checkboxGroup}>
-                  <TouchableOpacity
-                    style={styles.checkboxRow}
-                    onPress={() =>
-                      setVehTituloPropiedad((prev) =>
-                        prev === null ? true : !prev
-                      )
-                    }
-                  >
-                    <View style={styles.checkboxOuter}>
-                      {vehTituloPropiedad && <View style={styles.checkboxInner} />}
-                    </View>
-                    <ThemedText style={styles.checkboxLabel}>Título propiedad</ThemedText>
-                  </TouchableOpacity>
+                    <ThemedView style={styles.checkboxGroup}>
+                      <TouchableOpacity
+                        style={styles.checkboxRow}
+                        onPress={() =>
+                          setVehTituloPropiedad((prev) =>
+                            prev === null ? true : !prev
+                          )
+                        }
+                      >
+                        <View style={styles.checkboxOuter}>
+                          {vehTituloPropiedad && <View style={styles.checkboxInner} />}
+                        </View>
+                        <ThemedText style={styles.checkboxLabel}>Título propiedad</ThemedText>
+                      </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={styles.checkboxRow}
-                    onPress={() =>
-                      setVehRTV((prev) =>
-                        prev === null ? true : !prev
-                      )
-                    }
-                  >
-                    <View style={styles.checkboxOuter}>
-                      {vehRTV && <View style={styles.checkboxInner} />}
-                    </View>
-                    <ThemedText style={styles.checkboxLabel}>RTV</ThemedText>
-                  </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.checkboxRow}
+                        onPress={() =>
+                          setVehRTV((prev) =>
+                            prev === null ? true : !prev
+                          )
+                        }
+                      >
+                        <View style={styles.checkboxOuter}>
+                          {vehRTV && <View style={styles.checkboxInner} />}
+                        </View>
+                        <ThemedText style={styles.checkboxLabel}>RTV</ThemedText>
+                      </TouchableOpacity>
 
-                  <TouchableOpacity
-                    style={styles.checkboxRow}
-                    onPress={() =>
-                      setVehMarchamo((prev) =>
-                        prev === null ? true : !prev
-                      )
-                    }
-                  >
-                    <View style={styles.checkboxOuter}>
-                      {vehMarchamo && <View style={styles.checkboxInner} />}
-                    </View>
-                    <ThemedText style={styles.checkboxLabel}>Marchamo</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
+                      <TouchableOpacity
+                        style={styles.checkboxRow}
+                        onPress={() =>
+                          setVehMarchamo((prev) =>
+                            prev === null ? true : !prev
+                          )
+                        }
+                      >
+                        <View style={styles.checkboxOuter}>
+                          {vehMarchamo && <View style={styles.checkboxInner} />}
+                        </View>
+                        <ThemedText style={styles.checkboxLabel}>Marchamo</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
+                  </>
+                ) : null}
               </ThemedView>
 
               {/* Formulario dinámico - información general */}
               <ThemedText style={styles.sectionTitle}>Información general</ThemedText>
               {generalConfig.map((f) => {
+                if (f.key === 'numero_placa' && isTipoBicicleta(tipo)) {
+                  return null;
+                }
                 let value = '';
                 if (f.kind === 'readonly') {
                   if (f.key === 'empresa') {
@@ -4110,6 +4649,15 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
               {/* Formulario dinámico - información de revisión */}
               <ThemedText style={styles.sectionTitle}>Información de revisión</ThemedText>
+              {isEditingBitacoraRecord ? (
+                <ThemedView style={styles.revisionEditHintBox}>
+                  <Ionicons name="information-circle-outline" size={20} color="#007AFF" />
+                  <ThemedText style={styles.revisionEditHintText}>
+                    Las fotos ya guardadas se consultan y eliminan desde la lista principal (botón «Ver detalles»).
+                    Aquí solo puede agregar fotos nuevas; al guardar, se sumarán a las existentes sin borrarlas.
+                  </ThemedText>
+                </ThemedView>
+              ) : null}
               {revisionConfig.map((r) => {
                 if (r.kind === 'heading') {
                   return (
@@ -4122,41 +4670,47 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 if (r.kind === 'radio') {
                   const val = revisionValues[r.key] as YesNo | '';
                   return (
-                    <ThemedView key={r.key} style={styles.row}>
-                      <ThemedText style={styles.label}>{r.label}{r.required ? ' *' : ''}</ThemedText>
-                      <ThemedView style={styles.radioGroup}>
-                        {(['Sí', 'No'] as YesNo[]).map((opt) => (
-                          <TouchableOpacity
-                            key={opt}
-                            style={[styles.radioOption, val === opt && styles.radioOptionSelected]}
-                            onPress={() => setRevisionValues((prev) => ({ ...prev, [r.key]: opt }))}
-                          >
-                            <Ionicons
-                              name={val === opt ? 'radio-button-on' : 'radio-button-off'}
-                              size={18}
-                              color={val === opt ? '#007AFF' : '#999999'}
-                            />
-                            <ThemedText style={[styles.radioOptionText, val === opt && styles.radioOptionTextSelected]}>
-                              {opt}
-                            </ThemedText>
-                          </TouchableOpacity>
-                        ))}
+                    <ThemedView key={r.key}>
+                      <ThemedView style={styles.row}>
+                        <ThemedText style={styles.label}>{r.label}{r.required ? ' *' : ''}</ThemedText>
+                        <ThemedView style={styles.radioGroup}>
+                          {(['Sí', 'No'] as YesNo[]).map((opt) => (
+                            <TouchableOpacity
+                              key={opt}
+                              style={[styles.radioOption, val === opt && styles.radioOptionSelected]}
+                              onPress={() => setRevisionValues((prev) => ({ ...prev, [r.key]: opt }))}
+                            >
+                              <Ionicons
+                                name={val === opt ? 'radio-button-on' : 'radio-button-off'}
+                                size={18}
+                                color={val === opt ? '#007AFF' : '#999999'}
+                              />
+                              <ThemedText style={[styles.radioOptionText, val === opt && styles.radioOptionTextSelected]}>
+                                {opt}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
                       </ThemedView>
+                      {renderRevisionPhotoSection(r.key)}
                     </ThemedView>
                   );
                 }
 
                 if (r.kind === 'text') {
                   return (
-                    <ThemedView key={r.key} style={styles.row}>
-                      <ThemedText style={styles.label}>{r.label}</ThemedText>
-                      <TextInput
-                        style={styles.input}
-                        value={String(revisionValues[r.key] ?? '')}
-                        onChangeText={(t) => setRevisionValues((prev) => ({ ...prev, [r.key]: t }))}
-                        placeholder={r.label}
-                        placeholderTextColor="#999"
-                      />
+                    <ThemedView key={r.key}>
+                      <ThemedView style={styles.row}>
+                        <ThemedText style={styles.label}>{r.label}</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={String(revisionValues[r.key] ?? '')}
+                          onChangeText={(t) => setRevisionValues((prev) => ({ ...prev, [r.key]: t }))}
+                          placeholder={r.label}
+                          placeholderTextColor="#999"
+                        />
+                      </ThemedView>
+                      {renderRevisionPhotoSection(r.key)}
                     </ThemedView>
                   );
                 }
@@ -4164,28 +4718,31 @@ export default function BitacoraVehiculosDetenidosScreen() {
                 // select
                 const val = revisionValues[r.key] as ReviewStatus | '';
                 return (
-                  <ThemedView key={r.key} style={styles.row}>
-                    <ThemedText style={styles.label}>{r.label}{r.required ? ' *' : ''}</ThemedText>
-                    <ThemedView style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={String(val)}
-                        onValueChange={(v) => setRevisionValues((prev) => ({ ...prev, [r.key]: String(v) }))}
-                        style={styles.picker}
-                      >
-                        {REVIEW_OPTIONS.map((o) => (
-                          <Picker.Item key={o} label={o} value={o} color="#000000" />
-                        ))}
-                      </Picker>
+                  <ThemedView key={r.key}>
+                    <ThemedView style={styles.row}>
+                      <ThemedText style={styles.label}>{r.label}{r.required ? ' *' : ''}</ThemedText>
+                      <ThemedView style={styles.pickerContainer}>
+                        <Picker
+                          selectedValue={String(val)}
+                          onValueChange={(v) => setRevisionValues((prev) => ({ ...prev, [r.key]: String(v) }))}
+                          style={styles.picker}
+                        >
+                          {REVIEW_OPTIONS.map((o) => (
+                            <Picker.Item key={o} label={o} value={o} color="#000000" />
+                          ))}
+                        </Picker>
+                      </ThemedView>
+                      {r.withObservation && (
+                        <TextInput
+                          style={styles.input}
+                          value={revisionObs[`${r.key}__obs`] ?? ''}
+                          onChangeText={(t) => setRevisionObs((prev) => ({ ...prev, [`${r.key}__obs`]: t }))}
+                          placeholder="Observaciones (Opcional)"
+                          placeholderTextColor="#999"
+                        />
+                      )}
                     </ThemedView>
-                    {r.withObservation && (
-                      <TextInput
-                        style={styles.input}
-                        value={revisionObs[`${r.key}__obs`] ?? ''}
-                        onChangeText={(t) => setRevisionObs((prev) => ({ ...prev, [`${r.key}__obs`]: t }))}
-                        placeholder="Observaciones (Opcional)"
-                        placeholderTextColor="#999"
-                      />
-                    )}
+                    {renderRevisionPhotoSection(r.key)}
                   </ThemedView>
                 );
               })}
@@ -4547,6 +5104,26 @@ export default function BitacoraVehiculosDetenidosScreen() {
             </ScrollView>
           </ThemedView>
         </View>
+      </Modal>
+
+      <Modal
+        visible={cameraVisible}
+        animationType="slide"
+        onRequestClose={() => setCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          <CameraView ref={cameraRef} style={{ flex: 1 }} facing="back">
+            <TouchableOpacity
+              style={styles.cameraCloseButton}
+              onPress={() => setCameraVisible(false)}
+            >
+              <Ionicons name="close" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={takePictureForRevision}>
+              <ThemedView style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </CameraView>
+        </ThemedView>
       </Modal>
 
       <AppFooter />
@@ -5161,6 +5738,139 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     marginTop: 4,
     marginBottom: 8,
+  },
+  pickerEmptyHint: {
+    fontSize: 13,
+    color: '#666666',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  subSectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#333333',
+    marginBottom: 6,
+  },
+  revisionDetailBlock: {
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  revisionImagesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+  },
+  revisionImageWrap: {
+    position: 'relative',
+    width: '100%',
+    maxWidth: 360,
+    height: 200,
+    alignSelf: 'stretch',
+    borderRadius: 10,
+    overflow: 'hidden',
+    backgroundColor: '#EEE',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  revisionImagePreview: {
+    width: '100%',
+    height: '100%',
+  },
+  revisionImageDeleteBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(255,59,48,0.9)',
+    borderRadius: 14,
+    padding: 6,
+  },
+  revisionEditHintBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginBottom: 14,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8D9F5',
+  },
+  revisionEditHintText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#333333',
+  },
+  revisionPhotoSection: {
+    marginBottom: 12,
+    paddingLeft: 4,
+  },
+  cameraSmallButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  cameraSmallButtonText: {
+    fontSize: 13,
+    color: '#007AFF',
+    fontWeight: '600',
+  },
+  revisionFormImageWrap: {
+    position: 'relative',
+    width: 96,
+    height: 96,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#EEE',
+  },
+  revisionImagePreviewForm: {
+    width: '100%',
+    height: '100%',
+  },
+  revisionImageDeleteBtnForm: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 4,
+  },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 48,
+    right: 20,
+    zIndex: 10,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderRadius: 20,
+    padding: 8,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
   },
 });
 

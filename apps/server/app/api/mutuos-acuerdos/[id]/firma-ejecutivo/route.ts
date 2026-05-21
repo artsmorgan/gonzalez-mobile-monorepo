@@ -184,7 +184,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         });
 
         if (!empresa_ausente) {
-          return NextResponse.json({ status: false, message: "Empresa del ausente no encontrada" }, { status: 400 });
+          return NextResponse.json({ status: false, message: "Empresa del primer turno no encontrada" }, { status: 400 });
         }
 
         let consecutivo = null;

@@ -5437,7 +5437,7 @@ model c_solicitud_permiso {
   id                             Int                            @id @default(autoincrement())
   created_at                     DateTime                       @default(now())
   created_by                     Int
-  comentarios                    String?                        @db.LongText
+  observaciones                  String?                        @db.LongText
   ejecutivo_cuenta               Int
   empleado_id                    Int
   fecha_fin                      DateTime                       @db.DateTime(0)
@@ -5458,6 +5458,8 @@ model c_solicitud_permiso {
   corpo_id                       Int                            @default(0)
   puesto_id                      Int                            @default(0)
   isActive                       Boolean                        @default(true)
+  motivo                         String                         @db.LongText
+  firma_empleado_manual          String                         @db.LongText
   c_archivos_solicitud_permiso   c_archivos_solicitud_permiso[]
   c_empleado                     c_empleado                     @relation(fields: [empleado_id], references: [id], onDelete: Cascade)
 
@@ -5502,16 +5504,16 @@ model c_vehiculos_corporativos {
   id                                     Int                                      @id @default(autoincrement())
   cliente_id                             Int
   sucursal_id                            Int
-  placa                                  String                                   @db.VarChar(52)
+  placa                                  String?                                  @db.VarChar(52)
   tipo                                   String                                   @db.VarChar(52)
-  kilometraje                            Int
-  prox_cambio_aceite                     Int
-  modelo                                 String                                   @db.VarChar(52)
-  anno                                   Int
-  descripcion                            String                                   @db.LongText
-  titulo_propiedad                       Boolean                                  @default(true)
-  rtv                                    Boolean                                  @default(true)
-  marchamo                               Boolean                                  @default(true)
+  kilometraje                            Int?
+  prox_cambio_aceite                     Int?
+  modelo                                 String?                                  @db.VarChar(52)
+  anno                                   Int?
+  descripcion                            String?                                  @db.LongText
+  titulo_propiedad                       Boolean?
+  rtv                                    Boolean?
+  marchamo                               Boolean?
   firma_responsable                      String                                   @db.LongText
   created_by                             Int
   created_at                             DateTime                                 @db.DateTime(0)
@@ -5522,6 +5524,7 @@ model c_vehiculos_corporativos {
   contrato_id                            Int                                      @default(0)
   puesto_id                              Int                                      @default(0)
   isActive                               Boolean                                  @default(true)
+  marca                                  String                                   @db.VarChar(52)
   c_imagenes_vehiculos_corporativos      c_imagenes_vehiculos_corporativos[]
   c_mantenimiento_vehiculos_corporativos c_mantenimiento_vehiculos_corporativos[]
   c_usos_vehiculos_corporativos          c_usos_vehiculos_corporativos[]
@@ -6318,4 +6321,15 @@ model n_tipo_entrega {
 model n_tipo_quejas {
   id     Int    @id @default(autoincrement())
   nombre String @db.LongText
+}
+
+model c_ubicacion_puesto_registro_cambios {
+  id                Int      @id @default(autoincrement())
+  puesto_id         Int
+  latitud_anterior  String?  @db.VarChar(255)
+  longitud_anterior String?  @db.VarChar(255)
+  latitud_nueva     String?  @db.VarChar(255)
+  longitud_nueva    String?  @db.VarChar(255)
+  created_at        DateTime @db.DateTime(0)
+  created_by        Int
 }
