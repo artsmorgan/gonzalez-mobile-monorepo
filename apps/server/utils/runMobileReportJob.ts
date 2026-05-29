@@ -1116,13 +1116,17 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
 
         await prisma.e_reportes_mobile.update({
             where: { id: reportId },
-            data: { estado: "error" },
+            data: {
+                estado: "error",
+                error_message: `Módulo de reporte no soportado: ${moduleKey}`,
+            },
         });
     } catch (e) {
         console.error("runMobileReportJob", reportId, e);
+        const msg = e instanceof Error ? e.message : String(e);
         await prisma.e_reportes_mobile.update({
             where: { id: reportId },
-            data: { estado: "error" },
+            data: { estado: "error", error_message: msg },
         });
     }
 }

@@ -18,8 +18,8 @@ import {
     type UserLoginModuleFilters,
     type UserLoginOrderKey,
 } from "../../../../utils/reports-functions/userLogin";
-import { runMobileReportJob } from "../../../../utils/runMobileReportJob";
 import { purgeOldMobileReports } from "../../../../utils/purgeOldMobileReports";
+import { DEFAULT_REPORT_MAX_ATTEMPTS } from "../../../../utils/reportJobQueue";
 import {
     normalizeMobileReportTipo,
     resolveMobileReportTipoFromModuleFilters,
@@ -1707,17 +1707,16 @@ export async function POST(req: NextRequest) {
                     filters: JSON.stringify(filtersObj),
                     order_by: orderByVal,
                     firma_responsable: firma,
+                    attemps: 0,
+                    max_attempts: DEFAULT_REPORT_MAX_ATTEMPTS,
+                    progress: 0,
                 },
-            });
-
-            setImmediate(() => {
-                void runMobileReportJob(prisma, created.id);
             });
 
             return NextResponse.json(
                 {
                     status: true,
-                    message: "El reporte se generará en segundo plano.",
+                    message: "El reporte se encoló y se generará en segundo plano.",
                     data: { id: created.id, estado: created.estado },
                 },
                 { status: 200 },

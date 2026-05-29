@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start:web": "next start",
+    "start": "node scripts/startWithWorker.mjs",
+    "worker:reports": "tsx scripts/reportWorker.ts",
+    "dev:worker": "tsx scripts/reportWorker.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -21,6 +24,7 @@
     "jsonwebtoken": "^9.0.2",
     "next": "^15.5.9",
     "nodemailer": "^7.0.6",
+    "tsx": "^4.22.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
@@ -32,7 +36,6 @@
     "eslint-config-next": "^16.2.4",
     "prisma": "^6.16.1",
     "tailwindcss": "^4",
-    "tsx": "^4.22.3",
     "typescript": "^5"
   },
   "prisma": {
