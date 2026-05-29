@@ -9,10 +9,13 @@
   },
   "scripts": {
     "dev:mobile": "cd apps/mobile && expo start",
-    "dev:server": "cd apps/server && next dev",
+    "dev:server": "cd apps/server && npm run dev",
+    "dev:worker": "cd apps/server && npm run dev:worker",
     "dev": "turbo run dev",
     "build": "cd apps/server && npm run build",
     "start": "cd apps/server && npm start",
+    "start:web": "cd apps/server && npm run start:web",
+    "worker:reports": "cd apps/server && npm run worker:reports",
     "lint": "turbo run lint"
   },
   "dependencies": {
