@@ -337,7 +337,11 @@ export default function IncidentsScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return !!(networkState.isConnected && networkState.isInternetReachable);
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   useEffect(() => {

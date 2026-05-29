@@ -64,8 +64,12 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   >(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const resetSelection = () => {

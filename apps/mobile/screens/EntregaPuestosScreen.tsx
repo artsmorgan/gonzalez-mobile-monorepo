@@ -14,11 +14,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
 import SignatureScreen from "react-native-signature-canvas";
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import authedFetch from '@/hooks/authedFetch';
 import { Collapsible } from '@/components/Collapsible';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -225,7 +224,6 @@ export default function EntregaPuestosScreen() {
   const [signatureTarget, setSignatureTarget] = useState<'firma_recibe' | 'firma_entrega'>('firma_recibe');
   const [isReadingSignature, setIsReadingSignature] = useState(false);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const signatureRef = useRef<any>(null);
   const [signatureKey, setSignatureKey] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -248,7 +246,11 @@ export default function EntregaPuestosScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const generateRandomId = (): string => {
@@ -408,18 +410,6 @@ export default function EntregaPuestosScreen() {
     const hours = String(time.getHours()).padStart(2, '0');
     const minutes = String(time.getMinutes()).padStart(2, '0');
     return `${hours}:${minutes}`;
-  };
-
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
   };
 
   const loadData = async () => {
@@ -721,20 +711,13 @@ export default function EntregaPuestosScreen() {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }

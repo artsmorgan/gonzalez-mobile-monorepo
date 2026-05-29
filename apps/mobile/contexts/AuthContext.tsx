@@ -225,7 +225,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'employee_data',
             'refresh_token',
             'token_created_at',
-            'disconnected_info',
             'remembered_cedula',
             'server_time',
             'main_structure_created_at',

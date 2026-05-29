@@ -29,8 +29,7 @@ import authedFetch from '@/hooks/authedFetch';
 import SignatureScreen from 'react-native-signature-canvas';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { saveFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { buildNotesImagenesJsonForUpload, deleteNotesLocalFilesFromMeta, stripNoteImagesForActionPayload } from '@/hooks/notesFilesSync';
@@ -579,9 +578,11 @@ export default function NotesScreen() {
   const getConnectionStatus = async () => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    if (!networkState.isConnected) return false;
-    if (networkState.isInternetReachable === false) return false;
-    return true;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const isProbablyNetworkError = (err: any) => {
@@ -643,35 +644,11 @@ export default function NotesScreen() {
   };
 
   const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
-    try {
-      if (!employee) {
-        Alert.alert('Error', 'No se pudo obtener la información del empleado');
-        return null;
-      }
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
-        return null;
-      }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return null;
-      }
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId || 'unknown';
-      const timestamp = await getHoraAccion();
-      if (!timestamp) {
-        Alert.alert('Error', 'No se pudo obtener la hora');
-        return null;
-      }
-      const { latitude, longitude } = location.coords;
-      return btoa(`${sessionId}:${String(employee.id)}:${latitude}:${longitude}:${timestamp}`);
-    } catch (e) {
-      console.error('Error generating firma_responsable:', e);
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
       return null;
     }
+    return getCurrentUserDigitalSignature(employee);
   };
 
   const handleGenerateFirmaResponsable = async () => {

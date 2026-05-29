@@ -131,8 +131,12 @@ type AttendanceResponse = AttendanceSuccessResponse | AttendanceErrorResponse;
 /** Evalúa conexión a internet con el mismo criterio en toda esta pantalla. */
 async function evaluateInternetConnection(): Promise<boolean> {
   //return false;
-  const state = await Network.getNetworkStateAsync();
-  return !!(state.isConnected && state.isInternetReachable);
+  const networkState = await Network.getNetworkStateAsync();
+
+  return (
+    networkState.isConnected === true &&
+    networkState.isInternetReachable === true
+  );
 }
 
 export default function MarcarIngresoSalidaScreen() {
@@ -281,7 +285,8 @@ export default function MarcarIngresoSalidaScreen() {
           if (!server_time) {
             throw new Error('Server time not found');
           }
-          marca_send.current_time = parseInt(server_time, 10);
+          const server_time_obj = JSON.parse(server_time);
+          marca_send.current_time = parseInt(server_time_obj.server_time, 10);
           setRevertMarcaId(null);
           await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
           setErrorMessage(null);
@@ -393,8 +398,8 @@ export default function MarcarIngresoSalidaScreen() {
         if (!server_time) {
           throw new Error('Server time not found');
         }
-
-        marca_send.current_time = parseInt(server_time);
+        const server_time_obj = JSON.parse(server_time);
+        marca_send.current_time = parseInt(server_time_obj.server_time, 10);
 
         const cache = await AsyncStorage.getItem('current_marca');
         if (cache) {
@@ -788,7 +793,6 @@ export default function MarcarIngresoSalidaScreen() {
         'employee_data',
         'refresh_token',
         'token_created_at',
-        'disconnected_info',
         'remembered_cedula',
         'server_time',
         'main_structure_created_at',

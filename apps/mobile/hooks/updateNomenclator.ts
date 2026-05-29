@@ -67,8 +67,12 @@ export default async function updateNomenclator(updatedMarca: any, refreshAccess
 /** Evalúa conexión a internet con el mismo criterio en toda esta pantalla. */
 async function evaluateInternetConnection(): Promise<boolean> {
     //return false;
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   }
 
 const getJobManuals = async (puestoId: number | null | undefined, refreshAccessToken: any, logout: any) => {

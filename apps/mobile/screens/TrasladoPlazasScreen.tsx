@@ -62,12 +62,12 @@ type LocalFile = {
 };
 
 const getConnectionStatus = async (): Promise<boolean> => {
-    try {
-        const networkState = await Network.getNetworkStateAsync();
-        return networkState.isConnected ?? false;
-    } catch {
-        return false;
-    }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
 };
 
 const guessMimeType = (file: { type?: string; extension?: string; mimeType?: string }) => {

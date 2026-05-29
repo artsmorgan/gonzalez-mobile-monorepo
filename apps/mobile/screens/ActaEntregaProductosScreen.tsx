@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -24,7 +25,7 @@ import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { jwtDecode } from 'jwt-decode';
-
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
@@ -582,9 +583,13 @@ export default function ActaEntregaProductosScreen() {
   const [showFechaRecibePicker, setShowFechaRecibePicker] = useState(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    return false;
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -724,35 +729,12 @@ export default function ActaEntregaProductosScreen() {
     }
   };
 
-  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
+  const generateFirmaHashForCurrentUser = async (employee: any): Promise<string | null> => {
     try {
-      if (!employee) {
-        Alert.alert('Error', 'No se pudo obtener la información del empleado');
-        return null;
-      }
-
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
-        return null;
-      }
-
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return null;
-      }
-
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId || 'unknown';
-      const timestamp = await getHoraAccionSafeMs();
-
-      const { latitude, longitude } = location.coords;
-      const empleadoId = String(employee.id);
-      return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
+      if (!employee) return null;
+      const hash = await getCurrentUserDigitalSignature(employee);
+      return hash;
     } catch (e) {
-      console.error('Error generating firma_responsable:', e);
       return null;
     }
   };
@@ -760,7 +742,7 @@ export default function ActaEntregaProductosScreen() {
   const handleGenerateFirmaResponsable = async () => {
     try {
       setIsGeneratingFirmaResponsable(true);
-      const hash = await generateFirmaHashForCurrentUser();
+      const hash = await generateFirmaHashForCurrentUser(employee);
       if (!hash) return;
       setFirmaResponsableHash(hash);
     } finally {

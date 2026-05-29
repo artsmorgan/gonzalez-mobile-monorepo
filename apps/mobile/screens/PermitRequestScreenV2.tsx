@@ -20,12 +20,11 @@ import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import * as DocumentPicker from 'expo-document-picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { jwtDecode } from 'jwt-decode';
 import Constants from 'expo-constants';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -340,8 +339,12 @@ export default function PermitRequestScreenV2() {
   }, []);
 
   const getConnectionStatus = useCallback(async () => {
-    const n = await Network.getNetworkStateAsync();
-    return Boolean(n.isConnected && n.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   }, []);
 
   const loadCurrentMarcaInfo = useCallback(async () => {
@@ -361,24 +364,11 @@ export default function PermitRequestScreenV2() {
   }, []);
 
   const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
-    try {
-      if (!employee?.id) return null;
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se requiere ubicación para generar firma digital');
-        return null;
-      }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) return null;
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded?.sessionId || 'unknown';
-      const timestamp = await getHoraAccion();
-      if (!timestamp) return null;
-      return btoa(`${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${timestamp}`);
-    } catch {
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
       return null;
     }
+    return getCurrentUserDigitalSignature(employee);
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
@@ -568,10 +558,7 @@ export default function PermitRequestScreenV2() {
     setIsGeneratingFirma(true);
     try {
       const hash = await generateFirmaHashForCurrentUser();
-      if (!hash) {
-        Alert.alert('Error', 'No se pudo generar la firma digital');
-        return;
-      }
+      if (!hash) return;
       setFirmaResponsable(hash);
     } finally {
       setIsGeneratingFirma(false);
@@ -582,6 +569,11 @@ export default function PermitRequestScreenV2() {
     try {
       const qrData = await scanQR();
       if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
       setFirmaResponsable(qrData);
     } catch {
       Alert.alert('Error', 'No se pudo escanear el QR');
@@ -848,10 +840,7 @@ export default function PermitRequestScreenV2() {
     setIsGeneratingFirmaEjecutivo(true);
     try {
       const hash = await generateFirmaHashForCurrentUser();
-      if (!hash) {
-        Alert.alert('Error', 'No se pudo generar firma digital');
-        return;
-      }
+      if (!hash) return;
       setFirmaEjecutivoDigital(hash);
     } finally {
       setIsGeneratingFirmaEjecutivo(false);
@@ -862,6 +851,11 @@ export default function PermitRequestScreenV2() {
     try {
       const qrData = await scanQR();
       if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
       setFirmaEjecutivoDigital(qrData);
     } catch {
       Alert.alert('Error', 'No se pudo escanear el QR');

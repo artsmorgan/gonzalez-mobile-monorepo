@@ -23,8 +23,7 @@ import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { useAudioRecorder, useAudioRecorderState, useAudioPlayer, useAudioPlayerStatus, RecordingPresets, requestRecordingPermissionsAsync } from 'expo-audio';
 import getHoraAccion from '@/hooks/getHoraAccion';
@@ -382,7 +381,6 @@ export default function VoiceNotesScreen() {
   const [recordedAudioBase64, setRecordedAudioBase64] = useState<string | null>(null);
 
   // Location state
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // QR Scanner
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -514,7 +512,11 @@ export default function VoiceNotesScreen() {
   const checkConnection = async () => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const refetchVoiceNotesForFilter = useCallback(
@@ -786,14 +788,6 @@ export default function VoiceNotesScreen() {
 
   const startCreating = async () => {
     try {
-      // Request location permissions
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Error', 'Se necesitan permisos de ubicación');
-        return;
-      }
-
-      // Request audio permissions
       const { granted, canAskAgain } = await requestRecordingPermissionsAsync();
       if (!granted) {
         if (canAskAgain) {
@@ -803,9 +797,6 @@ export default function VoiceNotesScreen() {
         }
         return;
       }
-
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc);
 
       setEditingVoiceNote(null);
       setEditEmpresaId(null);
@@ -852,46 +843,32 @@ export default function VoiceNotesScreen() {
   };
 
   const generateSignature = async () => {
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
+      return;
+    }
+
+    setIsGeneratingFirma(true);
+
     try {
-      setIsGeneratingFirma(true);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
 
-      if (!employee?.id) {
-        Alert.alert('Error', 'No se pudo obtener el ID del empleado');
+      const decodedData = atob(hash);
+      const parts = decodedData.split(':');
+      if (parts.length !== 5) {
+        Alert.alert('Error', 'La firma generada no es válida');
         return;
       }
 
-      if (!location) {
-        Alert.alert('Error', 'No se pudo obtener la ubicación');
-        return;
-      }
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId || 'unknown';
-
-      const timestamp = await getHoraAccion();
-      if (!timestamp) {
-        Alert.alert('Error', 'No se pudo obtener la hora');
-        return;
-      }
-      const { latitude, longitude } = location.coords;
-      const decodedEmpleadoId = employee.id.toString();
-      const decodedLatitud = latitude.toString();
-      const decodedLongitud = longitude.toString();
-      const decodedTimestamp = timestamp.toString();
-
-      const signatureString = `${sessionId}:${decodedEmpleadoId}:${decodedLatitud}:${decodedLongitud}:${decodedTimestamp}`;
-      const signatureHash = btoa(signatureString);
-
-      // Fetch employee details
-      let empleadoDetalle = undefined;
+      let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
         try {
           const empleadoResponse = await authedFetch({
-            url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+            url: `${apiUrl}/api/empleados/${empleadoId}`,
             init: {
               method: 'GET',
               headers: {
@@ -918,10 +895,10 @@ export default function VoiceNotesScreen() {
 
       setFirmaResponsable({
         sessionId,
-        empleadoId: decodedEmpleadoId,
-        latitud: decodedLatitud,
-        longitud: decodedLongitud,
-        timestamp: decodedTimestamp,
+        empleadoId,
+        latitud,
+        longitud,
+        timestamp,
         empleadoDetalle,
       });
     } catch (error) {

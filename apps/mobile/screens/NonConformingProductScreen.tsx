@@ -18,12 +18,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import { jwtDecode } from 'jwt-decode';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -412,12 +411,12 @@ export default function NonConformingProductScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    try {
-      const state = await Network.getNetworkStateAsync();
-      return !!(state.isConnected && state.isInternetReachable);
-    } catch {
-      return false;
-    }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -827,20 +826,6 @@ export default function NonConformingProductScreen() {
     return contrato?.sucursales ?? [];
   }, [filterContratoOptionsMemo, filterContratoId]);
 
-  // --------- location ---------
-  useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({});
-        setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-      } catch {
-        // ignore
-      }
-    })();
-  }, []);
-
   // --------- CRUD + cache ---------
   const runFetchRecords = useCallback(
     async (snap: MarcaSnapshot) => {
@@ -1088,23 +1073,20 @@ export default function NonConformingProductScreen() {
   };
 
   const generateFirmaResponsable = async () => {
-    if (!employee) return Alert.alert('Error', 'No se pudo obtener el empleado');
-    if (!location) return Alert.alert('Error', 'No se pudo obtener la ubicación');
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener el empleado');
+      return;
+    }
 
     setIsGeneratingFirma(true);
     try {
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId;
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) throw new Error('Hora de acción not found');
-
-      const hash = btoa(`${sessionId}:${employee.id}:${location.latitude}:${location.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       const decodedHash = decodeFirmaHash(hash);
-      if (!decodedHash) throw new Error('Firma inválida');
-
+      if (!decodedHash) {
+        Alert.alert('Error', 'La firma generada no tiene el formato esperado');
+        return;
+      }
       setFirmaResponsable(decodedHash);
     } catch (e) {
       console.error('Error generating firma responsable:', e);

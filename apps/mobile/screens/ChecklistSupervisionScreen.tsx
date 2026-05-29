@@ -2,11 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
 import * as Network from 'expo-network';
@@ -136,6 +135,14 @@ type EvaluationSection = {
   isPredefined: boolean; // Si es true, no se puede eliminar
 };
 
+/** La pregunta va en `subsection.title`; "Respuesta" en inputs de plantilla no se muestra. */
+function shouldShowInputTitle(inputTitle: string | undefined, subsectionTitle?: string): boolean {
+  const t = String(inputTitle ?? '').trim();
+  if (!t || t.toLowerCase() === 'respuesta') return false;
+  const sub = String(subsectionTitle ?? '').trim();
+  return !sub || t !== sub;
+}
+
 // Tipos para artículos del puesto (similar a EntregaPuestosScreen)
 interface ArticuloForm {
   id: number;
@@ -166,7 +173,6 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
         {
           id: `lg-${idx}-cal`,
           type: 'select' as const,
-          title: 'Respuesta',
           value: '5',
           options: ['No aplica', '1', '2', '3', '4', '5'],
         },
@@ -175,7 +181,13 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           type: 'text' as const,
           title: 'Observaciones',
           value: '',
-        }
+        },
+        {
+          id: `lg-${idx}-photo`,
+          type: 'photo' as const,
+          title: 'Foto',
+          value: '',
+        },
       ]
     }))
   },
@@ -193,7 +205,6 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
         {
           id: `ca-${idx}-cal`,
           type: 'select' as const,
-          title: 'Respuesta',
           value: '5',
           options: ['No aplica', '1', '2', '3', '4', '5'],
         },
@@ -201,6 +212,12 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           id: `ca-${idx}-obs`,
           type: 'text' as const,
           title: 'Observaciones',
+          value: '',
+        },
+        {
+          id: 'ca-${idx}-photo',
+          type: 'photo' as const,
+          title: 'Foto',
           value: '',
         }
       ]
@@ -220,7 +237,6 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
         {
           id: `ss-${idx}-cal`,
           type: 'select' as const,
-          title: 'Respuesta',
           value: '5',
           options: ['No aplica', '1', '2', '3', '4', '5'],
         },
@@ -228,6 +244,12 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           id: `ss-${idx}-obs`,
           type: 'text' as const,
           title: 'Observaciones',
+          value: '',
+        },
+        {
+          id: `ss-${idx}-photo`,
+          type: 'photo' as const,
+          title: 'Foto',
           value: '',
         }
       ]
@@ -245,21 +267,19 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           {
             id: 'up-0-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Bueno',
             options: ['Bueno', 'Malo', 'No aplica'],
-          },
-          {
-            id: 'up-0-estado',
-            type: 'select' as const,
-            title: 'Estado',
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'Requiere cambio'],
           },
           {
             id: 'up-0-obs',
             type: 'text' as const,
             title: 'Observaciones',
+            value: '',
+          },
+          {
+            id: 'up-0-photo',
+            type: 'photo' as const,
+            title: 'Foto',
             value: '',
           }
         ]
@@ -271,53 +291,18 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           {
             id: 'up-1-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Bueno',
             options: ['Bueno', 'Malo', 'No aplica'],
           },
           {
-            id: 'up-1-estado',
-            type: 'select' as const,
-            title: 'Estado',
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'Requiere cambio'],
+            id: 'up-1-photo',
+            type: 'photo' as const,
+            title: 'Foto',
+            value: '',
           }
         ]
       }
     ]
-  },
-  {
-    id: 'estado-equipos',
-    title: 'Estado de los equipos',
-    isPredefined: true,
-    subsections: [
-      'Cepillo', 'Aspiradora', 'Hidrolavadora'
-    ].map((item, idx) => ({
-      id: `ee-sub-${idx}`,
-      title: item,
-      inputs: [
-        {
-          id: `ee-${idx}-cal`,
-          type: 'select' as const,
-          title: 'Respuesta',
-          value: 'Bueno',
-          options: ['Bueno', 'Malo', 'No aplica'],
-        },
-        {
-          id: `ee-${idx}-estado`,
-          type: 'select' as const,
-          title: 'Estado',
-          value: 'Bueno',
-          options: ['Bueno', 'Malo', 'Requiere cambio'],
-        },
-        {
-          id: `ee-${idx}-obs`,
-          type: 'text' as const,
-          title: 'Observaciones',
-          value: '',
-        }
-      ]
-    }))
   },
   {
     id: 'calificacion-general',
@@ -331,9 +316,14 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           {
             id: 'cg-0-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: '5',
             options: ['1', '2', '3', '4', '5'],
+          },
+          {
+            id: 'cg-0-photo',
+            type: 'photo' as const,
+            title: 'Foto',
+            value: '',
           }
         ]
       }
@@ -355,7 +345,6 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-0-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Vigente',
             options: ['Vencido', 'Vigente'],
           },
@@ -380,7 +369,6 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-1-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Vigente',
             options: ['Vencido', 'Vigente'],
           },
@@ -405,7 +393,6 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-2-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Bueno',
             options: ['Bueno', 'Malo', 'No existe'],
           },
@@ -424,7 +411,6 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-3-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Vigente',
             options: ['Vencido', 'Vigente'],
           },
@@ -456,9 +442,14 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'us-0-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Bueno',
             options: ['Bueno', 'Malo', 'No existe'],
+          },
+          {
+            id: 'us-0-photo',
+            type: 'photo' as const,
+            title: 'Foto',
+            value: '',
           }
         ]
       },
@@ -469,176 +460,121 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'us-1-cal',
             type: 'select' as const,
-            title: 'Respuesta',
             value: 'Bueno',
             options: ['Bueno', 'Malo', 'No existe'],
+          },
+          {
+            id: 'up-0-photo',
+            type: 'photo' as const,
+            title: 'Foto',
+            value: '',
           }
         ]
       }
     ]
-  },
-  {
-    id: 'equipo-seguridad',
-    title: 'Equipo de seguridad',
-    isPredefined: true,
-    subsections: [
-      'Cinturón de seguridad', 'Esposas y porta esposas', 'Porta tiros/ Porta Cargadores',
-      'Arma de fuego (serie y documento de matricula) / funda/ Munición', 'Bastón telescópico',
-      'Radio de comunicación', 'Porta gas pimienta y Gas pimienta', 'Chaleco antibalas',
-      'Linterna', 'Detector de metales', 'Marcador electrónico', 'Casco dielectrico',
-      'Revisión del estado de los vehículos (bicicleta y motocicletas)', 'Cargado y adaptador de radio'
-    ].map((item, idx) => ({
-      id: `es-sub-${idx}`,
-      title: item,
-      inputs: [
-        {
-          id: `es-${idx}-cal`,
-          type: 'select' as const,
-          title: 'Respuesta',
-          value: 'Bueno',
-          options: ['Bueno', 'Malo', 'No existe'],
-        }
-      ]
-    }))
-  },
-  {
-    id: 'mobiliario-menaje',
-    title: 'Mobiliario y menaje',
-    isPredefined: true,
-    subsections: [
-      'Silla', 'Mesa', 'Microondas', 'Coffee maker',
-      'Articulos de oficina (Grapadora, pilot, lapicero, bitácoras, gabinetes)', 'Gabinetes'
-    ].map((item, idx) => ({
-      id: `mm-sub-${idx}`,
-      title: item,
-      inputs: [
-        {
-          id: `mm-${idx}-cal`,
-          type: 'select' as const,
-          title: 'Respuesta',
-          value: 'Bueno',
-          options: ['Bueno', 'Malo', 'No existe'],
-        }
-      ]
-    }))
   },
   {
     id: 'bitacora',
     title: 'Bitácora',
     isPredefined: true,
     subsections: [
-      {
-        id: 'bit-sub-0',
-        title: 'Revisión de bitácora',
-        inputs: [
-          {
-            id: 'bit-0-1',
-            type: 'checkbox' as const,
-            title: 'Anotaciones legibles, sin manchones ni tachaduras',
-            value: 'true',
-          },
-          {
-            id: 'bit-0-2',
-            type: 'checkbox' as const,
-            title: 'Nombre completo y firma en entrega y recibo de puesto',
-            value: 'true',
-          },
-          {
-            id: 'bit-0-3',
-            type: 'checkbox' as const,
-            title: 'No deben existir espacios en blanco',
-            value: 'true',
-          },
-          {
-            id: 'bit-0-4',
-            type: 'checkbox' as const,
-            title: 'Folios completos',
-            value: 'true',
-          },
-          {
-            id: 'bit-0-5',
-            type: 'checkbox' as const,
-            title: 'Escritura sólo con tinta azul (si aplica según el cliente)',
-            value: 'true',
-          }
-        ]
-      }
-    ]
+      'Anotaciones legibles, sin manchones ni tachaduras',
+      'Nombre completo y firma en entrega y recibo de puesto',
+      'No deben existir espacios en blanco',
+      'Folios completos',
+      'Escritura sólo con tinta azul (si aplica según el cliente)',
+    ].map((item, idx) => ({
+      id: `bit-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `bit-${idx}-1`,
+          type: 'checkbox' as const,
+          title: 'Resultado',
+          value: 'true',
+        },
+        {
+          id: `bit-${idx}-photo`,
+          type: 'photo' as const,
+          value: '',
+        },
+      ],
+    })),
   },
   {
     id: 'marcas',
     title: 'Marcas',
     isPredefined: true,
     subsections: [
-      {
-        id: 'mar-sub-0',
-        title: 'Recorrido de marcas',
-        inputs: [
-          {
-            id: 'mar-0-1',
-            type: 'checkbox' as const,
-            title: 'Dispositivos (marcas y bastón) en buen estado',
-            value: 'true',
-          },
-          {
-            id: 'mar-0-2',
-            type: 'checkbox' as const,
-            title: 'SEG-F-038-Control de recorrido y marcas Electronicas (Completo, sin manchones ni tachaduras, y no debe estar completo antes de tiempo)',
-            value: 'true',
-          },
-          {
-            id: 'mar-0-3',
-            type: 'checkbox' as const,
-            title: 'Verificación del estado de las pastillas',
-            value: 'true',
-          }
-        ]
-      }
-    ]
+      'Dispositivos (marcas y bastón) en buen estado',
+      'SEG-F-038-Control de recorrido y marcas Electronicas (Completo, sin manchones ni tachaduras, y no debe estar completo antes de tiempo)',
+      'Verificación del estado de las pastillas',
+    ].map((item, idx) => ({
+      id: `mar-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `mar-${idx}-1`,
+          type: 'checkbox' as const,
+          title: 'Resultado',
+          value: 'true',
+        },
+        {
+          id: `mar-${idx}-photo`,
+          type: 'photo' as const,
+          value: '',
+        },
+      ],
+    })),
   },
   {
     id: 'perimetro',
     title: 'Perímetro',
     isPredefined: true,
     subsections: [
-      {
-        id: 'per-sub-0',
-        title: 'Revisión de perímetro',
-        inputs: [
-          {
-            id: 'per-0-1',
-            type: 'checkbox' as const,
-            title: 'Rerrido por el perimetro revisando barreras perimetrales',
-            value: 'true',
-          },
-          {
-            id: 'per-0-2',
-            type: 'checkbox' as const,
-            title: 'Revisar que no exitan activos cerca de las barreras perimetrales',
-            value: 'true',
-          }
-        ]
-      }
-    ]
+      'Rerrido por el perimetro revisando barreras perimetrales',
+      'Revisar que no exitan activos cerca de las barreras perimetrales',
+    ].map((item, idx) => ({
+      id: `per-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `per-${idx}-1`,
+          type: 'checkbox' as const,
+          title: 'Resultado',
+          value: 'true',
+        },
+        {
+          id: `per-${idx}-photo`,
+          type: 'photo' as const,
+          value: '',
+        },
+      ],
+    })),
   },
   {
     id: 'vehiculos',
     title: 'Vehículos',
     isPredefined: true,
     subsections: [
-      {
-        id: 'veh-sub-0',
-        title: 'Revisión de vehículos',
-        inputs: [
-          {
-            id: 'veh-0-1',
-            type: 'checkbox' as const,
-            title: 'Revisar aleatoriamente el/los vehículos custodiados en el puesto',
-            value: 'true',
-          }
-        ]
-      }
-    ]
+      'Revisar aleatoriamente el/los vehículos custodiados en el puesto',
+    ].map((item, idx) => ({
+      id: `veh-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `veh-${idx}-1`,
+          type: 'checkbox' as const,
+          title: 'Resultado',
+          value: 'true',
+        },
+        {
+          id: `veh-${idx}-photo`,
+          type: 'photo' as const,
+          value: '',
+        },
+      ],
+    })),
   },
   {
     id: 'capacitacion-iso',
@@ -688,92 +624,75 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
     title: 'Papelería',
     isPredefined: true,
     subsections: [
-      {
-        id: 'pap-sub-0',
-        title: 'Papelería completa, y sin manchones o tachones/ Información verídica (Cuando aplique el registro, de utilizarse la papelería del cliente si el contrato lo indica)',
+      ...[
+        'SEG-F-016-Pernocte de vehículos',
+        'SEG-F-017-Bitácora de revisión bicicletas detenidas y SEG-F-007-Bitácora de revisión motos detenidas',
+        'SEG-F-018-Control de ingreso y salida de visitas y vehículos particulares',
+        'SEG-F-019-Entradas y salida de materiales activos del cliente',
+        'SEG-F-020-Control de ingreso y salida de vehículos Institucionales',
+        'SEG-F-021-Registro de llaves',
+        'SEG-F-022-Boleta de salida de vehículos',
+        'SEG-F-023-Control de entrega de puesto',
+        'SEG-F-024-Control de activos visitantes',
+      ].map((item, idx) => ({
+        id: `pap-sub-${idx}`,
+        title: item,
         inputs: [
           {
-            id: 'pap-0-1',
+            id: `pap-${idx}-1`,
             type: 'checkbox' as const,
-            title: 'SEG-F-016-Pernocte de vehículos',
+            title: 'Resultado',
             value: 'true',
           },
           {
-            id: 'pap-0-2',
-            type: 'checkbox' as const,
-            title: 'SEG-F-017-Bitácora de revisión bicicletas detenidas y SEG-F-007-Bitácora de revisión motos detenidas',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-3',
-            type: 'checkbox' as const,
-            title: 'SEG-F-018-Control de ingreso y salida de visitas y vehículos particulares',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-4',
-            type: 'checkbox' as const,
-            title: 'SEG-F-019-Entradas y salida de materiales activos del cliente',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-5',
-            type: 'checkbox' as const,
-            title: 'SEG-F-020-Control de ingreso y salida de vehículos Institucionales',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-6',
-            type: 'checkbox' as const,
-            title: 'SEG-F-021-Registro de llaves',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-7',
-            type: 'checkbox' as const,
-            title: 'SEG-F-022-Boleta de salida de vehículos',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-8',
-            type: 'checkbox' as const,
-            title: 'SEG-F-023-Control de entrega de puesto',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-9',
-            type: 'checkbox' as const,
-            title: 'SEG-F-024-Control de activos visitantes',
-            value: 'true',
-          },
-          {
-            id: 'pap-0-10',
-            type: 'text' as const,
-            title: 'Número de Serie del arma vrs documento de matrícula',
+            id: `pap-${idx}-photo`,
+            type: 'photo' as const,
             value: '',
-          }
-        ]
-      }
-    ]
+          },
+        ],
+      })),
+      {
+        id: 'pap-sub-9',
+        title: 'Número de Serie del arma vrs documento de matrícula',
+        inputs: [
+          {
+            id: 'pap-9-1',
+            type: 'text' as const,
+            value: '',
+          },
+          {
+            id: 'pap-9-photo',
+            type: 'photo' as const,
+            title: 'Foto',
+            value: '',
+          },
+        ],
+      },
+    ],
   },
   {
     id: 'funcion',
     title: 'Función',
     isPredefined: true,
     subsections: [
-      {
-        id: 'fun-sub-0',
-        title: 'Revisión Funciones',
-        inputs: [
-          {
-            id: 'fun-0-1',
-            type: 'checkbox' as const,
-            title: 'Revisar aleatoriamente 3 puntos de la SEG-F-038-Guia de Funciones del puesto de cada lugar y anotar en las observaciones los hallazgos de todos los corpos visitados',
-            value: 'true',
-          }
-        ]
-      }
-    ]
+      'Revisar aleatoriamente 3 puntos de la SEG-F-038-Guia de Funciones del puesto de cada lugar y anotar en las observaciones los hallazgos de todos los corpos visitados',
+    ].map((item, idx) => ({
+      id: `fun-sub-${idx}`,
+      title: item,
+      inputs: [
+        {
+          id: `fun-${idx}-1`,
+          type: 'checkbox' as const,
+          title: 'Resultado',
+          value: 'true',
+        },
+        {
+          id: `fun-${idx}-photo`,
+          type: 'photo' as const,
+          value: '',
+        },
+      ],
+    })),
   }
 ];
 
@@ -1016,7 +935,6 @@ export default function ChecklistSupervisionScreen() {
   const [firmaSupervisor, setFirmaSupervisor] = useState('');
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // Estados para firma dibujada (formulario y firma supervisor desde lista)
   const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
@@ -1206,7 +1124,11 @@ export default function ChecklistSupervisionScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -1249,14 +1171,17 @@ export default function ChecklistSupervisionScreen() {
             }
             if (Array.isArray(subsection.inputs)) {
               subsection.inputs.forEach((input: any) => {
-                const title = input.title || 'Valor';
                 let value = input.value || '';
                 if (input.type === 'checkbox') {
                   value = value === 'true' ? 'Marcado' : 'No marcado';
                 } else if (input.type === 'photo') {
                   value = input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-';
                 }
-                lines.push(`    • ${title}: ${value}`);
+                if (shouldShowInputTitle(input.title, subsection.title)) {
+                  lines.push(`    • ${String(input.title).trim()}: ${value}`);
+                } else {
+                  lines.push(`    • ${value}`);
+                }
               });
             }
           });
@@ -1330,18 +1255,6 @@ export default function ChecklistSupervisionScreen() {
       Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
     }
   }, [getConnectionStatus, refreshAccessToken, logout]);
-
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
 
   const refreshAccessTokenRef = useRef(refreshAccessToken);
   const logoutRef = useRef(logout);
@@ -1914,20 +1827,13 @@ export default function ChecklistSupervisionScreen() {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -3039,56 +2945,24 @@ export default function ChecklistSupervisionScreen() {
                       )}
                       {subsection.inputs.map((input) => {
                         const listPhotoUri = getImageUriForList(input, it);
-                        console.log('renderItem: Rendering input:', {
-                          inputId: input.id,
-                          inputType: input.type,
-                          inputTitle: input.title,
-                          subsectionTitle: subsection.title,
-                          inputValue: input.value,
-                          hasValue: !!input.value,
-                          valueType: typeof input.value
-                        });
+                        const displayValue =
+                          input.type === 'photo'
+                            ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
+                            : input.type === 'checkbox'
+                              ? (input.value === 'true' ? 'Marcado' : 'No marcado')
+                              : (input.value || '-');
                         return (
                           <ThemedView key={input.id}>
-                            {/* Mostrar título del input si existe y es diferente al título de la subsección */}
-                            {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
-                              <ThemedText style={styles.evalLine}>
-                                <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
-                                <ThemedText style={styles.evalValue}>
-                                  {input.type === 'photo'
-                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
-                                    : input.type === 'checkbox'
-                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
-                                      : (input.value || '-')}
-                                </ThemedText>
-                              </ThemedText>
-                            )}
-                            {/* Si el título del input es igual al de la subsección, mostrar solo el valor */}
-                            {input.title && input.title.trim() !== '' && input.title === subsection.title && (
-                              <ThemedText style={styles.evalLine}>
-                                <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
-                                <ThemedText style={styles.evalValue}>
-                                  {input.type === 'photo'
-                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
-                                    : input.type === 'checkbox'
-                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
-                                      : (input.value || '-')}
-                                </ThemedText>
-                              </ThemedText>
-                            )}
-                            {/* Si no hay título, mostrar "Valor:" */}
-                            {(!input.title || input.title.trim() === '') && (
-                              <ThemedText style={styles.evalLine}>
-                                <ThemedText style={styles.evalLabel}>Valor: </ThemedText>
-                                <ThemedText style={styles.evalValue}>
-                                  {input.type === 'photo'
-                                    ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
-                                    : input.type === 'checkbox'
-                                      ? (input.value === 'true' ? 'Marcado' : 'No marcado')
-                                      : (input.value || '-')}
-                                </ThemedText>
-                              </ThemedText>
-                            )}
+                            <ThemedText style={styles.evalLine}>
+                              {shouldShowInputTitle(input.title, subsection.title) ? (
+                                <>
+                                  <ThemedText style={styles.evalLabel}>{input.title}: </ThemedText>
+                                  <ThemedText style={styles.evalValue}>{displayValue}</ThemedText>
+                                </>
+                              ) : (
+                                <ThemedText style={styles.evalValue}>{displayValue}</ThemedText>
+                              )}
+                            </ThemedText>
                             {/* Mostrar imagen si es tipo photo */}
                             {input.type === 'photo' &&
                               (input.value || input.file_name || input.localFileName) &&
@@ -3572,7 +3446,7 @@ export default function ChecklistSupervisionScreen() {
                           const formPhotoUri = getImageUri(input);
                           return (
                             <ThemedView key={input.id} style={styles.inputCard}>
-                              {input.title && input.title.trim() !== '' && input.title !== subsection.title && (
+                              {shouldShowInputTitle(input.title, subsection.title) && (
                                 <ThemedText style={styles.questionTitleList}>
                                   {input.title}
                                 </ThemedText>

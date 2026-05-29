@@ -1397,7 +1397,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </ThemedText>
             </TouchableOpacity>
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasLunchTime && (
+            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

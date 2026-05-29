@@ -4,33 +4,30 @@ import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
-import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, Modal, Image, Dimensions } from 'react-native';
 import QRCode from 'react-native-qrcode-svg';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import SignatureScreen from "react-native-signature-canvas";
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import { jwtDecode } from 'jwt-decode';
 import * as Network from 'expo-network';
 import saveManualSignature from '@/hooks/saveManualSignature';
-import getHoraAccion from '@/hooks/getHoraAccion';
-import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 type DigitalSignatureScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'DigitalSignature'>;
 
+const LOCATION_QR_ERROR_MESSAGE =
+  'No se pudo obtener la ubicación. Activa el GPS, concede permisos de ubicación y pulsa Reintentar para mostrar el código QR.';
+
 export default function DigitalSignatureScreen() {
   const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [locationError, setLocationError] = useState<string | null>(null);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(true);
+  const [isInitialQrLoad, setIsInitialQrLoad] = useState(true);
   const [signatureHash, setSignatureHash] = useState<string | null>(null);
   const [isGeneratingSignature, setIsGeneratingSignature] = useState(false);
   const [signatureError, setSignatureError] = useState<string | null>(null);
@@ -50,62 +47,51 @@ export default function DigitalSignatureScreen() {
   
   const navigation = useNavigation<DigitalSignatureScreenNavigationProp>();
 
-  useEffect(() => {
-    // Request location permissions and start watching location
-    (async () => {
-      try {
-        // Request foreground permissions
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        
-        if (status !== 'granted') {
-          setLocationError('Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.');
-          setIsLoadingLocation(false);
-          return;
-        }
+  const showQrLocationFailure = (message: string) => {
+    setSignatureHash(null);
+    setIsTimerActive(false);
+    setSignatureError(message);
+  };
 
-        // Check if location services are enabled
-        const isLocationEnabled = await Location.hasServicesEnabledAsync();
-        if (!isLocationEnabled) {
-          setLocationError('Los servicios de ubicación están desactivados. Por favor, activa la ubicación en tu dispositivo.');
-          setIsLoadingLocation(false);
-          return;
-        }
+  const refreshQrSignature = async (options?: { silent?: boolean }) => {
+    if (!employee) {
+      showQrLocationFailure('No se pudo obtener la información del empleado');
+      setIsInitialQrLoad(false);
+      return;
+    }
 
-        // Get initial location
-        const currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        setLocation(currentLocation);
-        setIsLoadingLocation(false);
+    if (!options?.silent) {
+      setIsGeneratingSignature(true);
+    }
+    setSignatureError(null);
 
-        // Generate signature automatically after getting location (only once)
-        await generateSignature(currentLocation);
-
-        // Watch location changes in real-time (only update location, not signature)
-        const subscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.High,
-            timeInterval: 5000, // Update every 5 seconds
-            distanceInterval: 10, // Update when moved 10 meters
-          },
-          (newLocation) => {
-            setLocation(newLocation);
-            // Don't regenerate signature on every location change
-            // QR code should remain stable for presentation
-          }
-        );
-
-        // Cleanup subscription on unmount
-        return () => {
-          subscription.remove();
-        };
-      } catch (error) {
-        console.error('Error obteniendo ubicación:', error);
-        setLocationError('Error al obtener la ubicación. Por favor, verifica que los servicios de ubicación estén habilitados.');
-        setIsLoadingLocation(false);
+    try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) {
+        showQrLocationFailure(LOCATION_QR_ERROR_MESSAGE);
+        return;
       }
-    })();
-  }, []);
+
+      setSignatureHash(hash);
+      setIsTimerActive(true);
+      setRefreshTimer(20);
+    } catch (error) {
+      console.error('Error generating QR signature:', error);
+      showQrLocationFailure(
+        'Error al generar la firma digital. Verifica la ubicación e intenta nuevamente.'
+      );
+    } finally {
+      if (!options?.silent) {
+        setIsGeneratingSignature(false);
+      }
+      setIsInitialQrLoad(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!employee) return;
+    void refreshQrSignature();
+  }, [employee]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -114,31 +100,22 @@ export default function DigitalSignatureScreen() {
     }
   }, [isAuthenticated, isLoading, navigation]);
 
-  // QR refresh timer effect
+  // QR refresh timer: cada 20 s regenera hash (ubicación + hora) vía getCurrentUserDigitalSignature
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | null = null;
+    if (!isTimerActive || !signatureHash || !employee) return;
 
-    if (isTimerActive && refreshTimer > 0) {
-      interval = setInterval(() => {
-        setRefreshTimer((prev) => {
-          if (prev <= 1) {
-            // Timer reached 0, refresh QR
-            if (location && employee) {
-              generateSignature(location);
-            }
-            return 20; // Reset to 20 seconds
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    }
+    const interval = setInterval(() => {
+      setRefreshTimer((prev) => {
+        if (prev <= 1) {
+          void refreshQrSignature({ silent: true });
+          return 20;
+        }
+        return prev - 1;
+      });
+    }, 1000);
 
-    return () => {
-      if (interval) {
-        clearInterval(interval);
-      }
-    };
-  }, [isTimerActive, refreshTimer, location, employee]);
+    return () => clearInterval(interval);
+  }, [isTimerActive, signatureHash, employee]);
 
   // Cleanup timer on unmount
   useEffect(() => {
@@ -162,49 +139,6 @@ export default function DigitalSignatureScreen() {
 
   const handleBack = () => {
     navigation.goBack();
-  };
-
-  const generateSignature = async (currentLocation: Location.LocationObject) => {
-    if (!employee) {
-      setSignatureError('No se pudo obtener la información del empleado');
-      return;
-    }
-
-    setIsGeneratingSignature(true);
-    setSignatureError(null);
-
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-      
-      const decodedToken = jwtDecode(token);
-      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('Hora de acción not found');
-      }
-      
-      // Encode base64
-      const hash = btoa(sessionId + ":" + employee.id + ":" + currentLocation.coords.latitude + ":" + currentLocation.coords.longitude + ":" + horaAccion);
-
-      setSignatureHash(hash);
-      // Start the refresh timer when signature is generated successfully
-      setIsTimerActive(true);
-      setRefreshTimer(20);
-    } catch (error) {
-      console.error('Error generating signature:', error);
-      setSignatureError('Error al generar la firma digital. Por favor, intenta nuevamente.');
-      // Stop timer on error
-      setIsTimerActive(false);
-    } finally {
-      setIsGeneratingSignature(false);
-    }
   };
 
   const fetchManualSignature = async () => {
@@ -338,60 +272,29 @@ export default function DigitalSignatureScreen() {
           </ThemedView>
 
           {/* QR Code Section */}
-          {isLoadingLocation ? (
+          {isInitialQrLoad || isGeneratingSignature ? (
             <ThemedView style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#007AFF" />
               <ThemedText style={styles.loadingLocationText}>
-                Obteniendo ubicación...
-              </ThemedText>
-            </ThemedView>
-          ) : locationError ? (
-            <ThemedView style={styles.errorContainer}>
-              <ThemedText style={styles.errorText}>{getActionIcon('error')} {locationError}</ThemedText>
-              <TouchableOpacity 
-                style={styles.retryButton}
-                onPress={() => {
-                  setLocationError(null);
-                  setIsLoadingLocation(true);
-                  Location.requestForegroundPermissionsAsync().then(() => {
-                    Location.getCurrentPositionAsync({
-                      accuracy: Location.Accuracy.High,
-                    }).then(async (loc) => {
-                      setLocation(loc);
-                      setIsLoadingLocation(false);
-                      await generateSignature(loc);
-                    }).catch((err) => {
-                      setLocationError('Error al obtener la ubicación.');
-                      setIsLoadingLocation(false);
-                    });
-                  });
-                }}
-              >
-                <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          ) : isGeneratingSignature ? (
-            <ThemedView style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#007AFF" />
-              <ThemedText style={styles.loadingLocationText}>
-                Generando firma digital...
+                {isInitialQrLoad
+                  ? 'Obteniendo ubicación y generando código QR...'
+                  : 'Generando firma digital...'}
               </ThemedText>
             </ThemedView>
           ) : signatureError ? (
             <ThemedView style={styles.errorContainer}>
               <ThemedText style={styles.errorText}>{getActionIcon('error')} {signatureError}</ThemedText>
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.retryButton}
                 onPress={() => {
-                  if (location) {
-                    generateSignature(location);
-                  }
+                  setIsInitialQrLoad(true);
+                  void refreshQrSignature();
                 }}
               >
                 <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
               </TouchableOpacity>
             </ThemedView>
-          ) : signatureHash && location ? (
+          ) : signatureHash ? (
             <ThemedView style={styles.qrContainer}>
               {/* QR Code */}
               <ThemedView style={styles.qrCodeWrapper}>
