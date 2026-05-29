@@ -524,7 +524,11 @@ export default function VehiclesScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const isProbablyNetworkError = (err: any) => {

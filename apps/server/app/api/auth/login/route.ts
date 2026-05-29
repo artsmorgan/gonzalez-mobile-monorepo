@@ -13,17 +13,17 @@ export async function POST(request: NextRequest) {
 
     const authHeader = request.headers.get('authorization') || '';
 
-    const response = await axios.post(
-      `${baseUrl}/api/dynamic-prisma/auth/login`,
-      body,
-      {
-        headers: {
-          Authorization: authHeader,
-          'Content-Type': 'application/json',
-        },
-        validateStatus: () => true,
-      }
-    );
+    const url = `${baseUrl}/api/dynamic-prisma/auth/login`;
+
+    console.log('url', url);
+
+    const response = await axios.post(url, body, {
+      headers: {
+        Authorization: authHeader,
+        'Content-Type': 'application/json'
+      },
+      validateStatus: () => true,
+    });
 
     const data = response.data;
     return NextResponse.json(data, { status: response.status });

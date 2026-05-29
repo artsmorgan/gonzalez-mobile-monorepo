@@ -169,7 +169,7 @@ import {
 } from './hooks/attendanceActionsStorage';
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
-import updateServerTime, { setDisconnectedTime } from './hooks/updateServerTime';
+import updateServerTime from './hooks/updateServerTime';
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult, appendJobManualPuestos } from './hooks/jobManualsFunctions';
@@ -725,14 +725,15 @@ function AppContent() {
     const wasOnlineRef = { current: false };
 
     (async () => {
-      const s = await Network.getNetworkStateAsync();
-      const online = !!(s.isConnected && s.isInternetReachable);
+      const networkState = await Network.getNetworkStateAsync();
+  
+      const online = (networkState.isConnected === true && networkState.isInternetReachable === true);
       wasOnlineRef.current = online;
       setIsConnected(online);
     })();
 
     const subscription = Network.addNetworkStateListener((s) => {
-      const online = !!(s.isConnected && s.isInternetReachable);
+      const online = !!(s.isConnected === true && s.isInternetReachable === true);
       setIsConnected(online);
       if (online && !wasOnlineRef.current) {
         eventBus.emit(SYNC_CACHES_EVENT);
@@ -7849,15 +7850,10 @@ function AppContent() {
 
   const check_conection_time = async () => {
     console.log('Checking connection time...');
+    await updateServerTime();
     const connectivity = await resolveAppConnectivity();
     if (connectivity.ok) {
       await get_notifications();
-    } else {
-      try {
-        await setDisconnectedTime();
-      } catch (error) {
-        console.error('Error setting disconnected time:', error);
-      }
     }
   }
 

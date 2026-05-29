@@ -18,8 +18,7 @@ import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { formatDateDMY } from '@/utils/formatDate';
@@ -158,8 +157,12 @@ async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, 
 
 const getConnectionStatus = async (): Promise<boolean> => {
   //return false;
-  const networkState = await Network.getNetworkStateAsync();
-  return networkState.isConnected && networkState.isInternetReachable ? true : false;
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
 };
 
 const formatParticipantesForDisplay = (participantesJson: string): string => {
@@ -468,7 +471,6 @@ export default function PhysicalMinuteAgendaScreen() {
   // firma responsable (QR)
   const [firmaResponsable, setFirmaResponsable] = useState<string>('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // UI collapsables in list items
   const [expandedParticipantesById, setExpandedParticipantesById] = useState<Record<string, boolean>>({});
@@ -1147,36 +1149,13 @@ export default function PhysicalMinuteAgendaScreen() {
     setFirmaResponsable(r.firma_responsable || '');
   };
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
-        return;
-      }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const timestamp = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${timestamp}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -1186,6 +1165,11 @@ export default function PhysicalMinuteAgendaScreen() {
     try {
       const qrData = await scanQR();
       if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
       setFirmaResponsable(qrData);
     } catch {
       Alert.alert('Error', 'No se pudo escanear el QR');

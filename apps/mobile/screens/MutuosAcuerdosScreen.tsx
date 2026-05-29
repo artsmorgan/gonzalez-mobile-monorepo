@@ -19,9 +19,8 @@ import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
 import * as DocumentPicker from 'expo-document-picker';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import Constants from 'expo-constants';
 
 import AppHeader from '@/components/AppHeader';
@@ -232,12 +231,12 @@ export default function MutuosAcuerdosScreen() {
   const [filterMotivo, setFilterMotivo] = useState('');
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    try {
-      const state = await Network.getNetworkStateAsync();
-      return !!(state.isConnected && state.isInternetReachable);
-    } catch {
-      return false;
-    }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const updateSection = (section: SectionKey, updater: (prev: EmployeeSectionState) => EmployeeSectionState) => {
@@ -452,36 +451,16 @@ export default function MutuosAcuerdosScreen() {
     }
   };
 
-  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
-    try {
-      if (!employee) return null;
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma digital');
-        return null;
-      }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) return null;
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded?.sessionId || 'unknown';
-      const timestamp = await getHoraAccion();
-      if (!timestamp) return null;
-      return btoa(`${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${timestamp}`);
-    } catch {
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     if (isGeneratingFirmaResponsable) return;
     setIsGeneratingFirmaResponsable(true);
     try {
-      const hash = await generateFirmaHashForCurrentUser();
-      if (!hash) {
-        Alert.alert('Error', 'No se pudo generar la firma digital');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
     } finally {
       setIsGeneratingFirmaResponsable(false);
@@ -823,11 +802,12 @@ export default function MutuosAcuerdosScreen() {
     if (isGeneratingFirmaEjecutivoDigital) return;
     setIsGeneratingFirmaEjecutivoDigital(true);
     try {
-      const hash = await generateFirmaHashForCurrentUser();
-      if (!hash) {
-        Alert.alert('Error', 'No se pudo generar la firma digital');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaEjecutivoDigital(hash);
     } finally {
       setIsGeneratingFirmaEjecutivoDigital(false);

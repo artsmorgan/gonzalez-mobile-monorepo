@@ -29,8 +29,7 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { Picker } from '@react-native-picker/picker';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
@@ -424,7 +423,6 @@ export default function AttendanceControlScreen() {
   const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
 
   // Firma responsable (similar a TrainingsScreen)
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isGeneratingFirmaResponsable, setIsGeneratingFirmaResponsable] = useState(false);
   const [firmaResponsable, setFirmaResponsable] = useState<QRInfo | null>(null);
   const [firmaResponsableHash, setFirmaResponsableHash] = useState<string>('');
@@ -556,7 +554,11 @@ export default function AttendanceControlScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -1547,20 +1549,6 @@ export default function AttendanceControlScreen() {
       /* ignore */
     }
 
-    // Request location permissions (firma)
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Error', 'Se necesita permiso de ubicación para generar la firma');
-          return;
-        }
-        const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        setLocation(currentLocation);
-      } catch (error) {
-        console.error('Error getting location:', error);
-      }
-    })();
   };
 
   const cancelCreating = async () => {
@@ -1670,18 +1658,6 @@ export default function AttendanceControlScreen() {
       setFirmaResponsable(null);
     }
 
-    // Ensure location for firma on edit
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const currentLocation = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        setLocation(currentLocation);
-      } catch (error) {
-        console.error('Error getting location:', error);
-      }
-    })();
-
     if (record.id) {
       await refreshColaboradoresFromServer(String(record.id), false);
     }
@@ -1708,25 +1684,15 @@ export default function AttendanceControlScreen() {
         return;
       }
 
-      if (!location) {
-        Alert.alert('Error', 'No se pudo obtener la ubicación');
-        return;
-      }
-
       setIsGeneratingFirmaResponsable(true);
+
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+
+      setFirmaResponsableHash(hash);
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-      const decodedToken = jwtDecode(token);
-      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) throw new Error('Hora de acción not found');
-
-      const hash = btoa(sessionId + ':' + employee.id + ':' + location.coords.latitude + ':' + location.coords.longitude + ':' + horaAccion);
-      setFirmaResponsableHash(hash);
 
       const decodedHash = atob(hash);
       const [decodedSessionId, decodedEmpleadoId, decodedLatitud, decodedLongitud, decodedTimestamp] = decodedHash.split(':');

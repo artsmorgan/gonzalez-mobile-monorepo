@@ -4,9 +4,8 @@ import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
 import Constants from 'expo-constants';
@@ -307,7 +306,6 @@ export default function LlavesScreen() {
   const [firmaResponsable, setFirmaResponsable] = useState('');
 
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
 
@@ -385,8 +383,12 @@ export default function LlavesScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -1078,36 +1080,17 @@ export default function LlavesScreen() {
     setEditing(null);
   };
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -1338,22 +1321,47 @@ export default function LlavesScreen() {
     if (isGeneratingMovFirma) return;
     setIsGeneratingMovFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setMovFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingMovFirma(false);
+    }
+  };
+
+  const handleGenerateLlaveroFirmaResponsable = async () => {
+    if (isGeneratingLlaveroFirma) return;
+    setIsGeneratingLlaveroFirma(true);
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return;
+      }
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+      setLlaveroFirmaResponsable(hash);
+    } finally {
+      setIsGeneratingLlaveroFirma(false);
+    }
+  };
+
+  const handleGenerateLlaveroMovFirmaResponsable = async () => {
+    if (isGeneratingLlaveroMovFirma) return;
+    setIsGeneratingLlaveroMovFirma(true);
+    try {
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return;
+      }
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+      setLlaveroMovFirmaResponsable(hash);
+    } finally {
+      setIsGeneratingLlaveroMovFirma(false);
     }
   };
 
@@ -3859,28 +3867,7 @@ export default function LlavesScreen() {
                   <ThemedView style={styles.signatureButtons}>
                     <TouchableOpacity
                       style={[styles.signatureButton, isGeneratingLlaveroFirma && styles.signatureButtonDisabled]}
-                      onPress={async () => {
-                        if (isGeneratingLlaveroFirma) return;
-                        setIsGeneratingLlaveroFirma(true);
-                        try {
-                          const loc = location ?? (await requestLocation());
-                          if (!loc || !employee) {
-                            Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
-                            return;
-                          }
-                          const token = await AsyncStorage.getItem('access_token');
-                          if (!token) throw new Error('No authentication token found');
-                          const decodedToken: any = jwtDecode(token);
-                          const sessionId = decodedToken.sessionId;
-                          const horaAccion = await getHoraAccion();
-                          const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
-                          setLlaveroFirmaResponsable(hash);
-                        } catch (e: any) {
-                          Alert.alert('Error', e.message || 'No se pudo generar la firma');
-                        } finally {
-                          setIsGeneratingLlaveroFirma(false);
-                        }
-                      }}
+                      onPress={handleGenerateLlaveroFirmaResponsable}
                       disabled={isGeneratingLlaveroFirma}
                     >
                       {isGeneratingLlaveroFirma ? (
@@ -4558,28 +4545,7 @@ export default function LlavesScreen() {
                 <ThemedView style={styles.signatureButtons}>
                   <TouchableOpacity
                     style={[styles.signatureButton, isGeneratingLlaveroMovFirma && styles.signatureButtonDisabled]}
-                    onPress={async () => {
-                      if (isGeneratingLlaveroMovFirma) return;
-                      setIsGeneratingLlaveroMovFirma(true);
-                      try {
-                        const loc = location ?? (await requestLocation());
-                        if (!loc || !employee) {
-                          Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
-                          return;
-                        }
-                        const token = await AsyncStorage.getItem('access_token');
-                        if (!token) throw new Error('No authentication token found');
-                        const decodedToken: any = jwtDecode(token);
-                        const sessionId = decodedToken.sessionId;
-                        const horaAccion = await getHoraAccion();
-                        const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
-                        setLlaveroMovFirmaResponsable(hash);
-                      } catch (e: any) {
-                        Alert.alert('Error', e.message || 'No se pudo generar la firma');
-                      } finally {
-                        setIsGeneratingLlaveroMovFirma(false);
-                      }
-                    }}
+                    onPress={handleGenerateLlaveroMovFirmaResponsable}
                     disabled={isGeneratingLlaveroMovFirma}
                   >
                     {isGeneratingLlaveroMovFirma ? (

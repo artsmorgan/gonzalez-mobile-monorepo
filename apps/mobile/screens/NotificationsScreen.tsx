@@ -126,7 +126,11 @@ export default function NotificationsScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const executeMarkAsRead = async (notificationId: number, is_plaza: boolean) => {

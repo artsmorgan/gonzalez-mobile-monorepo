@@ -2,11 +2,22 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import getHoraAccion from './getHoraAccion';
 import updateServerTime from './updateServerTime';
+import * as Network from 'expo-network';
 
 type GetValidAccessTokenOrLogoutArgs = {
     refreshAccessToken: () => Promise<boolean>;
     logout: () => Promise<any>;
 };
+
+const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
+  };
 
 /**
  * Preflight para llamadas autenticadas:
@@ -22,10 +33,9 @@ export default async function getValidAccessTokenOrLogout({
     logout,
 }: GetValidAccessTokenOrLogoutArgs): Promise<string | null> {
 
-    try {
-        await updateServerTime();
-    } catch (error) {
-        console.error('Error updating server time:', error);
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+        return null;
     }
 
     const [storedAccess, storedRefresh, storedCreatedAt] = await Promise.all([
@@ -89,5 +99,3 @@ export default async function getValidAccessTokenOrLogout({
 
     return nextAccess;
 }
-
-

@@ -16,8 +16,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import SignatureScreen from 'react-native-signature-canvas';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import * as Network from 'expo-network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
@@ -359,12 +358,12 @@ function getPuestosForCorpo(structureArr: MainStructureTree, corpoId: number | n
 
 async function getConnectionStatus() {
   //return false;
-  try {
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
-  } catch {
-    return false;
-  }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
 }
 
 function buildTemasSectionsFromFlat(flat: TemaFlatItem[], checkedIds: Set<string>): TemaSectionItem[] {
@@ -1751,43 +1750,14 @@ export default function GeneralInductionRegisterScreen() {
     }
   };
 
-  const generateFirmaHashForCurrentUser = async (): Promise<string | null> => {
-    try {
-      if (!employee) {
-        Alert.alert('Error', 'No se pudo obtener la información del empleado');
-        return null;
-      }
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'Se necesita permiso de ubicación para generar la firma');
-        return null;
-      }
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) {
-        Alert.alert('Error', 'No se pudo obtener el token de sesión');
-        return null;
-      }
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId || 'unknown';
-      const timestamp = await getHoraAccion();
-      if (!timestamp) {
-        Alert.alert('Error', 'No se pudo obtener la hora');
-        return null;
-      }
-      const { latitude, longitude } = location.coords;
-      const empleadoId = String(employee.id);
-      return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
-    } catch (e) {
-      console.error('Error generating firma_responsable:', e);
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     try {
       setIsGeneratingFirmaResponsable(true);
-      const hash = await generateFirmaHashForCurrentUser();
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
+        return;
+      }
+      const hash = await getCurrentUserDigitalSignature(employee);
       if (!hash) return;
       setFirmaResponsableHash(hash);
     } finally {

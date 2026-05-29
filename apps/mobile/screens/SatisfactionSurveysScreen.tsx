@@ -26,10 +26,10 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Location from 'expo-location';
 import SignatureScreen from "react-native-signature-canvas";
-import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import { useQRScanner } from '@/hooks/useQRScanner';
 import * as Network from 'expo-network';
 import { createSurvey as createSurveyAPI, updateSurveySignature, updateSurvey as updateSurveyAPI, deleteSurvey as deleteSurveyAPI } from '@/hooks/surveysFunctions';
 import { eventBus } from '@/hooks/eventBus';
@@ -750,6 +750,7 @@ function resolveHierarchyNamesFromStructure(
 
 export default function SatisfactionSurveysScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
+  const { scanQR, QRScannerComponent } = useQRScanner();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<SatisfactionSurveysScreenNavigationProp>();
 
@@ -935,7 +936,11 @@ export default function SatisfactionSurveysScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -1685,47 +1690,37 @@ export default function SatisfactionSurveysScreen() {
     setIsGeneratingFirmaResponsable(true);
 
     try {
-      // Request location permission
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Error', 'Se necesita permiso de ubicación para generar la firma');
-        setIsGeneratingFirmaResponsable(false);
-        return;
-      }
+      const firmaBase64 = await getCurrentUserDigitalSignature(employee);
+      if (!firmaBase64) return;
 
-      // Get current location
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      // Get session ID from token
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decodedToken = jwtDecode(token);
-      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
-
-      // Get timestamp
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('No se pudo obtener la hora');
-      }
-
-      // Generate base64 signature
-      const firmaString = `${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${horaAccion}`;
-      const firmaBase64 = btoa(firmaString);
-
-      // Decode and set firma data
       const firmaData = await decodeFirma(firmaBase64);
       if (firmaData) {
         setFirmaResponsable(firmaData);
-        Alert.alert('Éxito', 'Firma del responsable generada correctamente');
       }
     } catch (error) {
       console.error('Error generating firma responsable:', error);
       Alert.alert('Error', 'No se pudo generar la firma del responsable');
     } finally {
       setIsGeneratingFirmaResponsable(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHashSurvey(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      const firmaData = await decodeFirma(qrData);
+      if (firmaData) {
+        setFirmaResponsable(firmaData);
+      }
+    } catch (error) {
+      console.error('Error scanning firma responsable:', error);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
     }
   };
 
@@ -1931,8 +1926,6 @@ export default function SatisfactionSurveysScreen() {
       responsableNombreRef.current = employee.name || '';
       responsableCedulaRef.current = employee.cedula || '';
     }
-
-    generateResponsableSignature();
 
     const evalTmpl = getDefaultEvaluationFormForDivision(divisionRef.current);
     if (evalTmpl) {
@@ -4322,20 +4315,30 @@ export default function SatisfactionSurveysScreen() {
                               Esta encuesta no tiene firma del responsable registrada.
                             </ThemedText>
                           ) : null}
-                          <TouchableOpacity
-                            style={styles.signatureButton}
-                            onPress={generateResponsableSignature}
-                            disabled={isGeneratingFirmaResponsable}
-                          >
-                            {isGeneratingFirmaResponsable ? (
-                              <ActivityIndicator size="small" color="#FFFFFF" />
-                            ) : (
-                              <>
-                                <Ionicons name="create" size={24} color="#000000" />
-                                <ThemedText style={styles.signatureButtonText}>Generar Firma</ThemedText>
-                              </>
-                            )}
-                          </TouchableOpacity>
+                          <ThemedView style={styles.firmaButtonsRow}>
+                            <TouchableOpacity
+                              style={[styles.signatureButton, styles.firmaButtonHalf, isGeneratingFirmaResponsable && styles.signatureButtonDisabled]}
+                              onPress={generateResponsableSignature}
+                              disabled={isGeneratingFirmaResponsable}
+                            >
+                              {isGeneratingFirmaResponsable ? (
+                                <ActivityIndicator size="small" color="#FFFFFF" />
+                              ) : (
+                                <>
+                                  <Ionicons name="finger-print" size={20} color="#FFFFFF" />
+                                  <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                                </>
+                              )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[styles.signatureButton, styles.firmaButtonHalf]}
+                              onPress={handleScanFirmaResponsable}
+                              disabled={isGeneratingFirmaResponsable}
+                            >
+                              <Ionicons name="qr-code-outline" size={20} color="#FFFFFF" />
+                              <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                            </TouchableOpacity>
+                          </ThemedView>
                         </ThemedView>
                       ) : (
                         <ThemedView style={styles.signatureInfo}>
@@ -4681,6 +4684,7 @@ export default function SatisfactionSurveysScreen() {
         </View>
       </Modal>
 
+      {QRScannerComponent}
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} />
     </ThemedView>
@@ -5433,6 +5437,17 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
+  },
+  firmaButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+  },
+  firmaButtonHalf: {
+    flex: 1,
+  },
+  signatureButtonDisabled: {
+    opacity: 0.6,
   },
   signatureButton: {
     flexDirection: 'row',

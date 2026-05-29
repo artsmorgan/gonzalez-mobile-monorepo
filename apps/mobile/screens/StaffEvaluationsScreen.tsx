@@ -26,8 +26,7 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { Picker } from '@react-native-picker/picker';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -432,7 +431,6 @@ export default function StaffEvaluationsScreen() {
   const [evaluationSections, setEvaluationSections] = useState<EvaluationSection[]>([]);
 
   // Firma evaluador / funcionario
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isGeneratingFirmaEval, setIsGeneratingFirmaEval] = useState(false);
   const [firmaEvaluador, setFirmaEvaluador] = useState<FirmaData | null>(null);
   const [firmaEvaluadorHash, setFirmaEvaluadorHash] = useState<string | null>(null);
@@ -472,8 +470,12 @@ export default function StaffEvaluationsScreen() {
   // Conectividad
   const checkConnection = async (): Promise<boolean> => {
     //return false; 
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const handleMenuPress = () => setIsMenuVisible(true);
@@ -1124,23 +1126,6 @@ export default function StaffEvaluationsScreen() {
         setSelectedPlazaId(null);
       }
     }
-
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(
-          'Permiso de ubicación',
-          'Se necesita permiso de ubicación para generar la firma del evaluador.'
-        );
-        return;
-      }
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-      setLocation(loc);
-    } catch (error) {
-      console.error('Error getting location for staff evaluations:', error);
-    }
   };
 
   const releaseHeavyCreateFormResources = useCallback(() => {
@@ -1194,50 +1179,25 @@ export default function StaffEvaluationsScreen() {
       Alert.alert('Error', 'No se pudo obtener la información del evaluador');
       return;
     }
-    if (!location) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación para la firma del evaluador');
-      return;
-    }
 
     setIsGeneratingFirmaEval(true);
 
     try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+
+      const baseFirma = decodeSignature(hash);
+      if (!baseFirma) {
+        Alert.alert('Error', 'La firma generada no es válida');
+        return;
+      }
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('Hora de acción not found');
-      }
-
-      const hash = btoa(
-        sessionId +
-        ':' +
-        employee.id +
-        ':' +
-        location.coords.latitude +
-        ':' +
-        location.coords.longitude +
-        ':' +
-        horaAccion
-      );
-
-      const decodedHash = atob(hash);
-      const [decodedSessionId, decodedEmpleadoId, decodedLatitud, decodedLongitud, decodedTimestamp] =
-        decodedHash.split(':');
-
       let empleadoDetalle: FirmaData['empleadoDetalle'] = undefined;
       const isConnected = await checkConnection();
-      if (isConnected) {
+      if (isConnected && apiUrl) {
         const response = await authedFetch({
-          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          url: `${apiUrl}/api/empleados/${baseFirma.empleadoId}`,
           init: {
             method: 'GET',
             headers: {
@@ -1260,14 +1220,7 @@ export default function StaffEvaluationsScreen() {
         }
       }
 
-      setFirmaEvaluador({
-        sessionId: decodedSessionId,
-        empleadoId: decodedEmpleadoId,
-        latitud: decodedLatitud,
-        longitud: decodedLongitud,
-        timestamp: decodedTimestamp,
-        empleadoDetalle,
-      });
+      setFirmaEvaluador({ ...baseFirma, empleadoDetalle });
       setFirmaEvaluadorHash(hash);
     } catch (error) {
       console.error('Error generating evaluator signature:', error);

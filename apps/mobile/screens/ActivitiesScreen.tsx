@@ -16,15 +16,13 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Picker } from '@react-native-picker/picker';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
 import { Buffer } from 'buffer';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { appendCreatedActivityPuestos, createActivity, deleteCreatedActivity, duplicateCreatedActivity, listCreatedActivitiesByPuesto, unlinkCreatedActivityPuesto, updateCreatedActivity } from '@/hooks/activitiesFunctions';
 import authedFetch from '@/hooks/authedFetch';
-import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
@@ -1145,7 +1143,11 @@ export default function ActivitiesScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const isProbablyNetworkError = (err: any) => {
@@ -2149,28 +2151,9 @@ export default function ActivitiesScreen() {
 
       setIsProcessingSignature(true);
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permisos', 'Debes otorgar permiso de ubicación para generar la firma.');
-        return;
-      }
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
 
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('No se pudo obtener la hora actual');
-      }
-      const storedToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!storedToken) return;
-
-      const decodedToken = jwtDecode(storedToken);
-      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
-
-      const payload = `${sessionId}:${employee.id}:${location.coords.latitude}:${location.coords.longitude}:${horaAccion}`;
-      const hash = Buffer.from(payload).toString('base64');
       await handleSignatureData(hash);
       Alert.alert('Éxito', 'Firma generada correctamente.');
     } catch (error) {

@@ -12,6 +12,9 @@ const getUsuarioInsercion = async (req: NextRequest, id: number) => {
         req,
         data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id } }
     });
+    if (!empleado) {
+        return "MonitoreApp";
+    }
     return empleado.cedula ? (empleado.cedula) : "MonitoreApp";
 }
 
@@ -187,7 +190,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "GET",
                         table: "c_empleado",
                         operation: "findUnique",
-                        where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                        where: { id: marcaDia.empleadoFijo_id ? marcaDia.empleadoFijo_id : marcaDia.empleadoReemplaza_id ?? 0 }
                     }
                 });
                 const current_corpo = await callDynamicPrisma({
@@ -389,7 +392,7 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
                     action: "GET",
                     table: "c_empleado",
                     operation: "findUnique",
-                    where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                    where: { id: marcaDia.empleadoFijo_id ? marcaDia.empleadoFijo_id : marcaDia.empleadoReemplaza_id ?? 0 }
                 }
             });
             if (empleado) {
@@ -476,7 +479,7 @@ async function check_unmarked_activities(req: NextRequest, id: number) {
                     action: "GET",
                     table: "c_empleado",
                     operation: "findUnique",
-                    where: { id: marcaDia.empleadoFijo_id ?? 0 }
+                    where: { id: marcaDia.empleadoFijo_id ? marcaDia.empleadoFijo_id : marcaDia.empleadoReemplaza_id ?? 0 }
                 }
             });
             if (empleado && unmarked) {

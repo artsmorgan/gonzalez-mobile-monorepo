@@ -19,8 +19,7 @@ import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
-import { jwtDecode } from 'jwt-decode';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 
 import { useNavigation } from '@react-navigation/native';
 import AppHeader from '../components/AppHeader';
@@ -1421,7 +1420,6 @@ export default function ReportesScreen() {
     | 'modalRvdVehiculo'
   >(null);
   const [submitReportLoading, setSubmitReportLoading] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   const [showListDd, setShowListDd] = useState(false);
   const [showListDt, setShowListDt] = useState(false);
@@ -1754,8 +1752,9 @@ export default function ReportesScreen() {
 
   React.useEffect(() => {
     void (async () => {
-      const s = await Network.getNetworkStateAsync();
-      const ok = !!s.isConnected && s.isInternetReachable !== false;
+      const networkState = await Network.getNetworkStateAsync();
+  
+      const ok = (networkState.isConnected === true && networkState.isInternetReachable === true);
       setIsOnline(ok);
     })();
   }, []);
@@ -1777,18 +1776,6 @@ export default function ReportesScreen() {
     if (s.isInternetReachable === false) return false;
     return true;
   }, []);
-
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
 
   const runSearchEmployees = async (
     q: string,
@@ -3867,30 +3854,23 @@ export default function ReportesScreen() {
   const scanFirmaModal = async () => {
     try {
       const d = await scanQR();
-      if (d) setFirmaModal(String(d));
+      if (!d) return;
+      const decoded = decodeFirmaHash(d);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      setFirmaModal(String(d));
     } catch {
       Alert.alert('Error', 'No se pudo leer el código QR');
     }
   };
 
-  const generateFirma = async (target: 'modal') => {
-    if (target !== 'modal') return;
+  const generateFirma = async () => {
     setGenFirmaLoading(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'Ubicación o usuario no disponible');
-        return;
-      }
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId;
-      const horaAccion = await getHoraAccionSafeMs();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
-      setFirmaModal(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo generar firma');
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (hash) setFirmaModal(hash);
     } finally {
       setGenFirmaLoading(false);
     }
@@ -10488,7 +10468,7 @@ export default function ReportesScreen() {
                   <ThemedText style={styles.emptyText}>No hay firma registrada</ThemedText>
                   <TouchableOpacity
                     style={styles.signatureButtonPrimary}
-                    onPress={() => void generateFirma('modal')}
+                    onPress={() => void generateFirma()}
                     disabled={genFirmaLoading}
                     activeOpacity={0.85}
                   >

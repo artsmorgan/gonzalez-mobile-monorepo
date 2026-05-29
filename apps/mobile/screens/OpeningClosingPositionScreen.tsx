@@ -15,8 +15,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Picker } from '@react-native-picker/picker';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import SignatureScreen from "react-native-signature-canvas";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -448,7 +447,6 @@ export default function OpeningClosingPositionScreen() {
 
   const [firmaResponsable, setFirmaResponsable] = useState<string>('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   // Camera states
@@ -504,7 +502,11 @@ export default function OpeningClosingPositionScreen() {
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -757,36 +759,13 @@ export default function OpeningClosingPositionScreen() {
     [editingRecord, isCreating]
   );
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
-        return;
-      }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -796,6 +775,11 @@ export default function OpeningClosingPositionScreen() {
     try {
       const qrData = await scanQR();
       if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
       setFirmaResponsable(qrData);
     } catch {
       Alert.alert('Error', 'No se pudo escanear el QR');

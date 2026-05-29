@@ -3,7 +3,7 @@ import { ActivityIndicator, Alert, Animated, Dimensions, Image, Linking, Modal, 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import * as DocumentPicker from 'expo-document-picker';
 import { Picker } from '@react-native-picker/picker';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -34,7 +34,6 @@ import authedFetch from '../hooks/authedFetch';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { jwtDecode } from 'jwt-decode';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
@@ -208,6 +207,8 @@ export default function JobManualsScreen() {
   const [selectedManual, setSelectedManual] = useState<JobManualRemote | null>(null);
   const [isViewerVisible, setIsViewerVisible] = useState(false);
   const [viewSignature, setViewSignature] = useState<string | null>(null);
+  const [viewFirmaData, setViewFirmaData] = useState<FirmaData | null>(null);
+  const [isGeneratingViewFirma, setIsGeneratingViewFirma] = useState(false);
   const [isSigningManual, setIsSigningManual] = useState(false);
   const [viewTextFiles, setViewTextFiles] = useState<ManualFileLocal[]>([]);
   const [viewImageFiles, setViewImageFiles] = useState<ManualFileLocal[]>([]);
@@ -280,7 +281,6 @@ export default function JobManualsScreen() {
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
 
-  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   const { scanQR, QRScannerComponent } = useQRScanner();
 
@@ -391,13 +391,12 @@ export default function JobManualsScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    try {
-      const networkState = await Network.getNetworkStateAsync();
-      return networkState.isConnected === true && networkState.isInternetReachable === true;
-    } catch (error) {
-      console.error('Error checking network:', error);
-      return false;
-    }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const fetchMainStructure = useCallback(async () => {
@@ -657,32 +656,8 @@ export default function JobManualsScreen() {
     setAudioFiles([]);
     setVideoFiles([]);
     setFirmaResponsable(null);
-    setLocation(null);
     setQuizQuestions([]);
     void applyCurrentMarcaToCreateHierarchy();
-
-    // Solicitar permisos de ubicación y obtener la posición actual (similar a TrainingsScreen)
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert(
-            'Permiso de ubicación',
-            'Se necesita permiso de ubicación para generar la firma del responsable.'
-          );
-          return;
-        }
-        const currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        setLocation({
-          latitude: currentLocation.coords.latitude,
-          longitude: currentLocation.coords.longitude,
-        });
-      } catch (error) {
-        console.error('Error getting location for job manuals:', error);
-      }
-    })();
   };
 
   const parseQuizFromManual = (quizStr: any): { questions: QuizQuestion[]; minApprovalPercentage?: number } => {
@@ -1846,57 +1821,31 @@ export default function JobManualsScreen() {
     else setTextFiles((prev) => rm(prev));
   };
 
-  const generateSignature = async () => {
-    if (!employee) {
-      Alert.alert('Error', 'No se pudo obtener la información del empleado');
-      return;
-    }
-
-    if (!location) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación para generar la firma del responsable');
-      return;
-    }
-
-    setIsGeneratingFirma(true);
-
+  const buildFirmaDataFromHash = async (hash: string): Promise<FirmaData | null> => {
+    let decodedHash: string;
     try {
+      decodedHash = atob(hash);
+    } catch {
+      Alert.alert('Error', 'La firma no es válida');
+      return null;
+    }
+    const parts = decodedHash.split(':');
+
+    if (parts.length !== 5) {
+      Alert.alert('Error', 'La firma no tiene la estructura esperada');
+      return null;
+    }
+
+    const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+
+    const hasConnection = await getConnectionStatus();
+    let empleadoDetalle: FirmaData['empleadoDetalle'] | undefined = undefined;
+
+    if (hasConnection) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('Hora de acción not found');
-      }
-
-      const hash = btoa(
-        sessionId +
-        ':' +
-        employee.id +
-        ':' +
-        location.latitude +
-        ':' +
-        location.longitude +
-        ':' +
-        horaAccion
-      );
-
-      const decodedHash = atob(hash);
-      const [decodedSessionId, decodedEmpleadoId, decodedLatitud, decodedLongitud, decodedTimestamp] =
-        decodedHash.split(':');
-
-      let empleadoDetalle = undefined;
-      const isConnected = await getConnectionStatus();
-      if (isConnected) {
+      if (apiUrl) {
         const response = await authedFetch({
-          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          url: `${apiUrl}/api/empleados/${empleadoId}`,
           init: {
             method: 'GET',
             headers: {
@@ -1906,9 +1855,7 @@ export default function JobManualsScreen() {
           refreshAccessToken,
           logout,
         });
-        if (!response) return;
-
-        if (response.ok) {
+        if (response?.ok) {
           const empleadoData = await response.json();
           empleadoDetalle = {
             nombre: empleadoData.nombre,
@@ -1918,15 +1865,87 @@ export default function JobManualsScreen() {
           };
         }
       }
+    }
 
-      setFirmaResponsable({
-        sessionId: decodedSessionId,
-        empleadoId: decodedEmpleadoId,
-        latitud: decodedLatitud,
-        longitud: decodedLongitud,
-        timestamp: decodedTimestamp,
-        empleadoDetalle,
-      });
+    return {
+      sessionId,
+      empleadoId,
+      latitud,
+      longitud,
+      timestamp,
+      empleadoDetalle,
+    };
+  };
+
+  const applyFirmaResponsableFromHash = async (hash: string) => {
+    const data = await buildFirmaDataFromHash(hash);
+    if (!data) return;
+    setFirmaResponsable(data);
+  };
+
+  const clearViewFirma = () => {
+    setViewSignature(null);
+    setViewFirmaData(null);
+  };
+
+  const applyViewFirmaFromHash = async (hash: string) => {
+    const data = await buildFirmaDataFromHash(hash);
+    if (!data) return;
+    setViewFirmaData(data);
+    setViewSignature(hash);
+  };
+
+  const generateViewSignature = async () => {
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
+      return;
+    }
+
+    setIsGeneratingViewFirma(true);
+
+    try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+      await applyViewFirmaFromHash(hash);
+    } catch (error) {
+      console.error('Error generating view signature for job manual:', error);
+      Alert.alert('Error', 'No se pudo generar la firma');
+    } finally {
+      setIsGeneratingViewFirma(false);
+    }
+  };
+
+  const handleScanViewQR = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) {
+        return;
+      }
+
+      try {
+        await applyViewFirmaFromHash(qrData);
+      } catch (error) {
+        console.error('Error decoding view QR for job manual:', error);
+        Alert.alert('Error', 'El QR escaneado no es válido');
+      }
+    } catch (error) {
+      console.error('Error scanning view QR for job manual:', error);
+      Alert.alert('Error', 'No se pudo escanear el código QR');
+    }
+  };
+
+  const generateSignature = async () => {
+    if (!employee) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
+      return;
+    }
+
+    setIsGeneratingFirma(true);
+
+    try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+      await applyFirmaResponsableFromHash(hash);
     } catch (error) {
       console.error('Error generating signature for job manual:', error);
       Alert.alert('Error', 'No se pudo generar la firma');
@@ -1943,56 +1962,7 @@ export default function JobManualsScreen() {
       }
 
       try {
-        const decodedHash = atob(qrData);
-        const parts = decodedHash.split(':');
-
-        if (parts.length !== 5) {
-          Alert.alert('Error', 'El QR no tiene la estructura esperada');
-          return;
-        }
-
-        const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
-
-        const hasConnection = await getConnectionStatus();
-        let empleadoDetalle: FirmaData['empleadoDetalle'] | undefined = undefined;
-
-        if (hasConnection) {
-          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-          if (!apiUrl) {
-            throw new Error('Server URL not configured');
-          }
-          const response = await authedFetch({
-            url: `${apiUrl}/api/empleados/${empleadoId}`,
-            init: {
-              method: 'GET',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-            },
-            refreshAccessToken,
-            logout,
-          });
-          if (!response) return;
-
-          if (response.ok) {
-            const empleadoData = await response.json();
-            empleadoDetalle = {
-              nombre: empleadoData.nombre,
-              primer_apellido: empleadoData.primer_apellido,
-              segundo_apellido: empleadoData.segundo_apellido,
-              cedula_empleado: empleadoData.cedula,
-            };
-          }
-        }
-
-        setFirmaResponsable({
-          sessionId,
-          empleadoId,
-          latitud,
-          longitud,
-          timestamp,
-          empleadoDetalle,
-        });
+        await applyFirmaResponsableFromHash(qrData);
       } catch (error) {
         console.error('Error decoding QR for job manual:', error);
         Alert.alert('Error', 'El QR escaneado no es válido');
@@ -3429,7 +3399,7 @@ export default function JobManualsScreen() {
                     activeOpacity={0.85}
                   onPress={() => {
                     setSelectedManual(manual);
-                    setViewSignature(null);
+                    clearViewFirma();
                     setIsSigningManual(false);
                     setIsViewerVisible(true);
                   }}
@@ -3815,7 +3785,7 @@ export default function JobManualsScreen() {
         onRequestClose={() => {
           setIsViewerVisible(false);
           setSelectedManual(null);
-          setViewSignature(null);
+          clearViewFirma();
           setIsSigningManual(false);
         }}
       >
@@ -3874,7 +3844,7 @@ export default function JobManualsScreen() {
                                     Alert.alert('Modo Offline', 'Manual local eliminado.');
                                     setIsViewerVisible(false);
                                     setSelectedManual(null);
-                                    setViewSignature(null);
+                                    clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
                                       await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
@@ -3913,7 +3883,7 @@ export default function JobManualsScreen() {
                                       Alert.alert('Éxito', result.message || 'Manual eliminado');
                                       setIsViewerVisible(false);
                                       setSelectedManual(null);
-                                      setViewSignature(null);
+                                      clearViewFirma();
                                       setIsSigningManual(false);
                                       if (marcaId) {
                                         await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
@@ -3946,7 +3916,7 @@ export default function JobManualsScreen() {
                                     Alert.alert('Modo Offline', 'Manual marcado para eliminación cuando haya conexión.');
                                     setIsViewerVisible(false);
                                     setSelectedManual(null);
-                                    setViewSignature(null);
+                                    clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
                                       await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
@@ -4589,21 +4559,60 @@ export default function JobManualsScreen() {
                 <ThemedView style={styles.viewerSection}>
                   <ThemedText style={styles.viewerSectionTitle}>Confirmar visualización</ThemedText>
                   {!viewSignature ? (
-                    <TouchableOpacity
-                      style={styles.signatureActionButton}
-                      onPress={async () => {
-                        const horaAccionUse = await getHoraAccion();
-                        const timestamp = new Date(horaAccionUse).toISOString();
-                        const hash = btoa(`${employee?.id || 'emp'}:${timestamp}`);
-                        setViewSignature(hash);
-                      }}
-                    >
-                      <Ionicons name="finger-print" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.signatureActionText}>Generar firma</ThemedText>
-                    </TouchableOpacity>
+                    <ThemedView style={styles.signatureButtons}>
+                      <TouchableOpacity
+                        style={styles.signatureButton}
+                        onPress={generateViewSignature}
+                        disabled={isGeneratingViewFirma}
+                      >
+                        {isGeneratingViewFirma ? (
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                        ) : (
+                          <>
+                            <Ionicons name="finger-print" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
+                          </>
+                        )}
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.signatureButton}
+                        onPress={handleScanViewQR}
+                      >
+                        <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
+                      </TouchableOpacity>
+                    </ThemedView>
                   ) : (
                     <ThemedView style={styles.signatureRow}>
-                      <ThemedText style={styles.signatureText}>Firma lista</ThemedText>
+                      {viewFirmaData && (
+                        <ThemedView style={styles.signatureInfo}>
+                          <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
+                          <ThemedText style={styles.signatureInfoText}>ID de sesión: {viewFirmaData.sessionId}</ThemedText>
+                          <ThemedText style={styles.signatureInfoText}>ID del empleado: {viewFirmaData.empleadoId}</ThemedText>
+                          {viewFirmaData.empleadoDetalle && (
+                            <ThemedView style={styles.signatureInfoDetail}>
+                              <ThemedText style={styles.signatureInfoDetailText}>
+                                {viewFirmaData.empleadoDetalle.nombre}{' '}
+                                {viewFirmaData.empleadoDetalle.primer_apellido}{' '}
+                                {viewFirmaData.empleadoDetalle.segundo_apellido}{' '}
+                                ({viewFirmaData.empleadoDetalle.cedula_empleado})
+                              </ThemedText>
+                            </ThemedView>
+                          )}
+                          <ThemedText style={styles.signatureInfoText}>Latitud: {viewFirmaData.latitud}</ThemedText>
+                          <ThemedText style={styles.signatureInfoText}>Longitud: {viewFirmaData.longitud}</ThemedText>
+                          <ThemedText style={styles.signatureInfoText}>
+                            Fecha y hora:{' '}
+                            {convertDateTimestampToLocalString(new Date(Number(viewFirmaData.timestamp)).toISOString())}
+                          </ThemedText>
+                          <TouchableOpacity
+                            style={styles.clearSignatureButton}
+                            onPress={clearViewFirma}
+                          >
+                            <ThemedText style={styles.clearSignatureText}>Limpiar</ThemedText>
+                          </TouchableOpacity>
+                        </ThemedView>
+                      )}
 
                       {/* Evidencias (archivos) para la visualización */}
                       <ThemedView style={{ width: '100%', marginTop: 10 }}>
@@ -4943,7 +4952,7 @@ export default function JobManualsScreen() {
                             Alert.alert('Error', msg);
                           } finally {
                             setIsSigningManual(false);
-                            setViewSignature(null);
+                            clearViewFirma();
                             setViewTextFiles([]);
                             setViewImageFiles([]);
                             setViewAudioFiles([]);

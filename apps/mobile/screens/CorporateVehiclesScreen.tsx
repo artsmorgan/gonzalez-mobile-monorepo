@@ -26,7 +26,7 @@ import {
   upsertBitacoraDetenidoRowInMainStructure,
 } from '@/hooks/bitacoraMainStructureCache';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import Constants from 'expo-constants';
 import { Picker } from '@react-native-picker/picker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -900,7 +900,6 @@ export default function CorporateVehiclesScreen() {
   // firma responsable (QR/generar)
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // imágenes
   const [imageFiles, setImageFiles] = useState<LocalImage[]>([]);
@@ -973,12 +972,12 @@ export default function CorporateVehiclesScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    try {
-      const state = await Network.getNetworkStateAsync();
-      return !!(state.isConnected && state.isInternetReachable);
-    } catch {
-      return false;
-    }
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   type MarcaSnapshot = {
@@ -1329,19 +1328,6 @@ export default function CorporateVehiclesScreen() {
     setSelectedSucursalId(sucursalId);
     setSelectedPuestoId(null);
   };
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') return;
-        const loc = await Location.getCurrentPositionAsync({});
-        setLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-      } catch {
-        // ignore
-      }
-    })();
-  }, []);
 
   const toggleExpanded = (key: string) => {
     setExpanded((prev) => {
@@ -3310,28 +3296,28 @@ export default function CorporateVehiclesScreen() {
     if (signatureRef.current) signatureRef.current.readSignature();
   };
 
+  const applyGeneratedFirmaResponsable = async (
+    setFirma: React.Dispatch<React.SetStateAction<FirmaData | null>>,
+  ) => {
+    if (!employee) {
+      Alert.alert('Error', 'No se encontró el empleado');
+      return;
+    }
+    const hash = await getCurrentUserDigitalSignature(employee);
+    if (!hash) return;
+    const decoded = decodeFirmaHash(hash);
+    if (!decoded) {
+      Alert.alert('Error', 'No se pudo generar la firma');
+      return;
+    }
+    setFirma(decoded);
+  };
+
   // Funciones para firma_responsable
   const generateMaintenanceFirmaResponsable = async () => {
     try {
       setIsGeneratingFirma(true);
-      const employeeId = employee?.id ? String(employee.id) : '';
-      const token = (await AsyncStorage.getItem('access_token')) || '';
-      const sessionId = token ? token.slice(0, 24) : 'local-session';
-      const lat = location ? String(location.latitude) : '0';
-      const lon = location ? String(location.longitude) : '0';
-      const ts = String(Date.now());
-      if (!employeeId) {
-        Alert.alert('Error', 'No se encontró el empleado');
-        return;
-      }
-      const raw = `${sessionId}:${employeeId}:${lat}:${lon}:${ts}`;
-      const hash = btoa(raw);
-      const decoded = decodeFirmaHash(hash);
-      if (!decoded) {
-        Alert.alert('Error', 'No se pudo generar la firma');
-        return;
-      }
-      setMaintenanceFirmaResponsable(decoded);
+      await applyGeneratedFirmaResponsable(setMaintenanceFirmaResponsable);
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -3506,24 +3492,7 @@ export default function CorporateVehiclesScreen() {
   const generateFirmaResponsable = async () => {
     try {
       setIsGeneratingFirma(true);
-      const employeeId = employee?.id ? String(employee.id) : '';
-      const token = (await AsyncStorage.getItem('access_token')) || '';
-      const sessionId = token ? token.slice(0, 24) : 'local-session';
-      const lat = location ? String(location.latitude) : '0';
-      const lon = location ? String(location.longitude) : '0';
-      const ts = String(Date.now());
-      if (!employeeId) {
-        Alert.alert('Error', 'No se encontró el empleado');
-        return;
-      }
-      const raw = `${sessionId}:${employeeId}:${lat}:${lon}:${ts}`;
-      const hash = btoa(raw);
-      const decoded = decodeFirmaHash(hash);
-      if (!decoded) {
-        Alert.alert('Error', 'No se pudo generar la firma');
-        return;
-      }
-      setFirmaResponsable(decoded);
+      await applyGeneratedFirmaResponsable(setFirmaResponsable);
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -3548,24 +3517,7 @@ export default function CorporateVehiclesScreen() {
   const generateUseFirmaResponsable = async () => {
     try {
       setIsGeneratingFirma(true);
-      const employeeId = employee?.id ? String(employee.id) : '';
-      const token = (await AsyncStorage.getItem('access_token')) || '';
-      const sessionId = token ? token.slice(0, 24) : 'local-session';
-      const lat = location ? String(location.latitude) : '0';
-      const lon = location ? String(location.longitude) : '0';
-      const ts = String(Date.now());
-      if (!employeeId) {
-        Alert.alert('Error', 'No se encontró el empleado');
-        return;
-      }
-      const raw = `${sessionId}:${employeeId}:${lat}:${lon}:${ts}`;
-      const hash = btoa(raw);
-      const decoded = decodeFirmaHash(hash);
-      if (!decoded) {
-        Alert.alert('Error', 'No se pudo generar la firma');
-        return;
-      }
-      setUseFirmaResponsable(decoded);
+      await applyGeneratedFirmaResponsable(setUseFirmaResponsable);
     } finally {
       setIsGeneratingFirma(false);
     }

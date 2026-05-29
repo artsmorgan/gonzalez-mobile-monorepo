@@ -18,8 +18,7 @@ import SignatureScreen from 'react-native-signature-canvas';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
 
@@ -554,7 +553,6 @@ export default function ApreciacionVulnerabilidadScreen() {
   const [firmaSolicitante, setFirmaSolicitante] = useState('');
   const [firmaResponsable, setFirmaResponsable] = useState('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isCameraVisible, setIsCameraVisible] = useState(false);
   const [cameraTarget, setCameraTarget] = useState<{ sectionKey: string; itemId: string } | null>(null);
   const cameraRef = useRef<CameraView | null>(null);
@@ -581,8 +579,12 @@ export default function ApreciacionVulnerabilidadScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const decodeFirmaHash = (hash?: string | null) => {
@@ -613,36 +615,17 @@ export default function ApreciacionVulnerabilidadScreen() {
     return `${date} ${time}`;
   };
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
   const handleGenerateFirmaResponsable = async () => {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }

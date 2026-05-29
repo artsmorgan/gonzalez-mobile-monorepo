@@ -4,14 +4,13 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
-import * as Location from 'expo-location';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import SignatureScreen from 'react-native-signature-canvas';
-import { jwtDecode } from 'jwt-decode';
 
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -882,7 +881,6 @@ export default function MantenimientoEquipoScreen() {
     const signatureRef = useRef<any>(null);
     const [signatureKey, setSignatureKey] = useState(0);
     const [isReadingSignature, setIsReadingSignature] = useState(false);
-    const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
     // Nodos computados para filtros jerárquicos
     const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -1166,27 +1164,14 @@ export default function MantenimientoEquipoScreen() {
         return `data:image/png;base64,${base64Clean}`;
     };
 
-    const requestLocation = async () => {
-        try {
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== 'granted') return null;
-            const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-            setLocation(loc);
-            return loc;
-        } catch {
-            return null;
-        }
-    };
-
-    const getConnectionStatus = useCallback(async (): Promise<boolean> => {
-        //return false;
-        const state = await Network.getNetworkStateAsync();
-        // `isInternetReachable` puede venir null/undefined aunque haya internet.
-        // Solo consideramos offline cuando explícitamente es false.
-        if (!state.isConnected) return false;
-        if (state.isInternetReachable === false) return false;
-        return true;
-    }, []);
+    const getConnectionStatus = async (): Promise<boolean> => {
+        const networkState = await Network.getNetworkStateAsync();
+    
+        return (
+          networkState.isConnected === true &&
+          networkState.isInternetReachable === true
+        );
+      };
 
     const closeCambiosModal = () => {
         setIsCambiosModalVisible(false);
@@ -3376,20 +3361,13 @@ export default function MantenimientoEquipoScreen() {
         if (isGeneratingMovFirma) return;
         setIsGeneratingMovFirma(true);
         try {
-            const loc = location ?? (await requestLocation());
-            if (!loc || !employee) {
-                Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+            if (!employee) {
+                Alert.alert('Error', 'No se pudo obtener la información del empleado');
                 return;
             }
-            const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-            if (!token) return;
-            const decodedToken: any = jwtDecode(token);
-            const sessionId = decodedToken.sessionId;
-            const horaAccion = String((await getHoraAccion()) ?? new Date().toISOString());
-            const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+            const hash = await getCurrentUserDigitalSignature(employee);
+            if (!hash) return;
             setMovFirmaResponsable(hash);
-        } catch (e: any) {
-            Alert.alert('Error', e.message || 'No se pudo generar la firma');
         } finally {
             setIsGeneratingMovFirma(false);
         }

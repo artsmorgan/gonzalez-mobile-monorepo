@@ -10,18 +10,14 @@ import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, View, ScrollView, AppState, TextInput, Modal, Platform } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import saveLunchTime from '../hooks/saveLunchTime';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from '../hooks/getHoraAccion';
+import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
-import updateServerTime, { setDisconnectedTime } from '@/hooks/updateServerTime';
-import authedFetch from '@/hooks/authedFetch';
 
 type LunchTimeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'LunchTime'>;
 
@@ -29,6 +25,11 @@ interface LunchTimeConfig {
   status: boolean;
   minutos: number;
   marcaDiaId: string;
+}
+
+function isValidLunchMinutes(minutos: unknown): boolean {
+  const n = Number(minutos);
+  return Number.isFinite(n) && n > 0;
 }
 
 interface InactivityData {
@@ -57,6 +58,8 @@ export default function LunchTimeScreen() {
   const [endTime, setEndTime] = useState<Date | null>(null);
   const [isLoadingConfig, setIsLoadingConfig] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [needsManualMinutes, setNeedsManualMinutes] = useState(false);
+  const [manualMinutesInput, setManualMinutesInput] = useState('');
   const [inactivityReason, setInactivityReason] = useState('');
   const [inactivities, setInactivities] = useState<InactivityData[]>([]);
   const [currentInactivityStart, setCurrentInactivityStart] = useState<Date | null>(null);
@@ -72,7 +75,6 @@ export default function LunchTimeScreen() {
   const [inactivityPickerValue, setInactivityPickerValue] = useState(new Date());
   const [firmaEmpleado, setFirmaEmpleado] = useState('');
   const [isGeneratingFirmaEmpleado, setIsGeneratingFirmaEmpleado] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<LunchTimeScreenNavigationProp>();
@@ -143,13 +145,6 @@ export default function LunchTimeScreen() {
   }, [employee]);
 
   const getUpdatedHoraAccion = async () => {
-    const is_connected = await getConnectionStatus();
-    if (is_connected) {
-      await updateServerTime();
-    }
-    else {
-      await setDisconnectedTime();
-    }
     const horaAccion = await getHoraAccion();
     return horaAccion;
   }
@@ -302,7 +297,103 @@ export default function LunchTimeScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
+  };
+
+  const stopAllTimers = async () => {
+    setIsTimerActive(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+    setTimeRemaining(0);
+    setStartTime(null);
+    setEndTime(null);
+    setInactivities([]);
+    setCurrentInactivityStart(null);
+    setInactivityReason('');
+    setFirmaEmpleado('');
+    setEndTimeMode('current');
+    try {
+      await AsyncStorage.removeItem('temp_state');
+    } catch {
+      // ignore
+    }
+  };
+
+  const applyTimerConfig = async (
+    minutos: number,
+    marcaDiaId: string,
+    configObj: Record<string, unknown>
+  ) => {
+    const updatedConfigObj = {
+      ...configObj,
+      minutos,
+      status: true,
+    };
+    await AsyncStorage.setItem('lunch_time_config', JSON.stringify(updatedConfigObj));
+
+    const config: LunchTimeConfig = {
+      minutos,
+      status: true,
+      marcaDiaId,
+    };
+    setTimerConfig(config);
+    setTimeRemaining(minutos * 60);
+    setNeedsManualMinutes(false);
+    setManualMinutesInput('');
+  };
+
+  const handleAcceptManualMinutes = async () => {
+    const parsed = parseInt(manualMinutesInput.trim(), 10);
+    if (!isValidLunchMinutes(parsed)) {
+      Alert.alert('Error', 'Ingrese una cantidad válida de minutos (mayor a 0).');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar minutos de almuerzo',
+      `¿Desea establecer ${parsed} minutos de almuerzo?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            try {
+              const current_marca = await AsyncStorage.getItem('current_marca');
+              if (!current_marca) {
+                Alert.alert('Error', 'No se encontró la marca actual.');
+                return;
+              }
+              const current_marca_obj = JSON.parse(current_marca);
+              if (!current_marca_obj.id) {
+                Alert.alert('Error', 'No se encontró el identificador de la marca actual.');
+                return;
+              }
+
+              const stored = await AsyncStorage.getItem('lunch_time_config');
+              let configObj: Record<string, unknown> = { status: true };
+              if (stored) {
+                try {
+                  configObj = JSON.parse(stored);
+                } catch {
+                  configObj = { status: true };
+                }
+              }
+
+              await applyTimerConfig(parsed, String(current_marca_obj.id), configObj);
+            } catch (err) {
+              console.error('Error saving manual lunch minutes:', err);
+              Alert.alert('Error', 'No se pudo guardar la configuración de minutos.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const generateRandomId = () => {
@@ -401,54 +492,44 @@ export default function LunchTimeScreen() {
         throw new Error('No current marca id found');
       }
 
-      let lunch_time_config_obj = null;
-      const is_connected = await getConnectionStatus();
-      if (is_connected) {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
-        }
-        const response = await authedFetch({
-          url: `${apiUrl}/api/lunch-time/${current_marca_obj.id}`,
-          init: {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-          },
-          refreshAccessToken,
-          logout,
-        });
-        if (!response) return;
-
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data = await response.json();
-        if (!data.status) {
-          throw new Error('No lunch time config status found');
-        }
-        lunch_time_config_obj = data;
-      }
-      else {
-        const lunch_time_config = await AsyncStorage.getItem('lunch_time_config');
-        if (!lunch_time_config) {
-          throw new Error('No lunch time config found');
-        }
-        lunch_time_config_obj = JSON.parse(lunch_time_config);
-        if (!lunch_time_config_obj.status) {
-          throw new Error('No lunch time config status found');
+      let lunch_time_config_obj: Record<string, unknown> | null = null;
+      const lunch_time_config = await AsyncStorage.getItem('lunch_time_config');
+      if (lunch_time_config) {
+        try {
+          lunch_time_config_obj = JSON.parse(lunch_time_config);
+        } catch {
+          lunch_time_config_obj = null;
         }
       }
 
-      const config = {
-        minutos: lunch_time_config_obj.minutos,
-        status: lunch_time_config_obj.status,
-        marcaDiaId: current_marca_obj.id,
+      const hasAnyConfig =
+        lunch_time_config_obj != null && typeof lunch_time_config_obj === 'object';
+
+      if (!hasAnyConfig || !lunch_time_config_obj) {
+        await stopAllTimers();
+        setTimerConfig(null);
+        setNeedsManualMinutes(true);
+        return;
+      }
+
+      const resolvedConfig = lunch_time_config_obj;
+
+      if (!isValidLunchMinutes(resolvedConfig.minutos)) {
+        await stopAllTimers();
+        setTimerConfig(null);
+        setNeedsManualMinutes(true);
+        return;
+      }
+
+      const config: LunchTimeConfig = {
+        minutos: Number(resolvedConfig.minutos),
+        status: resolvedConfig.status !== false,
+        marcaDiaId: String(current_marca_obj.id),
       };
 
       setTimerConfig(config);
-      setTimeRemaining(config.minutos * 60); // Convert minutes to seconds
+      setTimeRemaining(config.minutos * 60);
+      setNeedsManualMinutes(false);
 
       await restoreCurrentState();
     } catch (error) {
@@ -459,56 +540,24 @@ export default function LunchTimeScreen() {
     }
   };
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
-  const generateFirmaEmpleado = async (): Promise<string | null> => {
-    if (isGeneratingFirmaEmpleado) return null;
-    setIsGeneratingFirmaEmpleado(true);
-    try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        return null;
-      }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) return null;
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      if (!sessionId) return null;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
-      setFirmaEmpleado(hash);
-      return hash;
-    } catch {
-      return null;
-    } finally {
-      setIsGeneratingFirmaEmpleado(false);
-    }
-  };
-
   const handleStart = async () => {
     if (timerConfig && timeRemaining > 0) {
-      // Consideramos “inicio desde el principio” cuando aún no hay startTime
-      // o cuando el tiempo restante es el total configurado.
-      const isFreshStart =
-        !startTimeRef.current ||
-        (timerConfig && timeRemaining === timerConfig.minutos * 60);
+      // Firma + ubicación solo al iniciar el contador por primera vez en esta sesión
+      // (no al reanudar tras pausa ni al restaurar estado guardado).
+      const isFirstStartOfSession =
+        !firmaEmpleadoRef.current?.trim() && startTimeRef.current == null;
 
-      if (isFreshStart) {
-        const generatedFirma = await generateFirmaEmpleado();
-        if (!generatedFirma) {
-          Alert.alert('Error', 'No se pudo generar la firma digital. Se reiniciará el contador.');
-          await handleReset();
-          return;
+      if (isFirstStartOfSession) {
+        if (isGeneratingFirmaEmpleado) return;
+        setIsGeneratingFirmaEmpleado(true);
+        try {
+          const generatedFirma = await getCurrentUserDigitalSignature(employee);
+          if (!generatedFirma) {
+            return;
+          }
+          setFirmaEmpleado(generatedFirma);
+        } finally {
+          setIsGeneratingFirmaEmpleado(false);
         }
       }
       const horaAccion = await getUpdatedHoraAccion();
@@ -925,11 +974,11 @@ export default function LunchTimeScreen() {
           onPress: async () => {
             let firmaToUse = firmaEmpleadoRef.current || '';
             if (!firmaToUse) {
-              const generatedFirma = await generateFirmaEmpleado();
+              const generatedFirma = await getCurrentUserDigitalSignature(employee);
               if (!generatedFirma) {
-                Alert.alert('Error', 'No se pudo generar la firma digital para el registro manual.');
                 return;
               }
+              setFirmaEmpleado(generatedFirma);
               firmaToUse = generatedFirma;
             }
             const requestData = {
@@ -997,6 +1046,32 @@ export default function LunchTimeScreen() {
                 <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
+          ) : needsManualMinutes ? (
+            <ThemedView style={[styles.timerContainer, styles.manualMinutesContainer]}>
+              <ThemedText style={styles.containerTitle}>
+                Configurar minutos de almuerzo
+              </ThemedText>
+              <ThemedText style={styles.manualMinutesHint}>
+                No se encontró una duración válida de almuerzo. Ingrese la cantidad de minutos para continuar.
+              </ThemedText>
+              <ThemedView style={styles.manualMinutesForm}>
+                <TextInput
+                  style={styles.manualMinutesInput}
+                  value={manualMinutesInput}
+                  onChangeText={setManualMinutesInput}
+                  placeholder="Ej: 30"
+                  placeholderTextColor="#999"
+                  keyboardType="number-pad"
+                  maxLength={3}
+                />
+                <TouchableOpacity
+                  style={styles.manualMinutesButton}
+                  onPress={handleAcceptManualMinutes}
+                >
+                  <ThemedText style={styles.manualMinutesButtonText}>Aceptar</ThemedText>
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
           ) : timerConfig ? (
             <ThemedView style={styles.timerContainer}>
               {/* Container Title */}
@@ -1061,9 +1136,13 @@ export default function LunchTimeScreen() {
                     <TouchableOpacity
                       style={styles.startButton}
                       onPress={handleStart}
-                      disabled={timeRemaining === 0}
+                      disabled={timeRemaining === 0 || isGeneratingFirmaEmpleado}
                     >
-                      {getActionIcon('start')}
+                      {isGeneratingFirmaEmpleado ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        getActionIcon('start')
+                      )}
                     </TouchableOpacity>
                   ) : (
                     <TouchableOpacity
@@ -1767,6 +1846,42 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  manualMinutesContainer: {
+    gap: 8,
+  },
+  manualMinutesHint: {
+    fontSize: 14,
+    textAlign: 'center',
+    color: '#666666',
+    lineHeight: 20,
+  },
+  manualMinutesForm: {
+    width: '100%',
+    gap: 12,
+  },
+  manualMinutesInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 18,
+    color: '#000000',
+    textAlign: 'center',
+  },
+  manualMinutesButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  manualMinutesButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',

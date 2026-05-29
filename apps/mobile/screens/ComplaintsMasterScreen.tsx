@@ -28,8 +28,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -218,6 +217,9 @@ function parseTipoCatalogoQuejasCache(raw: string | null): TipoCatalogoQuejaItem
     return [];
   }
 }
+
+/** Evita peticiones duplicadas a tipo-quejas / tipo-clientes (p. ej. re-renders o Strict Mode). */
+let tipoCatalogosServerFetchPromise: Promise<void> | null = null;
 
 async function readDefaultTipoClienteYQuejaFromCaches(): Promise<{ tipoCliente: string; tipoQueja: string }> {
   let tipoCliente = 'Publico';
@@ -581,65 +583,77 @@ export default function ComplaintsMasterScreen() {
   const isOperativo = roleName === 'OPERATIVO';
 
   /** Misma política que `MantenimientoEquipoScreen` / uso previo en esta pantalla. */
-  const getConnectionStatus = useCallback(async (): Promise<boolean> => {
-    try {
-      const networkState = await Network.getNetworkStateAsync();
-      if (!networkState.isConnected) return false;
-      if (networkState.isInternetReachable === false) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  }, []);
+  const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
+    const networkState = await Network.getNetworkStateAsync();
 
-  /** Solo con internet: GET `complaints-master/tipo-quejas` y `tipo-clientes` → AsyncStorage + estado (`tipo_*_cache`). */
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
+  };
+
+  /** Solo con internet: GET `complaints-master/tipo-quejas` y `tipo-clientes` → AsyncStorage + estado (`tipo_*_cache`). Una sola vez por sesión de carga. */
   const refreshTipoCatalogosFromServerIfOnline = useCallback(
     async (isCancelled?: () => boolean) => {
-      const online = await getConnectionStatus();
-      if (!online) return;
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl || String(apiUrl).trim() === '') return;
+      if (tipoCatalogosServerFetchPromise) {
+        await tipoCatalogosServerFetchPromise;
+        return;
+      }
 
-      const pull = async (
-        path: 'tipo-quejas' | 'tipo-clientes',
-        storageKey: 'tipo_quejas_cache' | 'tipo_clientes_quejas_cache',
-        setList: React.Dispatch<React.SetStateAction<TipoCatalogoQuejaItem[]>>,
-      ) => {
-        try {
-          const res = await authedFetch({
-            url: `${apiUrl}/api/complaints-master/${path}`,
-            init: {
-              method: 'GET',
-              headers: { 'Content-Type': 'application/json' },
-            },
-            refreshAccessToken,
-            logout,
-          });
-          if (!res?.ok) return;
-          const data = (await res.json()) as {
-            status?: boolean;
-            tipoQuejas?: unknown;
-            tipoClientes?: unknown;
-          };
-          if (!data?.status) return;
-          const rawArr = path === 'tipo-quejas' ? data.tipoQuejas : data.tipoClientes;
-          if (!Array.isArray(rawArr)) return;
-          const json = JSON.stringify(rawArr);
-          if (isCancelled?.()) return;
-          await AsyncStorage.setItem(storageKey, json);
-          if (isCancelled?.()) return;
-          setList(parseTipoCatalogoQuejasCache(json));
-        } catch {
-          /* fallo puntual: se conserva el cache ya cargado */
-        }
-      };
+      tipoCatalogosServerFetchPromise = (async () => {
+        const isConnected = await getConnectionStatus();
+        if (!isConnected) return;
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl || String(apiUrl).trim() === '') return;
 
-      await Promise.all([
-        pull('tipo-quejas', 'tipo_quejas_cache', setTipoQuejasCache),
-        pull('tipo-clientes', 'tipo_clientes_quejas_cache', setTipoClientesQuejasCache),
-      ]);
+        const pull = async (
+          path: 'tipo-quejas' | 'tipo-clientes',
+          storageKey: 'tipo_quejas_cache' | 'tipo_clientes_quejas_cache',
+          setList: React.Dispatch<React.SetStateAction<TipoCatalogoQuejaItem[]>>,
+        ) => {
+          try {
+            const res = await authedFetch({
+              url: `${apiUrl}/api/complaints-master/${path}`,
+              init: {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+              },
+              refreshAccessToken,
+              logout,
+            });
+            if (!res?.ok) return;
+            const data = (await res.json()) as {
+              status?: boolean;
+              tipoQuejas?: unknown;
+              tipoClientes?: unknown;
+            };
+            if (!data?.status) return;
+            const rawArr = path === 'tipo-quejas' ? data.tipoQuejas : data.tipoClientes;
+            if (!Array.isArray(rawArr)) return;
+            const json = JSON.stringify(rawArr);
+            if (isCancelled?.()) return;
+            await AsyncStorage.setItem(storageKey, json);
+            if (isCancelled?.()) return;
+            setList(parseTipoCatalogoQuejasCache(json));
+          } catch {
+            /* fallo puntual: se conserva el cache ya cargado */
+          }
+        };
+
+        await Promise.all([
+          pull('tipo-quejas', 'tipo_quejas_cache', setTipoQuejasCache),
+          pull('tipo-clientes', 'tipo_clientes_quejas_cache', setTipoClientesQuejasCache),
+        ]);
+      })();
+
+      try {
+        await tipoCatalogosServerFetchPromise;
+      } catch {
+        tipoCatalogosServerFetchPromise = null;
+      }
     },
-    [getConnectionStatus, refreshAccessToken, logout],
+    [refreshAccessToken, logout],
   );
 
   const closeCambiosModal = () => {
@@ -993,34 +1007,39 @@ export default function ComplaintsMasterScreen() {
     }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      let cancelled = false;
-      const isCancelled = () => cancelled;
-      void (async () => {
-        try {
-          const [rawClientes, rawQuejas] = await Promise.all([
-            AsyncStorage.getItem('tipo_clientes_quejas_cache'),
-            AsyncStorage.getItem('tipo_quejas_cache'),
-          ]);
-          if (cancelled) return;
-          setTipoClientesQuejasCache(parseTipoCatalogoQuejasCache(rawClientes));
-          setTipoQuejasCache(parseTipoCatalogoQuejasCache(rawQuejas));
-        } catch {
-          if (!cancelled) {
-            setTipoClientesQuejasCache([]);
-            setTipoQuejasCache([]);
-          }
-        }
+  const tipoCatalogosInitializedRef = useRef(false);
+
+  useEffect(() => {
+    if (tipoCatalogosInitializedRef.current) return;
+    tipoCatalogosInitializedRef.current = true;
+
+    let cancelled = false;
+    const isCancelled = () => cancelled;
+
+    void (async () => {
+      try {
+        const [rawClientes, rawQuejas] = await Promise.all([
+          AsyncStorage.getItem('tipo_clientes_quejas_cache'),
+          AsyncStorage.getItem('tipo_quejas_cache'),
+        ]);
+        if (cancelled) return;
+        setTipoClientesQuejasCache(parseTipoCatalogoQuejasCache(rawClientes));
+        setTipoQuejasCache(parseTipoCatalogoQuejasCache(rawQuejas));
+      } catch {
         if (!cancelled) {
-          await refreshTipoCatalogosFromServerIfOnline(isCancelled);
+          setTipoClientesQuejasCache([]);
+          setTipoQuejasCache([]);
         }
-      })();
-      return () => {
-        cancelled = true;
-      };
-    }, [refreshTipoCatalogosFromServerIfOnline])
-  );
+      }
+      if (!cancelled) {
+        await refreshTipoCatalogosFromServerIfOnline(isCancelled);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshTipoCatalogosFromServerIfOnline]);
 
   useEffect(() => {
     if (!hasCurrentMarca) return;
@@ -1279,29 +1298,17 @@ export default function ComplaintsMasterScreen() {
         return;
       }
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permisos requeridos', 'Se necesita acceso a la ubicación para generar la firma');
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+
+      const decodedData = atob(hash);
+      const parts = decodedData.split(':');
+      if (parts.length !== 5) {
+        Alert.alert('Error', 'La firma generada no tiene el formato esperado');
         return;
       }
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
 
-      const location = await Location.getCurrentPositionAsync({});
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decoded: any = jwtDecode(token);
-      const sessionId = decoded.sessionId || 'unknown';
-
-      const timestamp = await getHoraAccion();
-      if (!timestamp) {
-        Alert.alert('Error', 'No se pudo obtener la hora');
-        return;
-      }
-
-      const { latitude, longitude } = location.coords;
-      const empleadoId = employee.id.toString();
-
-      // Fetch employee details (opcional)
       let empleadoDetalle = undefined;
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
@@ -1335,9 +1342,9 @@ export default function ComplaintsMasterScreen() {
       setFirmaResponsable({
         sessionId,
         empleadoId,
-        latitud: latitude.toString(),
-        longitud: longitude.toString(),
-        timestamp: timestamp.toString(),
+        latitud,
+        longitud,
+        timestamp,
         empleadoDetalle,
       });
     } catch (error) {

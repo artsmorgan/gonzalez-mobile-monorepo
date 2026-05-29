@@ -22,11 +22,10 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { formatDateDMY } from '@/utils/formatDate';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
-import * as Location from 'expo-location';
 import SignatureScreen from 'react-native-signature-canvas';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import Constants from 'expo-constants';
-
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -762,7 +761,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const [firmaResponsable, setFirmaResponsable] = useState<string>('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // Signature capture modal (para firmas dibujadas)
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
@@ -1707,7 +1705,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                     <ThemedText style={styles.firmaInfoValue}>Sesión: {firmaInfo.sessionId || 'N/A'}</ThemedText>
                     <ThemedText style={styles.firmaInfoValue}>Empleado: {firmaInfo.empleadoId || 'N/A'}</ThemedText>
                     <ThemedText style={styles.firmaInfoValue}>Lat: {firmaInfo.latitud || 'N/A'} | Long: {firmaInfo.longitud || 'N/A'}</ThemedText>
-                    <ThemedText style={styles.firmaInfoValue}>Hora: {firmaInfo.timestamp || 'N/A'}</ThemedText>
+                    <ThemedText style={styles.firmaInfoValue}>Hora: {convertDateTimestampToLocalString(new Date(Number(firmaInfo.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                   </>
                 )}
               </ThemedView>
@@ -1758,8 +1756,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
-    const state = await Network.getNetworkStateAsync();
-    return !!(state.isConnected && state.isInternetReachable);
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const closeCambiosModal = () => {
@@ -2385,18 +2387,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
   );
 
 
-  const requestLocation = async () => {
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return null;
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      setLocation(loc);
-      return loc;
-    } catch {
-      return null;
-    }
-  };
-
   const resetForm = async (tipoNext: TipoBitacora) => {
 
     const horaAccion = await getHoraAccion();
@@ -2458,7 +2448,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
       });
     }
 
-    await requestLocation();
   };
 
   const startCreating = async () => {
@@ -2517,7 +2506,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setMovimientos(movs as any);
     setObservaciones(item.observaciones || '');
     setFirmaResponsable(item.firma_responsable || '');
-    await requestLocation();
 
     // Secuencia requerida al editar (modo normal): cargar vehículos -> seleccionar vehículo -> cargar usos -> seleccionar uso.
     if (!isPrefillMode) {
@@ -2756,20 +2744,13 @@ export default function BitacoraVehiculosDetenidosScreen() {
     if (isGeneratingFirma) return;
     setIsGeneratingFirma(true);
     try {
-      const loc = location ?? (await requestLocation());
-      if (!loc || !employee) {
-        Alert.alert('Error', 'No se pudo obtener ubicación o usuario');
+      if (!employee) {
+        Alert.alert('Error', 'No se pudo obtener la información del empleado');
         return;
       }
-      const token = await AsyncStorage.getItem('access_token');
-      if (!token) throw new Error('No authentication token found');
-      const decodedToken: any = jwtDecode(token);
-      const sessionId = decodedToken.sessionId;
-      const horaAccion = await getHoraAccion();
-      const hash = btoa(`${sessionId}:${employee.id}:${loc.coords.latitude}:${loc.coords.longitude}:${horaAccion}`);
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
       setFirmaResponsable(hash);
-    } catch (e: any) {
-      Alert.alert('Error', e.message || 'No se pudo generar la firma');
     } finally {
       setIsGeneratingFirma(false);
     }
@@ -4879,7 +4860,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
                           <ThemedText style={styles.firmaInfoValue}>Sesión: {info.sessionId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Empleado: {info.empleadoId || 'N/A'}</ThemedText>
                           <ThemedText style={styles.firmaInfoValue}>Lat: {info.latitud || 'N/A'} | Long: {info.longitud || 'N/A'}</ThemedText>
-                          <ThemedText style={styles.firmaInfoValue}>Hora: {info.timestamp || 'N/A'}</ThemedText>
+                          <ThemedText style={styles.firmaInfoValue}>Hora: { convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}</ThemedText>
                         </>
                       );
                     })()}

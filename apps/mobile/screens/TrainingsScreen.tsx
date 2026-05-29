@@ -28,8 +28,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import { Picker } from '@react-native-picker/picker';
 import { formatDateDMY } from '@/utils/formatDate';
-import * as Location from 'expo-location';
-import { jwtDecode } from 'jwt-decode';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import * as Network from 'expo-network';
 import {
@@ -538,7 +537,6 @@ export default function TrainingsScreen() {
   const [selectedResultado, setSelectedResultado] = useState<string>('');
 
   // Location state
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
 
   // Camera state
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -667,7 +665,11 @@ export default function TrainingsScreen() {
   const checkConnection = async (): Promise<boolean> => {
     //return false;
     const networkState = await Network.getNetworkStateAsync();
-    return networkState.isConnected && networkState.isInternetReachable ? true : false;
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
   };
 
   const isProbablyNetworkError = (err: any) => {
@@ -1077,26 +1079,8 @@ export default function TrainingsScreen() {
     setSelectedResultado('');
     setFirmaResponsable(null);
     setPendingTrainingFiles([]);
-    setLocation(null);
 
     await applyCurrentMarcaToFormHierarchy();
-
-    // Request location permissions
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Error', 'Se necesita permiso de ubicación para generar la firma');
-          return;
-        }
-        const currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        setLocation(currentLocation);
-      } catch (error) {
-        console.error('Error getting location:', error);
-      }
-    })();
   };
 
   const cancelCreating = () => {
@@ -1125,7 +1109,6 @@ export default function TrainingsScreen() {
     setSelectedResultado('');
     setFirmaResponsable(null);
     setPendingTrainingFiles([]);
-    setLocation(null);
   };
 
   const removeEmpleado = (empleadoId: number) => {
@@ -1316,42 +1299,24 @@ export default function TrainingsScreen() {
       return;
     }
 
-    if (!location) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación');
-      return;
-    }
-
     setIsGeneratingFirma(true);
 
     try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+
+      const parsed = parseFirmaBase64ToFirmaData(hash);
+      if (!parsed) {
+        Alert.alert('Error', 'La firma generada no es válida');
+        return;
+      }
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        throw new Error('Server URL not configured');
-      }
-      const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!token) return;
-
-      const decodedToken = jwtDecode(token);
-      const sessionId = JSON.parse(JSON.stringify(decodedToken)).sessionId;
-
-      const horaAccion = await getHoraAccion();
-      if (!horaAccion) {
-        throw new Error('Hora de acción not found');
-      }
-
-      // Encode base64
-      const hash = btoa(sessionId + ":" + employee.id + ":" + location.coords.latitude + ":" + location.coords.longitude + ":" + horaAccion);
-
-      // Decode to show info
-      const decodedHash = atob(hash);
-      const [decodedSessionId, decodedEmpleadoId, decodedLatitud, decodedLongitud, decodedTimestamp] = decodedHash.split(':');
-
-      // Fetch empleado details
       const connectionStatus = await checkConnection();
-      let empleadoDetalle = undefined;
-      if (connectionStatus) {
+      let empleadoDetalle = parsed.empleadoDetalle;
+      if (connectionStatus && apiUrl && !empleadoDetalle) {
         const empleadoResponse = await authedFetch({
-          url: `${apiUrl}/api/empleados/${decodedEmpleadoId}`,
+          url: `${apiUrl}/api/empleados/${parsed.empleadoId}`,
           init: {
             method: 'GET',
             headers: {
@@ -1374,14 +1339,7 @@ export default function TrainingsScreen() {
         }
       }
 
-      setFirmaResponsable({
-        sessionId: decodedSessionId,
-        empleadoId: decodedEmpleadoId,
-        latitud: decodedLatitud,
-        longitud: decodedLongitud,
-        timestamp: decodedTimestamp,
-        empleadoDetalle,
-      });
+      setFirmaResponsable({ ...parsed, empleadoDetalle });
     } catch (error) {
       console.error('Error generating signature:', error);
       Alert.alert('Error', 'No se pudo generar la firma digital');
