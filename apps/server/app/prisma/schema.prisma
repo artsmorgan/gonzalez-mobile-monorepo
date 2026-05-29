@@ -392,7 +392,7 @@ model c_marca_dia {
   fecha                                                               DateTime                          @db.Date
   hora_inicio                                                         DateTime?                         @db.Time(0)
   hora_fin                                                            DateTime?                         @db.Time(0)
-  horas_duracion                                                      Decimal?                          @db.Decimal(10, 0)
+  horas_duracion                                                      Decimal?                          @db.Decimal(10, 2)
   tipo_turno                                                          String?                           @db.VarChar(1)
   hora_entrada                                                        DateTime?                         @db.Time(0)
   hora_entrada_digitada                                               DateTime?                         @db.DateTime(0)
@@ -506,6 +506,8 @@ model c_marca_dia {
   @@index([tipo_turno], map: "tipoTurno_idx")
   @@index([usuario_marca_entrada], map: "usuarioMarcaEntrada_idx")
   @@index([usuario_marca_salida], map: "usuarioMarcaSalida_idx")
+  @@index([empleadoFijo_id, fecha], map: "idx_marca_dia_fijo_fecha")
+  @@index([empleadoReemplaza_id, fecha], map: "idx_marca_dia_reemplaza_fecha")
 }
 
 model a_recibo_pago {
@@ -1970,6 +1972,12 @@ model e_domicilio {
   activo             Boolean?
   coordenadas_gpslat String?     @db.VarChar(255)
   coordenadas_gpslng String?     @db.VarChar(255)
+  created_at         DateTime?   @db.DateTime(0)
+  updated_at         DateTime?   @db.DateTime(0)
+  created_by         String?     @db.VarChar(64)
+  updated_by         String?     @db.VarChar(64)
+  deleted_at         DateTime?   @db.DateTime(0)
+  deleted_by         String?     @db.VarChar(64)
   c_empleado         c_empleado? @relation(fields: [empleado_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_7F866C2C952BE730")
   n_region           n_region?   @relation(fields: [region_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_7F866C2C98260155")
   n_distrito         n_distrito? @relation(fields: [distrito_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_7F866C2CE557397E")
@@ -2247,7 +2255,7 @@ model e_estructura_dia_excepcion_plaza {
   hora_inicio_real                  DateTime?                          @db.Time(0)
   hora_fin_real                     DateTime?                          @db.Time(0)
   diaExcepcionPuesto_id             Int?
-  horas_duracion                    Decimal?                           @db.Decimal(10, 0)
+  horas_duracion                    Decimal?                           @db.Decimal(10, 2)
   marcaDia_id                       Int?                               @unique(map: "UNIQ_640C22F17963DFC5")
   e_estructura_dia_excepcion_puesto e_estructura_dia_excepcion_puesto? @relation(fields: [diaExcepcionPuesto_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_640C22F132838645")
   c_marca_dia                       c_marca_dia?                       @relation(fields: [marcaDia_id], references: [id], onUpdate: NoAction, map: "FK_640C22F17963DFC5")
@@ -2909,9 +2917,11 @@ model m_puesto_no_cubierto {
   hora_inicio           DateTime               @db.Time(0)
   hora_fin              DateTime               @db.Time(0)
   turno                 String                 @db.VarChar(1)
-  horas_duracion        Decimal?               @db.Decimal(10, 0)
+  horas_duracion        Decimal?               @db.Decimal(10, 2)
   marcaDia_id           Int?                   @unique(map: "UNIQ_61ED78837963DFC5")
   reposicionDeHoras_id  Int?
+  deleted_at            DateTime?              @db.DateTime(0)
+  deleted_by            String?                @db.VarChar(254)
   c_marca_dia           c_marca_dia?           @relation(fields: [marcaDia_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_61ED78837963DFC5")
   c_empleado            c_empleado?            @relation(fields: [empleado_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_61ED7883952BE730")
   m_reposicion_de_horas m_reposicion_de_horas? @relation(fields: [reposicionDeHoras_id], references: [id], onUpdate: NoAction, map: "FK_61ED7883C49D574A")
@@ -2931,7 +2941,7 @@ model m_refuerzo {
   hora_fin                  DateTime                    @db.Time(0)
   turno                     String                      @db.VarChar(1)
   marcaDia_id               Int?                        @unique(map: "UNIQ_E14C49FC7963DFC5")
-  horas_duracion            Decimal?                    @db.Decimal(10, 0)
+  horas_duracion            Decimal?                    @db.Decimal(10, 2)
   plaza_id                  Int?
   tipo_refuerzo             String                      @db.VarChar(2)
   extra_id                  Int?                        @unique(map: "UNIQ_E14C49FC2B959FC6")
@@ -2955,7 +2965,7 @@ model m_reposicion_de_horas {
   hora_inicio          DateTime               @db.Time(0)
   hora_fin             DateTime               @db.Time(0)
   turno                String                 @db.VarChar(1)
-  horas_duracion       Decimal?               @db.Decimal(10, 0)
+  horas_duracion       Decimal?               @db.Decimal(10, 2)
   marcaDia_id          Int?                   @unique(map: "UNIQ_35E7E0D47963DFC5")
   tipo                 String                 @db.VarChar(2)
   c_horas_extras       c_horas_extras[]
@@ -3303,6 +3313,7 @@ model n_motivo_extra {
   n_tipo_extra           n_tipo_extra?    @relation(fields: [tipoExtra_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_A3B0B86EB5523D4D")
 
   @@index([tipoExtra_id], map: "IDX_A3B0B86EB5523D4D")
+  @@index([codigo_accion_personal], map: "idx_codigo_accion_personal")
 }
 
 model n_motivo_hora_extra {
@@ -3920,7 +3931,7 @@ model pg_pe_dia {
   planillaEmpleado_id                                                         Int?
   hora_inicio                                                                 DateTime?             @db.Time(0)
   hora_fin                                                                    DateTime?             @db.Time(0)
-  horas_duracion                                                              Decimal?              @db.Decimal(10, 0)
+  horas_duracion                                                              Decimal?              @db.Decimal(10, 2)
   imp_rebajo                                                                  Decimal               @db.Decimal(10, 2)
   tipo_turno                                                                  String?               @db.VarChar(1)
   motivo_separacion_temp                                                      String?               @db.VarChar(5)
@@ -6298,19 +6309,27 @@ model c_imagenes_boleta_apreciacion_vulnerabilidad {
 }
 
 model e_reportes_mobile {
-  id                Int      @id @default(autoincrement())
-  nombre            String   @db.LongText
-  numero            String   @db.VarChar(100)
-  nomenclatura      String   @db.VarChar(100)
-  descripcion       String?  @db.LongText
-  modulo            String   @db.VarChar(100)
-  tipo_reporte      String   @db.VarChar(15)
+  id                Int       @id @default(autoincrement())
+  nombre            String    @db.LongText
+  numero            String    @db.VarChar(100)
+  nomenclatura      String    @db.VarChar(100)
+  descripcion       String?   @db.LongText
+  modulo            String    @db.VarChar(100)
+  tipo_reporte      String    @db.VarChar(15)
   created_by        Int
-  estado            String   @db.VarChar(15)
-  filters           String   @db.LongText
-  order_by          String   @db.LongText
-  firma_responsable String   @db.LongText
-  created_at        DateTime @default(now()) @db.DateTime(0)
+  estado            String    @db.VarChar(15)
+  filters           String    @db.LongText
+  order_by          String    @db.LongText
+  firma_responsable String    @db.LongText
+  created_at        DateTime  @default(now()) @db.DateTime(0)
+  attemps           Int?
+  max_attempts      Int?
+  started_at        DateTime? @db.DateTime(0)
+  finished_at       DateTime? @db.DateTime(0)
+  locked_at         DateTime? @db.DateTime(0)
+  locked_by         String?   @db.VarChar(55)
+  error_message     String?   @db.LongText
+  progress          Int?
 }
 
 model n_tipo_entrega {
