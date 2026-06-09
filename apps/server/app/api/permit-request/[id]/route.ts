@@ -179,7 +179,27 @@ export async function PUT(
             let dateTime_comments = (nowIso.split("T")[0]) + " a las " + (nowIso.split("T")[1].split(".")[0]);
             
             let comentarios = `Permiso solicitado por ${empleado_ausente} y aprobado por ${ejecutivo_nombre} el día ${dateTime_comments} en el sistema MonitoreApp`;
-            await createAccionPersonal(req, turno.id, tipoAccionId, permisoId, 0, 0, comentarios, 3, usuario_insercion);
+            
+            const corpo = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_sucursal",
+                    operation: "findUnique",
+                    where: { id: existing.corpo_id }
+                }
+            });
+            if (corpo) {
+                if (corpo.ejecutivoCuenta_id) {
+                    const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
+                      req,
+                      data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: corpo.ejecutivoCuenta_id } },
+                    });
+                    if (ejecutivo_cuenta_coordinador) {
+                        await createAccionPersonal(req, turno.id, tipoAccionId, permisoId, 0, 0, comentarios, 3, ejecutivo_cuenta_coordinador.coordinador_id, usuario_insercion);
+                    }
+                }
+            }
         }
 
         const updatedRecord = await callDynamicPrisma({

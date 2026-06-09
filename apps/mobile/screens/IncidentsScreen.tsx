@@ -18,6 +18,7 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { RootStackParamList } from '../App';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
@@ -352,6 +353,7 @@ export default function IncidentsScreen() {
     const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) {
+      setHasCurrentMarca(false);
       if (applyFiltersFromMarca) {
         setFilterEmpresaId(null);
         setFilterClienteId(null);
@@ -364,7 +366,11 @@ export default function IncidentsScreen() {
     }
     try {
       const current = JSON.parse(currentMarcaStr);
-      if (!current) return;
+      if (!current) {
+        setHasCurrentMarca(false);
+        return;
+      }
+      setHasCurrentMarca(true);
       const divFromMarca = getDivisionIdFromMarcaJson(current);
       const fe = numOrNull(current?.empresa?.id);
       const fc = numOrNull(current?.cliente?.id);
@@ -496,6 +502,27 @@ export default function IncidentsScreen() {
     setFilterSucursalId(null);
   };
 
+  const handleFilterHierarchyChange = (v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    filterSucursalIdRef.current = v.sucursalId;
+    setFilterSucursalId(v.sucursalId);
+    if (v.sucursalId != null) {
+      void fetchAll();
+    }
+  };
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFormEmpresaId(v.empresaId);
+    setFormClienteId(v.clienteId);
+    setFormDivisionId(v.divisionId);
+    setFormContratoId(v.contratoId);
+    setFormSucursalId(v.sucursalId);
+    setFormPuestoId(v.puestoId ?? null);
+  }, []);
+
   const clearFormHierarchy = () => {
     setFormEmpresaId(null);
     setFormClienteId(null);
@@ -507,7 +534,7 @@ export default function IncidentsScreen() {
 
   const getActiveListCorpoId = async (): Promise<number | null> => {
     const marcaStr = await AsyncStorage.getItem('current_marca');
-    if (!marcaStr) return null;
+    if (!marcaStr) return numOrNull(filterSucursalIdRef.current);
     try {
       const marca = JSON.parse(marcaStr);
       const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
@@ -515,20 +542,19 @@ export default function IncidentsScreen() {
       if (rn === 'OPERATIVO') return marcaCorpoId;
       return numOrNull(filterSucursalIdRef.current);
     } catch {
-      return null;
+      return numOrNull(filterSucursalIdRef.current);
     }
   };
 
   const resolveCorpoIdForSave = async (): Promise<number | null> => {
+    if (normalizeRoleName(currentRoleName) !== 'OPERATIVO') {
+      return numOrNull(formSucursalId);
+    }
     const marcaStr = await AsyncStorage.getItem('current_marca');
     if (!marcaStr) return null;
     try {
       const marca = JSON.parse(marcaStr);
-      const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
-      if (rn === 'OPERATIVO') {
-        return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
-      }
-      return numOrNull(formSucursalId) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+      return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
     } catch {
       return null;
     }
@@ -612,26 +638,27 @@ export default function IncidentsScreen() {
       setError(null);
       await loadCurrentRoleFromMarca();
 
+      let marca: any = null;
+      let isOperativo = normalizeRoleName(currentRoleName) === 'OPERATIVO';
+      let marcaCorpoId: number | null = null;
       const marcaStr = await AsyncStorage.getItem('current_marca');
-      if (!marcaStr) {
+      if (marcaStr) {
+        try {
+          marca = JSON.parse(marcaStr);
+          if (marca) {
+            setHasCurrentMarca(true);
+            const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
+            isOperativo = rn === 'OPERATIVO';
+            marcaCorpoId = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+          } else {
+            setHasCurrentMarca(false);
+          }
+        } catch {
+          setHasCurrentMarca(false);
+        }
+      } else {
         setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
       }
-
-      let marca: any;
-      try {
-        marca = JSON.parse(marcaStr);
-      } catch {
-        setHasCurrentMarca(false);
-        setIsLoading(false);
-        return;
-      }
-
-      setHasCurrentMarca(true);
-      const rn = normalizeRoleName(String(marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? ''));
-      const isOperativo = rn === 'OPERATIVO';
-      const marcaCorpoId = numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
       const listCorpoId = isOperativo ? marcaCorpoId : numOrNull(filterSucursalIdRef.current);
 
       const isConnected = await getConnectionStatus();
@@ -712,7 +739,11 @@ export default function IncidentsScreen() {
       void (async () => {
         await fetchMainStructure();
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          if (currentMarca?.id) {
+            await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          }
           listFiltersSyncedFromMarcaOnceRef.current = true;
         }
         if (cancelled) return;
@@ -2334,140 +2365,31 @@ export default function IncidentsScreen() {
             ) : (mainStructure ?? []).length === 0 ? (
               <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
             ) : (
-              <>
-                <ThemedText style={[styles.formLabel, { marginBottom: 4 }]}>Empresa</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={formEmpresaId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      handleFormEmpresaChange(next === 0 ? null : next);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                    {(mainStructure ?? []).map((e) => (
-                      <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-
-                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Cliente</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    enabled={formEmpresaId != null && formClienteOptions.length > 0}
-                    selectedValue={formClienteId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      handleFormClienteChange(next === 0 ? null : next);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item
-                      label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                      value={0}
-                      color="#000000"
-                    />
-                    {formClienteOptions.map((c) => (
-                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-
-                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>División</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    enabled={formClienteId != null && formDivisionOptions.length > 0}
-                    selectedValue={formDivisionId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      setFormDivisionId(next === 0 ? null : next);
-                      setFormContratoId(null);
-                      setFormSucursalId(null);
-                      setFormPuestoId(null);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item
-                      label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                      value={0}
-                      color="#000000"
-                    />
-                    {formDivisionOptions.map((d) => (
-                      <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-
-                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Contrato</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    enabled={formDivisionId != null && formContratoOptions.length > 0}
-                    selectedValue={formContratoId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      setFormContratoId(next === 0 ? null : next);
-                      setFormSucursalId(null);
-                      setFormPuestoId(null);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item
-                      label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                      value={0}
-                      color="#000000"
-                    />
-                    {formContratoOptions.map((c) => (
-                      <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-
-                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Sucursal (corpo) *</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    enabled={formContratoId != null && formSucursalOptions.length > 0}
-                    selectedValue={formSucursalId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      setFormSucursalId(next === 0 ? null : next);
-                      setFormPuestoId(null);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item
-                      label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                      value={0}
-                      color="#000000"
-                    />
-                    {formSucursalOptions.map((s) => (
-                      <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-
-                <ThemedText style={[styles.formLabel, { marginBottom: 4, marginTop: 8 }]}>Puesto *</ThemedText>
-                <ThemedView style={styles.pickerContainer}>
-                  <Picker
-                    enabled={formSucursalId != null && formPuestoOptions.length > 0}
-                    selectedValue={formPuestoId ?? 0}
-                    onValueChange={(v) => {
-                      const next = Number(v) || 0;
-                      setFormPuestoId(next === 0 ? null : next);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item
-                      label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
-                      value={0}
-                      color="#000000"
-                    />
-                    {formPuestoOptions.map((p) => (
-                      <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              </>
+              <HierarchyPickerFields
+                structure={mainStructure}
+                levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                emptyPickerValue={0}
+                values={{
+                  empresaId: formEmpresaId,
+                  clienteId: formClienteId,
+                  divisionId: formDivisionId,
+                  contratoId: formContratoId,
+                  sucursalId: formSucursalId,
+                  puestoId: formPuestoId,
+                }}
+                onChange={handleFormHierarchyChange}
+                labels={{
+                  empresa: 'Empresa *',
+                  cliente: 'Cliente *',
+                  division: 'División *',
+                  contrato: 'Contrato *',
+                  sucursal: 'Sucursal (corpo) *',
+                  puesto: 'Puesto *',
+                }}
+                renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                pickerStyle={styles.picker}
+                fieldGroupStyle={styles.formGroup}
+              />
             )}
           </ThemedView>
         ) : null}
@@ -2672,27 +2594,6 @@ export default function IncidentsScreen() {
     );
   }
 
-  if (!hasCurrentMarca) {
-    return (
-      <ThemedView style={styles.container}>
-        <AppHeader onMenuPress={handleMenuPress} title="Incidentes" />
-        <ThemedView style={styles.noMarcaContainer}>
-          <Ionicons name="alert-circle-outline" size={80} color="#FF9500" />
-          <ThemedText style={styles.noMarcaTitle}>No hay marca registrada</ThemedText>
-          <ThemedText style={styles.noMarcaMessage}>
-            Debes registrar una marca de ingreso antes de acceder a Incidentes.
-          </ThemedText>
-          <TouchableOpacity style={styles.goBackButton} onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={20} color="#000000" />
-            <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-        <AppFooter />
-        <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="Incidents" />
-      </ThemedView>
-    );
-  }
-
   return (
     <ThemedView style={styles.container}>
       <AppHeader onMenuPress={handleMenuPress} title="Incidentes" />
@@ -2709,6 +2610,14 @@ export default function IncidentsScreen() {
           {error && (
             <ThemedView style={styles.errorBox}>
               <ThemedText style={styles.errorText}>{error}</ThemedText>
+            </ThemedView>
+          )}
+
+          {!hasCurrentMarca && (
+            <ThemedView style={styles.noMarcaContainer}>
+              <ThemedText style={styles.noMarcaMessage}>
+                No hay marca activa. Puede seleccionar la jerarquía manualmente en los filtros.
+              </ThemedText>
             </ThemedView>
           )}
 
@@ -2730,7 +2639,7 @@ export default function IncidentsScreen() {
               </TouchableOpacity>
               {isFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
-                  {hasCurrentMarca && !isOperativoUser ? (
+                  {!isOperativoUser ? (
                     <>
                       <ThemedText style={styles.filterLabel}>
                         Ubicación del listado (empresa → sucursal / corpo)
@@ -2743,120 +2652,23 @@ export default function IncidentsScreen() {
                       ) : (mainStructure ?? []).length === 0 ? (
                         <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
                       ) : (
-                        <>
-                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              selectedValue={filterEmpresaId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                handleFilterEmpresaChange(next === 0 ? null : next);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                              {filterEmpresaOptions.map((e) => (
-                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-
-                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
-                              selectedValue={filterClienteId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                handleFilterClienteChange(next === 0 ? null : next);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterClienteOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-
-                          <ThemedText style={styles.filterLabel}>División</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
-                              selectedValue={filterDivisionId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterDivisionId(next === 0 ? null : next);
-                                setFilterContratoId(null);
-                                filterSucursalIdRef.current = null;
-                                setFilterSucursalId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterDivisionOptionsMemo.map((d) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-
-                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
-                              selectedValue={filterContratoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterContratoId(next === 0 ? null : next);
-                                filterSucursalIdRef.current = null;
-                                setFilterSucursalId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterContratoOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-
-                          <ThemedText style={styles.filterLabel}>Sucursal (sincroniza listado)</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
-                              selectedValue={filterSucursalId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                const nextSuc = next === 0 ? null : next;
-                                filterSucursalIdRef.current = nextSuc;
-                                setFilterSucursalId(nextSuc);
-                                void fetchAll();
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterSucursalOptionsMemo.map((s) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </>
+                        <HierarchyPickerFields
+                          structure={mainStructure}
+                          levels={['cliente', 'contrato', 'sucursal']}
+                          emptyPickerValue={0}
+                          values={{
+                            empresaId: filterEmpresaId,
+                            clienteId: filterClienteId,
+                            divisionId: filterDivisionId,
+                            contratoId: filterContratoId,
+                            sucursalId: filterSucursalId,
+                          }}
+                          onChange={handleFilterHierarchyChange}
+                          labels={{ sucursal: 'Sucursal (sincroniza listado)' }}
+                          renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                          pickerStyle={styles.picker}
+                          fieldGroupStyle={styles.formGroup}
+                        />
                       )}
                     </>
                   ) : null}

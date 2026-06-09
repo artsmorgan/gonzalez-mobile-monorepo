@@ -1,6 +1,7 @@
 import { loadMainStructureFragmentsObject, writeMainStructureFragmentPatch } from '@/hooks/mainStructureFragmentsStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { readPuestoArticulosList, writePuestoArticulosList } from '@/hooks/mantenimientoEquipoPuestoArticulosCache';
+import { sanitizeArticuloNodeForCache } from '@/utils/articuloMantenimientoFiles';
 
 /** Misma forma que en Checklist/Activities: `puesto.articulos` dentro del árbol mergeado. */
 export function extractArticulosForPuestoFromTree(tree: any[], puestoId: number): any[] | null {
@@ -51,7 +52,7 @@ export function reportItemToArticuloTreeNode(item: ReportListItem): any {
       : Array.isArray(item.mantenimientos) && item.mantenimientos.length > 0
         ? item.mantenimientos[0]
         : null;
-  return {
+  return sanitizeArticuloNodeForCache({
     id: item.estructura_id,
     tipo: expectedTipo,
     nombre: item.articulo_nombre,
@@ -63,7 +64,7 @@ export function reportItemToArticuloTreeNode(item: ReportListItem): any {
     movimientos: item.movimientos ?? [],
     ultimo_mantenimiento: ultimo,
     ultimo_registro_mantenimiento: ultimo,
-  };
+  });
 }
 
 /**

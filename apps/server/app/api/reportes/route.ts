@@ -28,6 +28,15 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
     }
     if (multi === "1" || multi === "true") out.soloMultiDispositivo = true;
 
+    const lmEmp = searchParams.get("listLmEmpleadoIds");
+    if (lmEmp && lmEmp.trim() !== "") {
+        const ids = lmEmp
+            .split(",")
+            .map((s) => Number(s.trim()))
+            .filter((n) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) out.empleadoIds = [...new Set(ids)];
+    }
+
     const aDesde = searchParams.get("listActaCreadoDesde");
     const aHasta = searchParams.get("listActaCreadoHasta");
     const vDesde = searchParams.get("listVulnCreadoDesde");

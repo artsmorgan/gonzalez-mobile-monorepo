@@ -18,6 +18,7 @@ import SignatureScreen from "react-native-signature-canvas";
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -933,7 +934,7 @@ export default function InductionTourRecordScreen() {
       const isOperativo = rn === 'OPERATIVO';
 
       let syncedFilterCorpoId: number | null = null;
-      if (syncListFilters && !isOperativo) {
+      if (syncListFilters && !isOperativo && current?.id) {
         setFilterEmpresaId(numOrNull(current?.empresa?.id));
         setFilterClienteId(numOrNull(current?.cliente?.id));
         setFilterDivisionId(getDivisionIdFromMarcaJson(current));
@@ -1050,6 +1051,26 @@ export default function InductionTourRecordScreen() {
   useEffect(() => {
     filterCorpoIdRef.current = filterCorpoId;
   }, [filterCorpoId]);
+
+  const applyFormDivisionSideEffects = useCallback((divisionId: number | null) => {
+    if (divisionId === 4) setDivision('Seguridad');
+    else if (divisionId === 5) setDivision('Aseo y limpieza');
+    else setDivision('Otros');
+    const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map((tema) => ({
+      tema,
+      respuesta: '',
+      comentarios: '',
+    }));
+    setTemasDesarrollados(temasPredefinidos);
+    setExpandedTemaIndices(temasPredefinidos.map((_, i) => i));
+    const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map((aspecto) => ({
+      aspecto,
+      respuesta: '',
+      comentarios: '',
+    }));
+    setAspectosEspecificos(aspectosPredefinidos);
+    setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
+  }, []);
 
   // Nodos computados para jerarquía del formulario
   const formEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
@@ -1211,13 +1232,60 @@ export default function InductionTourRecordScreen() {
     }
   }, [refreshAccessToken, logout, filterCorpoId, marcaCorpoId, marcaPuestoId]);
 
+  const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    filterCorpoIdRef.current = v.sucursalId;
+    setFilterCorpoId(v.sucursalId);
+    if (v.sucursalId != null) {
+      void fetchRecords({ corpoId: v.sucursalId });
+    }
+  }, [fetchRecords]);
+
+  const handleFormHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      const divisionChanged = v.divisionId !== formDivisionId;
+      const empresaOrClienteChanged = v.empresaId !== formEmpresaId || v.clienteId !== formClienteId;
+      const plazaChanged = v.plazaId !== formPlazaId;
+
+      setFormEmpresaId(v.empresaId);
+      setFormClienteId(v.clienteId);
+      setFormContratoId(v.contratoId);
+      setFormCorpoId(v.sucursalId);
+      setFormPuestoId(v.puestoId ?? null);
+
+      if (empresaOrClienteChanged) {
+        setDivision('Otros');
+      }
+      setFormDivisionId(v.divisionId);
+      if (divisionChanged) {
+        applyFormDivisionSideEffects(v.divisionId);
+      }
+
+      setFormPlazaId(v.plazaId ?? null);
+      if (plazaChanged) {
+        setSelectedEmpleadoId(null);
+        empleadoIdRef.current = null;
+        setFirmaEmpleado(null);
+        setFirmaEmpleadoHash(null);
+        setFirmaEmpleadoManual(null);
+        setFirmaEmpleadoWarning(null);
+      }
+    },
+    [formDivisionId, formEmpresaId, formClienteId, formPlazaId, applyFormDivisionSideEffects]
+  );
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       void (async () => {
         let fetchListOpts: { corpoId?: number | null } | undefined;
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          const ctxFirst = await loadMarcaContext({ syncListFilters: true });
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          const ctxFirst = await loadMarcaContext({ syncListFilters: !!(currentMarca?.id) });
           listFiltersSyncedFromMarcaOnceRef.current = true;
           if (!ctxFirst.isOperativo) fetchListOpts = { corpoId: ctxFirst.syncedFilterCorpoId };
         } else {
@@ -2709,7 +2777,7 @@ export default function InductionTourRecordScreen() {
             <ThemedView style={styles.noMarcaContainer}>
               <ThemedText style={styles.noMarcaTitle}>Marca no seleccionada</ThemedText>
               <ThemedText style={styles.noMarcaMessage}>
-                No se encontró una marca seleccionada. Por favor, selecciona una marca desde el menú principal.
+                No hay marca activa. Puede seleccionar la jerarquía manualmente en los filtros.
               </ThemedText>
             </ThemedView>
           )}
@@ -2748,187 +2816,33 @@ export default function InductionTourRecordScreen() {
                 </ThemedView>
               ) : (
                 <>
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Empresa *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formEmpresas.length > 0}
-                        selectedValue={formEmpresaId || ''}
-                        onValueChange={(value) => {
-                          setFormEmpresaId(value && value !== '' ? Number(value) : null);
-                          setFormClienteId(null);
-                          setFormDivisionId(null);
-                          setFormContratoId(null);
-                          setFormCorpoId(null);
-                          setFormPuestoId(null);
-                          setFormPlazaId(null);
-                          setDivision('Otros');
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                        {formEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Cliente *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formEmpresaId !== null}
-                        selectedValue={formClienteId || ''}
-                        onValueChange={(value) => {
-                          setFormClienteId(value && value !== '' ? Number(value) : null);
-                          setFormDivisionId(null);
-                          setFormContratoId(null);
-                          setFormCorpoId(null);
-                          setFormPuestoId(null);
-                          setFormPlazaId(null);
-                          setDivision('Otros');
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formEmpresaId ? "Seleccionar..." : "Seleccione empresa primero"} value="" />
-                        {formClientes.map((c: any) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>División *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formClienteId !== null}
-                        selectedValue={formDivisionId || ''}
-                        onValueChange={(value) => {
-                          const divisionId = value && value !== '' ? Number(value) : null;
-                          setFormDivisionId(divisionId);
-                          // Mapear ID de división al nombre
-                          if (divisionId === 4) {
-                            setDivision('Seguridad');
-                          } else if (divisionId === 5) {
-                            setDivision('Aseo y limpieza');
-                          } else {
-                            setDivision('Otros');
-                          }
-                          // Resetear temas y aspectos cuando cambia la división
-                          const temasPredefinidos: TemaDesarrollado[] = TEMAS_PREDEFINIDOS.map(tema => ({
-                            tema: tema,
-                            respuesta: '',
-                            comentarios: '',
-                          }));
-                          setTemasDesarrollados(temasPredefinidos);
-                          setExpandedTemaIndices(temasPredefinidos.map((_, i) => i));
-                          const aspectosPredefinidos: AspectoEspecifico[] = ASPECTOS_PREDEFINIDOS.map(aspecto => ({
-                            aspecto: aspecto,
-                            respuesta: '',
-                            comentarios: '',
-                          }));
-                          setAspectosEspecificos(aspectosPredefinidos);
-                          setExpandedAspectoIndices(aspectosPredefinidos.map((_, i) => i));
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formClienteId ? "Seleccionar..." : "Seleccione cliente primero"} value="" />
-                        {formDivisiones.map((d: any) => (
-                          <Picker.Item key={d.id} label={d.nombre} value={d.id} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Contrato *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formClienteId !== null}
-                        selectedValue={formContratoId || ''}
-                        onValueChange={(value) => {
-                          setFormContratoId(value && value !== '' ? Number(value) : null);
-                          setFormCorpoId(null);
-                          setFormPuestoId(null);
-                          setFormPlazaId(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formClienteId ? "Seleccionar..." : "Seleccione cliente primero"} value="" />
-                        {formContratos.map((c: any) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formContratoId !== null}
-                        selectedValue={formCorpoId || ''}
-                        onValueChange={(value) => {
-                          setFormCorpoId(value && value !== '' ? Number(value) : null);
-                          setFormPuestoId(null);
-                          setFormPlazaId(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formContratoId ? "Seleccionar..." : "Seleccione contrato primero"} value="" color="#000000" />
-                        {formSucursales.map((s: any) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Puesto</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formCorpoId !== null}
-                        selectedValue={formPuestoId || ''}
-                        onValueChange={(value) => {
-                          setFormPuestoId(value && value !== '' ? Number(value) : null);
-                          setFormPlazaId(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formCorpoId ? "Seleccionar..." : "Seleccione sucursal primero"} value="" color="#000000" />
-                        {formPuestos.map((p: any) => (
-                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Plaza *</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        enabled={formCorpoId !== null}
-                        selectedValue={formPlazaId || ''}
-                        onValueChange={(value) => {
-                          setFormPlazaId(value && value !== '' ? Number(value) : null);
-                          setSelectedEmpleadoId(null);
-                          empleadoIdRef.current = null;
-                          setFirmaEmpleado(null);
-                          setFirmaEmpleadoHash(null);
-                          setFirmaEmpleadoManual(null);
-                          setFirmaEmpleadoWarning(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={formCorpoId ? (formPuestoId ? "Seleccionar..." : "Seleccione puesto primero (opcional)") : "Seleccione sucursal primero"} value="" />
-                        {formPlazas.map((p: any) => (
-                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
+                  <HierarchyPickerFields
+                    structure={structure}
+                    levels={['cliente', 'contrato', 'sucursal', 'puesto', 'plaza']}
+                    isLoading={isLoadingStructure}
+                    values={{
+                      empresaId: formEmpresaId,
+                      clienteId: formClienteId,
+                      divisionId: formDivisionId,
+                      contratoId: formContratoId,
+                      sucursalId: formCorpoId,
+                      puestoId: formPuestoId,
+                      plazaId: formPlazaId,
+                    }}
+                    onChange={handleFormHierarchyChange}
+                    labels={{
+                      empresa: 'Empresa *',
+                      cliente: 'Cliente *',
+                      division: 'División *',
+                      contrato: 'Contrato *',
+                      sucursal: 'Sucursal *',
+                      puesto: 'Puesto',
+                      plaza: 'Plaza *',
+                    }}
+                    renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                    pickerStyle={styles.picker}
+                    fieldGroupStyle={styles.formGroup}
+                  />
 
                   {/* Empleado */}
                   <ThemedView style={styles.formGroup}>
@@ -3193,117 +3107,21 @@ export default function InductionTourRecordScreen() {
                   </ThemedView>
                   {isHierarchyFiltersExpanded && (
                     <ThemedView style={styles.filtersContent}>
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterEmpresaId || ''}
-                            onValueChange={(value) => {
-                              setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                              setFilterClienteId(null);
-                              setFilterDivisionId(null);
-                              setFilterContratoId(null);
-                              setFilterCorpoId(null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                            {filterEmpresas.map((e: any) => (
-                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      {filterEmpresaId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterClienteId || ''}
-                              onValueChange={(value) => {
-                                setFilterClienteId(value && value !== '' ? Number(value) : null);
-                                setFilterDivisionId(null);
-                                setFilterContratoId(null);
-                                setFilterCorpoId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                              {filterClientes.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
-                      {filterClienteId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterClienteId !== null}
-                              selectedValue={filterDivisionId || ''}
-                              onValueChange={(value) => {
-                                setFilterDivisionId(value && value !== '' ? Number(value) : null);
-                                setFilterContratoId(null);
-                                setFilterCorpoId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                              {filterDivisiones.map((d: any) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
-                      {filterClienteId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterContratoId || ''}
-                              onValueChange={(value) => {
-                                setFilterContratoId(value && value !== '' ? Number(value) : null);
-                                setFilterCorpoId(null);
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                              {filterContratos.map((c: any) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
-                      {filterContratoId && (
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterCorpoId || ''}
-                              onValueChange={(value) => {
-                                const nextCorpo = value && value !== '' ? Number(value) : null;
-                                setFilterCorpoId(nextCorpo);
-                                void fetchRecords({ corpoId: nextCorpo });
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                              {filterSucursales.map((s: any) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      )}
-
+                      <HierarchyPickerFields
+                        structure={structure}
+                        levels={['cliente', 'contrato', 'sucursal']}
+                        values={{
+                          empresaId: filterEmpresaId,
+                          clienteId: filterClienteId,
+                          divisionId: filterDivisionId,
+                          contratoId: filterContratoId,
+                          sucursalId: filterCorpoId,
+                        }}
+                        onChange={handleFilterHierarchyChange}
+                        renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}:</ThemedText>}
+                        pickerStyle={styles.picker}
+                        fieldGroupStyle={styles.filterGroup}
+                      />
                     </ThemedView>
                   )}
                 </ThemedView>

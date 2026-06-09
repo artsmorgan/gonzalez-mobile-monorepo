@@ -252,6 +252,13 @@ import {
     type TiempoAlmuerzoOrderKey,
 } from "../../../../utils/reports-functions/tiempoAlmuerzoReport";
 import {
+    filtersMatchLoginMarcaListQuery,
+    hasLoginMarcaListModuleFiltersContent,
+    normalizeLoginMarcaFilters,
+    queryLoginMarcaRows,
+    type LoginMarcaOrderKey,
+} from "../../../../utils/reports-functions/loginMarcaReport";
+import {
     filtersMatchSolicitudesPermisoListQuery,
     hasSolicitudesPermisoListModuleFiltersContent,
     normalizeSolicitudesPermisoFilters,
@@ -591,6 +598,7 @@ export async function POST(req: NextRequest) {
                 where: {
                     OR: [
                         { codigo: { contains: q } },
+                        { cedula: { contains: q } },
                         { nombre: { contains: q } },
                         { primer_apellido: { contains: q } },
                         { segundo_apellido: { contains: q } },
@@ -1052,6 +1060,13 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
         }
 
+        if (op === "previewLoginMarca") {
+            const mf = normalizeLoginMarcaFilters(coerceModuleFiltersInput(payload.moduleFilters));
+            const orderKey = (payload.order_by || "cedula_empleado") as LoginMarcaOrderKey;
+            const rows = await queryLoginMarcaRows(prisma, mf, orderKey);
+            return NextResponse.json({ status: true, data: rows.slice(0, 100), count: rows.length }, { status: 200 });
+        }
+
         if (op === "previewSolicitudesPermiso") {
             const mf = normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.moduleFilters));
             const orderKey = (payload.order_by || "empresa_id") as SolicitudesPermisoOrderKey;
@@ -1484,6 +1499,18 @@ export async function POST(req: NextRequest) {
                         }
                     });
                 }
+            } else if (payload.modulo === "login_marca") {
+                const listLm = normalizeLoginMarcaFilters(coerceModuleFiltersInput(payload.listModuleFilters));
+                if (hasLoginMarcaListModuleFiltersContent(listLm)) {
+                    rows = rows.filter((row) => {
+                        try {
+                            const p = JSON.parse(row.filters || "{}");
+                            return filtersMatchLoginMarcaListQuery(p, listLm);
+                        } catch {
+                            return false;
+                        }
+                    });
+                }
             } else if (payload.modulo === "solicitudes_permiso") {
                 const listSp = normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.listModuleFilters));
                 if (hasSolicitudesPermisoListModuleFiltersContent(listSp)) {
@@ -1550,11 +1577,12 @@ export async function POST(req: NextRequest) {
                 modulo === "notas_voz" ||
                 modulo === "cambios_ubicacion_puesto" ||
                 modulo === "registro_capacitaciones" ||
-                modulo === "tiempo_almuerzo"
+                modulo === "tiempo_almuerzo" ||
+                modulo === "login_marca"
             ) {
                 tipo = "Grupal";
             }
-            if (modulo === "articulos_puesto" || modulo === "mantenimiento_articulos" || modulo === "registro_vehiculos_corporativos") {
+            if (modulo === "articulos_puesto" || modulo === "mantenimiento_articulos" || modulo === "registro_vehiculos_corporativos" || modulo === "login_marca") {
                 tipo = "Consolidado";
             }
             if (modulo === "revision_vehiculos" && tipo !== "Individual") {
@@ -1580,6 +1608,7 @@ export async function POST(req: NextRequest) {
                 modulo === "registro_capacitaciones" ||
                 modulo === "registro_induccion_general" ||
                 modulo === "tiempo_almuerzo" ||
+                modulo === "login_marca" ||
                 modulo === "solicitudes_permiso" ||
                 modulo === "visitas_vehiculos" ||
                 modulo === "manuales_puesto" ||
@@ -1596,13 +1625,15 @@ export async function POST(req: NextRequest) {
                 modulo === "checklist_supervision"
                     ? String(
                           payload.order_by ||
-                              (modulo === "incidentes"
-                                  ? "created_at"
-                                  : modulo === "bitacora_novedades"
-                                    ? "titulo"
-                                    : modulo === "manuales_puesto"
-                                      ? "title"
-                                      : "empresa_id"),
+                              (modulo === "login_marca"
+                                  ? "cedula_empleado"
+                                  : modulo === "incidentes"
+                                    ? "created_at"
+                                    : modulo === "bitacora_novedades"
+                                      ? "titulo"
+                                      : modulo === "manuales_puesto"
+                                        ? "title"
+                                        : "empresa_id"),
                       ).trim()
                     : modulo === "actividades"
                       ? String(payload.order_by || "fecha").trim()
@@ -1643,6 +1674,8 @@ export async function POST(req: NextRequest) {
                                     ? normalizeRegistroInduccionGeneralFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "tiempo_almuerzo"
                                     ? normalizeTiempoAlmuerzoFilters(coerceModuleFiltersInput(payload.moduleFilters))
+                                  : modulo === "login_marca"
+                                    ? normalizeLoginMarcaFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "solicitudes_permiso"
                                     ? normalizeSolicitudesPermisoFilters(coerceModuleFiltersInput(payload.moduleFilters))
                                   : modulo === "mutuos_acuerdos"

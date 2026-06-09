@@ -134,8 +134,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, error: 'Server URL not configured' };
       }
 
-      const deviceName = Device.deviceName;
-
       console.log(Device.brand);
       console.log(Device.modelName);
 
@@ -344,6 +342,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       if (!apiUrl) {
         return false;
       }
+      
+      console.log(Device.brand);
+      console.log(Device.modelName);
 
       // Make API call to refresh the token
       const response = await fetch(`${apiUrl}/api/auth/refresh-token`, {
@@ -353,7 +354,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          refreshToken: tokenToUse
+          refreshToken: tokenToUse,
+          deviceName: `${Device.brand}-${Device.modelName}`
         }),
       });
 

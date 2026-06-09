@@ -62,7 +62,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           const currentMarcaData = JSON.parse(currentMarca);
           setRole(currentMarcaData.roleDivision.role.nombre);
           setDivision(currentMarcaData.roleDivision.division.nombre);
-          setHasCurrentMarca(currentMarcaData.hora_entrada_digitada != null);
+          setHasCurrentMarca(true);
           setCurrentMarca(currentMarcaData);
           const lunchTime = await AsyncStorage.getItem('lunch_time_config');
           if (lunchTime) {
@@ -415,7 +415,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     if (!isRole) {
       return true;
     }
-    return hasCurrentMarca && currentMarca?.hora_entrada_digitada != null && currentMarca?.hora_salida_digitada == null;
+    return hasCurrentMarca;
   };
 
   if (!shouldRender) {

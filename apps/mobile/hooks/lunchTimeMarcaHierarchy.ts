@@ -1,5 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+export const LUNCH_TIMER_COMPLETING_KEY = 'lunch_timer_completing';
+
+export function computeLunchEndTimeMs(tempState: {
+  currentTimestamp: number;
+  remainingSeconds: number;
+}): number {
+  return Number(tempState.currentTimestamp) + Number(tempState.remainingSeconds);
+}
+
+export async function tryAcquireLunchTimerCompletionLock(): Promise<boolean> {
+  const locked = await AsyncStorage.getItem(LUNCH_TIMER_COMPLETING_KEY);
+  if (locked === '1') return false;
+  await AsyncStorage.setItem(LUNCH_TIMER_COMPLETING_KEY, '1');
+  return true;
+}
+
+export async function releaseLunchTimerCompletionLock(): Promise<void> {
+  await AsyncStorage.removeItem(LUNCH_TIMER_COMPLETING_KEY);
+}
+
 function numOrNull(v: unknown): number | null {
   if (v === undefined || v === null || v === '') return null;
   const n = Number(v);
@@ -37,9 +57,13 @@ export function extractLunchTimeHierarchyFromMarca(marca: any): LunchTimeMarcaHi
   };
 }
 
+export function extractMarcaIdFromMarca(marca: any): number | null {
+  return numOrNull(marca?.id ?? marca?.marca_id);
+}
+
 /**
- * Añade al payload de POST `/api/lunch-time` los ids de jerarquía leídos de `current_marca`.
- * Se invoca en `saveLunchTime` para almuerzo automático, manual, cola offline y verificación en App.
+ * Añade al payload de POST `/api/lunch-time` los ids de jerarquía y `marca_id` leídos de `current_marca`.
+ * Se invoca en `saveLunchTime` y antes de guardar/enviar desde la pantalla de almuerzo.
  */
 export async function mergeCurrentMarcaHierarchyIntoLunchRequest(
   requestData: Record<string, any>
@@ -48,6 +72,8 @@ export async function mergeCurrentMarcaHierarchyIntoLunchRequest(
   if (!raw) return;
   try {
     const marca = JSON.parse(raw);
+    const marcaId = extractMarcaIdFromMarca(marca);
+    if (marcaId != null) requestData.marca_id = marcaId;
     const h = extractLunchTimeHierarchyFromMarca(marca);
     if (h.empresa_id != null) requestData.empresa_id = h.empresa_id;
     if (h.cliente_id != null) requestData.cliente_id = h.cliente_id;

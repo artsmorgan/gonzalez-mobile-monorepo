@@ -24,9 +24,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const latitude = searchParams.get("lat");
         const longitude = searchParams.get("long");
 
-        if (!latitude || !longitude) {
-            return NextResponse.json({ status: false, message: "Latitude y longitude no especificadas" }, { status: 200 });
-        }
+        // Ubicación: validación en el dispositivo; lat/long opcionales en este endpoint.
 
         const empleado = await callDynamicPrisma({
             req,
@@ -56,16 +54,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         };
 
         const buildMarcaDateTime = (marca: { fecha: Date; hora_inicio: Date | null }) => {
-            if (!marca.hora_inicio) return null;
+            if (!marca.hora_inicio) marca.hora_inicio = new Date("1970-01-01 00:00:00");
             const fechaIso = new Date(marca.fecha).toISOString().split("T")[0];
             const horaIso = new Date(marca.hora_inicio).toISOString().split("T")[1];
             return new Date(`${fechaIso}T${horaIso}`);
         };
-
-        console.log("now", now);
-        console.log("nowPlus15", nowPlus15);
-        console.log("currentDate", currentDate);
-        console.log("currentTime", currentTime);
 
         let proximasMarcas = await callDynamicPrisma({
             req,
@@ -79,6 +72,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                         {
                             fecha: {
                                 gte: currentDate,
+                            }
+                        },
+                        {
+                            tipo_turno: {
+                                not: "L",
+                            },
+                        },
+                        {
+                            tipo_turno: {
+                                not: null,
                             },
                         },
                     ],
@@ -123,6 +126,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                                     lte: currentDate,
                                 },
                             },
+                            {
+                                tipo_turno: {
+                                    not: "L",
+                                },
+                            },
+                            {
+                                tipo_turno: {
+                                    not: null,
+                                },
+                            },
                         ],
                     },
                     orderBy: [
@@ -139,13 +152,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             if (Array.isArray(ultimasMarcas)) {
                 for (const marca of ultimasMarcas) {
                     const marcaDateTime = buildMarcaDateTime(marca);
-                    console.log("marcaDateTime", marcaDateTime);
                     if (!marcaDateTime) {
                         continue;
                     }
                     if (marcaDateTime < now) {
                         marcaDia = marca;
-                        console.log("Usaremos última anterior al momento actual");
                         break;
                     }
                 }
@@ -154,22 +165,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
-        }
-
-        console.log("Marca dia", marcaDia.id);
-
-        if (marcaDia.empleadoFijo_id == empleado.id && marcaDia.empleadoReemplaza_id != null) {
-            const empleadoReemplaza = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: marcaDia.empleadoReemplaza_id }
-                }
-            });
-            const nombreReemplaza = empleadoReemplaza ? empleadoReemplaza.nombre + " " + empleadoReemplaza.primer_apellido + " " + empleadoReemplaza.segundo_apellido : "con código " + empleadoReemplaza.codigo;
-            return NextResponse.json({ status: false, message: "El empleado " + nombreReemplaza + " está cubriendo tu turno" }, { status: 200 });
         }
 
         const empresa = await callDynamicPrisma({
@@ -224,43 +219,134 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
 
-        const puesto = await callDynamicPrisma({
+        let puesto = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
                 table: "e_estructura_puesto",
                 operation: "findUnique",
-                where: { id: marcaDia.puesto_id }
+                where: { id: marcaDia.puesto_id ?? 0 }
             }
         });
-        if (!puesto) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
-        }
 
-        const plaza = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_plazas",
-                operation: "findUnique",
-                where: { id: marcaDia.plaza_id }
+        let plaza = null;
+        if (puesto) {
+            plaza = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_plazas",
+                    operation: "findUnique",
+                    where: { id: marcaDia.plaza_id ?? 0 }
+                }
+            });
+            if (!plaza) {
+                plaza = null;
             }
-        });
-        if (!plaza) {
-            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+        }
+        else {
+            puesto = null;
         }
 
-        const horario = await callDynamicPrisma({
+        let horario = await callDynamicPrisma({
             req,
             data: {
                 action: "GET",
                 table: "c_horario",
                 operation: "findUnique",
-                where: { id: marcaDia.horario_id }
+                where: { id: marcaDia.horario_id ?? 0 }
             }
         });
+
         if (!horario) {
-            return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
+            horario = null;
+        }
+
+        const roleDivision = await getRoleDivision(req, plaza, contrato);
+
+        const marca_return = {
+            id: marcaDia.id,
+            hora_entrada_digitada: marcaDia.hora_entrada_digitada ?? null,
+            hora_salida_digitada: marcaDia.hora_salida_digitada ?? null,
+            hora_inicio: marcaDia.hora_inicio,
+            hora_fin: marcaDia.hora_fin,
+            fecha: marcaDia.fecha,
+            tipo_turno: marcaDia.tipo_turno,
+            horas_duracion: marcaDia.horas_duracion,
+            roleDivision: roleDivision,
+            empleadoFijo_id: empleado.id,
+            empresa: {
+                id: empresa.id,
+                nombre: empresa.nombre
+            },
+            cliente: {
+                id: cliente.id,
+                nombre: cliente.nombre
+            },
+            contrato: {
+                id: contrato.id,
+                nombre: contrato.nombre
+            },
+            corpo: {
+                id: corpo.id,
+                nombre: corpo.nombre,
+                ubicacion: {
+                    lat: corpo.coordenadas_gpslat,
+                    lng: corpo.coordenadas_gpslng
+                }
+            },
+            puesto: {
+                id: puesto?.id ?? 0,
+                nombre: puesto?.nombre ?? "Indefinido",
+                tiene_relevo: puesto?.tiene_relevo ?? false,
+                ubicacion: {
+                    lat: puesto?.coordenadas_gpslat ? parseFloat(puesto?.coordenadas_gpslat) : null,
+                    lng: puesto?.coordenadas_gpslng ? parseFloat(puesto?.coordenadas_gpslng) : null
+                }
+            },
+            plaza: {
+                id: plaza?.id ?? 0,
+                nombre: plaza?.nombre ?? "Indefinido"
+            },
+            horario: {
+                id: horario?.id ?? 0,
+                nombre: horario?.titulo ?? "Indefinido"
+            }
+        };
+
+        console.log("marca_return: ", marca_return);
+
+        const blockedMarcaResponse = (
+            message: string,
+            extra: Record<string, unknown> = {}
+        ) =>
+            NextResponse.json(
+                {
+                    status: false,
+                    mark_blocked: true,
+                    current_time: currentTime,
+                    marca: marca_return,
+                    marca_id: marca_return.id,
+                    message,
+                    ...extra,
+                },
+                { status: 200 }
+            );
+
+        if (marcaDia.empleadoFijo_id == empleado.id && marcaDia.empleadoReemplaza_id != null) {
+            const empleadoReemplaza = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_empleado",
+                    operation: "findUnique",
+                    where: { id: marcaDia.empleadoReemplaza_id }
+                }
+            });
+            const nombreReemplaza = empleadoReemplaza
+                ? empleadoReemplaza.nombre + " " + empleadoReemplaza.primer_apellido + " " + empleadoReemplaza.segundo_apellido
+                : "con código " + empleadoReemplaza.codigo;
+            return blockedMarcaResponse("El empleado " + nombreReemplaza + " está cubriendo tu turno");
         }
         
         // Obtener las solicitudes de permiso aprobadas del empleado cuyo rango de fechas contenga la fecha de la marca
@@ -272,7 +358,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 operation: "findMany",
                 where: {
                     empleado_id: empleado.id,
-                    plaza_id: marcaDia.plaza_id,
+                    plaza_id: marcaDia.plaza_id ?? 0,
                     fecha_inicio: {
                         lte: marcaDia.fecha
                     },
@@ -285,21 +371,30 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         });
 
         if (solicitudesPermiso.length > 0) {
-            return NextResponse.json({ status: false, message: "Tienes un permiso aprobado para el puesto " + puesto.nombre + " para el día " + new Date(marcaDia.fecha).toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) }, { status: 200 });
+            let puesto_name = puesto?.nombre ?? "Indefinido";
+            return blockedMarcaResponse(
+                "Tienes un permiso aprobado para el puesto " +
+                    puesto_name +
+                    " para el día " +
+                    new Date(marcaDia.fecha).toLocaleDateString("es-ES", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        year: "numeric",
+                    })
+            );
         }
 
         const estado = marcaDia.hora_entrada_digitada != null ? "Ingresado" : "No ingresado";
         if (marcaDia.hora_salida_digitada != null) {
-            return NextResponse.json({ status: false, absent: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
+            return blockedMarcaResponse("Ya has marcado la salida", { absent: false });
         }
 
         let change_available = true;
         let is_late = false;
         let next_time = null;
-        if (marcaDia.hora_inicio && marcaDia.hora_fin) {
 
             const fecha_marca_string = marcaDia.fecha.split("T")[0];
-            const hora_inicio_string = marcaDia.hora_inicio.split("T")[1];
+            const hora_inicio_string = marcaDia.hora_inicio ? marcaDia.hora_inicio.split("T")[1].split(".")[0] : "00:00:00"; 
             const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string);
 
             let fin_marca = null;
@@ -309,17 +404,19 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             }
             else {
                 // Definimos si marcaDia.hora_inicio es mayor a marcaDia.hora_fin, si es así, entonces la hora_fin es el siguiente día
-                if (new Date(marcaDia.hora_inicio) > new Date(marcaDia.hora_fin)) {
-                    fin_marca = new Date(marcaDia.fecha.setDate(marcaDia.fecha.getDate() + 1));
+                if (marcaDia.hora_inicio && marcaDia.hora_fin) {
+                    if (new Date(marcaDia.hora_inicio) > new Date(marcaDia.hora_fin)) {
+                        fin_marca = new Date(marcaDia.fecha.setDate(marcaDia.fecha.getDate() + 1));
+                    }
+                    else {
+                        const hora_fin_string = marcaDia.hora_fin.split("T")[1];
+                        fin_marca = new Date(fecha_marca_string + "T" + hora_fin_string);
+                    }
                 }
                 else {
-                    const hora_fin_string = marcaDia.hora_fin.split("T")[1];
-                    fin_marca = new Date(fecha_marca_string + "T" + hora_fin_string);
+                    fin_marca = new Date(fecha_marca_string + "T23:59:59.999Z");
                 }
             }
-
-            console.log("momento_inicio_marca", inicio_marca);
-            console.log("momento_fin_marca", fin_marca);
 
             if (!marcaDia.hora_entrada_digitada && (now > fin_marca)) {
                 const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
@@ -358,7 +455,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     }
                 }
 
-                return NextResponse.json({ status: false, absent: true, should_response, message: "No has marcado la entrada para el turno del día " + fecha_marca_string + " a las " + hora_inicio_string + "." + extra_reason, marca_id: marcaDia.id }, { status: 200 });
+                return blockedMarcaResponse(
+                    "No has marcado la entrada para el turno del día " +
+                        fecha_marca_string +
+                        " a las " +
+                        hora_inicio_string +
+                        "." +
+                        extra_reason,
+                    { absent: true, should_response }
+                );
             }
 
             next_time = new Date(estado == "No ingresado" ? inicio_marca : fin_marca);
@@ -371,72 +476,12 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             if (toZonedTime(new Date(), "America/Costa_Rica") > next_time) {
                 is_late = true;
             }
-        }
-        else {
-            return NextResponse.json({ status: false, message: "Horario de entrada y salida no configurado" }, { status: 200 });
-        }
-
-        const roleDivision = await getRoleDivision(req, plaza, contrato);
-
-        const marca_return = {
-            id: marcaDia.id,
-            hora_entrada_digitada: marcaDia.hora_entrada_digitada ?? null,
-            hora_salida_digitada: marcaDia.hora_salida_digitada ?? null,
-            hora_inicio: marcaDia.hora_inicio,
-            hora_fin: marcaDia.hora_fin,
-            fecha: marcaDia.fecha,
-            tipo_turno: marcaDia.tipo_turno,
-            horas_duracion: marcaDia.horas_duracion,
-            roleDivision: roleDivision,
-            empleadoFijo_id: empleado.id,
-            empresa: {
-                id: empresa.id,
-                nombre: empresa.nombre
-            },
-            cliente: {
-                id: cliente.id,
-                nombre: cliente.nombre
-            },
-            contrato: {
-                id: contrato.id,
-                nombre: contrato.nombre
-            },
-            corpo: {
-                id: corpo.id,
-                nombre: corpo.nombre,
-                ubicacion: {
-                    lat: corpo.coordenadas_gpslat,
-                    lng: corpo.coordenadas_gpslng
-                }
-            },
-            puesto: {
-                id: puesto.id,
-                nombre: puesto.nombre,
-                tiene_relevo: puesto.tiene_relevo ?? false,
-                ubicacion: {
-                    lat: puesto.coordenadas_gpslat ? parseFloat(puesto.coordenadas_gpslat) : null,
-                    lng: puesto.coordenadas_gpslng ? parseFloat(puesto.coordenadas_gpslng) : null
-                }
-            },
-            plaza: {
-                id: plaza.id,
-                nombre: plaza.nombre
-            },
-            horario: {
-                id: horario.id,
-                nombre: horario.titulo
-            }
-        };
-
-        console.log("marca_return", marca_return);
 
         const data = {
             status: true,
-            current_time: toZonedTime(new Date(), "America/Costa_Rica"), // Se define aquí
+            current_time: currentTime,
             marca: marca_return
         }
-
-        console.log("Retornamos la marca");
 
         return NextResponse.json(data, { status: 200 });
 

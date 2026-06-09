@@ -14,6 +14,7 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -30,17 +31,23 @@ import {
 } from '../hooks/checklistSupervisionFunctions';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import {
-  loadChecklistSupervisionCacheFlat,
+  loadChecklistSupervisionCacheForCorpo,
   mergeChecklistSupervisionServerIntoCacheForCorpo,
-  saveChecklistSupervisionCacheFlat,
-  filterChecklistFlatByCorpoId,
+  saveChecklistSupervisionCacheForCorpo,
+  normalizeChecklistRowForCache,
+  dedupeChecklistRows,
+  resolveChecklistRowCorpoId,
+  applyServerPayloadToCachedChecklistRow,
 } from '@/hooks/checklistSupervisionCacheStorage';
 import {
   loadPuestoArticulosForTable,
+  refreshPuestoArticulosFromServer,
   rewritePuestoArticulosInMainStructure,
 } from '@/hooks/puestoArticulosSync';
+import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
+import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
+import { serializeArticulosPuestoForStorage } from '@/utils/articuloMantenimientoFiles';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
-import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import Constants from 'expo-constants';
 
@@ -55,6 +62,16 @@ function checklistRowShowsOfflineBadge(it: ChecklistSupervisionUI): boolean {
   if (Number(it.id) === 0) return true;
   const loc = it.id_local;
   return loc != null && String(loc).trim() !== '';
+}
+
+function checklistListKey(it: ChecklistSupervisionUI, index: number): string {
+  const id = Number(it.id ?? 0);
+  const idLocal = String(it.id_local ?? '').trim();
+  if (id > 0) {
+    return idLocal ? `checklist-${id}-${idLocal}` : `checklist-${id}`;
+  }
+  if (idLocal) return `checklist-local-${idLocal}`;
+  return `checklist-idx-${index}`;
 }
 
 /** Nombres para título de fila; offline/API sin include suele venir sin `cliente`/`corpo`/`puesto`. */
@@ -148,10 +165,27 @@ interface ArticuloForm {
   id: number;
   nombre: string;
   tipo?: string;
+  /** Clave estable para React (plan-123 / asignado-456); evita colisión Plan vs Asignado con mismo id numérico. */
+  rowKey?: string;
   cantidad_requerida: number;
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
   observaciones?: string;
+  ultimo_mantenimiento_id?: number | null;
+  mantenimiento_files?: ArticuloMantenimientoPendingFile[];
+}
+
+function articuloListKey(art: Pick<ArticuloForm, 'id' | 'tipo' | 'rowKey'>, index = 0): string {
+  if (art.rowKey && String(art.rowKey).trim()) return String(art.rowKey).trim();
+  const tipo = String(art.tipo ?? '').toLowerCase();
+  const prefix = tipo.includes('asignado') ? 'asignado' : 'plan';
+  const id = Number(art.id);
+  if (Number.isFinite(id) && id > 0) return `${prefix}-${id}`;
+  return `articulo-${index}`;
+}
+
+function evaluationInputKey(sectionId: string, subsectionId: string, inputId: string): string {
+  return `${sectionId}::${subsectionId}::${inputId}`;
 }
 
 // Constantes predefinidas para Aseo y limpieza
@@ -215,7 +249,7 @@ const ASEO_LIMPIEZA_SECTIONS: EvaluationSection[] = [
           value: '',
         },
         {
-          id: 'ca-${idx}-photo',
+          id: `ca-${idx}-photo`,
           type: 'photo' as const,
           title: 'Foto',
           value: '',
@@ -464,7 +498,7 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
             options: ['Bueno', 'Malo', 'No existe'],
           },
           {
-            id: 'up-0-photo',
+            id: 'us-1-photo',
             type: 'photo' as const,
             title: 'Foto',
             value: '',
@@ -973,6 +1007,7 @@ export default function ChecklistSupervisionScreen() {
 
   // Estados para artículos del puesto
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
+  const [archivosModalIndex, setArchivosModalIndex] = useState<number | null>(null);
 
   const getMarcaRoleDivisionId = useCallback((currentMarca: any): number | null => {
     const id = Number(currentMarca?.roleDivision?.division?.id);
@@ -1083,29 +1118,6 @@ export default function ChecklistSupervisionScreen() {
     const sucursal = sucursales.find((s: any) => s.id === selectedCorpoId);
     return sucursal?.puestos || [];
   }, [sucursales, selectedCorpoId]);
-
-  // Mismos nodos para filtros
-  const filterEmpresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
-
-  const filterClientes = useMemo(() => {
-    const empresa = filterEmpresas.find((e: any) => e.id === filterEmpresaId);
-    return empresa?.clientes || [];
-  }, [filterEmpresas, filterEmpresaId]);
-
-  const filterDivisiones = useMemo(() => {
-    const cliente = filterClientes.find((c: any) => c.id === filterClienteId);
-    return cliente?.division || [];
-  }, [filterClientes, filterClienteId]);
-
-  const filterContratos = useMemo(() => {
-    const division = filterDivisiones.find((d: any) => d.id === filterDivisionId);
-    return division?.contratos || [];
-  }, [filterDivisiones, filterDivisionId]);
-
-  const filterSucursales = useMemo(() => {
-    const contrato = filterContratos.find((c: any) => c.id === filterContratoId);
-    return contrato?.sucursales || [];
-  }, [filterContratos, filterContratoId]);
 
   // Cargar estructura principal (fragmentos mergeados o caché legada)
   const fetchMainStructure = useCallback(async (): Promise<StructureNode[]> => {
@@ -1264,28 +1276,44 @@ export default function ChecklistSupervisionScreen() {
   }, [refreshAccessToken, logout]);
 
   const filterCorpoIdRef = useRef(filterCorpoId);
+  const listCorpoScopeRef = useRef<number | null>(null);
   filterCorpoIdRef.current = filterCorpoId;
+  if (filterCorpoId != null) listCorpoScopeRef.current = filterCorpoId;
 
-  // Cargar checklists (caché por corpo al sincronizar; listado solo por sucursal seleccionada o marca)
+  const normalizeApiChecklistRows = useCallback((rows: any[], corpoScope: number) => {
+    return (Array.isArray(rows) ? rows : []).map(
+      (it: any) => normalizeChecklistRowForCache(it, corpoScope) as ChecklistSupervisionUI,
+    );
+  }, []);
+
+  // Cargar checklists: caché por sucursal (offline) + API (online). `checklists` queda acotado a la sucursal activa.
   const fetchChecklists = useCallback(async (scopeOverride?: ChecklistListCorpoScope | null) => {
+    
     setIsLoading(true);
     setError(null);
     try {
       const scope: ChecklistListCorpoScope =
-        scopeOverride != null ? scopeOverride : { filterCorpoId: filterCorpoIdRef.current };
+        scopeOverride != null
+          ? scopeOverride
+          : { filterCorpoId: filterCorpoIdRef.current ?? listCorpoScopeRef.current };
 
-      const applyCachedRowsForScope = async (corpoScope: number | null) => {
-        try {
-          const cached = await loadChecklistSupervisionCacheFlat();
-          const onlyActive = cached.filter((it: any) => it?.isActive !== false);
-          const scoped = filterChecklistFlatByCorpoId(onlyActive, corpoScope);
-          setChecklists(scoped as ChecklistSupervisionUI[]);
-        } catch {
-          setChecklists([]);
-        }
-      };
+      const corpoScope = Number(scope.filterCorpoId ?? listCorpoScopeRef.current);
+      if (!Number.isFinite(corpoScope) || corpoScope <= 0) {
+        setChecklists([]);
+        setIsLoading(false);
+        return;
+      }
 
-      await applyCachedRowsForScope(scope.filterCorpoId);
+      listCorpoScopeRef.current = corpoScope;
+      filterCorpoIdRef.current = corpoScope;
+      setFilterCorpoId(corpoScope);
+
+      try {
+        const cached = await loadChecklistSupervisionCacheForCorpo(corpoScope);
+        setChecklists(dedupeChecklistRows(cached) as ChecklistSupervisionUI[]);
+      } catch {
+        /* conservar lista previa si falla la caché */
+      }
 
       const isConnected = await getConnectionStatus();
       if (!isConnected) {
@@ -1293,28 +1321,20 @@ export default function ChecklistSupervisionScreen() {
         return;
       }
 
-      if (scope.filterCorpoId == null) {
-        setIsLoading(false);
-        return;
-      }
-
       const result = await listChecklistSupervision({
-        corpoId: scope.filterCorpoId,
+        corpoId: corpoScope,
         refreshAccessToken: () => refreshAccessTokenRef.current(),
         logout: () => logoutRef.current(),
       });
 
-      if (result.status && result.data) {
-        const list = result.data.map((it: any) => {
-          const row = { ...it } as ChecklistSupervisionUI;
-          if (row.id_local != null && String(row.id_local).trim() !== '') return row;
-          delete (row as any).id_local;
-          return row;
-        });
-        const merged = await mergeChecklistSupervisionServerIntoCacheForCorpo(scope.filterCorpoId, list);
-        const mergedScoped = filterChecklistFlatByCorpoId(merged, scope.filterCorpoId) as ChecklistSupervisionUI[];
-        setChecklists(mergedScoped);
-      } else {
+      const rawRows = Array.isArray(result?.data) ? result.data : null;
+      if (result.status && rawRows != null) {
+        const list = dedupeChecklistRows(
+          normalizeApiChecklistRows(rawRows, corpoScope) as ChecklistSupervisionItem[],
+        );
+        setChecklists(list as ChecklistSupervisionUI[]);
+        await mergeChecklistSupervisionServerIntoCacheForCorpo(corpoScope, list);
+      } else if (!result.status) {
         setError(result.message || 'Error al cargar checklists');
       }
     } catch (err: any) {
@@ -1322,10 +1342,38 @@ export default function ChecklistSupervisionScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [normalizeApiChecklistRows]);
 
   const fetchChecklistsRef = useRef(fetchChecklists);
   fetchChecklistsRef.current = fetchChecklists;
+
+  /** Lee el bucket de la sucursal activa en AsyncStorage y actualiza la lista UI. */
+  const syncChecklistsFromCache = useCallback(async (corpoId?: number | null) => {
+    const cid = Number(corpoId ?? listCorpoScopeRef.current ?? filterCorpoIdRef.current);
+    if (!Number.isFinite(cid) || cid <= 0) return;
+    const rows = await loadChecklistSupervisionCacheForCorpo(cid);
+    setChecklists(dedupeChecklistRows(rows) as ChecklistSupervisionUI[]);
+  }, []);
+
+  const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    setFilterCorpoId(v.sucursalId);
+    if (v.sucursalId != null) {
+      fetchChecklistsRef.current({ filterCorpoId: v.sucursalId });
+    }
+  }, []);
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setSelectedEmpresaId(v.empresaId);
+    setSelectedClienteId(v.clienteId);
+    setSelectedDivisionId(v.divisionId);
+    setSelectedContratoId(v.contratoId);
+    setSelectedCorpoId(v.sucursalId);
+    setSelectedPuestoId(v.puestoId ?? null);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -1355,7 +1403,10 @@ export default function ChecklistSupervisionScreen() {
 
   useEffect(() => {
     const handler = () => {
-      fetchChecklistsRef.current();
+      const corpo = listCorpoScopeRef.current ?? filterCorpoIdRef.current;
+      if (corpo != null) {
+        fetchChecklistsRef.current({ filterCorpoId: corpo });
+      }
     };
     eventBus.on('connectionRestored', handler);
     return () => {
@@ -1401,7 +1452,8 @@ export default function ChecklistSupervisionScreen() {
           setArticulos([]);
           return;
         }
-        const articulosForm: ArticuloForm[] = sourceArticulos.map((art: any) => {
+        const articulosForm: ArticuloForm[] = sourceArticulos.map((art: any, index: number) => {
+          const aid = Number(art?.id ?? art?.estructura_id);
           const ultimo = art?.ultimo_mantenimiento ?? null;
           const estadoUltimo = ultimo?.estado;
           const estado =
@@ -1417,17 +1469,25 @@ export default function ChecklistSupervisionScreen() {
                 : Number(art?.cantidad) || 0;
 
           const cantidad_real = estado === 'No está' ? 0 : Math.max(0, Number(cantidadRealRaw) || 0);
+          const tipo = String(art?.tipo ?? '').trim();
+          const rowKey =
+            String(art?.key ?? '').trim() ||
+            articuloListKey({ id: aid, tipo, rowKey: undefined }, index);
 
           return {
-            id: art.id,
-            nombre: art.nombre || 'Desconocido',
-            tipo: art.tipo || '',
+            id: aid,
+            rowKey,
+            nombre: art.nombre || art.articulo_nombre || 'Desconocido',
+            tipo,
             cantidad_requerida: normalizeCantidadNecesaria(
               typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad)
             ),
             cantidad_real,
             estado,
             observaciones: art.observaciones || '',
+            ultimo_mantenimiento_id:
+              ultimo?.id != null && Number(ultimo.id) > 0 ? Number(ultimo.id) : null,
+            mantenimiento_files: [],
           };
         });
         setArticulos(articulosForm);
@@ -1715,8 +1775,11 @@ export default function ChecklistSupervisionScreen() {
     const isLocalOnly = !row.id || Number(row.id) === 0;
 
     if (isLocalOnly && row.id_local) {
-      const flat = await loadChecklistSupervisionCacheFlat();
-      const next = flat.map((c) => (matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c));
+      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const next = bucket.map((c) =>
+        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
+      );
       const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
       const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id_local) === String(row.id_local));
@@ -1727,8 +1790,8 @@ export default function ChecklistSupervisionScreen() {
         };
         await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
       }
-      await saveChecklistSupervisionCacheFlat(next);
-      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
+      await syncChecklistsFromCache(corpoId);
       return true;
     }
 
@@ -1745,20 +1808,27 @@ export default function ChecklistSupervisionScreen() {
         return false;
       }
       const sr = (result as any).data;
-      const flat = await loadChecklistSupervisionCacheFlat();
-      const next = flat.map((c) =>
+      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const next = bucket.map((c) =>
         Number(c.id) === Number(row.id)
-          ? { ...c, ...(sr && typeof sr === 'object' ? sr : {}), firma_supervisor: sr?.firma_supervisor ?? formattedSignature }
-          : c
+          ? applyServerPayloadToCachedChecklistRow(c, {
+              ...(sr && typeof sr === 'object' ? sr : {}),
+              firma_supervisor: sr?.firma_supervisor ?? formattedSignature,
+            })
+          : c,
       );
-      await saveChecklistSupervisionCacheFlat(next);
-      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
+      await syncChecklistsFromCache(corpoId);
       return true;
     }
 
     if (Number(row.id) > 0 && !isConnected) {
-      const flat = await loadChecklistSupervisionCacheFlat();
-      const next = flat.map((c) => (matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c));
+      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const next = bucket.map((c) =>
+        matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
+      );
       const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
       const actions = actionsStr ? JSON.parse(actionsStr) : [];
       const uidx = actions.findIndex((a: any) => a.type === 'update' && Number(a.id) === Number(row.id));
@@ -1781,8 +1851,8 @@ export default function ChecklistSupervisionScreen() {
         else actions.push(entry);
       }
       await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
-      await saveChecklistSupervisionCacheFlat(next);
-      setChecklists(filterChecklistFlatByCorpoId(next, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
+      await syncChecklistsFromCache(corpoId);
       return true;
     }
 
@@ -1873,6 +1943,24 @@ export default function ChecklistSupervisionScreen() {
     newArticulos[index].observaciones = observaciones;
     setArticulos(newArticulos);
   };
+
+  const handleArticuloMantenimientoFilesChange = (
+    index: number,
+    files: ArticuloMantenimientoPendingFile[]
+  ) => {
+    setArticulos((prev) =>
+      prev.map((a, i) => (i === index ? { ...a, mantenimiento_files: files } : a))
+    );
+  };
+
+  const refreshPuestoArticulosCacheAfterSave = useCallback(async () => {
+    if (!selectedPuestoId) return;
+    await refreshPuestoArticulosFromServer({
+      puestoId: Number(selectedPuestoId),
+      refreshAccessToken,
+      logout,
+    });
+  }, [selectedPuestoId, refreshAccessToken, logout]);
 
   // Funciones para cámara (siguiendo patrón de VehiclesScreen)
   const openCamera = async (target: string) => {
@@ -2131,8 +2219,10 @@ export default function ChecklistSupervisionScreen() {
         const parsedArticulos = typeof articulosData === 'string' ? JSON.parse(articulosData) : articulosData;
         if (Array.isArray(parsedArticulos) && parsedArticulos.length > 0) {
           // Asegurar que cada artículo tenga observaciones inicializadas
-          const articulosConObservaciones = parsedArticulos.map((art: any) => ({
+          const articulosConObservaciones = parsedArticulos.map((art: any, index: number) => ({
             ...art,
+            id: Number(art?.id ?? art?.estructura_id),
+            rowKey: art.rowKey ?? articuloListKey(art, index),
             cantidad_requerida: normalizeCantidadNecesaria(art?.cantidad_requerida ?? art?.cantidad),
             observaciones: art.observaciones || '',
           }));
@@ -2236,7 +2326,7 @@ export default function ChecklistSupervisionScreen() {
       const horaAccionIso = new Date(horaAccion).toISOString();
       const articulosPuesto =
         articulos && articulos.length > 0
-          ? JSON.stringify(articulos.map((a) => ({ ...a, created_at: horaAccionIso })))
+          ? serializeArticulosPuestoForStorage(articulos, horaAccionIso)
           : '[]';
       const requestData = {
         empresa_id: selectedEmpresaId,
@@ -2272,6 +2362,7 @@ export default function ChecklistSupervisionScreen() {
               horaAccion,
             });
             await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
+            await refreshPuestoArticulosCacheAfterSave();
 
             Alert.alert('Éxito', result.message || 'Checklist actualizado correctamente');
             setTimeout(async () => {
@@ -2302,30 +2393,34 @@ export default function ChecklistSupervisionScreen() {
 
           // Actualizar cache (lista en estado solo incluye la sucursal del filtro: mezclar con el flat completo)
           const lblUp = resolveChecklistHierarchyLabels(structure, selectedPuestoId);
-          const flat = await loadChecklistSupervisionCacheFlat();
-          const nextFlat = flat.map((c) => {
+          const corpoId = Number(selectedCorpoId);
+          const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+          const nextBucket = bucket.map((c) => {
             if (c.id !== editing.id) return c;
-            return {
-              ...c,
-              ...requestData,
-              id_local: localId,
-              cliente: {
-                id: selectedClienteId!,
-                nombre: (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lblUp.cliente || '-',
+            return normalizeChecklistRowForCache(
+              {
+                ...c,
+                ...requestData,
+                id_local: localId,
+                cliente: {
+                  id: selectedClienteId!,
+                  nombre: (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lblUp.cliente || '-',
+                },
+                corpo: {
+                  id: selectedCorpoId!,
+                  nombre: (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lblUp.corpo || '-',
+                },
+                puesto: {
+                  id: selectedPuestoId!,
+                  nombre: (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lblUp.puesto || '-',
+                  codigo: (c.puesto as any)?.codigo || lblUp.codigo || '',
+                },
               },
-              corpo: {
-                id: selectedCorpoId!,
-                nombre: (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lblUp.corpo || '-',
-              },
-              puesto: {
-                id: selectedPuestoId!,
-                nombre: (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lblUp.puesto || '-',
-                codigo: (c.puesto as any)?.codigo || lblUp.codigo || '',
-              },
-            } as ChecklistSupervisionItem;
+              corpoId,
+            );
           });
-          await saveChecklistSupervisionCacheFlat(nextFlat);
-          setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+          await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
+          await syncChecklistsFromCache(corpoId);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2384,16 +2479,21 @@ export default function ChecklistSupervisionScreen() {
                           }
                         : undefined,
                     };
-              const flat = await loadChecklistSupervisionCacheFlat();
-              const nextFlat = [serverRow, ...flat.filter((x) => Number(x.id) !== newId)];
-              await saveChecklistSupervisionCacheFlat(nextFlat);
-              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+              const row = normalizeChecklistRowForCache(
+                serverRow,
+                selectedCorpoId,
+              ) as ChecklistSupervisionUI;
+              const bucket = await loadChecklistSupervisionCacheForCorpo(selectedCorpoId);
+              const nextBucket = [row, ...bucket.filter((x) => Number(x.id) !== newId)];
+              await saveChecklistSupervisionCacheForCorpo(selectedCorpoId, nextBucket);
+              await syncChecklistsFromCache(selectedCorpoId);
             }
             // Online: actualizar caches sin encolar acciones de mantenimiento
             await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
               horaAccion,
             });
             await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
+            await refreshPuestoArticulosCacheAfterSave();
 
             Alert.alert('Éxito', result.message || 'Checklist creado correctamente');
             setTimeout(async () => {
@@ -2446,15 +2546,17 @@ export default function ChecklistSupervisionScreen() {
             corpo: { id: selectedCorpoId, nombre: lblNew.corpo || '-' },
             puesto: { id: selectedPuestoId, nombre: lblNew.puesto || '-', codigo: lblNew.codigo || '' },
           };
-          const flat = await loadChecklistSupervisionCacheFlat();
-          const nextFlat =
+          const corpoId = Number(selectedCorpoId);
+          const normalizedNew = normalizeChecklistRowForCache(newItem, corpoId) as ChecklistSupervisionItem;
+          const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+          const nextBucket =
             editing?.id_local && String(editing.id_local).length > 0
-              ? flat.map((c) =>
-                  String((c as ChecklistSupervisionUI).id_local) === String(editing.id_local) ? (newItem as ChecklistSupervisionItem) : c
+              ? bucket.map((c) =>
+                  String((c as ChecklistSupervisionUI).id_local) === String(editing.id_local) ? normalizedNew : c,
                 )
-              : [...flat, newItem as ChecklistSupervisionItem];
-          await saveChecklistSupervisionCacheFlat(nextFlat);
-          setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+              : [...bucket, normalizedNew];
+          await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
+          await syncChecklistsFromCache(corpoId);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2529,10 +2631,11 @@ export default function ChecklistSupervisionScreen() {
               });
               await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(cleaned));
 
-              const flat = await loadChecklistSupervisionCacheFlat();
-              const nextFlat = flat.filter((c) => c.id !== it.id);
-              await saveChecklistSupervisionCacheFlat(nextFlat);
-              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+              const corpoId = resolveChecklistRowCorpoId(it, filterCorpoIdRef.current);
+              const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+              const nextBucket = bucket.filter((c) => Number(c.id) !== Number(it.id));
+              await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
+              await syncChecklistsFromCache(corpoId);
 
               Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
             } else if (it.id_local) {
@@ -2545,10 +2648,13 @@ export default function ChecklistSupervisionScreen() {
               });
               await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
 
-              const flat = await loadChecklistSupervisionCacheFlat();
-              const nextFlat = flat.filter((c) => String((c as ChecklistSupervisionUI).id_local || '') !== String(it.id_local));
-              await saveChecklistSupervisionCacheFlat(nextFlat);
-              setChecklists(filterChecklistFlatByCorpoId(nextFlat, filterCorpoIdRef.current) as ChecklistSupervisionUI[]);
+              const corpoId = resolveChecklistRowCorpoId(it, filterCorpoIdRef.current);
+              const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+              const nextBucket = bucket.filter(
+                (c) => String((c as ChecklistSupervisionUI).id_local || '') !== String(it.id_local),
+              );
+              await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
+              await syncChecklistsFromCache(corpoId);
 
               Alert.alert('Éxito', 'Registro pendiente eliminado (no requiere sincronizar borrado en servidor).');
             }
@@ -2569,28 +2675,25 @@ export default function ChecklistSupervisionScreen() {
     setFilterCorpoId(null);
   };
 
-  /** Solo filas de la sucursal elegida (filtro o marca); sin sucursal, lista vacía. */
+  /** `checklists` ya está acotado a la sucursal activa; aquí solo aplica búsqueda por texto. */
   const filteredChecklists = useMemo(() => {
-    if (filterCorpoId == null) return [];
-    return checklists.filter((c) => {
+    const unique = dedupeChecklistRows(checklists as ChecklistSupervisionItem[]) as ChecklistSupervisionUI[];
+    if (!filterSearch.trim()) return unique;
+    const searchLower = filterSearch.toLowerCase();
+    return unique.filter((c) => {
       if ((c as any).isActive === false) return false;
-      if (Number(c.corpo_id) !== Number(filterCorpoId)) return false;
-      if (filterSearch) {
-        const lbl = resolveChecklistHierarchyLabels(structure, c.puesto_id);
-        const nc = (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lbl.cliente || '';
-        const ns = (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lbl.corpo || '';
-        const np = (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lbl.puesto || '';
-        const searchLower = filterSearch.toLowerCase();
-        const matchesSearch =
-          c.ejecutivo_cuenta?.toLowerCase().includes(searchLower) ||
-          nc.toLowerCase().includes(searchLower) ||
-          ns.toLowerCase().includes(searchLower) ||
-          np.toLowerCase().includes(searchLower);
-        if (!matchesSearch) return false;
-      }
-      return true;
+      const lbl = resolveChecklistHierarchyLabels(structure, c.puesto_id);
+      const nc = (c.cliente?.nombre && String(c.cliente.nombre).trim()) || lbl.cliente || '';
+      const ns = (c.corpo?.nombre && String(c.corpo.nombre).trim()) || lbl.corpo || '';
+      const np = (c.puesto?.nombre && String(c.puesto.nombre).trim()) || lbl.puesto || '';
+      return (
+        c.ejecutivo_cuenta?.toLowerCase().includes(searchLower) ||
+        nc.toLowerCase().includes(searchLower) ||
+        ns.toLowerCase().includes(searchLower) ||
+        np.toLowerCase().includes(searchLower)
+      );
     });
-  }, [checklists, filterSearch, filterCorpoId, structure]);
+  }, [checklists, filterSearch, structure]);
 
   // Renderizar evaluación dinámica (como StaffEvaluationsScreen)
   const renderEvaluationInput = (input: EvaluationInput, sectionId: string, subsectionId: string) => {
@@ -2766,13 +2869,6 @@ export default function ChecklistSupervisionScreen() {
     try {
       const parsed = JSON.parse(evaluacionStr);
       const result = Array.isArray(parsed) ? parsed : [];
-      console.log('parseEvaluation: Parsed evaluation:', {
-        sections: result.length,
-        firstSection: result[0]?.title,
-        firstSubsection: result[0]?.subsections?.[0]?.title,
-        firstInput: result[0]?.subsections?.[0]?.inputs?.[0],
-        firstInputValue: result[0]?.subsections?.[0]?.inputs?.[0]?.value
-      });
       return result;
     } catch (error) {
       console.error('parseEvaluation: Error parsing evaluation:', error);
@@ -2808,17 +2904,11 @@ export default function ChecklistSupervisionScreen() {
   };
 
   const renderItem = (it: ChecklistSupervisionUI, index: number) => {
-    const key = it.id !== 0 ? `checklist-${it.id}` : it.id_local ? `checklist-${it.id_local}` : `checklist-${index}`;
+    const key = checklistListKey(it, index);
     const isExpanded = expandedChecklists.has(key);
     const firmasExpanded = expandedChecklistFirmas.has(key);
     const fechaStr = it.fecha ? new Date(it.fecha).toLocaleDateString() : '-';
     const evaluationSections = parseEvaluation(it.evaluacion);
-    console.log('renderItem: Evaluation sections for item:', {
-      itemId: it.id || it.id_local,
-      sectionsCount: evaluationSections.length,
-      firstSection: evaluationSections[0],
-      firstInputValue: evaluationSections[0]?.subsections?.[0]?.inputs?.[0]?.value
-    });
 
     const lbl = resolveChecklistHierarchyLabels(structure, it.puesto_id);
     const nombreCliente = (it.cliente?.nombre && String(it.cliente.nombre).trim()) || lbl.cliente || '-';
@@ -2952,7 +3042,7 @@ export default function ChecklistSupervisionScreen() {
                               ? (input.value === 'true' ? 'Marcado' : 'No marcado')
                               : (input.value || '-');
                         return (
-                          <ThemedView key={input.id}>
+                          <ThemedView key={evaluationInputKey(section.id, subsection.id, input.id)}>
                             <ThemedText style={styles.evalLine}>
                               {shouldShowInputTitle(input.title, subsection.title) ? (
                                 <>
@@ -3081,117 +3171,27 @@ export default function ChecklistSupervisionScreen() {
                     />
                   </ThemedView>
 
-                  {/* Árbol jerárquico para filtros */}
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                    <View style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={filterEmpresaId || ''}
-                        onValueChange={(value) => {
-                          setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                          setFilterClienteId(null);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                        {filterEmpresas.map((e: any) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-
-                  {filterEmpresaId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={filterClienteId || ''}
-                          onValueChange={(value) => {
-                            setFilterClienteId(value && value !== '' ? Number(value) : null);
-                            setFilterDivisionId(null);
-                            setFilterContratoId(null);
-                            setFilterCorpoId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                          {filterClientes.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterClienteId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={filterDivisionId || ''}
-                          onValueChange={(value) => {
-                            setFilterDivisionId(value && value !== '' ? Number(value) : null);
-                            setFilterContratoId(null);
-                            setFilterCorpoId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                          {filterDivisiones.map((d: any) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterDivisionId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={filterContratoId || ''}
-                          onValueChange={(value) => {
-                            setFilterContratoId(value && value !== '' ? Number(value) : null);
-                            setFilterCorpoId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                          {filterContratos.map((c: any) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-                  )}
-
-                  {filterContratoId && (
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                      <View style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={filterCorpoId || ''}
-                          onValueChange={(value) => {
-                            const id = value && value !== '' ? Number(value) : null;
-                            setFilterCorpoId(id);
-                            if (id != null) {
-                              fetchChecklistsRef.current({ filterCorpoId: id });
-                            }
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                          {filterSucursales.map((s: any) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
+                  {/* Jerarquía para filtros (sucursal = alcance del listado) */}
+                  {structure.length === 0 ? (
+                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                  ) : (
+                    <HierarchyPickerFields
+                      structure={structure}
+                      levels={['cliente', 'contrato', 'sucursal']}
+                      emptyPickerValue={0}
+                      values={{
+                        empresaId: filterEmpresaId,
+                        clienteId: filterClienteId,
+                        divisionId: filterDivisionId,
+                        contratoId: filterContratoId,
+                        sucursalId: filterCorpoId,
+                      }}
+                      onChange={handleFilterHierarchyChange}
+                      labels={{ sucursal: 'Sucursal (corpo)' }}
+                      renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                      pickerStyle={styles.picker}
+                      fieldGroupStyle={styles.filterGroupSearch}
+                    />
                   )}
                   <ThemedText style={styles.filterHintMuted}>
                     Elija sucursal para ver y sincronizar registros. El puesto solo aplica en el formulario de nuevo/editar.
@@ -3244,152 +3244,25 @@ export default function ChecklistSupervisionScreen() {
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
 
-              {/* Árbol jerárquico para formulario */}
-              <ThemedView style={styles.filterGroup}>
-                <ThemedText style={styles.label}>Empresa *</ThemedText>
-                <View style={styles.pickerContainer}>
-                  <Picker
-                    selectedValue={selectedEmpresaId || ''}
-                    onValueChange={(value) => {
-                      setSelectedEmpresaId(value && value !== '' ? Number(value) : null);
-                      setSelectedClienteId(null);
-                      setSelectedDivisionId(null);
-                      setSelectedContratoId(null);
-                      setSelectedCorpoId(null);
-                      setSelectedPuestoId(null);
-                    }}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                    {empresas.map((e: any) => (
-                      <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-              </ThemedView>
-
-              {selectedEmpresaId && (
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.label}>Cliente *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={selectedClienteId || ''}
-                      onValueChange={(value) => {
-                        setSelectedClienteId(value && value !== '' ? Number(value) : null);
-                        setSelectedDivisionId(null);
-                        setSelectedContratoId(null);
-                        setSelectedCorpoId(null);
-                        setSelectedPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000"/>
-                      {clientes.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                  {selectedClienteId && clientes.length === 0 && (
-                    <ThemedText style={styles.errorText}>No hay clientes disponibles</ThemedText>
-                  )}
-                </ThemedView>
-              )}
-
-              {selectedClienteId && (
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.label}>División *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={selectedDivisionId || ''}
-                      onValueChange={(value) => {
-                        setSelectedDivisionId(value && value !== '' ? Number(value) : null);
-                        setSelectedContratoId(null);
-                        setSelectedCorpoId(null);
-                        setSelectedPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {divisiones.map((d: any) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                  {selectedDivisionId && divisiones.length === 0 && (
-                    <ThemedText style={styles.errorText}>No hay divisiones disponibles</ThemedText>
-                  )}
-                </ThemedView>
-              )}
-
-              {selectedDivisionId && (
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.label}>Contrato *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={selectedContratoId || ''}
-                      onValueChange={(value) => {
-                        setSelectedContratoId(value && value !== '' ? Number(value) : null);
-                        setSelectedCorpoId(null);
-                        setSelectedPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {contratos.map((c: any) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                  {selectedContratoId && contratos.length === 0 && (
-                    <ThemedText style={styles.errorText}>No hay contratos disponibles</ThemedText>
-                  )}
-                </ThemedView>
-              )}
-
-              {selectedContratoId && (
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.label}>Sucursal *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={selectedCorpoId || ''}
-                      onValueChange={(value) => {
-                        setSelectedCorpoId(value && value !== '' ? Number(value) : null);
-                        setSelectedPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {sucursales.map((s: any) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                  {selectedCorpoId && sucursales.length === 0 && (
-                    <ThemedText style={styles.errorText}>No hay sucursales disponibles</ThemedText>
-                  )}
-                </ThemedView>
-              )}
-
-              {selectedCorpoId && (
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.label}>Puesto *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={selectedPuestoId || ''}
-                      onValueChange={(value) => setSelectedPuestoId(value && value !== '' ? Number(value) : null)}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                      {puestos.map((p: any) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                  {selectedPuestoId && puestos.length === 0 && (
-                    <ThemedText style={styles.errorText}>No hay puestos disponibles</ThemedText>
-                  )}
-                </ThemedView>
-              )}
+              {/* Jerarquía para formulario (incluye puesto) */}
+              <HierarchyPickerFields
+                structure={structure}
+                levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                emptyPickerValue={0}
+                values={{
+                  empresaId: selectedEmpresaId,
+                  clienteId: selectedClienteId,
+                  divisionId: selectedDivisionId,
+                  contratoId: selectedContratoId,
+                  sucursalId: selectedCorpoId,
+                  puestoId: selectedPuestoId,
+                }}
+                onChange={handleFormHierarchyChange}
+                labels={{ sucursal: 'Sucursal (corpo)' }}
+                renderLabel={(text) => <ThemedText style={styles.label}>{text} *</ThemedText>}
+                pickerStyle={styles.picker}
+                fieldGroupStyle={styles.filterGroup}
+              />
 
               <ThemedText style={styles.label}>Fecha *</ThemedText>
               <TouchableOpacity style={styles.dateButton} onPress={() => setShowFechaPicker(true)}>
@@ -3445,7 +3318,10 @@ export default function ChecklistSupervisionScreen() {
                           }
                           const formPhotoUri = getImageUri(input);
                           return (
-                            <ThemedView key={input.id} style={styles.inputCard}>
+                            <ThemedView
+                              key={evaluationInputKey(section.id, subsection.id, input.id)}
+                              style={styles.inputCard}
+                            >
                               {shouldShowInputTitle(input.title, subsection.title) && (
                                 <ThemedText style={styles.questionTitleList}>
                                   {input.title}
@@ -3590,7 +3466,7 @@ export default function ChecklistSupervisionScreen() {
                         </View>
                         {/* Filas fijas */}
                         {articulos.map((articulo, index) => (
-                          <View key={articulo.id} style={styles.tableRowFixed}>
+                          <View key={articuloListKey(articulo, index)} style={styles.tableRowFixed}>
                             <View style={styles.tableCellFirst}>
                               <ThemedText style={styles.tableCellFirstText}>
                                 {articulo.nombre}
@@ -3621,10 +3497,13 @@ export default function ChecklistSupervisionScreen() {
                             <View style={styles.tableHeaderCell}>
                               <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
                             </View>
+                            <View style={styles.tableHeaderCellArchivos}>
+                              <ThemedText style={styles.tableHeaderText}>Archivos</ThemedText>
+                            </View>
                           </View>
                           {/* Filas de datos */}
                           {articulos.map((articulo, index) => (
-                            <View key={articulo.id} style={styles.tableRow}>
+                            <View key={articuloListKey(articulo, index)} style={styles.tableRow}>
                               <View style={styles.tableCell}>
                                 <View style={styles.pickerContainerTable}>
                                   <Picker
@@ -3666,6 +3545,19 @@ export default function ChecklistSupervisionScreen() {
                                   multiline
                                   numberOfLines={3}
                                 />
+                              </View>
+                              <View style={styles.tableCellArchivos}>
+                                <TouchableOpacity
+                                  style={styles.archivosBtn}
+                                  onPress={() => setArchivosModalIndex(index)}
+                                >
+                                  <Ionicons name="attach" size={20} color="#007AFF" />
+                                  {(articulo.mantenimiento_files?.length ?? 0) > 0 ? (
+                                    <ThemedText style={styles.archivosBadge}>
+                                      {articulo.mantenimiento_files!.length}
+                                    </ThemedText>
+                                  ) : null}
+                                </TouchableOpacity>
                               </View>
                             </View>
                           ))}
@@ -3792,14 +3684,18 @@ export default function ChecklistSupervisionScreen() {
               ) : filteredChecklists.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>
-                    {filterCorpoId == null
+                    {filterCorpoId == null && listCorpoScopeRef.current == null
                       ? 'Seleccione una sucursal en los filtros (o use la marca actual al entrar) para ver registros.'
                       : 'No hay registros para esta sucursal'}
                   </ThemedText>
                 </ThemedView>
               ) : (
                 <ThemedView style={styles.listContainer}>
-                  {filteredChecklists.map((item, index) => renderItem(item, index))}
+                  {filteredChecklists.map((item, index) => (
+                    <React.Fragment key={checklistListKey(item, index)}>
+                      {renderItem(item, index)}
+                    </React.Fragment>
+                  ))}
                 </ThemedView>
               )}
             </>
@@ -4110,6 +4006,24 @@ export default function ChecklistSupervisionScreen() {
           </ThemedView>
         )}
       </Modal>
+
+      {/* Modal archivos de mantenimiento por artículo */}
+      {archivosModalIndex != null && selectedPuestoId && articulos[archivosModalIndex] ? (
+        <ArticuloMantenimientoArchivosModal
+          visible
+          onClose={() => setArchivosModalIndex(null)}
+          puestoId={Number(selectedPuestoId)}
+          articuloId={articulos[archivosModalIndex].id}
+          articuloNombre={articulos[archivosModalIndex].nombre}
+          formEstado={articulos[archivosModalIndex].estado}
+          ultimoMantenimientoId={articulos[archivosModalIndex].ultimo_mantenimiento_id ?? null}
+          pendingFiles={articulos[archivosModalIndex].mantenimiento_files ?? []}
+          onPendingFilesChange={(files) =>
+            handleArticuloMantenimientoFilesChange(archivosModalIndex, files)
+          }
+          accessToken={accessToken || queryAccessToken}
+        />
+      ) : null}
 
       {/* Modal de cámara (siguiendo patrón de VehiclesScreen) */}
       <Modal
@@ -5086,6 +5000,39 @@ const styles = StyleSheet.create({
     width: 150,
     justifyContent: 'center',
     height: 70,
+  },
+  tableHeaderCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 70,
+  },
+  archivosBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#F0F8FF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  archivosBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#007AFF',
   },
   tableCellFirst: {
     padding: 10,

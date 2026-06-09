@@ -135,6 +135,208 @@ function pushFragment(fragments: Record<string, any>, key: string, item: any) {
     (fragments[key] as any[]).push(item);
 }
 
+function groupByNumberKey<T>(items: T[], keyFn: (item: T) => number | null | undefined): Map<number, T[]> {
+    const map = new Map<number, T[]>();
+    for (const item of items) {
+        const raw = keyFn(item);
+        if (raw == null || !Number.isFinite(Number(raw))) continue;
+        const key = Number(raw);
+        const list = map.get(key) ?? [];
+        list.push(item);
+        map.set(key, list);
+    }
+    return map;
+}
+
+function activeStructureWhere(nowCostaRica: Date) {
+    return {
+        deleted: null as null,
+        OR: [{ fecha_inactivacion: null }, { fecha_inactivacion: { gte: nowCostaRica } }],
+    };
+}
+
+function attachTiposMantenimientoToArticulos(
+    articulos_return: any[],
+    tiposByArticuloId: Map<number, TipoMantenimientoArticuloDTO[]>,
+): any[] {
+    return articulos_return.map((a) => ({
+        ...a,
+        tipos_mantenimiento: a.articulo_nomenclador_id
+            ? (tiposByArticuloId.get(a.articulo_nomenclador_id) ?? [])
+            : [],
+    }));
+}
+
+function attachMantenimientosAndMovimientosToArticulos(articulos_return: any[], mantenimientos: any[], movimientos: any[]): any[] {
+    const planIds = articulos_return.filter((a) => a.tipo === "Plan").map((a) => a.id);
+    const asignadoIds = articulos_return.filter((a) => a.tipo === "Asignado").map((a) => a.id);
+
+    if (planIds.length === 0 && asignadoIds.length === 0) {
+        return articulos_return.map((a) => ({
+            ...a,
+            key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
+            source: a.tipo === "Plan" ? "plan" : "asignado",
+            estructura_id: a.id,
+            articulo_nombre: a.nombre,
+            cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
+            mantenimientos: [],
+            ultimo_mantenimiento: null,
+            ultimo_registro_mantenimiento: null,
+            movimientos: [],
+        }));
+    }
+
+    const latestByPlanId = new Map<number, any>();
+    const latestByAsignadoId = new Map<number, any>();
+    const mantenimientosByPlanId = new Map<number, any[]>();
+    const mantenimientosByAsignadoId = new Map<number, any[]>();
+    for (const m of mantenimientos) {
+        if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
+        if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
+        if (m.articulo_plan_id) {
+            const list = mantenimientosByPlanId.get(m.articulo_plan_id) ?? [];
+            if (list.length < 8) {
+                list.push(m);
+                mantenimientosByPlanId.set(m.articulo_plan_id, list);
+            }
+        }
+        if (m.articulo_asignado_id) {
+            const list = mantenimientosByAsignadoId.get(m.articulo_asignado_id) ?? [];
+            if (list.length < 8) {
+                list.push(m);
+                mantenimientosByAsignadoId.set(m.articulo_asignado_id, list);
+            }
+        }
+    }
+
+    const movsByPlanId = new Map<number, any[]>();
+    const movsByAsignadoId = new Map<number, any[]>();
+    for (const mov of movimientos) {
+        if (mov.articulo_plan_id) {
+            const list = movsByPlanId.get(mov.articulo_plan_id) ?? [];
+            list.push(mov);
+            movsByPlanId.set(mov.articulo_plan_id, list);
+        }
+        if (mov.articulo_asignado_id) {
+            const list = movsByAsignadoId.get(mov.articulo_asignado_id) ?? [];
+            list.push(mov);
+            movsByAsignadoId.set(mov.articulo_asignado_id, list);
+        }
+    }
+
+    return articulos_return.map((a) => ({
+        ...a,
+        key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
+        source: a.tipo === "Plan" ? "plan" : "asignado",
+        estructura_id: a.id,
+        articulo_nombre: a.nombre,
+        cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
+        marca:
+            a.tipo === "Plan"
+                ? (latestByPlanId.get(a.id)?.marca ?? a.marca ?? null)
+                : (a.marca ?? null),
+        serie:
+            a.tipo === "Plan"
+                ? (latestByPlanId.get(a.id)?.serie_placa ?? a.serie ?? null)
+                : (a.serie ?? null),
+        mantenimientos:
+            a.tipo === "Plan"
+                ? (mantenimientosByPlanId.get(a.id) ?? [])
+                : a.tipo === "Asignado"
+                    ? (mantenimientosByAsignadoId.get(a.id) ?? [])
+                    : [],
+        ultimo_mantenimiento:
+            a.tipo === "Plan"
+                ? latestByPlanId.get(a.id) ?? null
+                : a.tipo === "Asignado"
+                    ? latestByAsignadoId.get(a.id) ?? null
+                    : null,
+        ultimo_registro_mantenimiento:
+            a.tipo === "Plan"
+                ? latestByPlanId.get(a.id) ?? null
+                : a.tipo === "Asignado"
+                    ? latestByAsignadoId.get(a.id) ?? null
+                    : null,
+        movimientos:
+            a.tipo === "Plan"
+                ? movsByPlanId.get(a.id) ?? []
+                : a.tipo === "Asignado"
+                    ? movsByAsignadoId.get(a.id) ?? []
+                    : [],
+    }));
+}
+
+function buildArticulosBaseForPuesto(
+    puesto: { id: number; comboArticulosCP_id: number | null },
+    sucursalId: number,
+    validComboIds: Set<number>,
+    planByComboId: Map<number, any[]>,
+    allPlanRows: any[],
+    allEntregaRows: any[],
+    nomencladorById: Map<number, { id: number; nombre: string }>,
+): any[] {
+    const articulos_return: any[] = [];
+
+    if (puesto.comboArticulosCP_id && validComboIds.has(puesto.comboArticulosCP_id)) {
+        const articulos_combo_articulo_cp = planByComboId.get(puesto.comboArticulosCP_id) ?? [];
+        for (const articulo of articulos_combo_articulo_cp) {
+            const art_bd = articulo.articuloCP_id ? nomencladorById.get(articulo.articuloCP_id) ?? null : null;
+            articulos_return.push({
+                id: articulo.id,
+                nombre: art_bd ? art_bd.nombre : "Desconocido",
+                tipo: "Plan",
+                marca: "",
+                serie: "",
+                cantidad: articulo.cantidad,
+                articulo_nomenclador_id: articulo.articuloCP_id ?? null,
+                tipos_mantenimiento: [],
+            });
+        }
+    }
+
+    const excludedIds = new Set(articulos_return.map((articulo) => articulo.id));
+    const articulos_puesto_plan = allPlanRows.filter(
+        (articulo) =>
+            !excludedIds.has(articulo.id) &&
+            (articulo.puesto_id === puesto.id || articulo.corpo_id === sucursalId),
+    );
+
+    for (const articulo of articulos_puesto_plan) {
+        const art_bd = articulo.articuloCP_id ? nomencladorById.get(articulo.articuloCP_id) ?? null : null;
+        articulos_return.push({
+            id: articulo.id,
+            nombre: art_bd ? art_bd.nombre : "Desconocido",
+            tipo: "Plan",
+            marca: "",
+            serie: "",
+            cantidad: articulo.cantidad,
+            articulo_nomenclador_id: articulo.articuloCP_id ?? null,
+            tipos_mantenimiento: [],
+        });
+    }
+
+    const articulos_puesto_entrega = allEntregaRows.filter(
+        (articulo) => articulo.puesto_id === puesto.id || articulo.corpo_id === sucursalId,
+    );
+    for (const articulo of articulos_puesto_entrega) {
+        const art_bd = articulo.nomencladorArticuloCP_id
+            ? nomencladorById.get(articulo.nomencladorArticuloCP_id) ?? null
+            : null;
+        articulos_return.push({
+            id: articulo.id,
+            nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
+            tipo: "Asignado",
+            marca: articulo.marca,
+            serie: articulo.serie,
+            cantidad: 1,
+            articulo_nomenclador_id: articulo.nomencladorArticuloCP_id ?? null,
+            tipos_mantenimiento: [],
+        });
+    }
+
+    return articulos_return;
+}
+
 export async function POST(req: NextRequest) {
     try {
         // Cadena de 8 números aleatorios
@@ -147,65 +349,313 @@ export async function POST(req: NextRequest) {
         }*/
 
         const nowCostaRica = toZonedTime(new Date(), "America/Costa_Rica");
+        const activeWhere = activeStructureWhere(nowCostaRica);
 
+        // Escalones jerárquicos: findMany por nivel y lookup en memoria (patrón sendNotificationByRole).
         const main = await prisma.e_estructura_empresa.findMany({ where: { deleted: null } });
+        const empresaIds = main.map((e) => e.id);
 
-        // Cache offline mobile: datos en `fragments` por clave jerárquica; `structure` se arma al vuelo.
-        const fragments: Record<string, any> = {};
         const divisionRows = await prisma.n_division.findMany();
+
+        const clienteRows =
+            empresaIds.length > 0
+                ? await prisma.e_estructura_cliente.findMany({
+                      where: { empresa_id: { in: empresaIds }, ...activeWhere },
+                  })
+                : [];
+        const clienteIds = clienteRows.map((c) => c.id);
+        const clientesByEmpresaId = groupByNumberKey(clienteRows, (c) => c.empresa_id);
+
+        const contratoRows =
+            clienteIds.length > 0
+                ? await prisma.e_estructura_contrato.findMany({
+                      where: { cliente_id: { in: clienteIds }, ...activeWhere },
+                  })
+                : [];
+        const contratoIds = contratoRows.map((c) => c.id);
+        const contratosByClienteDivision = new Map<string, typeof contratoRows>();
+        for (const c of contratoRows) {
+            if (c.cliente_id == null || c.division_id == null) continue;
+            const key = `${c.cliente_id}_${c.division_id}`;
+            const list = contratosByClienteDivision.get(key) ?? [];
+            list.push(c);
+            contratosByClienteDivision.set(key, list);
+        }
+
+        const sucursalRows =
+            contratoIds.length > 0
+                ? await prisma.e_estructura_sucursal.findMany({
+                      where: { contrato_id: { in: contratoIds }, ...activeWhere },
+                  })
+                : [];
+        const sucursalIds = sucursalRows.map((s) => s.id);
+        const sucursalesByContratoId = groupByNumberKey(sucursalRows, (s) => s.contrato_id);
+
+        const puestoRows =
+            sucursalIds.length > 0
+                ? await prisma.e_estructura_puesto.findMany({
+                      where: { sucursal_id: { in: sucursalIds }, ...activeWhere },
+                  })
+                : [];
+        const puestoIds = puestoRows.map((p) => p.id);
+        const puestosBySucursalId = groupByNumberKey(puestoRows, (p) => p.sucursal_id);
+
+        const plazaRows =
+            puestoIds.length > 0
+                ? await prisma.e_estructura_plazas.findMany({
+                      where: { puesto_id: { in: puestoIds }, ...activeWhere },
+                  })
+                : [];
+        const plazaIds = plazaRows.map((pl) => pl.id);
+        const plazasByPuestoId = groupByNumberKey(plazaRows, (pl) => pl.puesto_id);
+
+        const [vehiculosRows, bitacorasRows, llavesRows, llaverosRows] =
+            sucursalIds.length > 0
+                ? await Promise.all([
+                      prisma.c_vehiculos_corporativos.findMany({
+                          where: { sucursal_id: { in: sucursalIds }, isActive: true },
+                          include: {
+                              c_usos_vehiculos_corporativos: true,
+                              c_mantenimiento_vehiculos_corporativos: true,
+                          },
+                      }),
+                      prisma.c_bitacora_vehiculo_detenido.findMany({
+                          where: { sucursal_id: { in: sucursalIds }, isActive: true },
+                          orderBy: { id: "desc" },
+                      }),
+                      prisma.e_llave.findMany({
+                          where: { corpo_id: { in: sucursalIds }, isActive: true },
+                          include: { e_movimiento_llave: { orderBy: { id: "desc" } } },
+                          orderBy: { id: "desc" },
+                      }),
+                      prisma.e_llavero.findMany({
+                          where: { corpo_id: { in: sucursalIds }, isActive: true },
+                          include: {
+                              e_movimiento_llavero: { orderBy: { id: "desc" } },
+                              e_llave_en_llavero: { orderBy: { id: "asc" } },
+                          },
+                          orderBy: { id: "desc" },
+                      }),
+                  ])
+                : [[], [], [], []];
+
+        const vehiculosBySucursalId = groupByNumberKey(vehiculosRows, (v) => v.sucursal_id);
+        const bitacorasBySucursalId = groupByNumberKey(bitacorasRows, (b) => b.sucursal_id);
+        const llavesBySucursalId = groupByNumberKey(llavesRows, (l) => l.corpo_id);
+        const llaverosBySucursalId = groupByNumberKey(llaverosRows, (l) => l.corpo_id);
+
+        const comboIds = Array.from(
+            new Set(
+                puestoRows
+                    .map((p) => p.comboArticulosCP_id)
+                    .filter((id): id is number => id != null && Number.isFinite(id)),
+            ),
+        );
+        const comboRows =
+            comboIds.length > 0
+                ? await prisma.e_estructura_combo_articulo_cp.findMany({ where: { id: { in: comboIds } } })
+                : [];
+        const validComboIds = new Set(comboRows.map((c) => c.id));
+
+        const planOrConditions: any[] = [];
+        if (puestoIds.length) planOrConditions.push({ puesto_id: { in: puestoIds } });
+        if (sucursalIds.length) planOrConditions.push({ corpo_id: { in: sucursalIds } });
+        if (comboIds.length) planOrConditions.push({ combo_id: { in: comboIds } });
+
+        const allPlanRows =
+            planOrConditions.length > 0
+                ? await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { OR: planOrConditions } })
+                : [];
+
+        const entregaOrConditions: any[] = [];
+        if (puestoIds.length) entregaOrConditions.push({ puesto_id: { in: puestoIds } });
+        if (sucursalIds.length) entregaOrConditions.push({ corpo_id: { in: sucursalIds } });
+
+        const allEntregaRows =
+            entregaOrConditions.length > 0
+                ? await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { OR: entregaOrConditions } })
+                : [];
+
+        const planByComboId = groupByNumberKey(
+            allPlanRows.filter((a) => a.combo_id != null),
+            (a) => a.combo_id,
+        );
+
+        const nomencladorIds = Array.from(
+            new Set(
+                [
+                    ...allPlanRows.map((a) => a.articuloCP_id),
+                    ...allEntregaRows.map((a) => a.nomencladorArticuloCP_id),
+                ].filter((id): id is number => id != null && Number.isFinite(id)),
+            ),
+        );
+        const nomencladorRows =
+            nomencladorIds.length > 0
+                ? await prisma.n_articulo_corpo_puesto.findMany({ where: { id: { in: nomencladorIds } } })
+                : [];
+        const nomencladorById = new Map(nomencladorRows.map((n) => [n.id, n]));
+
+        const tiposRows =
+            nomencladorIds.length > 0
+                ? await prisma.n_tipo_mantenimiento_articulo.findMany({
+                      where: { articulo_id: { in: nomencladorIds } },
+                      select: { id: true, articulo_id: true, nombre: true },
+                      orderBy: { id: "asc" },
+                  })
+                : [];
+        const tiposByArticuloId = new Map<number, TipoMantenimientoArticuloDTO[]>();
+        for (const t of tiposRows) {
+            const list = tiposByArticuloId.get(t.articulo_id) ?? [];
+            list.push({ id: t.id, nombre: t.nombre });
+            tiposByArticuloId.set(t.articulo_id, list);
+        }
+
+        const allPlanArticuloIds = allPlanRows.map((a) => a.id);
+        const allAsignadoIds = allEntregaRows.map((a) => a.id);
+        const mantOrConditions: any[] = [];
+        if (allPlanArticuloIds.length) mantOrConditions.push({ articulo_plan_id: { in: allPlanArticuloIds } });
+        if (allAsignadoIds.length) mantOrConditions.push({ articulo_asignado_id: { in: allAsignadoIds } });
+
+        const [allMantenimientos, allMovimientos] =
+            mantOrConditions.length > 0
+                ? await Promise.all([
+                      prisma.c_articulo_mantenimiento.findMany({
+                          where: { OR: mantOrConditions },
+                          orderBy: { id: "desc" },
+                          include: {
+                              c_archivos_adjuntos_articulo_mantenimiento: {
+                                  select: {
+                                      id: true,
+                                      name: true,
+                                      original_name: true,
+                                      type: true,
+                                      extension: true,
+                                  },
+                              },
+                          },
+                      }),
+                      prisma.c_movimientos_articulo_mantenimiento.findMany({
+                          where: { OR: mantOrConditions },
+                          orderBy: { id: "desc" },
+                          select: {
+                              id: true,
+                              articulo_plan_id: true,
+                              articulo_asignado_id: true,
+                              nombre_persona_recibe: true,
+                              nombre_persona_entrega: true,
+                              departamento: true,
+                              telefono: true,
+                              entrega: true,
+                              recibe: true,
+                              fecha: true,
+                              hora: true,
+                              firma_entrega: true,
+                              firma_recibe: true,
+                              firma_responsable: true,
+                          },
+                      }),
+                  ])
+                : [[], []];
+
+        const mantenimientosByPlanId = groupByNumberKey(
+            allMantenimientos.filter((m) => m.articulo_plan_id != null),
+            (m) => m.articulo_plan_id,
+        );
+        const mantenimientosByAsignadoId = groupByNumberKey(
+            allMantenimientos.filter((m) => m.articulo_asignado_id != null),
+            (m) => m.articulo_asignado_id,
+        );
+        const movimientosByPlanId = groupByNumberKey(
+            allMovimientos.filter((m) => m.articulo_plan_id != null),
+            (m) => m.articulo_plan_id,
+        );
+        const movimientosByAsignadoId = groupByNumberKey(
+            allMovimientos.filter((m) => m.articulo_asignado_id != null),
+            (m) => m.articulo_asignado_id,
+        );
+
+        const plazaEmpleadoRows =
+            plazaIds.length > 0
+                ? await prisma.c_empleado_plaza.findMany({
+                      where: { plaza_id: { in: plazaIds }, empleado_id: { not: null } },
+                      select: { plaza_id: true, empleado_id: true },
+                  })
+                : [];
+        const empleadoIdsByPlazaId = new Map<number, number[]>();
+        const allEmpleadoIds = new Set<number>();
+        for (const row of plazaEmpleadoRows) {
+            if (row.plaza_id == null || row.empleado_id == null) continue;
+            const eid = Number(row.empleado_id);
+            if (!Number.isFinite(eid)) continue;
+            allEmpleadoIds.add(eid);
+            const list = empleadoIdsByPlazaId.get(row.plaza_id) ?? [];
+            if (!list.includes(eid)) list.push(eid);
+            empleadoIdsByPlazaId.set(row.plaza_id, list);
+        }
+
+        const empleadoIdsList = Array.from(allEmpleadoIds);
+        const empleadoRows =
+            empleadoIdsList.length > 0
+                ? await prisma.c_empleado.findMany({
+                      where: {
+                          id: { in: empleadoIdsList },
+                          fecha_contratacion: { not: null },
+                          OR: [{ estado: null }, { estado: { not: "BA" } }],
+                          NOT: [{ cedula: { contains: "@" } }],
+                      },
+                      select: {
+                          id: true,
+                          codigo: true,
+                          cedula: true,
+                          nombre: true,
+                          primer_apellido: true,
+                          segundo_apellido: true,
+                          Email: true,
+                          telefono: true,
+                          tipoCedula: true,
+                          fecha_contratacion: true,
+                          estado: true,
+                          supervisor_id: true,
+                          firma_manual: true,
+                      },
+                      orderBy: [
+                          { nombre: "asc" },
+                          { primer_apellido: "asc" },
+                          { segundo_apellido: "asc" },
+                          { id: "asc" },
+                      ],
+                  })
+                : [];
+        const empleadoById = new Map(empleadoRows.map((e) => [e.id, e]));
+
+        // Ensamblar fragments desde variables en memoria (sin consultas por elemento).
+        const fragments: Record<string, any> = {};
         fragments.divisiones = divisionRows.map((d) => ({ id: d.id, nombre: d.nombre }));
         fragments.empresas = main.map((e) => ({ id: e.id, nombre: `${e.codigo} - ${e.nombre}` }));
 
         for (const empresa of main) {
-            const clientes = await prisma.e_estructura_cliente.findMany({
-                where: {
-                    empresa_id: empresa.id,
-                    deleted: null,
-                    OR: [{ fecha_inactivacion: null }, { fecha_inactivacion: { gte: nowCostaRica } }],
-                },
-            });
+            const clientes = clientesByEmpresaId.get(empresa.id) ?? [];
             for (const cliente of clientes) {
                 pushFragment(fragments, `empresa_${empresa.id}_clientes`, { id: cliente.id, nombre: cliente.nombre });
 
                 for (const division of divisionRows) {
-                    const contratos = await prisma.e_estructura_contrato.findMany({
-                        where: {
-                            cliente_id: cliente.id,
-                            division_id: division.id,
-                            deleted: null,
-                            OR: [
-                                { fecha_inactivacion: null },
-                                { fecha_inactivacion: { gte: nowCostaRica } },
-                            ],
-                        },
-                    });
+                    const contratos = contratosByClienteDivision.get(`${cliente.id}_${division.id}`) ?? [];
                     for (const contrato of contratos) {
                         pushFragment(fragments, `cliente_${cliente.id}_division_${division.id}_contratos`, {
                             id: contrato.id,
                             nombre: contrato.nombre,
+                            nro_contrato: contrato.nro_contrato,
                         });
 
-                        const sucursales = await prisma.e_estructura_sucursal.findMany({
-                            where: {
-                                contrato_id: contrato.id,
-                                deleted: null,
-                                OR: [
-                                    { fecha_inactivacion: null },
-                                    { fecha_inactivacion: { gte: nowCostaRica } },
-                                ],
-                            },
-                        });
+                        const sucursales = sucursalesByContratoId.get(contrato.id) ?? [];
                         for (const sucursal of sucursales) {
                             pushFragment(fragments, `contrato_${contrato.id}_sucursales`, {
                                 id: sucursal.id,
                                 nombre: `${sucursal.nro_sucursal} - ${sucursal.nombre}`,
+                                nro_sucursal: sucursal.nro_sucursal,
                             });
 
-                            const vehiculos = await prisma.c_vehiculos_corporativos.findMany({
-                                where: { sucursal_id: sucursal.id, isActive: true },
-                                include: { c_usos_vehiculos_corporativos: true, c_mantenimiento_vehiculos_corporativos: true },
-                            });
-
+                            const vehiculos = vehiculosBySucursalId.get(sucursal.id) ?? [];
                             const vehiculoById = new Map<number, any>(vehiculos.map((v: any) => [v.id, v]));
 
                             fragments[`sucursal_${sucursal.id}_vehiculos_corporativos`] = vehiculos.map((v: any) => ({
@@ -213,365 +663,102 @@ export async function POST(req: NextRequest) {
                                 usos: v.c_usos_vehiculos_corporativos.map((u: any) => ({ ...u })),
                             }));
 
-                            const bitacorasRows = await prisma.c_bitacora_vehiculo_detenido.findMany({
-                                where: { sucursal_id: sucursal.id, isActive: true },
-                                orderBy: { id: "desc" },
-                            });
+                            const bitacorasSucursal = bitacorasBySucursalId.get(sucursal.id) ?? [];
+                            fragments[`sucursal_${sucursal.id}_bitacora_vehiculos_detenidos`] = bitacorasSucursal.map(
+                                (b: any) => {
+                                    const vehRaw = b.vehiculo_id != null ? vehiculoById.get(Number(b.vehiculo_id)) : null;
+                                    let uso: any = null;
+                                    if (vehRaw && b.uso_id != null) {
+                                        uso =
+                                            vehRaw.c_usos_vehiculos_corporativos.find(
+                                                (u: any) => Number(u.id) === Number(b.uso_id),
+                                            ) ?? null;
+                                    }
+                                    return {
+                                        ...b,
+                                        vehiculo: mapVehiculoCorporativoSummaryForBitacora(vehRaw),
+                                        uso: uso ? { ...uso } : null,
+                                    };
+                                },
+                            );
 
-                            fragments[`sucursal_${sucursal.id}_bitacora_vehiculos_detenidos`] = bitacorasRows.map((b: any) => {
-                                const vehRaw = b.vehiculo_id != null ? vehiculoById.get(Number(b.vehiculo_id)) : null;
-                                let uso: any = null;
-                                if (vehRaw && b.uso_id != null) {
-                                    uso =
-                                        vehRaw.c_usos_vehiculos_corporativos.find(
-                                            (u: any) => Number(u.id) === Number(b.uso_id)
-                                        ) ?? null;
-                                }
-                                return {
-                                    ...b,
-                                    vehiculo: mapVehiculoCorporativoSummaryForBitacora(vehRaw),
-                                    uso: uso ? { ...uso } : null,
-                                };
-                            });
-
-                            const [llavesCorpo, llaverosCorpo] = await Promise.all([
-                                prisma.e_llave.findMany({
-                                    where: { corpo_id: sucursal.id, isActive: true },
-                                    include: {
-                                        e_movimiento_llave: { orderBy: { id: "desc" } },
-                                    },
-                                    orderBy: { id: "desc" },
-                                }),
-                                prisma.e_llavero.findMany({
-                                    where: { corpo_id: sucursal.id, isActive: true },
-                                    include: {
-                                        e_movimiento_llavero: { orderBy: { id: "desc" } },
-                                        e_llave_en_llavero: {
-                                            orderBy: { id: "asc" },
-                                        },
-                                    },
-                                    orderBy: { id: "desc" },
-                                }),
-                            ]);
+                            const llavesCorpo = llavesBySucursalId.get(sucursal.id) ?? [];
+                            const llaverosCorpo = llaverosBySucursalId.get(sucursal.id) ?? [];
                             fragments[`sucursal_${sucursal.id}_llaves`] = llavesCorpo.map(mapLlaveForStructure);
                             fragments[`sucursal_${sucursal.id}_llaveros`] = llaverosCorpo.map(mapLlaveroForStructure);
 
-                            const puestos = await prisma.e_estructura_puesto.findMany({
-                                where: {
-                                    sucursal_id: sucursal.id,
-                                    deleted: null,
-                                    OR: [
-                                        { fecha_inactivacion: null },
-                                        { fecha_inactivacion: { gte: nowCostaRica } },
-                                    ],
-                                },
-                            });
-
+                            const puestos = puestosBySucursalId.get(sucursal.id) ?? [];
                             for (const puesto of puestos) {
                                 pushFragment(fragments, `sucursal_${sucursal.id}_puestos`, {
                                     id: puesto.id,
                                     nombre: `${puesto.codigo} - ${puesto.nombre}`,
-                                    ubicacion: { lat: puesto.coordenadas_gpslat ?? null, lng: puesto.coordenadas_gpslng ?? null },
+                                    codigo: puesto.codigo,
+                                    ubicacion: {
+                                        lat: puesto.coordenadas_gpslat ?? null,
+                                        lng: puesto.coordenadas_gpslng ?? null,
+                                    },
                                 });
 
-                                let articulos_return: any[] = [];
-
-                                if (puesto.comboArticulosCP_id) {
-                                    const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({ where: { id: puesto.comboArticulosCP_id } });
-                                    if (combo_articulo_cp) {
-                                        const articulos_combo_articulo_cp = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: { combo_id: combo_articulo_cp.id } });
-                                        for (const articulo of articulos_combo_articulo_cp) {
-                                            let art_bd = null;
-                                            if (articulo.articuloCP_id) {
-                                                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
-                                            }
-                                            articulos_return.push({
-                                                id: articulo.id,
-                                                nombre: art_bd ? art_bd.nombre : "Desconocido",
-                                                tipo: "Plan",
-                                                marca: "",
-                                                serie: "",
-                                                cantidad: articulo.cantidad,
-                                                articulo_nomenclador_id: articulo.articuloCP_id ?? null,
-                                                tipos_mantenimiento: [],
-                                            });
-                                        }
-                                    }
-                                }
-
-                                const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({ where: {
-                                    OR: [ { puesto_id: puesto.id } , { corpo_id: sucursal.id } ],
-                                    id: { notIn: articulos_return.map(articulo => articulo.id) }
-                                } });
-                                
-                                for (const articulo of articulos_puesto_plan) {
-                                    let art_bd = null;
-                                    if (articulo.articuloCP_id) {
-                                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.articuloCP_id } });
-                                    }
-                                    articulos_return.push({
-                                        id: articulo.id,
-                                        nombre: art_bd ? art_bd.nombre : "Desconocido",
-                                        tipo: "Plan",
-                                        marca: "",
-                                        serie: "",
-                                        cantidad: articulo.cantidad,
-                                        articulo_nomenclador_id: articulo.articuloCP_id ?? null,
-                                        tipos_mantenimiento: [],
-                                    });
-                                }
-
-                                const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({ where: { OR: [{ puesto_id: puesto.id }, { corpo_id: sucursal.id }] } });
-                                for (const articulo of articulos_puesto_entrega) {
-                                    let art_bd = null;
-                                    if (articulo.nomencladorArticuloCP_id) {
-                                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({ where: { id: articulo.nomencladorArticuloCP_id } });
-                                    }
-                                    articulos_return.push({
-                                        id: articulo.id,
-                                        nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
-                                        tipo: "Asignado",
-                                        marca: articulo.marca,
-                                        serie: articulo.serie,
-                                        cantidad: 1,
-                                        articulo_nomenclador_id: articulo.nomencladorArticuloCP_id ?? null,
-                                        tipos_mantenimiento: [],
-                                    });
-                                }
-
-                                // Adjuntar tipos de mantenimiento por artículo nomenclador (n_tipo_mantenimiento_articulo)
-                                const articuloNomencladorIds = Array.from(
-                                    new Set(
-                                        articulos_return
-                                            .map((a) => a.articulo_nomenclador_id)
-                                            .filter((id): id is number => typeof id === "number" && Number.isFinite(id))
-                                    )
+                                let articulos_return = buildArticulosBaseForPuesto(
+                                    puesto,
+                                    sucursal.id,
+                                    validComboIds,
+                                    planByComboId,
+                                    allPlanRows,
+                                    allEntregaRows,
+                                    nomencladorById,
                                 );
-                                if (articuloNomencladorIds.length > 0) {
-                                    const tiposRows = await prisma.n_tipo_mantenimiento_articulo.findMany({
-                                        where: { articulo_id: { in: articuloNomencladorIds } },
-                                        select: { id: true, articulo_id: true, nombre: true },
-                                        orderBy: { id: "asc" },
-                                    });
-                                    const tiposByArticuloId = new Map<number, TipoMantenimientoArticuloDTO[]>();
-                                    for (const t of tiposRows) {
-                                        const list = tiposByArticuloId.get(t.articulo_id) ?? [];
-                                        list.push({ id: t.id, nombre: t.nombre });
-                                        tiposByArticuloId.set(t.articulo_id, list);
-                                    }
-                                    articulos_return = articulos_return.map((a) => ({
-                                        ...a,
-                                        tipos_mantenimiento: a.articulo_nomenclador_id
-                                            ? (tiposByArticuloId.get(a.articulo_nomenclador_id) ?? [])
-                                            : [],
-                                    }));
-                                }
+                                articulos_return = attachTiposMantenimientoToArticulos(articulos_return, tiposByArticuloId);
 
-                                // Adjuntar último mantenimiento a cada artículo del puesto
                                 const planIds = articulos_return.filter((a) => a.tipo === "Plan").map((a) => a.id);
                                 const asignadoIds = articulos_return.filter((a) => a.tipo === "Asignado").map((a) => a.id);
 
-                                if (planIds.length > 0 || asignadoIds.length > 0) {
-                                    const or: any[] = [];
-                                    if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
-                                    if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
-
-                                    const mantenimientos = await prisma.c_articulo_mantenimiento.findMany({
-                                        where: { OR: or },
-                                        orderBy: { id: "desc" },
-                                        include: {
-                                            c_archivos_adjuntos_articulo_mantenimiento: {
-                                                select: {
-                                                    id: true,
-                                                    name: true,
-                                                    original_name: true,
-                                                    type: true,
-                                                    extension: true,
-                                                },
-                                            },
-                                        },
-                                    });
-
-                                    const latestByPlanId = new Map<number, any>();
-                                    const latestByAsignadoId = new Map<number, any>();
-                                    const mantenimientosByPlanId = new Map<number, any[]>();
-                                    const mantenimientosByAsignadoId = new Map<number, any[]>();
-                                    for (const m of mantenimientos) {
-                                        if (m.articulo_plan_id && !latestByPlanId.has(m.articulo_plan_id)) latestByPlanId.set(m.articulo_plan_id, m);
-                                        if (m.articulo_asignado_id && !latestByAsignadoId.has(m.articulo_asignado_id)) latestByAsignadoId.set(m.articulo_asignado_id, m);
-                                        if (m.articulo_plan_id) {
-                                            const list = mantenimientosByPlanId.get(m.articulo_plan_id) ?? [];
-                                            if (list.length < 8) {
-                                                list.push(m);
-                                                mantenimientosByPlanId.set(m.articulo_plan_id, list);
-                                            }
-                                        }
-                                        if (m.articulo_asignado_id) {
-                                            const list = mantenimientosByAsignadoId.get(m.articulo_asignado_id) ?? [];
-                                            if (list.length < 8) {
-                                                list.push(m);
-                                                mantenimientosByAsignadoId.set(m.articulo_asignado_id, list);
-                                            }
-                                        }
-                                    }
-
-                                    // Adjuntar movimientos a cada artículo del puesto
-                                    const movimientos = await prisma.c_movimientos_articulo_mantenimiento.findMany({
-                                        where: { OR: or },
-                                        orderBy: { id: "desc" },
-                                        select: {
-                                            id: true,
-                                            articulo_plan_id: true,
-                                            articulo_asignado_id: true,
-                                            nombre_persona_recibe: true,
-                                            nombre_persona_entrega: true,
-                                            departamento: true,
-                                            telefono: true,
-                                            entrega: true,
-                                            recibe: true,
-                                            fecha: true,
-                                            hora: true,
-                                            firma_entrega: true,
-                                            firma_recibe: true,
-                                            firma_responsable: true,
-                                        },
-                                    });
-
-                                    const movsByPlanId = new Map<number, any[]>();
-                                    const movsByAsignadoId = new Map<number, any[]>();
-                                    for (const mov of movimientos) {
-                                        if (mov.articulo_plan_id) {
-                                            const list = movsByPlanId.get(mov.articulo_plan_id) ?? [];
-                                            list.push(mov);
-                                            movsByPlanId.set(mov.articulo_plan_id, list);
-                                        }
-                                        if (mov.articulo_asignado_id) {
-                                            const list = movsByAsignadoId.get(mov.articulo_asignado_id) ?? [];
-                                            list.push(mov);
-                                            movsByAsignadoId.set(mov.articulo_asignado_id, list);
-                                        }
-                                    }
-
-                                    articulos_return = (articulos_return as any[]).map((a) => ({
-                                        ...a,
-                                        key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
-                                        source: a.tipo === "Plan" ? "plan" : "asignado",
-                                        estructura_id: a.id,
-                                        articulo_nombre: a.nombre,
-                                        cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
-                                        marca:
-                                            a.tipo === "Plan"
-                                                ? (latestByPlanId.get(a.id)?.marca ?? a.marca ?? null)
-                                                : (a.marca ?? null),
-                                        serie:
-                                            a.tipo === "Plan"
-                                                ? (latestByPlanId.get(a.id)?.serie_placa ?? a.serie ?? null)
-                                                : (a.serie ?? null),
-                                        mantenimientos:
-                                            a.tipo === "Plan"
-                                                ? (mantenimientosByPlanId.get(a.id) ?? [])
-                                                : a.tipo === "Asignado"
-                                                    ? (mantenimientosByAsignadoId.get(a.id) ?? [])
-                                                    : [],
-                                        ultimo_mantenimiento:
-                                            a.tipo === "Plan"
-                                                ? latestByPlanId.get(a.id) ?? null
-                                                : a.tipo === "Asignado"
-                                                    ? latestByAsignadoId.get(a.id) ?? null
-                                                    : null,
-                                        ultimo_registro_mantenimiento:
-                                            a.tipo === "Plan"
-                                                ? latestByPlanId.get(a.id) ?? null
-                                                : a.tipo === "Asignado"
-                                                    ? latestByAsignadoId.get(a.id) ?? null
-                                                    : null,
-                                        movimientos:
-                                            a.tipo === "Plan"
-                                                ? movsByPlanId.get(a.id) ?? []
-                                                : a.tipo === "Asignado"
-                                                    ? movsByAsignadoId.get(a.id) ?? []
-                                                    : [],
-                                    }));
-                                } else {
-                                    articulos_return = (articulos_return as any[]).map((a) => ({
-                                        ...a,
-                                        key: `${a.tipo === "Plan" ? "plan" : "asignado"}-${a.id}`,
-                                        source: a.tipo === "Plan" ? "plan" : "asignado",
-                                        estructura_id: a.id,
-                                        articulo_nombre: a.nombre,
-                                        cantidad_plan: a.tipo === "Plan" ? a.cantidad : null,
-                                        mantenimientos: [],
-                                        ultimo_mantenimiento: null,
-                                        ultimo_registro_mantenimiento: null,
-                                        movimientos: [],
-                                    }));
+                                const mantenimientosForPuesto: any[] = [];
+                                for (const id of planIds) {
+                                    mantenimientosForPuesto.push(...(mantenimientosByPlanId.get(id) ?? []));
                                 }
+                                for (const id of asignadoIds) {
+                                    mantenimientosForPuesto.push(...(mantenimientosByAsignadoId.get(id) ?? []));
+                                }
+                                mantenimientosForPuesto.sort((a, b) => b.id - a.id);
 
+                                const movimientosForPuesto: any[] = [];
+                                for (const id of planIds) {
+                                    movimientosForPuesto.push(...(movimientosByPlanId.get(id) ?? []));
+                                }
+                                for (const id of asignadoIds) {
+                                    movimientosForPuesto.push(...(movimientosByAsignadoId.get(id) ?? []));
+                                }
+                                movimientosForPuesto.sort((a, b) => b.id - a.id);
+
+                                articulos_return = attachMantenimientosAndMovimientosToArticulos(
+                                    articulos_return,
+                                    mantenimientosForPuesto,
+                                    movimientosForPuesto,
+                                );
                                 fragments[`puesto_${puesto.id}_articulos`] = articulos_return.map((a) => ({ ...a }));
 
-                                const plazas = await prisma.e_estructura_plazas.findMany({
-                                    where: {
-                                        puesto_id: puesto.id,
-                                        deleted: null,
-                                        OR: [
-                                            { fecha_inactivacion: null },
-                                            { fecha_inactivacion: { gte: nowCostaRica } },
-                                        ],
-                                    },
-                                });
+                                const plazas = plazasByPuestoId.get(puesto.id) ?? [];
                                 for (const plaza of plazas) {
-                                    const plazaEmpleadoRows = await prisma.c_empleado_plaza.findMany({
-                                        where: {
-                                            plaza_id: plaza.id,
-                                            empleado_id: { not: null },
-                                        },
-                                        select: { empleado_id: true },
-                                    });
-
-                                    const empleadoIds = Array.from(
-                                        new Set(
-                                            plazaEmpleadoRows
-                                                .map((row: any) => row.empleado_id)
-                                                .filter((id: any): id is number => typeof id === "number" && Number.isFinite(id))
-                                        )
-                                    );
-
-                                    const empleados = empleadoIds.length > 0
-                                        ? await prisma.c_empleado.findMany({
-                                            where: {
-                                                id: { in: empleadoIds },
-                                                fecha_contratacion: { not: null },
-                                                OR: [{ estado: null }, { estado: { not: "BA" } }],
-                                                NOT: [{ cedula: { contains: "@" } }],
-                                            },
-                                            select: {
-                                                id: true,
-                                                codigo: true,
-                                                cedula: true,
-                                                nombre: true,
-                                                primer_apellido: true,
-                                                segundo_apellido: true,
-                                                Email: true,
-                                                telefono: true,
-                                                tipoCedula: true,
-                                                fecha_contratacion: true,
-                                                estado: true,
-                                                supervisor_id: true,
-                                                firma_manual: true,
-                                            },
-                                            orderBy: [
-                                                { nombre: "asc" },
-                                                { primer_apellido: "asc" },
-                                                { segundo_apellido: "asc" },
-                                                { id: "asc" },
-                                            ],
-                                        })
-                                        : [];
-
                                     pushFragment(fragments, `puesto_${puesto.id}_plazas`, {
                                         id: plaza.id,
                                         nombre: `${plaza.codigo_plaza} - ${plaza.nombre}`,
+                                        codigo_plaza: plaza.codigo_plaza,
                                     });
+
+                                    const empleadoIds = empleadoIdsByPlazaId.get(plaza.id) ?? [];
+                                    const empleados = empleadoIds
+                                        .map((eid) => empleadoById.get(eid))
+                                        .filter((e): e is NonNullable<typeof e> => e != null)
+                                        .sort((a, b) => {
+                                            const byNombre = (a.nombre ?? "").localeCompare(b.nombre ?? "");
+                                            if (byNombre !== 0) return byNombre;
+                                            const byAp1 = (a.primer_apellido ?? "").localeCompare(b.primer_apellido ?? "");
+                                            if (byAp1 !== 0) return byAp1;
+                                            const byAp2 = (a.segundo_apellido ?? "").localeCompare(b.segundo_apellido ?? "");
+                                            if (byAp2 !== 0) return byAp2;
+                                            return a.id - b.id;
+                                        });
                                     fragments[`plaza_${plaza.id}_empleados`] = empleados;
                                 }
                             }

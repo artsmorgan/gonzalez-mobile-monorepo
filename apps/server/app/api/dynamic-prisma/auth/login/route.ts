@@ -113,6 +113,16 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    await prisma.c_login_marca_almuerzo.create({
+      data: {
+        nombre_empleado: (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || ""),
+        cedula_empleado: empleado.cedula || "",
+        fecha_hora: now,
+        device: deviceName,
+        session_id: sessionId,
+      },
+    });
+
     // Construir roles del empleado (misma lógica que la ruta original, pero con Prisma)
     const empleadoPlazas = await prisma.c_empleado_plaza.findMany({
       where: { empleado_id: empleado.id },

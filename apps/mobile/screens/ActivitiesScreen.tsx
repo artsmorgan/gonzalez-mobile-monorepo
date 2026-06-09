@@ -3,6 +3,7 @@ import { StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Mod
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -26,7 +27,9 @@ import authedFetch from '@/hooks/authedFetch';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
-import { loadPuestoArticulosForTable, rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
+import { loadPuestoArticulosForTable, refreshPuestoArticulosFromServer, rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
+import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
+import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 
 const ACTIVITIES_MARK_PHOTO_PREFIX = 'activities_mark';
 
@@ -42,7 +45,14 @@ type ActivitiesScreenNavigationProp = NativeStackNavigationProp<RootStackParamLi
 
 type EstadoArticulo = 'Bueno' | 'Malo' | 'No está';
 
-type ArticleFormState = { estado: EstadoArticulo; cantidadReal: number; observaciones: string };
+type ArticleFormState = {
+  estado: EstadoArticulo;
+  cantidadReal: number;
+  observaciones: string;
+  tipo?: string;
+  ultimo_mantenimiento_id?: number | null;
+  mantenimiento_files?: ArticuloMantenimientoPendingFile[];
+};
 
 // Inventory Item Component
 interface InventoryItemProps {
@@ -59,6 +69,7 @@ interface InventoryItemProps {
   onClearInventoryImage: (inventoryId: number) => void;
   getArticleFormState: (activityId: number, inventory: Inventario) => ArticleFormState;
   setArticleFormState: (activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => void;
+  onOpenArchivos: (activityId: number, inventory: Inventario) => void;
 }
 
 // Activity Item Component
@@ -78,6 +89,7 @@ interface ActivityItemProps {
   onGoToEntregaPuestos: () => void;
   getArticleFormState: (activityId: number, inventory: Inventario) => ArticleFormState;
   setArticleFormState: (activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => void;
+  onOpenArchivos: (activityId: number, inventory: Inventario) => void;
 }
 
 const ActivityItemComponent: React.FC<ActivityItemProps> = ({
@@ -96,6 +108,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   onGoToEntregaPuestos,
   getArticleFormState,
   setArticleFormState,
+  onOpenArchivos,
 }) => {
   const [cachedActivityImage, setCachedActivityImage] = React.useState<string | null>(null);
   const [serverActivityImageBase64, setServerActivityImageBase64] = React.useState<string | null>(null);
@@ -286,6 +299,9 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
                     <View style={styles.tableHeaderCell}>
                       <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
                     </View>
+                    <View style={styles.tableHeaderCellArchivos}>
+                      <ThemedText style={styles.tableHeaderText}>Archivos</ThemedText>
+                    </View>
                   </View>
                   {inventoryRows.map((inventory) => (
                     <InventoryItemComponent
@@ -303,6 +319,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
                       onClearInventoryImage={onClearInventoryImage}
                       getArticleFormState={getArticleFormState}
                       setArticleFormState={setArticleFormState}
+                      onOpenArchivos={onOpenArchivos}
                     />
                   ))}
                 </View>
@@ -345,6 +362,9 @@ const getDefaultArticleFormState = (inventory: Inventario): ArticleFormState => 
     : 'Bueno'),
   cantidadReal: typeof inventory.cantidad_real === 'number' ? inventory.cantidad_real : (inventory.cantidad_requerida ?? 0),
   observaciones: inventory.observaciones ?? inventory.revision_equipo?.motivo_incorrecto ?? '',
+  tipo: inventory.tipo ? resolveArticuloTipoForApi(inventory) : '',
+  ultimo_mantenimiento_id: inventory.ultimo_mantenimiento_id ?? null,
+  mantenimiento_files: [],
 });
 
 const InventoryItemComponent: React.FC<InventoryItemProps> = ({
@@ -361,6 +381,7 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
   onClearInventoryImage,
   getArticleFormState,
   setArticleFormState,
+  onOpenArchivos,
 }) => {
   const formState = getArticleFormState(activity.id, inventory);
 
@@ -554,6 +575,19 @@ const InventoryItemComponent: React.FC<InventoryItemProps> = ({
           </ThemedView>
         )}
       </View>
+      <View style={styles.tableCellArchivos}>
+        <TouchableOpacity
+          style={styles.archivosBtn}
+          onPress={() => onOpenArchivos(activity.id, inventory)}
+        >
+          <Ionicons name="attach" size={20} color="#007AFF" />
+          {(formState.mantenimiento_files?.length ?? 0) > 0 ? (
+            <ThemedText style={styles.archivosBadge}>
+              {formState.mantenimiento_files!.length}
+            </ThemedText>
+          ) : null}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -575,6 +609,8 @@ interface Actividad {
 interface Inventario {
   id: number;
   nombre: string;
+  tipo?: string;
+  ultimo_mantenimiento_id?: number | null;
   cantidad_requerida?: number;
   cantidad_real?: number;
   estado?: 'Bueno' | 'Malo' | 'No está';
@@ -641,6 +677,21 @@ function normalizeCantidadNecesaria(value: any): number {
   return Math.max(1, Math.floor(n));
 }
 
+/** Normaliza tipo de artículo para el API de mantenimiento (Plan / Asignado). */
+function resolveArticuloTipoForApi(inv: Inventario & { source?: string }): string {
+  const raw = String(inv.tipo ?? '').trim();
+  if (raw) {
+    const s = raw.toLowerCase();
+    if (s === 'plan' || s.includes('plan de')) return 'Plan';
+    if (s === 'asignado' || s.includes('asignado')) return 'Asignado';
+    if (raw === 'Plan' || raw === 'Asignado') return raw;
+  }
+  const src = String(inv.source ?? '').toLowerCase();
+  if (src === 'asignado') return 'Asignado';
+  if (src === 'plan') return 'Plan';
+  return 'Plan';
+}
+
 type ActivityArticleFormRow = {
   id: number;
   tipo?: string;
@@ -648,6 +699,8 @@ type ActivityArticleFormRow = {
   cantidad_real: number;
   estado: EstadoArticulo;
   observaciones: string;
+  created_at?: string;
+  mantenimiento_files?: ArticuloMantenimientoPendingFile[];
 };
 
 interface EmpleadoOption {
@@ -829,7 +882,7 @@ function ScalePressButton({
 }
 
 export default function ActivitiesScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<ActivitiesScreenNavigationProp>();
 
@@ -858,6 +911,8 @@ export default function ActivitiesScreen() {
   /** Por id de artículo: nombre de archivo local (no base64 en memoria). */
   const [inventoryImages, setInventoryImages] = useState<{ [key: number]: string }>({});
   const [articleFormState, setArticleFormState] = useState<Record<string, ArticleFormState>>({});
+  const [archivosModalTarget, setArchivosModalTarget] = useState<{ activityId: number; inventory: Inventario } | null>(null);
+  const [currentPuestoId, setCurrentPuestoId] = useState<number | null>(null);
   const getArticleFormState = useCallback((activityId: number, inventory: Inventario) => {
     const key = `${activityId}-${inventory.id}`;
     return articleFormState[key] ?? getDefaultArticleFormState(inventory);
@@ -993,6 +1048,7 @@ export default function ActivitiesScreen() {
 
       const horaAccionValue = await getHoraAccion();
       const horaAccionMs = horaAccionValue ?? Date.now();
+      const horaAccionIso = new Date(horaAccionMs).toISOString();
 
       const articleMap = new Map<number, ActivityArticleFormRow>();
 
@@ -1002,13 +1058,15 @@ export default function ActivitiesScreen() {
           const form = getArticleFormState(act.id, inv);
           articleMap.set(inv.id, {
             id: inv.id,
-            tipo: (inv as any)?.tipo,
+            tipo: form.tipo ?? (inv as any)?.tipo,
             cantidad_requerida: normalizeCantidadNecesaria(
               inv.cantidad_requerida ?? (inv as any)?.cantidad_requerida
             ),
             cantidad_real: form.cantidadReal,
             estado: form.estado,
             observaciones: form.observaciones || '',
+            created_at: horaAccionIso,
+            mantenimiento_files: form.mantenimiento_files,
           });
         });
       };
@@ -1196,7 +1254,7 @@ export default function ActivitiesScreen() {
       const sourceArticulos = await loadPuestoArticulosForTable(puestoId);
       const normalized: Inventario[] = (Array.isArray(sourceArticulos) ? sourceArticulos : [])
         .map((art: any) => {
-          const aid = Number(art?.id);
+          const aid = Number(art?.id ?? art?.estructura_id);
           if (!Number.isFinite(aid) || aid <= 0) return null;
           const ultimo = art?.ultimo_mantenimiento ?? art?.ultimo_registro_mantenimiento ?? null;
           const estadoUltimo = ultimo?.estado;
@@ -1217,13 +1275,17 @@ export default function ActivitiesScreen() {
             ultimo?.observaciones != null && String(ultimo.observaciones).trim() !== ''
               ? String(ultimo.observaciones)
               : (art?.observaciones ? String(art.observaciones) : '');
-          return {
+          const invRow = {
             id: aid,
-            nombre: String(art?.nombre || 'Artículo'),
+            nombre: String(art?.nombre || art?.articulo_nombre || 'Artículo'),
+            source: art?.source,
+            tipo: String(art?.tipo ?? ''),
             cantidad_requerida: normalizeCantidadNecesaria(art?.cantidad_plan ?? art?.cantidad ?? 1),
             cantidad_real,
             estado,
             observaciones: observacionesUltimo,
+            ultimo_mantenimiento_id:
+              ultimo?.id != null && Number(ultimo.id) > 0 ? Number(ultimo.id) : null,
             reglas: [],
             revision_equipo: {
               id: Number(ultimo?.id ?? 0) || 0,
@@ -1232,6 +1294,10 @@ export default function ActivitiesScreen() {
               motivo_incorrecto: estado === 'Bueno' ? '-' : (observacionesUltimo || '-'),
               imagen_adjunta: '',
             },
+          } as Inventario;
+          return {
+            ...invRow,
+            tipo: resolveArticuloTipoForApi(invRow),
           } as Inventario;
         })
         .filter((x: Inventario | null): x is Inventario => x != null);
@@ -1258,6 +1324,8 @@ export default function ActivitiesScreen() {
         ...src,
         id: Number(src.id),
         nombre: src.nombre || prev.nombre,
+        tipo: src.tipo ?? prev.tipo,
+        ultimo_mantenimiento_id: src.ultimo_mantenimiento_id ?? prev.ultimo_mantenimiento_id,
         cantidad_requerida: src.cantidad_requerida ?? prev.cantidad_requerida,
         cantidad_real: src.cantidad_real,
         estado: src.estado,
@@ -1326,6 +1394,8 @@ export default function ActivitiesScreen() {
 
       const currentMarcaData = JSON.parse(currentMarca);
       const marcaId = currentMarcaData.id;
+      const puestoId = Number(currentMarcaData?.puesto?.id);
+      setCurrentPuestoId(Number.isFinite(puestoId) && puestoId > 0 ? puestoId : null);
       await loadInventorySourceFromPuesto(currentMarcaData?.puesto?.id);
       setHasCurrentMarca(true);
 
@@ -2614,9 +2684,14 @@ export default function ActivitiesScreen() {
         const form = getArticleFormState(activity.id, inv);
         return {
           id: inv.id,
+          nombre: inv.nombre,
+          tipo: resolveArticuloTipoForApi(inv),
           estado: form.estado,
           cantidad_real: form.cantidadReal,
+          cantidad_requerida: inv.cantidad_requerida ?? 1,
           observaciones: form.observaciones?.trim() || '',
+          created_at: horaAccionIso,
+          mantenimiento_files: form.mantenimiento_files ?? [],
         };
       });
     }
@@ -2648,6 +2723,13 @@ export default function ActivitiesScreen() {
           if (activity.is_revision_equipo) {
             await updateMainStructureCacheFromActivities(activity);
             await updateActivitiesCacheFromActivities();
+            if (currentPuestoId) {
+              await refreshPuestoArticulosFromServer({
+                puestoId: currentPuestoId,
+                refreshAccessToken,
+                logout,
+              }).catch(() => {});
+            }
           }
 
           if (estado === 'marcar' && activity.is_revision_equipo && inventoryRows.length > 0 && employee?.id) {
@@ -2777,6 +2859,12 @@ export default function ActivitiesScreen() {
     });
   };
 
+  const handleMantenimientoFilesChange = useCallback((files: ArticuloMantenimientoPendingFile[]) => {
+    if (!archivosModalTarget) return;
+    const { activityId, inventory } = archivosModalTarget;
+    setArticleFormStateCallback(activityId, inventory, { mantenimiento_files: files });
+  }, [archivosModalTarget, setArticleFormStateCallback]);
+
   const renderActivityItem = (activity: Actividad) => {
     const inventoryRows = getInventoryRowsForActivity(activity);
     return (
@@ -2805,6 +2893,7 @@ export default function ActivitiesScreen() {
         }}
         getArticleFormState={getArticleFormState}
         setArticleFormState={setArticleFormStateCallback}
+        onOpenArchivos={(activityId, inventory) => setArchivosModalTarget({ activityId, inventory })}
       />
     );
   };
@@ -2969,57 +3058,6 @@ export default function ActivitiesScreen() {
   const effectivePuestos = assignToAllDivision && selectedDivisionForAll
     ? getDivisionPuestos(selectedDivisionForAll)
     : filteredPuestos;
-
-  const updPEmpresa = useMemo(
-    () => empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId)) || null,
-    [empresasOptions, updPEmpresaId],
-  );
-
-  const updPClientesOptions = useMemo(() => {
-    if (updPEmpresaId == null) return [];
-    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId));
-    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
-  }, [empresasOptions, updPEmpresaId]);
-
-  const updPSelectedCliente = useMemo(
-    () => updPClientesOptions.find((c: any) => Number(c.id) === Number(updPClienteId)) || null,
-    [updPClientesOptions, updPClienteId],
-  );
-
-  const updPDivisionesOptions = useMemo(() => {
-    if (updPEmpresaId == null || updPClienteId == null) return [];
-    const empresa = empresasOptions.find((e: any) => Number(e.id) === Number(updPEmpresaId));
-    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(updPClienteId));
-    if (Array.isArray(cliente?.division)) return cliente.division;
-    return Array.isArray((cliente as any)?.divisiones) ? (cliente as any).divisiones : [];
-  }, [empresasOptions, updPEmpresaId, updPClienteId]);
-
-  const updPSelectedDivision = useMemo(
-    () => updPDivisionesOptions.find((d: any) => Number(d.id) === Number(updPDivisionId)) || null,
-    [updPDivisionesOptions, updPDivisionId],
-  );
-
-  const updPContratosOptions = useMemo(() => {
-    if (updPDivisionId == null) return [];
-    const division = updPDivisionesOptions.find((d: any) => Number(d.id) === Number(updPDivisionId));
-    return Array.isArray(division?.contratos) ? division.contratos : [];
-  }, [updPDivisionesOptions, updPDivisionId]);
-
-  const updPSelectedContrato = useMemo(
-    () => updPContratosOptions.find((c: any) => Number(c.id) === Number(updPContratoId)) || null,
-    [updPContratosOptions, updPContratoId],
-  );
-
-  const updPSucursalesOptions = useMemo(() => {
-    if (updPContratoId == null) return [];
-    const contrato = updPContratosOptions.find((c: any) => Number(c.id) === Number(updPContratoId));
-    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
-  }, [updPContratosOptions, updPContratoId]);
-
-  const updPSelectedSucursal = useMemo(
-    () => updPSucursalesOptions.find((s: any) => Number(s.id) === Number(updPSucursalId)) || null,
-    [updPSucursalesOptions, updPSucursalId],
-  );
 
   const updPFilteredPuestos = useMemo(() => {
     if (!updPEmpresaId || !Array.isArray(structure) || structure.length === 0) return [];
@@ -3788,6 +3826,40 @@ export default function ActivitiesScreen() {
     setCreatedActivities([]);
   };
 
+  const handleCreatedHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setSelectedEmpresaId(v.empresaId);
+      setSelectedClienteId(v.clienteId);
+      setSelectedDivisionId(v.divisionId);
+      setSelectedContratoId(v.contratoId);
+      setSelectedSucursalId(v.sucursalId);
+      setSelectedPuestoFilterId(v.puestoId ?? null);
+      setCreatedActivities([]);
+      if (v.puestoId) void fetchCreatedActivitiesByPuesto(v.puestoId);
+    },
+    [fetchCreatedActivitiesByPuesto],
+  );
+
+  const handleModalHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setSelectedEmpresaId(v.empresaId);
+    setSelectedClienteId(v.clienteId);
+    setSelectedDivisionId(v.divisionId);
+    setSelectedContratoId(v.contratoId);
+    setSelectedSucursalId(v.sucursalId);
+    setSelectedPuestoFilterId(null);
+    setSelectedPuestoId('');
+  }, []);
+
+  const handleUpdPHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setUpdPEmpresaId(v.empresaId);
+    setUpdPClienteId(v.clienteId);
+    setUpdPDivisionId(v.divisionId);
+    setUpdPContratoId(v.contratoId);
+    setUpdPSucursalId(v.sucursalId);
+    setUpdPSelectedPuestoId('');
+    setUpdPMarkedPlazaIds([]);
+  }, []);
+
   if (isLoading) {
     return (
       <ThemedView style={styles.container}>
@@ -3928,120 +4000,22 @@ export default function ActivitiesScreen() {
               </ScalePressButton>
 
               <ThemedView style={styles.sectionCard}>
-                {isStructureLoading ? (
-                  <ActivityIndicator size="small" color="#007AFF" />
-                ) : (
-                  <>
-                    <ThemedText style={styles.formLabel}>Empresa</ThemedText>
-                    <ThemedView style={styles.pickerContainer}>
-                      <Picker
-                        selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
-                        onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Selecciona empresa" value="" color="#000000" />
-                        {empresasOptions.map((empresa) => (
-                          <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-
-                    {selectedEmpresaId && (
-                      <>
-                        <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
-                            onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                            {clientesOptions.map((cliente: any) => (
-                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </>
-                    )}
-
-                    {selectedClienteId && (
-                      <>
-                        <ThemedText style={styles.formLabel}>División</ThemedText>
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
-                            onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona división" value="" color="#000000" />
-                            {divisionesOptions.map((division: any) => (
-                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </>
-                    )}
-
-                    {selectedDivisionId && (
-                      <>
-                        <ThemedText style={styles.formLabel}>Contrato</ThemedText>
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedContratoId ? String(selectedContratoId) : ''}
-                            onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                            {contratosOptions.map((contrato: any) => (
-                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </>
-                    )}
-
-                    {selectedContratoId && (
-                      <>
-                        <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedSucursalId ? String(selectedSucursalId) : ''}
-                            onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                            {sucursalesOptions.map((sucursal: any) => (
-                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </>
-                    )}
-
-                    {selectedSucursalId && (
-                      <>
-                        <ThemedText style={styles.formLabel}>Puesto</ThemedText>
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={selectedPuestoFilterId ? String(selectedPuestoFilterId) : ''}
-                            onValueChange={async (v) => {
-                              const next = v ? Number(v) : null;
-                              setSelectedPuestoFilterId(next);
-                              setCreatedActivities([]);
-                              if (next) await fetchCreatedActivitiesByPuesto(next);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona puesto" value="" color="#000000" />
-                            {puestosOptionsFromHierarchy.map((puesto) => (
-                              <Picker.Item key={puesto.id} label={puesto.nombre} value={String(puesto.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </>
-                    )}
-                  </>
-                )}
+                <HierarchyPickerFields
+                  structure={structure}
+                  levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                  isLoading={isStructureLoading}
+                  values={{
+                    empresaId: selectedEmpresaId,
+                    clienteId: selectedClienteId,
+                    divisionId: selectedDivisionId,
+                    contratoId: selectedContratoId,
+                    sucursalId: selectedSucursalId,
+                    puestoId: selectedPuestoFilterId,
+                  }}
+                  onChange={handleCreatedHierarchyChange}
+                  renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                  pickerStyle={styles.picker}
+                />
               </ThemedView>
 
               {isLoadingCreatedActivities ? (
@@ -4364,74 +4338,21 @@ export default function ActivitiesScreen() {
                       ) : (
                         <>
                           <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
-                          <ThemedView style={styles.pickerContainer}>
-                            <Picker
-                              selectedValue={selectedEmpresaId ? String(selectedEmpresaId) : ''}
-                              onValueChange={(v) => { setSelectedEmpresaId(v ? Number(v) : null); resetHierarchyBelowEmpresa(); }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Selecciona empresa" value="" color="#000000" />
-                              {empresasOptions.map((empresa) => (
-                                <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {!!selectedEmpresaId && (
-                            <ThemedView style={styles.pickerContainer}>
-                              <Picker
-                                selectedValue={selectedClienteId ? String(selectedClienteId) : ''}
-                                onValueChange={(v) => { setSelectedClienteId(v ? Number(v) : null); resetHierarchyBelowCliente(); }}
-                                style={styles.picker}
-                              >
-                                <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                                {clientesOptions.map((cliente: any) => (
-                                  <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
-                                ))}
-                              </Picker>
-                            </ThemedView>
-                          )}
-                          {!!selectedClienteId && (
-                            <ThemedView style={styles.pickerContainer}>
-                              <Picker
-                                selectedValue={selectedDivisionId ? String(selectedDivisionId) : ''}
-                                onValueChange={(v) => { setSelectedDivisionId(v ? Number(v) : null); resetHierarchyBelowDivision(); }}
-                                style={styles.picker}
-                              >
-                                <Picker.Item label="Selecciona división" value="" color="#000000" />
-                                {divisionesOptions.map((division: any) => (
-                                  <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
-                                ))}
-                              </Picker>
-                            </ThemedView>
-                          )}
-                          {!!selectedDivisionId && (
-                            <ThemedView style={styles.pickerContainer}>
-                              <Picker
-                                selectedValue={selectedContratoId ? String(selectedContratoId) : ''}
-                                onValueChange={(v) => { setSelectedContratoId(v ? Number(v) : null); resetHierarchyBelowContrato(); }}
-                                style={styles.picker}
-                              >
-                                <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                                {contratosOptions.map((contrato: any) => (
-                                  <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
-                                ))}
-                              </Picker>
-                            </ThemedView>
-                          )}
-                          {!!selectedContratoId && (
-                            <ThemedView style={styles.pickerContainer}>
-                              <Picker
-                                selectedValue={selectedSucursalId ? String(selectedSucursalId) : ''}
-                                onValueChange={(v) => { setSelectedSucursalId(v ? Number(v) : null); resetHierarchyBelowSucursal(); }}
-                                style={styles.picker}
-                              >
-                                <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                                {sucursalesOptions.map((sucursal: any) => (
-                                  <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
-                                ))}
-                              </Picker>
-                            </ThemedView>
-                          )}
+                          <HierarchyPickerFields
+                            structure={structure}
+                            levels={['cliente', 'contrato', 'sucursal']}
+                            isLoading={isStructureLoading}
+                            values={{
+                              empresaId: selectedEmpresaId,
+                              clienteId: selectedClienteId,
+                              divisionId: selectedDivisionId,
+                              contratoId: selectedContratoId,
+                              sucursalId: selectedSucursalId,
+                            }}
+                            onChange={handleModalHierarchyChange}
+                            renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                            pickerStyle={styles.picker}
+                          />
                         </>
                       )}
                       <ThemedText style={styles.helperText}>Puestos disponibles: {effectivePuestos.length}</ThemedText>
@@ -5078,88 +4999,21 @@ export default function ActivitiesScreen() {
                   ) : (
                     <>
                       <ThemedText style={styles.formLabel}>Jerarquía para puestos</ThemedText>
-                      <ThemedView style={styles.pickerContainer}>
-                        <Picker
-                          selectedValue={updPEmpresaId ? String(updPEmpresaId) : ''}
-                          onValueChange={(v) => {
-                            setUpdPEmpresaId(v ? Number(v) : null);
-                            resetUpdPHierarchyBelowEmpresa();
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Selecciona empresa" value="" color="#000000" />
-                          {empresasOptions.map((empresa) => (
-                            <Picker.Item key={empresa.id} label={empresa.nombre} value={String(empresa.id)} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {!!updPEmpresaId && (
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={updPClienteId ? String(updPClienteId) : ''}
-                            onValueChange={(v) => {
-                              setUpdPClienteId(v ? Number(v) : null);
-                              resetUpdPHierarchyBelowCliente();
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona cliente" value="" color="#000000" />
-                            {updPClientesOptions.map((cliente: any) => (
-                              <Picker.Item key={cliente.id} label={cliente.nombre} value={String(cliente.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      )}
-                      {!!updPClienteId && (
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={updPDivisionId ? String(updPDivisionId) : ''}
-                            onValueChange={(v) => {
-                              setUpdPDivisionId(v ? Number(v) : null);
-                              resetUpdPHierarchyBelowDivision();
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona división" value="" color="#000000" />
-                            {updPDivisionesOptions.map((division: any) => (
-                              <Picker.Item key={division.id} label={division.nombre} value={String(division.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      )}
-                      {!!updPDivisionId && (
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={updPContratoId ? String(updPContratoId) : ''}
-                            onValueChange={(v) => {
-                              setUpdPContratoId(v ? Number(v) : null);
-                              resetUpdPHierarchyBelowContrato();
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona contrato" value="" color="#000000" />
-                            {updPContratosOptions.map((contrato: any) => (
-                              <Picker.Item key={contrato.id} label={contrato.nombre} value={String(contrato.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      )}
-                      {!!updPContratoId && (
-                        <ThemedView style={styles.pickerContainer}>
-                          <Picker
-                            selectedValue={updPSucursalId ? String(updPSucursalId) : ''}
-                            onValueChange={(v) => {
-                              setUpdPSucursalId(v ? Number(v) : null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Selecciona sucursal" value="" color="#000000" />
-                            {updPSucursalesOptions.map((sucursal: any) => (
-                              <Picker.Item key={sucursal.id} label={sucursal.nombre} value={String(sucursal.id)} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      )}
+                      <HierarchyPickerFields
+                        structure={structure}
+                        levels={['cliente', 'contrato', 'sucursal']}
+                        isLoading={isStructureLoading}
+                        values={{
+                          empresaId: updPEmpresaId,
+                          clienteId: updPClienteId,
+                          divisionId: updPDivisionId,
+                          contratoId: updPContratoId,
+                          sucursalId: updPSucursalId,
+                        }}
+                        onChange={handleUpdPHierarchyChange}
+                        renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                        pickerStyle={styles.picker}
+                      />
                     </>
                   )}
                   <ThemedText style={styles.helperText}>Puestos disponibles: {updPEffectivePuestos.length}</ThemedText>
@@ -5338,6 +5192,26 @@ export default function ActivitiesScreen() {
           </ThemedView>
         </ThemedView>
       </Modal>
+
+      {/* Modal archivos de mantenimiento por artículo */}
+      {archivosModalTarget && currentPuestoId ? (
+        <ArticuloMantenimientoArchivosModal
+          visible
+          onClose={() => setArchivosModalTarget(null)}
+          puestoId={currentPuestoId}
+          articuloId={archivosModalTarget.inventory.id}
+          articuloNombre={archivosModalTarget.inventory.nombre}
+          formEstado={getArticleFormState(archivosModalTarget.activityId, archivosModalTarget.inventory).estado}
+          ultimoMantenimientoId={
+            getArticleFormState(archivosModalTarget.activityId, archivosModalTarget.inventory).ultimo_mantenimiento_id ?? null
+          }
+          pendingFiles={
+            getArticleFormState(archivosModalTarget.activityId, archivosModalTarget.inventory).mantenimiento_files ?? []
+          }
+          onPendingFilesChange={handleMantenimientoFilesChange}
+          accessToken={accessToken}
+        />
+      ) : null}
 
       {/* Camera Modal */}
       <Modal
@@ -6592,6 +6466,39 @@ const styles = StyleSheet.create({
     width: 150,
     justifyContent: 'center',
     height: 50,
+  },
+  tableHeaderCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    height: 50,
+  },
+  tableCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 70,
+  },
+  archivosBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#F0F8FF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  archivosBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#007AFF',
   },
   tableHeaderCellFirst: {
     padding: 10,

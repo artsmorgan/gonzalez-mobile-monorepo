@@ -46,6 +46,227 @@ const parseDateInputToDate = (input: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
+type ShiftInterval = { startMs: number; endMs: number; marcaId: number };
+
+const parseClockFromDb = (value: unknown): { h: number; m: number; s: number } | null => {
+  if (value == null || value === "") return null;
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (isNaN(d.getTime())) return null;
+  return { h: d.getUTCHours(), m: d.getUTCMinutes(), s: d.getUTCSeconds() };
+};
+
+const ymdFromMarcaFecha = (fecha: unknown): { y: number; m: number; d: number } | null => {
+  if (!fecha) return null;
+  const d = fecha instanceof Date ? fecha : new Date(String(fecha));
+  if (isNaN(d.getTime())) return null;
+  return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() };
+};
+
+/** Rango efectivo del turno: fecha + hora_entrada … fecha(+1 si aplica) + hora_salida. */
+const buildShiftIntervalFromMarca = (marca: any): ShiftInterval | null => {
+  const ymd = ymdFromMarcaFecha(marca?.fecha);
+  if (!ymd) return null;
+  const marcaId = parseIntStrict(marca?.id);
+  if (!marcaId) return null;
+
+  const entrada = parseClockFromDb(marca?.hora_entrada) ?? parseClockFromDb(marca?.hora_inicio);
+  const salida = parseClockFromDb(marca?.hora_salida) ?? parseClockFromDb(marca?.hora_fin);
+  if (!entrada || !salida) return null;
+
+  const startMs = Date.UTC(ymd.y, ymd.m, ymd.d, entrada.h, entrada.m, entrada.s);
+  const entSec = entrada.h * 3600 + entrada.m * 60 + entrada.s;
+  const salSec = salida.h * 3600 + salida.m * 60 + salida.s;
+
+  let endY = ymd.y;
+  let endM = ymd.m;
+  let endD = ymd.d;
+  if (salSec <= entSec) {
+    const next = new Date(Date.UTC(ymd.y, ymd.m, ymd.d));
+    next.setUTCDate(next.getUTCDate() + 1);
+    endY = next.getUTCFullYear();
+    endM = next.getUTCMonth();
+    endD = next.getUTCDate();
+  }
+  const endMs = Date.UTC(endY, endM, endD, salida.h, salida.m, salida.s);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return null;
+
+  return { startMs, endMs, marcaId };
+};
+
+const isInstantInsideShift = (instantMs: number, interval: ShiftInterval): boolean =>
+  instantMs > interval.startMs && instantMs < interval.endMs;
+
+/** Conflicto si entrada/salida del turno a cubrir cae dentro de un turno original o los rangos se solapan. */
+const shiftIntervalsConflict = (candidate: ShiftInterval, original: ShiftInterval): boolean => {
+  if (isInstantInsideShift(candidate.startMs, original)) return true;
+  if (isInstantInsideShift(candidate.endMs, original)) return true;
+  if (isInstantInsideShift(original.startMs, candidate)) return true;
+  if (isInstantInsideShift(original.endMs, candidate)) return true;
+  return candidate.startMs < original.endMs && original.startMs < candidate.endMs;
+};
+
+const formatShiftIntervalLabel = (marca: any, interval: ShiftInterval): string => {
+  const ymd = ymdFromMarcaFecha(marca?.fecha);
+  const fechaStr = ymd
+    ? `${String(ymd.d).padStart(2, "0")}/${String(ymd.m + 1).padStart(2, "0")}/${ymd.y}`
+    : "?";
+  const fmt = (ms: number) => {
+    const d = new Date(ms);
+    return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  };
+  return `marca #${interval.marcaId} (${fechaStr} ${fmt(interval.startMs)}–${fmt(interval.endMs)})`;
+};
+
+const fetchMarcasOriginalesEmpleado = async (
+  req: NextRequest,
+  empleadoId: number,
+  fechaGte: Date,
+  fechaLte: Date
+) => {
+  const rows = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "c_marca_dia",
+      operation: "findMany",
+      where: {
+        empleadoFijo_id: empleadoId,
+        fecha: { gte: fechaGte, lte: fechaLte },
+      },
+      select: {
+        id: true,
+        fecha: true,
+        hora_entrada: true,
+        hora_salida: true,
+        hora_inicio: true,
+        hora_fin: true,
+      },
+    },
+  });
+  return Array.isArray(rows) ? rows : [];
+};
+
+type ExchangeConflictResult = { ok: true } | { ok: false; message: string };
+
+type OriginalShiftConflict = { marca: any; interval: ShiftInterval; marcaId: number };
+
+/**
+ * Evalúa conflictos del turno a cubrir contra todos los turnos originales del empleado.
+ * Solo se permite 1 conflicto y únicamente si ese turno es el que cede en el acuerdo (lo tomará el otro).
+ * Con 2+ conflictos se rechaza aunque uno sea el turno cedido al otro empleado.
+ */
+const validateEmployeeTakingExchangedShift = (
+  coveringTurnLabel: string,
+  shiftToTake: any,
+  shiftToTakeLabel: string,
+  /** Marca del turno que cede en el acuerdo (lo tomará el otro turno). */
+  marcaCedidaEnAcuerdoId: number,
+  originalMarcas: any[]
+): ExchangeConflictResult => {
+  const candidate = buildShiftIntervalFromMarca(shiftToTake);
+  if (!candidate) {
+    return {
+      ok: false,
+      message: `No se pudo determinar el horario (entrada/salida) de ${coveringTurnLabel} al cubrir el ${shiftToTakeLabel}.`,
+    };
+  }
+
+  const conflicts: OriginalShiftConflict[] = [];
+  const seenMarcaIds = new Set<number>();
+
+  for (const original of originalMarcas) {
+    const originalId = parseIntStrict(original?.id);
+    if (!originalId || seenMarcaIds.has(originalId)) continue;
+
+    const origInterval = buildShiftIntervalFromMarca(original);
+    if (!origInterval) continue;
+
+    if (shiftIntervalsConflict(candidate, origInterval)) {
+      seenMarcaIds.add(originalId);
+      conflicts.push({ marca: original, interval: origInterval, marcaId: originalId });
+    }
+  }
+
+  if (conflicts.length === 0) return { ok: true };
+
+  if (conflicts.length === 1 && conflicts[0]!.marcaId === marcaCedidaEnAcuerdoId) {
+    return { ok: true };
+  }
+
+  const conflictLabels = conflicts.map((c) => formatShiftIntervalLabel(c.marca, c.interval)).join("; ");
+
+  if (conflicts.length >= 2) {
+    return {
+      ok: false,
+      message:
+        `El intercambio no es válido: ${coveringTurnLabel} al cubrir el ${shiftToTakeLabel} ` +
+        `choca con ${conflicts.length} turnos originales (${conflictLabels}). ` +
+        `No se permite el mutuo acuerdo cuando hay más de un conflicto horario, ` +
+        `aunque uno de esos turnos sea el que el otro turno asumirá en el acuerdo.`,
+    };
+  }
+
+  const only = conflicts[0]!;
+  return {
+    ok: false,
+    message:
+      `El intercambio no es válido: ${coveringTurnLabel} al cubrir el ${shiftToTakeLabel} ` +
+      `choca con un turno original ${formatShiftIntervalLabel(only.marca, only.interval)}, ` +
+      `que no es el turno que cede en este acuerdo (marca #${marcaCedidaEnAcuerdoId}).`,
+  };
+};
+
+const validateMutuoAcuerdoShiftExchange = async (
+  req: NextRequest,
+  marcaAusente: any,
+  marcaReemplaza: any
+): Promise<ExchangeConflictResult> => {
+  const intervalAusente = buildShiftIntervalFromMarca(marcaAusente);
+  const intervalReemplaza = buildShiftIntervalFromMarca(marcaReemplaza);
+  if (!intervalAusente || !intervalReemplaza) {
+    return {
+      ok: false,
+      message:
+        "No se pudo validar el intercambio: ambas marcas deben tener fecha y horarios de entrada/salida (o inicio/fin) definidos.",
+    };
+  }
+
+  const minStart = Math.min(intervalAusente.startMs, intervalReemplaza.startMs);
+  const maxEnd = Math.max(intervalAusente.endMs, intervalReemplaza.endMs);
+  const fechaGte = new Date(minStart - 24 * 60 * 60 * 1000);
+  const fechaLte = new Date(maxEnd + 24 * 60 * 60 * 1000);
+
+  const empleadoAusenteId = Number(marcaAusente.empleadoFijo_id);
+  const empleadoReemplazaId = Number(marcaReemplaza.empleadoFijo_id);
+  const marcaDiaAusenteId = Number(marcaAusente.id);
+  const marcaDiaReemplazaId = Number(marcaReemplaza.id);
+
+  const [marcasAusente, marcasReemplaza] = await Promise.all([
+    fetchMarcasOriginalesEmpleado(req, empleadoAusenteId, fechaGte, fechaLte),
+    fetchMarcasOriginalesEmpleado(req, empleadoReemplazaId, fechaGte, fechaLte),
+  ]);
+
+  const checkSegundoTurno = validateEmployeeTakingExchangedShift(
+    "el segundo turno",
+    marcaAusente,
+    "primer turno",
+    marcaDiaReemplazaId,
+    marcasReemplaza
+  );
+  if (!checkSegundoTurno.ok) return checkSegundoTurno;
+
+  const checkPrimerTurno = validateEmployeeTakingExchangedShift(
+    "el primer turno",
+    marcaReemplaza,
+    "segundo turno",
+    marcaDiaAusenteId,
+    marcasAusente
+  );
+  if (!checkPrimerTurno.ok) return checkPrimerTurno;
+
+  return { ok: true };
+};
+
 export async function GET(req: NextRequest) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -319,6 +540,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen cliente/sucursal válidos" }, { status: 400 });
     }
 
+    const exchangeValidation = await validateMutuoAcuerdoShiftExchange(req, marcaAusente, marcaReemplaza);
+    if (!exchangeValidation.ok) {
+      return NextResponse.json({ status: false, message: exchangeValidation.message }, { status: 400 });
+    }
+
     // Obtener ejecutivo_cuenta desde la sucursal (corpo_id) asociada a las marcas
     const sucursal = await callDynamicPrisma({
       req,
@@ -482,10 +708,8 @@ export async function POST(req: NextRequest) {
         select: { empleado_id: true },
       },
     });
-    for (const row of Array.isArray(employeePlazas) ? employeePlazas : []) {
-      const empId = parseIntStrict((row as any)?.empleado_id);
-      if (empId) recipients.add(empId);
-    }
+    
+    recipients.add(createdBy)
 
     if (recipients.size > 0) {
       const empleados_ejecutivos = await callDynamicPrisma({
@@ -576,6 +800,10 @@ export async function POST(req: NextRequest) {
         }
       }
 
+      const employeeIds = (Array.isArray(empleados_ejecutivos) ? empleados_ejecutivos : []).map((e: any) => e.id);
+      employeeIds.push(empleadoAusente.id);
+      employeeIds.push(empleadoReemplaza.id);
+
       const puestoNombreAusente = puestoAusente ? puestoAusente.nombre : "Desconocido";
       const puestoNombreReemplaza = puestoReemplaza ? puestoReemplaza.nombre : "Desconocido";
       const ausenteNombre = empleadoAusente
@@ -597,10 +825,15 @@ export async function POST(req: NextRequest) {
       await sendNotificationByEmployee(
         req,
         0,
-        Array.from(recipients),
+        Array.from(recipients), 
         `Nuevo mutuo acuerdo`,
-        `Se creó un mutuo acuerdo el día ${fecha} a las ${hora}. El empleado ${ausenteNombre} (cédula ${ausenteCedula || "N/A"}) acuerda cambiar el turno del día ${fecha_ausente_cambio} a las ${hora_inicio_ausente} para el puesto ${puestoNombreAusente} (Sucursal ${sucursalNombreAusente} del cliente ${clienteNombreAusente}) por el turno del día ${fecha_reemplaza_cambio} a las ${hora_inicio_reemplaza} para el puesto ${puestoNombreReemplaza} (Sucursal ${sucursalNombreReemplaza} del cliente ${clienteNombreReemplaza}) del empleado ${reemplazaNombre} (cédula ${reemplazaCedula || "N/A"}).`,
-        (Array.isArray(empleados_ejecutivos) ? empleados_ejecutivos : []).map((e: any) => e.id)
+        `Se creó un mutuo acuerdo el día ${fecha} a las ${hora}. ` +
+        `Primer turno: ${ausenteNombre} (cédula ${ausenteCedula || "N/A"}) cede el turno del día ${fecha_ausente_cambio} a las ${hora_inicio_ausente} ` +
+        `para el puesto ${puestoNombreAusente} (Sucursal ${sucursalNombreAusente} del cliente ${clienteNombreAusente}) ` +
+        `a cambio del segundo turno del día ${fecha_reemplaza_cambio} a las ${hora_inicio_reemplaza} ` +
+        `para el puesto ${puestoNombreReemplaza} (Sucursal ${sucursalNombreReemplaza} del cliente ${clienteNombreReemplaza}) ` +
+        `de ${reemplazaNombre} (cédula ${reemplazaCedula || "N/A"}).`,
+        employeeIds
       ).catch((error) => {
         const msg = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error sending mutuos-acuerdos notifications:", msg);

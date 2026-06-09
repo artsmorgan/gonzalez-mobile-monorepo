@@ -165,10 +165,6 @@ export async function POST(req: NextRequest) {
         ? parseInt(String(bodyPuestoId), 10)
         : marcaDia.puesto_id;
 
-    if (useCliente !== marcaDia.cliente_id) {
-      return NextResponse.json({ status: false, message: "Cliente del llavero no coincide con la marca" }, { status: 200 });
-    }
-
     const useEmpresa = parseId(bodyEmpresaId);
     const useDivision = parseId(bodyDivisionId);
     const useContrato = parseId(bodyContratoId);

@@ -6,6 +6,10 @@ import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { mapChecklistSupervisionPublicRow } from "../mapPublicRow";
 import { processChecklistSupervisionArticulosMantenimiento } from "../articulosMantenimiento";
+import {
+  sanitizeArticulosPuestoForPersistence,
+  stripMantenimientoFilesFromArticulosPuesto,
+} from "../../../../utils/sanitizeArticulosPuestoForPersistence";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -190,7 +194,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (puesto_id !== undefined) updateData.puesto_id = parseInt(String(puesto_id));
     if (fecha !== undefined) updateData.fecha = fecha instanceof Date ? fecha : new Date(fecha);
     if (ejecutivo_cuenta !== undefined) updateData.ejecutivo_cuenta = String(ejecutivo_cuenta);
-    if (articulos_puesto !== undefined) updateData.articulos_puesto = articulos_puesto ? String(articulos_puesto) : '';
+    if (articulos_puesto !== undefined) {
+      updateData.articulos_puesto = sanitizeArticulosPuestoForPersistence(articulos_puesto);
+    }
     if (firma_supervisor !== undefined) {
       updateData.firma_supervisor =
         firma_supervisor != null && typeof firma_supervisor === "string" && firma_supervisor.trim().length > 0
@@ -280,6 +286,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           notifySenderIds,
           fechaNotificacion: accionAt,
           isUpdate: true,
+        });
+
+        const articulosStored = stripMantenimientoFilesFromArticulosPuesto(
+          sanitizeArticulosPuestoForPersistence(articulos_puesto),
+        );
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "UPDATE",
+            table: "c_checklist_supervision",
+            where: { id },
+            data: { articulos_puesto: articulosStored },
+          },
         });
       }
     }

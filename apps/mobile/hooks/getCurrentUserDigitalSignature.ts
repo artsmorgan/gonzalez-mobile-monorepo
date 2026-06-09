@@ -43,10 +43,30 @@ async function resolveSignatureCoordinates(): Promise<{ latitude: number; longit
     );
     return null;
   }
+  
+  // 🔥 Warm-up del provider (fix para Android)
+  let subscription: Location.LocationSubscription | null = null;
+
+  try {
+    subscription = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.Low,
+        timeInterval: 1000,
+        distanceInterval: 1,
+      },
+      () => {}
+    );
+
+    // Espera mínima para que el provider reaccione
+    await new Promise((res) => setTimeout(res, 1000));
+
+  } finally {
+    subscription?.remove();
+  }
 
   try {
     const location = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
       new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('LOCATION_TIMEOUT')), LOCATION_TIMEOUT_MS);
       }),
@@ -81,7 +101,6 @@ async function resolveSignatureCoordinates(): Promise<{ latitude: number; longit
 }
 
 export default async function getCurrentUserDigitalSignature(employee: any): Promise<string | null> {
-  console.log(' ++++++++++++++++++++++++++++++++++++++++++ getCurrentUserDigitalSignature');
   if (!employee) {
     Alert.alert('Error', 'No se pudo obtener la información del empleado');
     return null;

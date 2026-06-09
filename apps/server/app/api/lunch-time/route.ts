@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
             pausas,
             es_manual,
             firma_empleado,
+            marca_id: bodyMarcaId,
             empresa_id: bodyEmpresaId,
             cliente_id: bodyClienteId,
             division_id: bodyDivisionId,
@@ -52,12 +53,19 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Faltan datos requeridos" }, { status: 400 });
         }
 
+        const marcaId = parseInt(String(bodyMarcaId), 10);
         const empresaId = parseInt(String(bodyEmpresaId), 10);
         const clienteId = parseInt(String(bodyClienteId), 10);
         const divisionId = parseInt(String(bodyDivisionId), 10);
         const contratoId = parseInt(String(bodyContratoId), 10);
         const corpoId = parseInt(String(bodyCorpoId), 10);
         const puestoId = parseInt(String(bodyPuestoId), 10);
+        if (!Number.isFinite(marcaId) || marcaId <= 0) {
+            return NextResponse.json(
+                { status: false, message: "Falta el identificador de la marca (marca_id). Verifique la marca actual." },
+                { status: 400 }
+            );
+        }
         if (
             !Number.isFinite(empresaId) || empresaId <= 0 ||
             !Number.isFinite(clienteId) || clienteId <= 0 ||
@@ -135,6 +143,7 @@ export async function POST(req: NextRequest) {
                     fin: finDate.toISOString(),
                     pausas: String(pausas || "[]"),
                     es_manual: Boolean(es_manual),
+                    marca_id: marcaId,
                     empresa_id: empresaId,
                     cliente_id: clienteId,
                     division_id: divisionId,

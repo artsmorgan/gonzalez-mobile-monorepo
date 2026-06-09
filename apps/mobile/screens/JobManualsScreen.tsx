@@ -19,7 +19,6 @@ import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
 import { appendJobManualPuestos, createJobManual, listJobManualsByPuesto, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
 import {
-  getManualCorpoId,
   getManualPuestoId,
   manualIsVisibleForPuesto,
   mergeJobManualsCacheForPuesto,
@@ -35,6 +34,7 @@ import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -251,6 +251,8 @@ export default function JobManualsScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const filterSucursalIdRef = useRef<number | null>(null);
   /** puesto_id de la marca activa (lista OPERATIVO). */
   const [marcaPuestoIdFromMarca, setMarcaPuestoIdFromMarca] = useState<number | null>(null);
   /** corpo_id (sucursal) de la marca — listado offline OPERATIVO. */
@@ -447,97 +449,137 @@ export default function JobManualsScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const fetchCurrentMarca = useCallback(async () => {
-    try {
-      setIsLoading(true);
+  const syncMarcaContextFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }) => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
         setHasMarca(false);
+        setMarcaId(null);
+        setPuestoActualNombre('');
+        setRoleName(null);
+        setMarcaPuestoIdFromMarca(null);
+        setMarcaCorpoIdFromMarca(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+          setFilterPuestoId(null);
+        }
         return;
       }
 
-      const currentMarca = JSON.parse(currentMarcaStr);
-      setHasMarca(true);
-      setMarcaId(Number(currentMarca.id));
-      setPuestoActualNombre(currentMarca.puesto?.nombre || '');
-      const role = currentMarca.roleDivision?.role?.nombre ?? currentMarca.role_division?.role?.nombre ?? null;
-      setRoleName(typeof role === 'string' ? role : null);
-      const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
-      setMarcaPuestoIdFromMarca(Number.isFinite(pid as number) && (pid as number) > 0 ? pid : null);
-      const corpoM = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
-      setMarcaCorpoIdFromMarca(Number.isFinite(corpoM as number) && (corpoM as number) > 0 ? corpoM : null);
+      try {
+        const currentMarca = JSON.parse(currentMarcaStr);
+        if (!currentMarca?.id) {
+          setHasMarca(false);
+          setMarcaId(null);
+          return;
+        }
+        setHasMarca(true);
+        setMarcaId(Number(currentMarca.id));
+        setPuestoActualNombre(currentMarca.puesto?.nombre || '');
+        const role = currentMarca.roleDivision?.role?.nombre ?? currentMarca.role_division?.role?.nombre ?? null;
+        setRoleName(typeof role === 'string' ? role : null);
+        const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
+        setMarcaPuestoIdFromMarca(Number.isFinite(pid as number) && (pid as number) > 0 ? pid : null);
+        const corpoM = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+        setMarcaCorpoIdFromMarca(Number.isFinite(corpoM as number) && (corpoM as number) > 0 ? corpoM : null);
 
-      const divId = getDivisionIdFromMarcaJson(currentMarca);
-      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
-      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
-      setFilterDivisionId(divId);
-      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
-      setFilterSucursalId(currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null);
-      setFilterPuestoId(pid != null && Number.isFinite(pid) && pid > 0 ? pid : null);
-
-      await fetchMainStructure();
-    } catch (error) {
-      console.error('Error fetching current marca for job manuals:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchMainStructure]);
+        if (applyFiltersFromMarca) {
+          const divId = getDivisionIdFromMarcaJson(currentMarca);
+          const fs = currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null;
+          setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+          setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+          setFilterDivisionId(divId);
+          setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+          setFilterPuestoId(pid != null && Number.isFinite(pid) && pid > 0 ? pid : null);
+        }
+      } catch (error) {
+        console.error('Error syncing marca for job manuals:', error);
+        setHasMarca(false);
+      }
+    },
+    []
+  );
 
   const resetListFiltersFromCurrentMarca = useCallback(async () => {
-    try {
-      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-      if (!currentMarcaStr) return;
-      const currentMarca = JSON.parse(currentMarcaStr);
-      const divId = getDivisionIdFromMarcaJson(currentMarca);
-      const pid = currentMarca.puesto?.id != null ? Number(currentMarca.puesto.id) : null;
-      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
-      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
-      setFilterDivisionId(divId);
-      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
-      setFilterSucursalId(currentMarca.corpo?.id != null ? Number(currentMarca.corpo.id) : null);
-      setFilterPuestoId(pid != null && Number.isFinite(pid) && pid > 0 ? pid : null);
-    } catch (e) {
-      console.error('resetListFiltersFromCurrentMarca:', e);
-    }
+    await syncMarcaContextFromStorage({ applyFiltersFromMarca: true });
+  }, [syncMarcaContextFromStorage]);
+
+  const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    filterSucursalIdRef.current = v.sucursalId;
+    setFilterSucursalId(v.sucursalId);
+    setFilterPuestoId(v.puestoId ?? null);
   }, []);
 
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setSelectedEmpresaId(v.empresaId);
+    setSelectedClienteId(v.clienteId);
+    setSelectedDivisionId(v.divisionId);
+    setSelectedContratoId(v.contratoId);
+    setSelectedSucursalId(v.sucursalId);
+    setSelectedPuestoId(v.puestoId ?? null);
+    setHasConfirmedPuestos(false);
+    setIsSelectedPuestosExpanded(false);
+  }, []);
+
+  const handleUpdPHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setUpdEmpresaId(v.empresaId);
+    setUpdClienteId(v.clienteId);
+    setUpdDivisionId(v.divisionId);
+    setUpdContratoId(v.contratoId);
+    setUpdSucursalId(v.sucursalId);
+    setUpdPuestoId(v.puestoId ?? null);
+    setUpdHasConfirmedPuestos(false);
+    setUpdIsSelectedPuestosExpanded(false);
+    setUpdSelectedPuestos([]);
+  }, []);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
   const fetchManuals = useCallback(
-    async (marcaIdToUse: number, listPuestoId: number | null, listCorpoId: number | null) => {
-    try {
-      setIsLoadingManuals(true);
+    async (_marcaIdToUse: number, listPuestoId: number | null) => {
+      try {
+        setIsLoadingManuals(true);
         if (listPuestoId == null || !Number.isFinite(Number(listPuestoId)) || Number(listPuestoId) <= 0) {
           setManuals([]);
           return;
         }
         const puestoIdNum = Number(listPuestoId);
-      const isConnected = await getConnectionStatus();
 
-        const manualsForListScope = (cacheArr: JobManualRemote[]) => {
-          const byPuesto = (m: JobManualRemote) => manualIsVisibleForPuesto(m, puestoIdNum);
-          const corpoOk = (m: JobManualRemote) => {
-            if (listCorpoId == null || !Number.isFinite(listCorpoId) || listCorpoId <= 0) return true;
-            const c = getManualCorpoId(m);
-            if (c == null) return true;
-            return c === listCorpoId;
-          };
-          return cacheArr.filter((m) => corpoOk(m) && byPuesto(m));
-        };
+        /** El GET ya filtra por `puesto_id`; no excluir por `corpo_id` del registro (puede diferir del filtro jerárquico). */
+        const manualsForListScope = (cacheArr: JobManualRemote[]) =>
+          cacheArr.filter((m) => manualIsVisibleForPuesto(m, puestoIdNum));
 
-      if (isConnected) {
+        const isConnected = await getConnectionStatus();
+
+        if (isConnected) {
           const result = await listJobManualsByPuesto({
             puestoId: puestoIdNum,
-          refreshAccessToken,
-          logout,
-        });
+            refreshAccessToken,
+            logout,
+          });
 
-        if (result.status && result.manuals) {
+          if (result.status && Array.isArray(result.manuals)) {
             const list = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
             const merged = mergeJobManualsCacheForPuesto(existing, list, puestoIdNum);
             await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
             setManuals(manualsForListScope(merged));
-        } else {
+          } else {
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             if (cacheStr) {
               try {
@@ -545,71 +587,95 @@ export default function JobManualsScreen() {
                 const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
                 setManuals(filtered);
               } catch {
-          setManuals([]);
+                setManuals([]);
               }
             } else {
               setManuals([]);
             }
-        }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
+          }
+        } else {
+          const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
             const filtered = Array.isArray(cache) ? manualsForListScope(cache) : [];
             setManuals(filtered);
-        } else {
-          setManuals([]);
+          } else {
+            setManuals([]);
+          }
         }
-      }
-    } catch (error) {
-      console.error('Error fetching job manuals:', error);
-      try {
+      } catch (error) {
+        console.error('Error fetching job manuals:', error);
+        try {
           if (listPuestoId != null && Number.isFinite(Number(listPuestoId))) {
-        const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-        if (cacheStr) {
-          const cache = JSON.parse(cacheStr);
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
               const puestoIdNum = Number(listPuestoId);
-              const listCor = listCorpoId != null && Number.isFinite(listCorpoId) && listCorpoId > 0 ? listCorpoId : null;
               const filtered = Array.isArray(cache)
-                ? (cache as JobManualRemote[]).filter((m) => {
-                    if (!manualIsVisibleForPuesto(m, puestoIdNum)) return false;
-                    if (listCor == null) return true;
-                    const c = getManualCorpoId(m);
-                    if (c == null) return true;
-                    return c === listCor;
-                  })
+                ? (cache as JobManualRemote[]).filter((m) => manualIsVisibleForPuesto(m, puestoIdNum))
                 : [];
               setManuals(filtered);
             }
+          }
+        } catch (cacheErr) {
+          console.error('Error loading job manuals from cache:', cacheErr);
         }
-      } catch (cacheErr) {
-        console.error('Error loading job manuals from cache:', cacheErr);
+      } finally {
+        setIsLoadingManuals(false);
       }
-    } finally {
-      setIsLoadingManuals(false);
-    }
     },
     [refreshAccessToken, logout]
   );
 
+  const resolveListPuestoId = useCallback((): number | null => {
+    if (roleName === 'OPERATIVO') return marcaPuestoIdFromMarca;
+    const fromFilter = filterPuestoId;
+    if (fromFilter != null && Number.isFinite(Number(fromFilter)) && Number(fromFilter) > 0) {
+      return Number(fromFilter);
+    }
+    return marcaPuestoIdFromMarca;
+  }, [roleName, marcaPuestoIdFromMarca, filterPuestoId]);
+
   useEffect(() => {
-    if (!hasMarca || marcaId == null) return;
-    const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-    const listCorpoId = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
-    void fetchManuals(marcaId, listPuestoId, listCorpoId);
-  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, marcaCorpoIdFromMarca, filterPuestoId, filterSucursalId, fetchManuals]);
+    const listPuestoId = resolveListPuestoId();
+    if (roleName === 'OPERATIVO' && (marcaPuestoIdFromMarca == null || !hasMarca)) return;
+    void fetchManuals(marcaId ?? 0, listPuestoId);
+  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, filterPuestoId, fetchManuals, resolveListPuestoId]);
 
   useFocusEffect(
     useCallback(() => {
-      void fetchCurrentMarca();
+      let cancelled = false;
+      void (async () => {
+        setIsLoading(true);
+        try {
+          await fetchMainStructure();
+          if (!listFiltersSyncedFromMarcaOnceRef.current) {
+            const marcaStr = await AsyncStorage.getItem('current_marca');
+            const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+            if (currentMarca?.id) {
+              await syncMarcaContextFromStorage({ applyFiltersFromMarca: true });
+            } else {
+              await syncMarcaContextFromStorage({ applyFiltersFromMarca: false });
+            }
+            listFiltersSyncedFromMarcaOnceRef.current = true;
+          } else if (!cancelled) {
+            await syncMarcaContextFromStorage({ applyFiltersFromMarca: false });
+          }
+        } catch (error) {
+          console.error('Error on focus (job manuals):', error);
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+      })();
       const handler = () => {
-        void fetchCurrentMarca();
+        void syncMarcaContextFromStorage({ applyFiltersFromMarca: false });
       };
       eventBus.on('connectionRestored', handler);
       return () => {
+        cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [fetchCurrentMarca])
+    }, [fetchMainStructure, syncMarcaContextFromStorage])
   );
 
   useEffect(() => {
@@ -633,6 +699,7 @@ export default function JobManualsScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const marca = JSON.parse(currentMarcaStr);
+      if (!marca?.id) return;
       const divId = getDivisionIdFromMarcaJson(marca);
       setSelectedEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
       setSelectedClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
@@ -1262,31 +1329,6 @@ export default function JobManualsScreen() {
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
   }, [selectedPuestos, puestoNameById]);
 
-  const updClienteOptions = useMemo(() => {
-    const empresa = structure.find(e => e.id === updEmpresaId);
-    return empresa?.clientes ?? [];
-  }, [structure, updEmpresaId]);
-
-  const updDivisionOptions = useMemo(() => {
-    const cliente = updClienteOptions.find(c => c.id === updClienteId);
-    return cliente?.division ?? [];
-  }, [updClienteOptions, updClienteId]);
-
-  const updContratoOptions = useMemo(() => {
-    const division = updDivisionOptions.find(d => d.id === updDivisionId);
-    return division?.contratos ?? [];
-  }, [updDivisionOptions, updDivisionId]);
-
-  const updSucursalOptions = useMemo(() => {
-    const contrato = updContratoOptions.find(c => c.id === updContratoId);
-    return contrato?.sucursales ?? [];
-  }, [updContratoOptions, updContratoId]);
-
-  const updPuestoOptions = useMemo(() => {
-    const sucursal = updSucursalOptions.find(s => s.id === updSucursalId);
-    return sucursal?.puestos ?? [];
-  }, [updSucursalOptions, updSucursalId]);
-
   const updFilteredPuestosFromTree: Puesto[] = useMemo(() => {
     if (updAssignToAllDivision && updSelectedDivisionForAll) {
       return getAllPuestosFromDivision(updSelectedDivisionForAll);
@@ -1422,8 +1464,8 @@ export default function JobManualsScreen() {
       return;
     }
     const manual = updManualForPuestos;
-    const listPuestoReload = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-    const listCorpoReload = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+    const listPuestoReload =
+      roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : (filterPuestoId ?? marcaPuestoIdFromMarca);
 
     const serverManualId = Number(manual.id);
     const isLocalOnly = !Number.isFinite(serverManualId) || serverManualId <= 0;
@@ -1472,7 +1514,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Listo', 'Se actualizaron los puestos en el borrador pendiente de sincronización.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+        await fetchManuals(marcaId, listPuestoReload);
       } catch (e) {
         console.error('submitUpdManualPuestosModal local merge', e);
         Alert.alert('Error', 'No se pudo guardar.');
@@ -1507,7 +1549,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Modo offline', 'Se sincronizarán los nuevos puestos cuando haya conexión.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+        await fetchManuals(marcaId, listPuestoReload);
       } catch (e) {
         console.error('submitUpdManualPuestosModal offline queue', e);
         Alert.alert('Error', 'No se pudo guardar la acción offline.');
@@ -1535,7 +1577,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Éxito', res.message || 'Puestos actualizados.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+        await fetchManuals(marcaId, listPuestoReload);
       } else {
         Alert.alert('Error', res.message || 'No se pudo actualizar.');
       }
@@ -1991,7 +2033,8 @@ export default function JobManualsScreen() {
       const signatureString = `${firmaResponsable?.sessionId}:${firmaResponsable?.empleadoId}:${firmaResponsable?.latitud}:${firmaResponsable?.longitud}:${firmaResponsable?.timestamp}`;
       const signatureHash = btoa(signatureString);
 
-      const listPuestoId = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
+      const listPuestoId =
+        roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : (filterPuestoId ?? marcaPuestoIdFromMarca);
       const listCorpoId = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
 
       const currentMarcaStrForCreate = await AsyncStorage.getItem('current_marca');
@@ -2102,7 +2145,7 @@ export default function JobManualsScreen() {
           setIsCreating(false);
 
           if (marcaId) {
-            await fetchManuals(marcaId, listPuestoId, listCorpoId);
+            await fetchManuals(marcaId, listPuestoId);
           }
 
           Alert.alert('Éxito', result.message || 'Manual creado correctamente');
@@ -2201,7 +2244,7 @@ export default function JobManualsScreen() {
         setIsCreating(false);
 
         if (marcaId) {
-          await fetchManuals(marcaId, listPuestoId, listCorpoId);
+          await fetchManuals(marcaId, listPuestoId);
         }
       }
     } catch (error) {
@@ -2303,17 +2346,6 @@ export default function JobManualsScreen() {
     );
   }
 
-  if (!hasMarca) {
-    return (
-      <ThemedView style={styles.container}>
-        <ThemedText style={styles.noMarcaTitle}>No se encontró la marca actual</ThemedText>
-        <ThemedText style={styles.noMarcaMessage}>
-          Este módulo requiere una marca activa para mostrar los manuales de puesto disponibles.
-        </ThemedText>
-      </ThemedView>
-    );
-  }
-
   const canCreate = roleName === 'SUPERVISOR' || roleName === 'ADMINISTRATIVO';
 
   return (
@@ -2335,6 +2367,14 @@ export default function JobManualsScreen() {
             <ThemedText style={styles.puestoLabel}>Puesto actual:</ThemedText>
             <ThemedText style={styles.puestoName}>{puestoActualNombre || 'No disponible'}</ThemedText>
           </ThemedView>
+
+          {!hasMarca ? (
+            <ThemedView style={{ paddingHorizontal: 4, marginBottom: 12 }}>
+              <ThemedText style={styles.noMarcaMessage}>
+                No hay marca activa. Puede seleccionar la jerarquía manualmente en los filtros.
+              </ThemedText>
+            </ThemedView>
+          ) : null}
 
           {!isCreating && roleName !== 'OPERATIVO' && (
             <ThemedView style={styles.filtersMain}>
@@ -2371,153 +2411,26 @@ export default function JobManualsScreen() {
                     <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
                   ) : (
                     <>
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterEmpresaId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterEmpresaId(next === 0 ? null : next);
-                              setFilterClienteId(null);
-                              setFilterDivisionId(null);
-                              setFilterContratoId(null);
-                              setFilterSucursalId(null);
-                              setFilterPuestoId(null);
-                            }}
-                          >
-                            <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                            {filterEmpresaOptions.map((e) => (
-                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
-                            selectedValue={filterClienteId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterClienteId(next === 0 ? null : next);
-                              setFilterDivisionId(null);
-                              setFilterContratoId(null);
-                              setFilterSucursalId(null);
-                              setFilterPuestoId(null);
-                            }}
-                          >
-                            <Picker.Item
-                              label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {filterClienteOptionsMemo.map((c) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>División</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
-                            selectedValue={filterDivisionId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterDivisionId(next === 0 ? null : next);
-                              setFilterContratoId(null);
-                              setFilterSucursalId(null);
-                              setFilterPuestoId(null);
-                            }}
-                          >
-                            <Picker.Item
-                              label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {filterDivisionOptionsMemo.map((d) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
-                            selectedValue={filterContratoId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterContratoId(next === 0 ? null : next);
-                              setFilterSucursalId(null);
-                              setFilterPuestoId(null);
-                            }}
-                          >
-                            <Picker.Item
-                              label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {filterContratoOptionsMemo.map((c) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
-                            selectedValue={filterSucursalId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterSucursalId(next === 0 ? null : next);
-                              setFilterPuestoId(null);
-                            }}
-                          >
-                            <Picker.Item
-                              label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {filterSucursalOptionsMemo.map((s) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Puesto *</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={filterSucursalId != null && filterPuestoOptionsMemo.length > 0}
-                            selectedValue={filterPuestoId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setFilterPuestoId(next === 0 ? null : next);
-                            }}
-                          >
-                            <Picker.Item
-                              label={filterSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {filterPuestoOptionsMemo.map((p) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
+                      <ThemedText style={styles.filterLabel}>Jerarquía (lista)</ThemedText>
+                      <HierarchyPickerFields
+                        structure={structure}
+                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                        isLoading={isStructureLoading}
+                        emptyPickerValue={0}
+                        values={{
+                          empresaId: filterEmpresaId,
+                          clienteId: filterClienteId,
+                          divisionId: filterDivisionId,
+                          contratoId: filterContratoId,
+                          sucursalId: filterSucursalId,
+                          puestoId: filterPuestoId,
+                        }}
+                        onChange={handleFilterHierarchyChange}
+                        labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto *' }}
+                        renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                        pickerWrapperStyle={styles.pickerWrapper}
+                        fieldGroupStyle={styles.filterGroup}
+                      />
                     </>
                   )}
                 </ThemedView>
@@ -2862,165 +2775,25 @@ export default function JobManualsScreen() {
                           Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se vincularán todos los puestos debajo.
                         </ThemedText>
 
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={empresaOptions.length > 0}
-                              selectedValue={selectedEmpresaId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedEmpresaId(next === 0 ? null : next);
-                                setSelectedClienteId(null);
-                                setSelectedDivisionId(null);
-                                setSelectedContratoId(null);
-                                setSelectedSucursalId(null);
-                                setSelectedPuestoId(null);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                              {empresaOptions.map((e) => (
-                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                        </ThemedView>
-
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                              selectedValue={selectedClienteId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedClienteId(next === 0 ? null : next);
-                                setSelectedDivisionId(null);
-                                setSelectedContratoId(null);
-                                setSelectedSucursalId(null);
-                                setSelectedPuestoId(null);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'} value={0} color="#000000" />
-                              {clienteOptions.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {selectedEmpresaId !== null && clienteOptions.length === 0 && (
-                            <ThemedText style={styles.emptyText}>No hay clientes disponibles para esta empresa.</ThemedText>
-                          )}
-                        </ThemedView>
-
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>División</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                              selectedValue={selectedDivisionId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedDivisionId(next === 0 ? null : next);
-                                setSelectedContratoId(null);
-                                setSelectedSucursalId(null);
-                                setSelectedPuestoId(null);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'} value={0} color="#000000" />
-                              {divisionOptions.map((d) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {selectedClienteId !== null && divisionOptions.length === 0 && (
-                            <ThemedText style={styles.emptyText}>Este cliente no tiene divisiones con contratos.</ThemedText>
-                          )}
-                        </ThemedView>
-
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                              selectedValue={selectedContratoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedContratoId(next === 0 ? null : next);
-                                setSelectedSucursalId(null);
-                                setSelectedPuestoId(null);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'} value={0} color="#000000" />
-                              {contratoOptions.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {selectedDivisionId !== null && contratoOptions.length === 0 && (
-                            <ThemedText style={styles.emptyText}>Esta división no tiene contratos para el cliente seleccionado.</ThemedText>
-                          )}
-                        </ThemedView>
-
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                              selectedValue={selectedSucursalId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedSucursalId(next === 0 ? null : next);
-                                setSelectedPuestoId(null);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'} value={0} color="#000000" />
-                              {sucursalOptions.map((s) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {selectedContratoId !== null && sucursalOptions.length === 0 && (
-                            <ThemedText style={styles.emptyText}>Este contrato no tiene sucursales.</ThemedText>
-                          )}
-                        </ThemedView>
-
-                        <ThemedView style={styles.structureGroup}>
-                          <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
-                          <ThemedView style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                              selectedValue={selectedPuestoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setSelectedPuestoId(next === 0 ? null : next);
-                                setHasConfirmedPuestos(false);
-                                setIsSelectedPuestosExpanded(false);
-                              }}
-                            >
-                              <Picker.Item
-                                label={selectedSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {puestoOptions.map((p) => (
-                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </ThemedView>
-                          {selectedSucursalId !== null && puestoOptions.length === 0 && (
-                            <ThemedText style={styles.emptyText}>Esta sucursal no tiene puestos.</ThemedText>
-                          )}
-                        </ThemedView>
+                        <HierarchyPickerFields
+                          structure={structure}
+                          levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                          isLoading={isStructureLoading}
+                          emptyPickerValue={0}
+                          values={{
+                            empresaId: selectedEmpresaId,
+                            clienteId: selectedClienteId,
+                            divisionId: selectedDivisionId,
+                            contratoId: selectedContratoId,
+                            sucursalId: selectedSucursalId,
+                            puestoId: selectedPuestoId,
+                          }}
+                          onChange={handleFormHierarchyChange}
+                          labels={{ sucursal: 'Sucursal (Corpo)', puesto: 'Puesto' }}
+                          renderLabel={(text) => <ThemedText style={styles.smallLabel}>{text}</ThemedText>}
+                          pickerWrapperStyle={styles.pickerWrapper}
+                          fieldGroupStyle={styles.structureGroup}
+                        />
                       </>
                     )}
 
@@ -3530,161 +3303,25 @@ export default function JobManualsScreen() {
                         Filtra el árbol hasta el nivel deseado. Si seleccionas un nivel superior, se incluirán
                         todos los puestos debajo.
                       </ThemedText>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>Empresa</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={empresaOptions.length > 0}
-                            selectedValue={updEmpresaId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdEmpresaId(next === 0 ? null : next);
-                              setUpdClienteId(null);
-                              setUpdDivisionId(null);
-                              setUpdContratoId(null);
-                              setUpdSucursalId(null);
-                              setUpdPuestoId(null);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                            {empresaOptions.map((e) => (
-                              <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>Cliente</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={updEmpresaId !== null && updClienteOptions.length > 0}
-                            selectedValue={updClienteId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdClienteId(next === 0 ? null : next);
-                              setUpdDivisionId(null);
-                              setUpdContratoId(null);
-                              setUpdSucursalId(null);
-                              setUpdPuestoId(null);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item
-                              label={updEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {updClienteOptions.map((c) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>División</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={updClienteId !== null && updDivisionOptions.length > 0}
-                            selectedValue={updDivisionId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdDivisionId(next === 0 ? null : next);
-                              setUpdContratoId(null);
-                              setUpdSucursalId(null);
-                              setUpdPuestoId(null);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item
-                              label={updClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {updDivisionOptions.map((d) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>Contrato</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={updDivisionId !== null && updContratoOptions.length > 0}
-                            selectedValue={updContratoId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdContratoId(next === 0 ? null : next);
-                              setUpdSucursalId(null);
-                              setUpdPuestoId(null);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item
-                              label={updDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {updContratoOptions.map((c) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>Sucursal (Corpo)</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={updContratoId !== null && updSucursalOptions.length > 0}
-                            selectedValue={updSucursalId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdSucursalId(next === 0 ? null : next);
-                              setUpdPuestoId(null);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item
-                              label={updContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {updSucursalOptions.map((s) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
-                      <ThemedView style={styles.structureGroup}>
-                        <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
-                        <ThemedView style={styles.pickerWrapper}>
-                          <Picker
-                            enabled={updSucursalId !== null && updPuestoOptions.length > 0}
-                            selectedValue={updPuestoId ?? 0}
-                            onValueChange={(v) => {
-                              const next = Number(v) || 0;
-                              setUpdPuestoId(next === 0 ? null : next);
-                              setUpdHasConfirmedPuestos(false);
-                              setUpdIsSelectedPuestosExpanded(false);
-                            }}
-                          >
-                            <Picker.Item
-                              label={updSucursalId ? 'Seleccione puesto (opcional)' : 'Seleccione sucursal primero'}
-                              value={0}
-                              color="#000000"
-                            />
-                            {updPuestoOptions.map((p) => (
-                              <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </ThemedView>
-                      </ThemedView>
+                      <HierarchyPickerFields
+                        structure={structure}
+                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                        isLoading={isStructureLoading}
+                        emptyPickerValue={0}
+                        values={{
+                          empresaId: updEmpresaId,
+                          clienteId: updClienteId,
+                          divisionId: updDivisionId,
+                          contratoId: updContratoId,
+                          sucursalId: updSucursalId,
+                          puestoId: updPuestoId,
+                        }}
+                        onChange={handleUpdPHierarchyChange}
+                        labels={{ sucursal: 'Sucursal (Corpo)', puesto: 'Puesto' }}
+                        renderLabel={(text) => <ThemedText style={styles.smallLabel}>{text}</ThemedText>}
+                        pickerWrapperStyle={styles.pickerWrapper}
+                        fieldGroupStyle={styles.structureGroup}
+                      />
                     </>
                   )}
 
@@ -3814,9 +3451,9 @@ export default function JobManualsScreen() {
                                 try {
                                   setIsDeletingManual(true);
                                   const listPuestoReload =
-                                    roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-                                  const listCorpoReload =
-                                    roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+                                    roleName === 'OPERATIVO'
+                                      ? marcaPuestoIdFromMarca
+                                      : (filterPuestoId ?? marcaPuestoIdFromMarca);
                                   const isConnected = await getConnectionStatus();
 
                                   // Si es local sin sincronizar, solo limpiar cache y acciones
@@ -3847,7 +3484,7 @@ export default function JobManualsScreen() {
                                     clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+                                      await fetchManuals(marcaId, listPuestoReload);
                                     }
                                     return;
                                   }
@@ -3886,7 +3523,7 @@ export default function JobManualsScreen() {
                                       clearViewFirma();
                                       setIsSigningManual(false);
                                       if (marcaId) {
-                                        await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+                                        await fetchManuals(marcaId, listPuestoReload);
                                       }
                                     }
                                   } else {
@@ -3919,7 +3556,7 @@ export default function JobManualsScreen() {
                                     clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+                                      await fetchManuals(marcaId, listPuestoReload);
                                     }
                                   }
                                 } catch (error) {
@@ -4775,9 +4412,11 @@ export default function JobManualsScreen() {
                                 };
                                 setSelectedManual(manualRef);
                                 if (marcaId) {
-                                  const listPuestoR = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-                                  const listCorpoR = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
-                                  await fetchManuals(marcaId, listPuestoR, listCorpoR);
+                                  const listPuestoR =
+                                    roleName === 'OPERATIVO'
+                                      ? marcaPuestoIdFromMarca
+                                      : (filterPuestoId ?? marcaPuestoIdFromMarca);
+                                  await fetchManuals(marcaId, listPuestoR);
                                 }
                               }
                             }
@@ -4919,10 +4558,12 @@ export default function JobManualsScreen() {
                               await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
                             }
 
-                            const listPuestoReload = roleName === 'OPERATIVO' ? marcaPuestoIdFromMarca : filterPuestoId;
-                            const listCorpoReload = roleName === 'OPERATIVO' ? marcaCorpoIdFromMarca : filterSucursalId;
+                            const listPuestoReload =
+                              roleName === 'OPERATIVO'
+                                ? marcaPuestoIdFromMarca
+                                : (filterPuestoId ?? marcaPuestoIdFromMarca);
                             if (marcaId) {
-                              await fetchManuals(marcaId, listPuestoReload, listCorpoReload);
+                              await fetchManuals(marcaId, listPuestoReload);
                               const cacheAfter = await AsyncStorage.getItem('job_manuals_cache');
                               if (cacheAfter) {
                                 try {

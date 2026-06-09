@@ -27,6 +27,7 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '../components/HierarchyPickerFields';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -1078,6 +1079,24 @@ export default function ApreciacionVulnerabilidadScreen() {
     setContratoId(path.contratoId);
     setCorpoId(path.corpoId);
     setPuestoId(path.puestoId);
+  }, []);
+
+  const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    setFilterCorpoId(v.sucursalId);
+    fetchItemsRef.current({ filterCorpoId: v.sucursalId });
+  }, []);
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setEmpresaId(v.empresaId);
+    setClienteId(v.clienteId);
+    setDivisionId(v.divisionId);
+    setContratoId(v.contratoId);
+    setCorpoId(v.sucursalId);
+    setPuestoId(v.puestoId ?? null);
   }, []);
 
   const resetForm = (horaAccion: number) => {
@@ -2180,127 +2199,26 @@ export default function ApreciacionVulnerabilidadScreen() {
                     </ThemedView>
                   ) : null}
 
-                  <ThemedText style={styles.label}>Empresa</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterEmpresaId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          setFilterEmpresaId(id === PICKER_NONE ? null : id);
-                          setFilterClienteId(null);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                          fetchItemsRef.current({ filterCorpoId: null });
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
-                        {empresas.map((o: HierarchyPickerOption) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
-                  {filterEmpresaId && filterClientes.length === 0 ? (
-                    <ThemedText style={styles.warningText}>La empresa seleccionada no tiene clientes.</ThemedText>
-                  ) : null}
-
-                  <ThemedText style={styles.label}>Cliente</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={!!filterEmpresaId}
-                        selectedValue={filterClienteId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          setFilterClienteId(id === PICKER_NONE ? null : id);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                          fetchItemsRef.current({ filterCorpoId: null });
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
-                        {filterClientes.map((o: HierarchyPickerOption) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
-                  {filterClienteId && filterDivisiones.length === 0 ? (
-                    <ThemedText style={styles.warningText}>El cliente seleccionado no tiene divisiones/contratos.</ThemedText>
-                  ) : null}
-
-                  <ThemedText style={styles.label}>División</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={!!filterClienteId}
-                        selectedValue={filterDivisionId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          setFilterDivisionId(id === PICKER_NONE ? null : id);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                          fetchItemsRef.current({ filterCorpoId: null });
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
-                        {filterDivisiones.map((o: HierarchyPickerOption) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
-                  {filterDivisionId && filterContratos.length === 0 ? (
-                    <ThemedText style={styles.warningText}>La división seleccionada no tiene contratos.</ThemedText>
-                  ) : null}
-
-                  <ThemedText style={styles.label}>Contrato</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={!!filterDivisionId}
-                        selectedValue={filterContratoId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          setFilterContratoId(id === PICKER_NONE ? null : id);
-                          setFilterCorpoId(null);
-                          fetchItemsRef.current({ filterCorpoId: null });
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
-                        {filterContratos.map((o: HierarchyPickerOption) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
-                  {filterContratoId && filterCorpos.length === 0 ? (
-                    <ThemedText style={styles.warningText}>El contrato seleccionado no tiene sucursales (corpos).</ThemedText>
-                  ) : null}
-
-                  <ThemedText style={styles.label}>Sucursal (Corpo)</ThemedText>
-                  {!isStructureLoading ? (
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={!!filterContratoId}
-                        selectedValue={filterCorpoId ?? PICKER_NONE}
-                        onValueChange={(val) => {
-                          const id = Number(val) || 0;
-                          const nextCorpo = id === PICKER_NONE ? null : id;
-                          setFilterCorpoId(nextCorpo);
-                          fetchItemsRef.current({ filterCorpoId: nextCorpo });
-                        }}
-                      >
-                        <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
-                        {filterCorpos.map((o: HierarchyPickerOption) => (
-                          <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  ) : null}
+                  <HierarchyPickerFields
+                    structure={structure}
+                    levels={['cliente', 'contrato', 'sucursal']}
+                    isLoading={isStructureLoading}
+                    emptyPickerValue={0}
+                    values={{
+                      empresaId: filterEmpresaId,
+                      clienteId: filterClienteId,
+                      divisionId: filterDivisionId,
+                      contratoId: filterContratoId,
+                      sucursalId: filterCorpoId,
+                    }}
+                    onChange={handleFilterHierarchyChange}
+                    labels={{
+                      sucursal: 'Sucursal (Corpo)',
+                      selectSucursal: 'Seleccionar sucursal (corpo)',
+                    }}
+                    renderLabel={(text) => <ThemedText style={styles.label}>{text}</ThemedText>}
+                    pickerWrapperStyle={styles.pickerWrapper}
+                  />
                 </ThemedView>
               )}
             </ThemedView>
@@ -2333,138 +2251,27 @@ export default function ApreciacionVulnerabilidadScreen() {
                 </ThemedView>
               ) : null}
 
-              <ThemedText style={styles.label}>Empresa</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={empresaId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setEmpresaId(id === PICKER_NONE ? null : id);
-                      setClienteId(null);
-                      setDivisionId(null);
-                      setContratoId(null);
-                      setCorpoId(null);
-                      setPuestoId(null);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar empresa" value={PICKER_NONE} color="#000000" />
-                    {empresas.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
-              {empresaId && clientes.length === 0 ? <ThemedText style={styles.warningText}>La empresa seleccionada no tiene clientes.</ThemedText> : null}
-
-              <ThemedText style={styles.label}>Cliente</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    enabled={!!empresaId}
-                    selectedValue={clienteId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setClienteId(id === PICKER_NONE ? null : id);
-                      setDivisionId(null);
-                      setContratoId(null);
-                      setCorpoId(null);
-                      setPuestoId(null);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar cliente" value={PICKER_NONE} color="#000000" />
-                    {clientes.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
-              {clienteId && divisiones.length === 0 ? <ThemedText style={styles.warningText}>El cliente seleccionado no tiene divisiones/contratos.</ThemedText> : null}
-
-              <ThemedText style={styles.label}>División</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    enabled={!!clienteId}
-                    selectedValue={divisionId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setDivisionId(id === PICKER_NONE ? null : id);
-                      setContratoId(null);
-                      setCorpoId(null);
-                      setPuestoId(null);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar división" value={PICKER_NONE} color="#000000" />
-                    {divisiones.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
-              {divisionId && contratos.length === 0 ? <ThemedText style={styles.warningText}>La división seleccionada no tiene contratos.</ThemedText> : null}
-
-              <ThemedText style={styles.label}>Contrato</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    enabled={!!divisionId}
-                    selectedValue={contratoId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setContratoId(id === PICKER_NONE ? null : id);
-                      setCorpoId(null);
-                      setPuestoId(null);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar contrato" value={PICKER_NONE} color="#000000" />
-                    {contratos.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
-              {contratoId && corpos.length === 0 ? <ThemedText style={styles.warningText}>El contrato seleccionado no tiene sucursales (corpos).</ThemedText> : null}
-
-              <ThemedText style={styles.label}>Sucursal (Corpo)</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    enabled={!!contratoId}
-                    selectedValue={corpoId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setCorpoId(id === PICKER_NONE ? null : id);
-                      setPuestoId(null);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar sucursal (corpo)" value={PICKER_NONE} color="#000000" />
-                    {corpos.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
-              {corpoId && puestos.length === 0 ? <ThemedText style={styles.warningText}>La sucursal seleccionada no tiene puestos.</ThemedText> : null}
-
-              <ThemedText style={styles.label}>Puesto</ThemedText>
-              {!isStructureLoading ? (
-                <ThemedView style={styles.pickerWrapper}>
-                  <Picker
-                    enabled={!!corpoId}
-                    selectedValue={puestoId ?? PICKER_NONE}
-                    onValueChange={(val) => {
-                      const id = Number(val) || 0;
-                      setPuestoId(id === PICKER_NONE ? null : id);
-                    }}
-                  >
-                    <Picker.Item label="Seleccionar puesto" value={PICKER_NONE} color="#000000" />
-                    {puestos.map((o: HierarchyPickerOption) => (
-                      <Picker.Item key={String(o.id)} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </ThemedView>
-              ) : null}
+              <HierarchyPickerFields
+                structure={structure}
+                levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                isLoading={isStructureLoading}
+                emptyPickerValue={0}
+                values={{
+                  empresaId,
+                  clienteId,
+                  divisionId,
+                  contratoId,
+                  sucursalId: corpoId,
+                  puestoId,
+                }}
+                onChange={handleFormHierarchyChange}
+                labels={{
+                  sucursal: 'Sucursal (Corpo)',
+                  selectSucursal: 'Seleccionar sucursal (corpo)',
+                }}
+                renderLabel={(text) => <ThemedText style={styles.label}>{text}</ThemedText>}
+                pickerWrapperStyle={styles.pickerWrapper}
+              />
 
               <ThemedText style={styles.label}>Enlace *</ThemedText>
               <TextInput style={styles.input} placeholder="Enlace" placeholderTextColor="#999" value={enlace} onChangeText={setEnlace} />

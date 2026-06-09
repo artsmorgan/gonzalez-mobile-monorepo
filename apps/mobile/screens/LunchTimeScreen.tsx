@@ -4,7 +4,7 @@ import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
@@ -13,6 +13,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import saveLunchTime from '../hooks/saveLunchTime';
+import { mergeCurrentMarcaHierarchyIntoLunchRequest, releaseLunchTimerCompletionLock, tryAcquireLunchTimerCompletionLock } from '../hooks/lunchTimeMarcaHierarchy';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -78,6 +79,7 @@ export default function LunchTimeScreen() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<LunchTimeScreenNavigationProp>();
+  const isFocused = useIsFocused();
 
   // Mantén referencias actualizadas de los valores que cambian
   const timerActiveRef = useRef(isTimerActive);
@@ -91,8 +93,54 @@ export default function LunchTimeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      const syncTimerFromTempState = async () => {
+        const temp_state = await AsyncStorage.getItem('temp_state');
+        if (!temp_state) return;
+
+        try {
+          const temp_state_obj = JSON.parse(temp_state);
+          if (!temp_state_obj?.running) return;
+
+          if (temp_state_obj.inactivities) {
+            setInactivities(temp_state_obj.inactivities.map((inactivity: any) => ({
+              ...inactivity,
+              startTime: new Date(inactivity.startTime),
+              endTime: new Date(inactivity.endTime),
+            })));
+          }
+          setFirmaEmpleado(temp_state_obj.firma_empleado || '');
+
+          const horaAccion = await getUpdatedHoraAccion();
+          const remaining_time =
+            temp_state_obj.remainingSeconds / 1000 -
+            (horaAccion - temp_state_obj.currentTimestamp) / 1000;
+
+          setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
+          setCurrentInactivityStart(
+            temp_state_obj.currentInactivityStart
+              ? new Date(temp_state_obj.currentInactivityStart)
+              : null
+          );
+
+          if (remaining_time <= 0) {
+            setIsTimerActive(false);
+            setTimeRemaining(0);
+            await handleTimerComplete();
+            return;
+          }
+
+          setIsTimerActive(true);
+          setEndTimeMode('current');
+          setTimeRemaining(parseInt(remaining_time.toFixed(0)));
+        } catch (error) {
+          console.error('Error syncing lunch timer from temp_state:', error);
+        }
+      };
+
+      void syncTimerFromTempState();
+
       return () => {
-        saveCurrentState();
+        void saveCurrentState();
       };
     }, [])
   );
@@ -149,9 +197,9 @@ export default function LunchTimeScreen() {
     return horaAccion;
   }
 
-  // Timer effect
+  // Timer effect (solo en pantalla; fuera de ella App.tsx completa el almuerzo vía temp_state)
   useEffect(() => {
-    if (isTimerActive && timeRemaining > 0) {
+    if (isFocused && isTimerActive && timeRemaining > 0) {
       intervalRef.current = setInterval(() => {
         setTimeRemaining((prev) => {
           if (prev <= 1) {
@@ -173,7 +221,7 @@ export default function LunchTimeScreen() {
         clearInterval(intervalRef.current);
       }
     };
-  }, [isTimerActive, timeRemaining]);
+  }, [isFocused, isTimerActive, timeRemaining]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', async nextAppState => {
@@ -220,6 +268,7 @@ export default function LunchTimeScreen() {
     const temp_state = await AsyncStorage.getItem('temp_state');
 
     if (temp_state) {
+      let keepTempState = false;
       try {
         const temp_state_obj = JSON.parse(temp_state);
 
@@ -236,6 +285,7 @@ export default function LunchTimeScreen() {
         console.log('temp_state_obj', temp_state_obj);
 
         if (temp_state_obj.running) {
+          keepTempState = true;
           setIsTimerActive(true);
           const horaAccion = await getUpdatedHoraAccion();
           const remaining_time = (temp_state_obj.remainingSeconds / 1000) - ((horaAccion - temp_state_obj.currentTimestamp) / 1000);
@@ -247,6 +297,7 @@ export default function LunchTimeScreen() {
             setTimeRemaining(0);
             // Ejecutar la lógica de guardado cuando el tiempo se agotó mientras la app estaba minimizada
             await handleTimerComplete();
+            keepTempState = false;
           } else {
             setEndTimeMode('current');
             setTimeRemaining(parseInt(remaining_time.toFixed(0)));
@@ -263,12 +314,19 @@ export default function LunchTimeScreen() {
       } catch (error) {
         console.error('Error parsing temp_state:', error);
       }
-      await AsyncStorage.removeItem('temp_state');
+      if (!keepTempState) {
+        await AsyncStorage.removeItem('temp_state');
+      }
     }
     console.log('✅ Restored current state');
   }
 
   const handleTimerComplete = async () => {
+    const stillRaw = await AsyncStorage.getItem('temp_state');
+    if (!stillRaw && !timerActiveRef.current) {
+      return;
+    }
+
     setIsTimerActive(false);
     console.log('endTimeMode', endTimeModeRef.current);
     await AsyncStorage.setItem('alert_lunch_time', 'false');
@@ -406,6 +464,18 @@ export default function LunchTimeScreen() {
   };
 
   const sendLunchTimeRecord = async (requestData: any) => {
+    const acquired = await tryAcquireLunchTimerCompletionLock();
+    if (!acquired) return;
+
+    try {
+    await mergeCurrentMarcaHierarchyIntoLunchRequest(requestData);
+
+    const marcaId = Number(requestData.marca_id);
+    if (!Number.isFinite(marcaId) || marcaId <= 0) {
+      Alert.alert('Error', 'No se encontró el identificador de la marca actual.');
+      return;
+    }
+
     // Verificar conectividad
     const isConnected = await getConnectionStatus();
 
@@ -422,6 +492,8 @@ export default function LunchTimeScreen() {
         Alert.alert('Error', responseData.message);
         return;
       }
+
+      await AsyncStorage.removeItem('temp_state');
 
       const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado correctamente' : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
 
@@ -454,6 +526,8 @@ export default function LunchTimeScreen() {
       });
       await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
 
+      await AsyncStorage.removeItem('temp_state');
+
       const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado localmente. Se sincronizará cuando haya conexión.' : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.';
 
       Alert.alert(
@@ -471,6 +545,9 @@ export default function LunchTimeScreen() {
           },
         ]
       );
+    }
+    } finally {
+      await releaseLunchTimerCompletionLock();
     }
   }
 

@@ -81,26 +81,43 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             console.log(2);
             if (ausencia) {
                 // Crear la acción personal
-                const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
-                console.log(3);
                 let usuario_insercion = empleado.cedula ? (empleado.cedula + " - MonitoreApp") : "MonitoreApp";
-                const response = await createAccionPersonal(req, marcaDia.id, 5, 0, ausencia.id, 0, reason, coordinadoPorId, usuario_insercion);
-                console.log(4);
-                if (response.status) {
-                    accionPersonal = response.data;
-
-                    // Update marca dia con la acción personal
-                    const updatedMarcaDia = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "UPDATE",
-                            operation: "update",
-                            table: "c_marca_dia",
-                            where: { id: marcaDia.id },
-                            data: { accionPersonal_id: accionPersonal.id }
+                const coordinadoPorId = 3;
+                const corpo = await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "GET",
+                        table: "e_estructura_sucursal",
+                        operation: "findUnique",
+                        where: { id: marcaDia.corpo_id }
+                    }
+                });
+                if (corpo) {
+                    if (corpo.ejecutivoCuenta_id) {
+                        const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
+                          req,
+                          data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: corpo.ejecutivoCuenta_id } },
+                        });
+                        if (ejecutivo_cuenta_coordinador) {
+                            const response = await createAccionPersonal(req, marcaDia.id, 5, 0, ausencia.id, 0, reason, coordinadoPorId, ejecutivo_cuenta_coordinador.coordinador_id, usuario_insercion);
+                            if (response.status) {
+                                accionPersonal = response.data;
+            
+                                // Update marca dia con la acción personal
+                                const updatedMarcaDia = await callDynamicPrisma({
+                                    req,
+                                    data: {
+                                        action: "UPDATE",
+                                        operation: "update",
+                                        table: "c_marca_dia",
+                                        where: { id: marcaDia.id },
+                                        data: { accionPersonal_id: accionPersonal.id }
+                                    }
+                                });
+                                console.log(5);
+                            }
                         }
-                    });
-                    console.log(5);
+                    }
                 }
             }
         }
@@ -144,7 +161,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         else {
             const title = "Motivo de ausencia confirmado";
             const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha confirmado el motivo de ausencia: ${reason} (horaAccion: ${new Date(horaAccionNum).toISOString()})`;
-            await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id ?? 0], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 
         return NextResponse.json({ status: true, message: "Motivo de ausencia confirmado" }, { status: 200 });
