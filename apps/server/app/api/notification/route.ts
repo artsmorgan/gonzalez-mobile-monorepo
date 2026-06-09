@@ -10,9 +10,10 @@ export async function GET(req: NextRequest) {
 
         const searchParams = req.nextUrl.searchParams;
         const m = searchParams.get("m");
+        const e = searchParams.get("e");
 
-        if (!m) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        if (!m || !e) {
+            return NextResponse.json({ status: false, message: "Marca o empleado no especificados" }, { status: 200 });
         }
 
         const marca = await callDynamicPrisma({
@@ -48,51 +49,54 @@ export async function GET(req: NextRequest) {
                 action: "GET",
                 table: "c_empleado_notification",
                 operation: "findMany",
-                where: { empleadoId: marca.empleadoFijo_id }
+                where: { empleadoId: parseInt(e) }
             }
         });
 
         const notifications_return: { id: number, title: string, description: string, watched: boolean, is_plaza: boolean, created_at: string }[] = [];
 
-        for (const not of plaza_notifications) {
-            const notificationData = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_notifications",
-                    operation: "findUnique",
-                    where: { id: not.notificationId }
-                }
-            });
-            if (!notificationData) continue;
+        const plaza_noti_ids = plaza_notifications.map((not: { notificationId: number }) => not.notificationId);
+        const empleado_noti_ids = empleado_notifications.map((not: { notificationId: number }) => not.notificationId);
+
+        const plazaWatchedByNotificationId = new Map<number, boolean>(
+            (Array.isArray(plaza_notifications) ? plaza_notifications : []).map(
+                (row: { notificationId: number; watched?: boolean }) => [row.notificationId, row.watched === true]
+            )
+        );
+        const empleadoWatchedByNotificationId = new Map<number, boolean>(
+            (Array.isArray(empleado_notifications) ? empleado_notifications : []).map(
+                (row: { notificationId: number; watched?: boolean }) => [row.notificationId, row.watched === true]
+            )
+        );
+        
+        const plaza_notifications_data = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_notifications", operation: "findMany", where: { id: { in: plaza_noti_ids } } }
+        });
+        const empleado_notifications_data = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_notifications", operation: "findMany", where: { id: { in: empleado_noti_ids } } }
+        });
+
+        for (const not of plaza_notifications_data) {
             notifications_return.push({
                 id: not.id,
-                title: notificationData.title,
-                description: notificationData.description,
-                watched: not.watched,
+                title: not.title,
+                description: not.description,
+                watched: plazaWatchedByNotificationId.get(not.id) === true,
                 is_plaza: true,
-                created_at: notificationData.created_at
+                created_at: not.created_at
             });
         }
 
-        for (const not of empleado_notifications) {
-            const notificationData = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_notifications",
-                    operation: "findUnique",
-                    where: { id: not.notificationId }
-                }
-            });
-            if (!notificationData) continue;
+        for (const not of empleado_notifications_data) {
             notifications_return.push({
                 id: not.id,
-                title: notificationData.title,
-                description: notificationData.description,
-                watched: not.watched,
+                title: not.title,
+                description: not.description,
+                watched: empleadoWatchedByNotificationId.get(not.id) === true,
                 is_plaza: false,
-                created_at: notificationData.created_at
+                created_at: not.created_at
             });
         }
 
@@ -117,30 +121,37 @@ export async function POST(req: NextRequest) {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        for (const not of notifications) {
-            if (not.is_plaza) {
-                await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "UPDATE",
-                        table: "c_plaza_notification",
-                        operation: "update",
-                        where: { id: not.id },
-                        data: { watched: true }
-                    }
-                });
-            } else {
-                await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "UPDATE",
-                        table: "c_empleado_notification",
-                        operation: "update",
-                        where: { id: not.id },
-                        data: { watched: true }
-                    }
-                });
-            }
+        let plaza_not_ids: number[] = [];
+        plaza_not_ids.push(...notifications.filter((not: { is_plaza: boolean }) => not.is_plaza).map((not: { id: number }) => Number(not.id)));
+        let empleado_not_ids: number[] = [];
+        empleado_not_ids.push(...notifications.filter((not: { is_plaza: boolean }) => !not.is_plaza).map((not: { id: number }) => Number(not.id)));
+
+        const employeeId = parseInt(String((payload as { id?: number })?.id ?? ""), 10);
+
+        if (plaza_not_ids.length > 0) {
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "UPDATE",
+                    table: "c_plaza_notification",
+                    operation: "updateMany",
+                    where: { notificationId: { in: plaza_not_ids } },
+                    data: { watched: true },
+                },
+            });
+        }
+
+        if (empleado_not_ids.length > 0 && Number.isFinite(employeeId) && employeeId > 0) {
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "UPDATE",
+                    table: "c_empleado_notification",
+                    operation: "updateMany",
+                    where: { notificationId: { in: empleado_not_ids }, empleadoId: employeeId },
+                    data: { watched: true },
+                },
+            });
         }
 
         return NextResponse.json({ status: true, message: "Notificaciones actualizadas correctamente" }, { status: 200 });

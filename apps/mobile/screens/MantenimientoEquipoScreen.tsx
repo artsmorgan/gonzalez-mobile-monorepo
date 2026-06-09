@@ -46,6 +46,7 @@ import {
 } from '@/hooks/mantenimientoEquipoMainStructureSync';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import type { StoredFileType } from '@/hooks/fileStorage';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -731,6 +732,7 @@ export default function MantenimientoEquipoScreen() {
     const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
     const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
     const didInitFiltersFromMarca = useRef(false);
+    const listFiltersSyncedFromMarcaOnceRef = useRef(false);
     const lastMarcaPuestoIdRef = useRef<number | null>(null);
     const isFetchingReportesRef = useRef(false);
     const pendingReportesRefetchRef = useRef(false);
@@ -1349,6 +1351,16 @@ export default function MantenimientoEquipoScreen() {
         setFilterPuestoId(puestoId);
     }, [marcaEmpresaId, marcaClienteId, marcaDivisionId, marcaContratoId, marcaCorpoId, marcaPuestoId]);
 
+    const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+        setFilterEmpresaId(v.empresaId);
+        setFilterClienteId(v.clienteId);
+        setFilterDivisionId(v.divisionId);
+        setFilterContratoId(v.contratoId);
+        setFilterCorpoId(v.sucursalId);
+        setFilterPuestoId(v.puestoId ?? null);
+        isFetchingReportesRef.current = false;
+    }, []);
+
     const resetFiltersToCurrentMarca = useCallback(() => {
         if (roleName === 'OPERATIVO') {
             void fetchReportes({ force: true });
@@ -1603,20 +1615,19 @@ export default function MantenimientoEquipoScreen() {
             setError(null);
 
             const current = await loadMarcaContext();
-            const currentMarcaId = current?.id ?? marcaId;
-            if (!currentMarcaId) {
+            const rn =
+                current?.roleDivision?.role?.nombre ??
+                current?.role_division?.role?.nombre ??
+                roleName;
+            const isOperativo = rn === 'OPERATIVO';
+
+            if (isOperativo && !current?.id) {
                 setHasCurrentMarca(false);
-                console.log('Nos caímos 1');
                 setReportes([]);
                 returnList = null;
                 return returnList;
             }
 
-            const rn =
-                current?.roleDivision?.role?.nombre ??
-                current?.role_division?.role?.nombre ??
-                null;
-            const isOperativo = rn === 'OPERATIVO';
             const marcaCorpoLive = numOrNull(current?.corpo?.id ?? current?.corpo_id);
 
             if (isOperativo) {
@@ -1955,10 +1966,16 @@ export default function MantenimientoEquipoScreen() {
     // Cargar contexto de marca al entrar (solo contexto). No debe disparar /api/main-structure en loop.
     useFocusEffect(
         useCallback(() => {
-            (async () => {
-                await loadMarcaContext();
+            void (async () => {
+                const current = await loadMarcaContext();
+                if (!listFiltersSyncedFromMarcaOnceRef.current) {
+                    if (current?.id && roleName !== 'OPERATIVO') {
+                        // Los filtros se aplican vía didInitFiltersFromMarca cuando marcaPuestoId esté listo
+                    }
+                    listFiltersSyncedFromMarcaOnceRef.current = true;
+                }
             })();
-        }, [])
+        }, [roleName])
     );
 
     // Cargar estructura principal una sola vez al montar la pantalla
@@ -1971,7 +1988,12 @@ export default function MantenimientoEquipoScreen() {
     // Inicializar filtros (Empresa → ... → Puesto) a partir del puesto de `current_marca`
     useEffect(() => {
         if (roleName === 'OPERATIVO') return;
-        if (!marcaPuestoId) return;
+        if (!marcaPuestoId) {
+            if (!didInitFiltersFromMarca.current) {
+                didInitFiltersFromMarca.current = true;
+            }
+            return;
+        }
         if (!filterEmpresas.length) return;
 
         const prevMarcaPuestoId = lastMarcaPuestoIdRef.current;
@@ -2001,10 +2023,9 @@ export default function MantenimientoEquipoScreen() {
 
     // Cargar artículos del puesto (plan + asignados) al entrar / cuando cambia la marca actual
     useEffect(() => {
-        if (!hasCurrentMarca) return;
         fetchReportes();
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [marcaId, activePuestoId, hasCurrentMarca, roleName, marcaCorpoId]);
+    }, [marcaId, activePuestoId, roleName, marcaCorpoId]);
 
     useFocusEffect(
         useCallback(() => {
@@ -2022,7 +2043,7 @@ export default function MantenimientoEquipoScreen() {
             eventBus.off('connectionRestored', handler);
         };
         // Re-registrar para que use el puesto activo actual
-    }, [activePuestoId, marcaId, hasCurrentMarca, roleName, marcaCorpoId]);
+    }, [activePuestoId, marcaId, roleName, marcaCorpoId]);
 
     const handleVerActivos = async (reporte: ArticuloPuestoMantenimientoItem) => {
         let reporteToUse = reporte;
@@ -4685,14 +4706,15 @@ export default function MantenimientoEquipoScreen() {
 
                     {!hasCurrentMarca ? (
                         <ThemedView style={styles.emptyContainer}>
-                            <ThemedText style={styles.errorText}>Debes tener una marca activa para usar este módulo.</ThemedText>
+                            <ThemedText style={styles.errorText}>
+                                No hay marca activa. Puede seleccionar la jerarquía manualmente en los filtros.
+                            </ThemedText>
                         </ThemedView>
                     ) : null}
 
                     {/* Filtros jerárquicos (Empresa → ... → Puesto); OPERATIVO: datos por corpo de current_marca (sin selectores) */}
                     {!isUpdating &&
                         !showActivos &&
-                        hasCurrentMarca &&
                         roleName != null &&
                         roleName !== 'OPERATIVO' && (
                         <ThemedView style={styles.filtersMain}>
@@ -4719,142 +4741,24 @@ export default function MantenimientoEquipoScreen() {
 
                             {isFiltersExpanded && (
                                 <ThemedView style={styles.filterContent}>
-                                    <ThemedView style={styles.filterGroup}>
-                                        <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterEmpresaId || ''}
-                                                onValueChange={(value) => {
-                                                    setFilterEmpresaId(value && value !== '' ? Number(value) : null);
-                                                    setFilterClienteId(null);
-                                                    setFilterDivisionId(null);
-                                                    setFilterContratoId(null);
-                                                    setFilterCorpoId(null);
-                                                    setFilterPuestoId(null);
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                {filterEmpresas.map((e: any) => (
-                                                    <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </ThemedView>
-
-                                    {filterEmpresaId && (
-                                        <ThemedView style={styles.filterGroup}>
-                                            <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                                            <View style={styles.pickerContainer}>
-                                                <Picker
-                                                    selectedValue={filterClienteId || ''}
-                                                    onValueChange={(value) => {
-                                                        setFilterClienteId(value && value !== '' ? Number(value) : null);
-                                                        setFilterDivisionId(null);
-                                                        setFilterContratoId(null);
-                                                        setFilterCorpoId(null);
-                                                        setFilterPuestoId(null);
-                                                    }}
-                                                    style={styles.picker}
-                                                >
-                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                    {filterClientes.map((c: any) => (
-                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                                                    ))}
-                                                </Picker>
-                                            </View>
-                                        </ThemedView>
-                                    )}
-
-                                    {filterClienteId && (
-                                        <ThemedView style={styles.filterGroup}>
-                                            <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                                            <View style={styles.pickerContainer}>
-                                                <Picker
-                                                    selectedValue={filterDivisionId || ''}
-                                                    onValueChange={(value) => {
-                                                        setFilterDivisionId(value && value !== '' ? Number(value) : null);
-                                                        setFilterContratoId(null);
-                                                        setFilterCorpoId(null);
-                                                        setFilterPuestoId(null);
-                                                    }}
-                                                    style={styles.picker}
-                                                >
-                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                    {filterDivisiones.map((d: any) => (
-                                                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                                                    ))}
-                                                </Picker>
-                                            </View>
-                                        </ThemedView>
-                                    )}
-
-                                    {filterDivisionId && (
-                                        <ThemedView style={styles.filterGroup}>
-                                            <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                                            <View style={styles.pickerContainer}>
-                                                <Picker
-                                                    selectedValue={filterContratoId || ''}
-                                                    onValueChange={(value) => {
-                                                        setFilterContratoId(value && value !== '' ? Number(value) : null);
-                                                        setFilterCorpoId(null);
-                                                        setFilterPuestoId(null);
-                                                    }}
-                                                    style={styles.picker}
-                                                >
-                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                    {filterContratos.map((c: any) => (
-                                                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                                                    ))}
-                                                </Picker>
-                                            </View>
-                                        </ThemedView>
-                                    )}
-
-                                    {filterContratoId && (
-                                        <ThemedView style={styles.filterGroup}>
-                                            <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                                            <View style={styles.pickerContainer}>
-                                                <Picker
-                                                    selectedValue={filterCorpoId || ''}
-                                                    onValueChange={(value) => {
-                                                        setFilterCorpoId(value && value !== '' ? Number(value) : null);
-                                                        setFilterPuestoId(null);
-                                                    }}
-                                                    style={styles.picker}
-                                                >
-                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                    {filterSucursales.map((s: any) => (
-                                                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                                                    ))}
-                                                </Picker>
-                                            </View>
-                                        </ThemedView>
-                                    )}
-
-                                    {filterCorpoId && (
-                                        <ThemedView style={styles.filterGroup}>
-                                            <ThemedText style={styles.filterLabel}>Puesto:</ThemedText>
-                                            <View style={styles.pickerContainer}>
-                                                <Picker
-                                                    selectedValue={filterPuestoId || ''}
-                                                    onValueChange={(value) => {
-                                                        const newPuestoId = value && value !== '' ? Number(value) : null;
-                                                        setFilterPuestoId(newPuestoId);
-                                                        // Resetear el ref para permitir nueva búsqueda cuando cambia el puesto
-                                                        // El useEffect se disparará automáticamente cuando activePuestoId cambie
-                                                        isFetchingReportesRef.current = false;
-                                                    }}
-                                                    style={styles.picker}
-                                                >
-                                                    <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                                                    {filterPuestos.map((p: any) => (
-                                                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                                                    ))}
-                                                </Picker>
-                                            </View>
-                                        </ThemedView>
-                                    )}
+                                    <HierarchyPickerFields
+                                        structure={structure}
+                                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                                        emptyPickerValue={0}
+                                        values={{
+                                            empresaId: filterEmpresaId,
+                                            clienteId: filterClienteId,
+                                            divisionId: filterDivisionId,
+                                            contratoId: filterContratoId,
+                                            sucursalId: filterCorpoId,
+                                            puestoId: filterPuestoId,
+                                        }}
+                                        onChange={handleFilterHierarchyChange}
+                                        labels={{ sucursal: 'Sucursal', puesto: 'Puesto' }}
+                                        renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}:</ThemedText>}
+                                        pickerStyle={styles.picker}
+                                        fieldGroupStyle={styles.filterGroup}
+                                    />
                                 </ThemedView>
                             )}
                         </ThemedView>

@@ -25,6 +25,7 @@ import { formatDateDMY } from '@/utils/formatDate';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import Constants from 'expo-constants';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -397,6 +398,8 @@ export default function PhysicalMinuteAgendaScreen() {
   const [filterFecha, setFilterFecha] = useState('');
   const [filterHoraInicio, setFilterHoraInicio] = useState('');
   const [filterHoraFin, setFilterHoraFin] = useState('');
+  const filterCorpoIdRef = useRef<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
 
   // IDs de current_marca para inicialización
   const [marcaEmpresaId, setMarcaEmpresaId] = useState<number | null>(null);
@@ -630,6 +633,28 @@ export default function PhysicalMinuteAgendaScreen() {
     }
   }, []);
 
+  const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFilterEmpresaId(v.empresaId);
+    setFilterClienteId(v.clienteId);
+    setFilterDivisionId(v.divisionId);
+    setFilterContratoId(v.contratoId);
+    filterCorpoIdRef.current = v.sucursalId;
+    setFilterCorpoId(v.sucursalId);
+  }, []);
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    isRestoringHierarchyRef.current = true;
+    setSelectedEmpresaId(v.empresaId);
+    setSelectedClienteId(v.clienteId);
+    setSelectedDivisionId(v.divisionId);
+    setSelectedContratoId(v.contratoId);
+    setSelectedSucursalId(v.sucursalId);
+    setSelectedPuestoId(v.puestoId ?? null);
+    queueMicrotask(() => {
+      isRestoringHierarchyRef.current = false;
+    });
+  }, []);
+
   const applyHierarchyFiltersFromMarca = useCallback((current: any, tree: StructureTree) => {
     if (!current) return;
     const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
@@ -651,13 +676,14 @@ export default function PhysicalMinuteAgendaScreen() {
     setFilterClienteId(clienteId);
     setFilterDivisionId(divisionId);
     setFilterContratoId(contratoId);
+    filterCorpoIdRef.current = corpoId;
     setFilterCorpoId(corpoId);
     // "Puesto" es solo un filtro visual; inicia vacío para mostrar todos los registros del corpo.
     setFilterPuestoId(null);
   }, []);
 
   const applyHierarchyFormFromMarca = useCallback((current: any, tree: StructureTree) => {
-    if (!current) return;
+    if (!current?.id) return;
     const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
     const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
     const contratoIdRaw = current?.contrato?.id ?? current?.contrato_id;
@@ -672,17 +698,20 @@ export default function PhysicalMinuteAgendaScreen() {
     const puestoId = puestoIdRaw !== undefined && puestoIdRaw !== null ? toValidId(puestoIdRaw) : null;
     const divisionId = resolveDivisionIdInStructure(tree, empresaId, clienteId, divisionIdRaw);
 
-    pendingCreateHierarchyRef.current = {
-      empresaId,
-      clienteId,
-      divisionId,
-      contratoId,
-      sucursalId: corpoId,
-      puestoId,
-    };
-    isApplyingCreateHierarchyRef.current = true;
+    pendingCreateHierarchyRef.current = null;
+    isApplyingCreateHierarchyRef.current = false;
     isRestoringHierarchyRef.current = true;
     setSelectedEmpresaId(empresaId);
+    setSelectedClienteId(clienteId);
+    setSelectedDivisionId(divisionId);
+    setSelectedContratoId(contratoId);
+    setSelectedSucursalId(corpoId);
+    setSelectedPuestoId(puestoId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        isRestoringHierarchyRef.current = false;
+      });
+    });
   }, []);
 
   useEffect(() => {
@@ -1062,10 +1091,11 @@ export default function PhysicalMinuteAgendaScreen() {
     setEditingRecord(null);
     setIsCreating(true);
     resetForm(horaAccion);
-    const current = await loadMarcaContext();
-    if (!current) return;
     const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
-    applyHierarchyFormFromMarca(current, tree);
+    const current = await loadMarcaContext();
+    if (current?.id != null) {
+      applyHierarchyFormFromMarca(current, tree);
+    }
   };
 
   const cancelCreateOrEdit = () => {
@@ -1306,25 +1336,12 @@ export default function PhysicalMinuteAgendaScreen() {
       setIsLoading(true);
       setError(null);
 
-      let currentMarca: any = null;
-      try {
-        const raw = await AsyncStorage.getItem('current_marca');
-        if (raw) currentMarca = JSON.parse(raw);
-      } catch {
-        currentMarca = null;
-      }
-      const rn =
-        currentMarca?.roleDivision?.role?.nombre ??
-        currentMarca?.role_division?.role?.nombre ??
-        null;
-      const isOperativoUser = rn === 'OPERATIVO';
-
-      if (isOperativoUser && currentMarca) {
-        const c = Number(currentMarca?.corpo?.id ?? currentMarca?.corpo_id);
-        searchCorpoIdNum = Number.isFinite(c) && c > 0 ? c : null;
+      const fromFilter = Number(filterCorpoIdRef.current ?? filterCorpoId);
+      if (Number.isFinite(fromFilter) && fromFilter > 0) {
+        searchCorpoIdNum = fromFilter;
       } else {
-        const c = Number(filterCorpoId);
-        searchCorpoIdNum = Number.isFinite(c) && c > 0 ? c : null;
+        const fromMarca = Number(marcaCorpoId);
+        searchCorpoIdNum = Number.isFinite(fromMarca) && fromMarca > 0 ? fromMarca : null;
       }
 
       const parseEvaluationsCacheArray = async (): Promise<any[]> => {
@@ -1375,26 +1392,14 @@ export default function PhysicalMinuteAgendaScreen() {
       console.error('Error fetching agenda minuta:', err);
       setError('Error al cargar la agenda minuta');
       try {
-        let currentMarcaCatch: any = null;
-        try {
-          const raw = await AsyncStorage.getItem('current_marca');
-          if (raw) currentMarcaCatch = JSON.parse(raw);
-        } catch {
-          currentMarcaCatch = null;
-        }
-        const rnCatch =
-          currentMarcaCatch?.roleDivision?.role?.nombre ??
-          currentMarcaCatch?.role_division?.role?.nombre ??
-          null;
-        const isOperativoCatch = rnCatch === 'OPERATIVO';
         let corpoCatch: number | null = searchCorpoIdNum;
         if (corpoCatch == null) {
-          if (isOperativoCatch && currentMarcaCatch) {
-            const c = Number(currentMarcaCatch?.corpo?.id ?? currentMarcaCatch?.corpo_id);
-            corpoCatch = Number.isFinite(c) && c > 0 ? c : null;
+          const fromFilter = Number(filterCorpoIdRef.current ?? filterCorpoId);
+          if (Number.isFinite(fromFilter) && fromFilter > 0) {
+            corpoCatch = fromFilter;
           } else {
-            const c = Number(filterCorpoId);
-            corpoCatch = Number.isFinite(c) && c > 0 ? c : null;
+            const fromMarca = Number(marcaCorpoId);
+            corpoCatch = Number.isFinite(fromMarca) && fromMarca > 0 ? fromMarca : null;
           }
         }
 
@@ -1416,27 +1421,38 @@ export default function PhysicalMinuteAgendaScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, refreshAccessToken, logout]);
+  }, [filterCorpoId, marcaCorpoId, refreshAccessToken, logout]);
 
-  // Inicializar filtros desde current_marca al cargar
+  useEffect(() => {
+    filterCorpoIdRef.current = filterCorpoId;
+  }, [filterCorpoId]);
+
+  // Inicializar filtros desde current_marca al cargar (solo si hay marca con id)
   useFocusEffect(
     useCallback(() => {
-      (async () => {
-        const current = await loadMarcaContext();
+      let cancelled = false;
+      void (async () => {
+        await loadMarcaContext();
         const tree = await fetchMainStructure();
-        const rn =
-          current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
-        if (current && rn !== 'OPERATIVO') {
-          applyHierarchyFiltersFromMarca(current, tree);
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          if (!cancelled && currentMarca?.id != null) {
+            applyHierarchyFiltersFromMarca(currentMarca, tree);
+          }
+          if (!cancelled) listFiltersSyncedFromMarcaOnceRef.current = true;
         }
       })();
+      return () => {
+        cancelled = true;
+      };
     }, [applyHierarchyFiltersFromMarca, fetchMainStructure])
   );
 
-  // Recargar registros al definir/actualizar corpo (operativo usa current_marca.corpo)
+  // Recargar registros al definir/actualizar corpo del filtro o marca
   useEffect(() => {
     fetchRecords();
-  }, [filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId]);
+  }, [filterCorpoId, marcaCorpoId, fetchRecords]);
 
   // Limpiar filtros dependientes cuando cambia un nivel superior
   useEffect(() => {
@@ -2185,109 +2201,29 @@ export default function PhysicalMinuteAgendaScreen() {
           <ThemedView style={styles.formCard}>
             <ThemedText style={styles.formTitle}>{editingRecord ? 'Editar agenda' : 'Nueva agenda'}</ThemedText>
 
-            {!!isStructureLoading && (
-              <ThemedView style={styles.inlineLoading}>
-                <ActivityIndicator size="small" color="#007AFF" />
-                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
-              </ThemedView>
-            )}
-
             <ThemedText style={styles.formSectionTitle}>Jerarquía</ThemedText>
 
-            {roleName == null ? (
-              <ThemedText style={[styles.label, { opacity: 0.7 }]}>Cargando contexto de marca...</ThemedText>
-            ) : roleName === 'OPERATIVO' ? (
-              <ThemedText style={[styles.label, { opacity: 0.75, marginBottom: 8 }]}>
-                La ubicación (empresa, cliente, división, contrato, sucursal y puesto) se define desde tu marca actual.
-              </ThemedText>
-            ) : (
-              <>
-                <ThemedText style={styles.label}>Empresa</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker selectedValue={selectedEmpresaId ?? 0} onValueChange={(v) => setSelectedEmpresaId(Number(v) || null)} style={styles.picker}>
-                    <Picker.Item label="Seleccione empresa" value={0} color="#000000" />
-                    {empresaOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <ThemedText style={styles.label}>Cliente</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={selectedClienteId ?? 0}
-                    enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                    onValueChange={(v) => setSelectedClienteId(Number(v) || null)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label={selectedEmpresaId === null ? 'Seleccione empresa primero' : 'Seleccione cliente'} value={0} color="#000000" />
-                    {clienteOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <ThemedText style={styles.label}>División</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={selectedDivisionId ?? 0}
-                    enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                    onValueChange={(v) => setSelectedDivisionId(Number(v) || null)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label={selectedClienteId === null ? 'Seleccione cliente primero' : 'Seleccione división'} value={0} color="#000000" />
-                    {divisionOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <ThemedText style={styles.label}>Contrato</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={selectedContratoId ?? 0}
-                    enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                    onValueChange={(v) => setSelectedContratoId(Number(v) || null)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label={selectedDivisionId === null ? 'Seleccione división primero' : 'Seleccione contrato'} value={0} color="#000000" />
-                    {contratoOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <ThemedText style={styles.label}>Sucursal</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={selectedSucursalId ?? 0}
-                    enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                    onValueChange={(v) => setSelectedSucursalId(Number(v) || null)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label={selectedContratoId === null ? 'Seleccione contrato primero' : 'Seleccione sucursal'} value={0} color="#000000" />
-                    {sucursalOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-
-                <ThemedText style={styles.label}>Puesto</ThemedText>
-                <View style={styles.pickerWrapper}>
-                  <Picker
-                    selectedValue={selectedPuestoId ?? 0}
-                    enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                    onValueChange={(v) => setSelectedPuestoId(Number(v) || null)}
-                    style={styles.picker}
-                  >
-                    <Picker.Item label={selectedSucursalId === null ? 'Seleccione sucursal primero' : 'Seleccione puesto'} value={0} color="#000000" />
-                    {puestoOptions.map((o) => (
-                      <Picker.Item key={o.id} label={o.label} value={o.id} color="#000000" />
-                    ))}
-                  </Picker>
-                </View>
-              </>
-            )}
+            {structure.length === 0 ? (
+              <ThemedText style={[styles.label, { opacity: 0.7, marginBottom: 8 }]}>Sin estructura en caché.</ThemedText>
+            ) : null}
+            <HierarchyPickerFields
+              structure={structure}
+              levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+              isLoading={false}
+              emptyPickerValue={0}
+              values={{
+                empresaId: selectedEmpresaId,
+                clienteId: selectedClienteId,
+                divisionId: selectedDivisionId,
+                contratoId: selectedContratoId,
+                sucursalId: selectedSucursalId,
+                puestoId: selectedPuestoId,
+              }}
+              onChange={handleFormHierarchyChange}
+              renderLabel={(text) => <ThemedText style={styles.label}>{text}</ThemedText>}
+              pickerStyle={styles.picker}
+              fieldGroupStyle={styles.filterGroup}
+            />
 
             <ThemedText style={styles.formSectionTitle}>Datos</ThemedText>
 
@@ -2789,11 +2725,7 @@ export default function PhysicalMinuteAgendaScreen() {
         </View>
       </Modal>
 
-      {!hasCurrentMarca ? (
-        <ThemedView style={styles.noMarcaContainer}>
-          <ThemedText style={styles.noMarcaText}>Debe seleccionar una marca para continuar.</ThemedText>
-        </ThemedView>
-      ) : isCreating ? (
+      {isCreating ? (
         renderForm()
       ) : (
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
@@ -2805,8 +2737,14 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.subtitle}>Registra y consulta agendas de minuta por puesto</ThemedText>
             </ThemedView>
 
-      {/* Filtros siempre visibles; jerarquía solo para no operativos */}
-      {roleName != null && (
+            {!hasCurrentMarca && (
+              <ThemedView style={styles.noMarcaBanner}>
+                <ThemedText style={styles.noMarcaText}>
+                  Sin marca seleccionada: puede elegir la jerarquía manualmente o seleccionar una marca para precargar los filtros.
+                </ThemedText>
+              </ThemedView>
+            )}
+
               <ThemedView style={styles.filtersMain}>
                 <ThemedView style={styles.filterHeader}>
                   <TouchableOpacity
@@ -2821,12 +2759,29 @@ export default function PhysicalMinuteAgendaScreen() {
                     />
                   </TouchableOpacity>
                   {isFiltersExpanded && (
-                    <TouchableOpacity style={styles.resetFiltersButton} onPress={() => {
+                    <TouchableOpacity style={styles.resetFiltersButton} onPress={async () => {
+                      const marcaStr = await AsyncStorage.getItem('current_marca');
+                      if (marcaStr) {
+                        try {
+                          const current = JSON.parse(marcaStr);
+                          if (current?.id != null) {
+                            const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+                            applyHierarchyFiltersFromMarca(current, tree);
+                            setFilterFecha('');
+                            setFilterHoraInicio('');
+                            setFilterHoraFin('');
+                            return;
+                          }
+                        } catch {
+                          /* ignore */
+                        }
+                      }
                       setFilterEmpresaId(null);
-                      setFilterClienteId(marcaClienteId);
+                      setFilterClienteId(null);
                       setFilterDivisionId(null);
                       setFilterContratoId(null);
-                      setFilterCorpoId(marcaCorpoId);
+                      filterCorpoIdRef.current = null;
+                      setFilterCorpoId(null);
                       setFilterPuestoId(null);
                       setFilterFecha('');
                       setFilterHoraInicio('');
@@ -2839,109 +2794,29 @@ export default function PhysicalMinuteAgendaScreen() {
                 </ThemedView>
                 {isFiltersExpanded && (
                   <ThemedView style={styles.filterContent}>
-                    {roleName !== 'OPERATIVO' && (
-                      <>
-                    {/* Árbol jerárquico para filtros */}
-                    <ThemedView style={styles.filterGroup}>
-                      <ThemedText style={styles.filterLabel}>Empresa:</ThemedText>
-                      <View style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={filterEmpresaId ?? 0}
-                          onValueChange={(value) => {
-                            setFilterEmpresaId(Number(value) || null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccionar..." value={0} color="#000000" />
-                          {filterEmpresas.map((e: any) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </View>
-                    </ThemedView>
-
-                    {filterEmpresaId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Cliente:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterClienteId ?? 0}
-                            onValueChange={(value) => {
-                              setFilterClienteId(Number(value) || null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
-                            {filterClientes.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-
-                    {filterClienteId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>División:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterDivisionId ?? 0}
-                            onValueChange={(value) => {
-                              setFilterDivisionId(Number(value) || null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
-                            {filterDivisiones.map((d: any) => (
-                              <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-
-                    {filterDivisionId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Contrato:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterContratoId ?? 0}
-                            onValueChange={(value) => {
-                              setFilterContratoId(Number(value) || null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
-                            {filterContratos.map((c: any) => (
-                              <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-
-                    {filterContratoId && (
-                      <ThemedView style={styles.filterGroup}>
-                        <ThemedText style={styles.filterLabel}>Sucursal:</ThemedText>
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={filterCorpoId ?? 0}
-                            onValueChange={(value) => {
-                              setFilterCorpoId(Number(value) || null);
-                            }}
-                            style={styles.picker}
-                          >
-                            <Picker.Item label="Seleccionar..." value={0} color="#000000" />
-                            {filterSucursales.map((s: any) => (
-                              <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                            ))}
-                          </Picker>
-                        </View>
-                      </ThemedView>
-                    )}
-
-                      </>
-                    )}
+                    {structure.length === 0 ? (
+                      <ThemedText style={[styles.filterLabel, { opacity: 0.7, marginBottom: 8 }]}>
+                        Sin estructura en caché.
+                      </ThemedText>
+                    ) : null}
+                    <HierarchyPickerFields
+                      structure={structure}
+                      levels={['cliente', 'contrato', 'sucursal']}
+                      isLoading={false}
+                      emptyPickerValue={0}
+                      values={{
+                        empresaId: filterEmpresaId,
+                        clienteId: filterClienteId,
+                        divisionId: filterDivisionId,
+                        contratoId: filterContratoId,
+                        sucursalId: filterCorpoId,
+                      }}
+                      onChange={handleFilterHierarchyChange}
+                      labels={{ sucursal: 'Sucursal (corpo)' }}
+                      renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                      pickerStyle={styles.picker}
+                      fieldGroupStyle={styles.filterGroup}
+                    />
 
                     <ThemedView style={styles.filterGroup}>
                       <ThemedText style={styles.filterLabel}>Puesto (solo visual):</ThemedText>
@@ -2994,7 +2869,6 @@ export default function PhysicalMinuteAgendaScreen() {
                   </ThemedView>
                 )}
               </ThemedView>
-            )}
 
             {!isLoading && (
               <TouchableOpacity style={styles.createButton} onPress={startCreate} activeOpacity={0.85}>
@@ -3100,6 +2974,14 @@ const styles = StyleSheet.create({
   filterLabel: { fontSize: 13, fontWeight: '600', marginBottom: 4, color: '#000' },
 
   noMarcaContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 16 },
+  noMarcaBanner: {
+    backgroundColor: '#FFF8E6',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FFE4A3',
+  },
   noMarcaText: { color: '#000', opacity: 0.7, fontSize: 14 },
 
   // Form (como ComplaintsMasterScreen)

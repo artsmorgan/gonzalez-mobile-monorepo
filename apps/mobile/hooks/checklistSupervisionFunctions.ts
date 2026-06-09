@@ -1,12 +1,16 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
 import { hydrateChecklistEvaluationImagesForApi } from './checklistSupervisionEvaluationFiles';
+import { hydrateArticulosPuestoFilesForApi } from '@/utils/articuloMantenimientoFiles';
 
 async function requestDataWithHydratedEvaluacion(requestData: any): Promise<any> {
   const rd = { ...requestData };
   const raw = rd?.evaluacion;
   const evStr = typeof raw === 'string' ? raw : JSON.stringify(raw ?? []);
   rd.evaluacion = await hydrateChecklistEvaluationImagesForApi(evStr);
+  const apRaw = rd?.articulos_puesto;
+  const apStr = typeof apRaw === 'string' ? apRaw : JSON.stringify(apRaw ?? '[]');
+  rd.articulos_puesto = await hydrateArticulosPuestoFilesForApi(apStr);
   return rd;
 }
 

@@ -6,13 +6,11 @@ import {
     Alert,
     ActivityIndicator,
     Platform,
-    View,
     TextInput,
     Modal,
     KeyboardAvoidingView,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
-import * as Location from 'expo-location';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -37,6 +35,7 @@ import {
     writePuestoUbicacionDispositivo,
 } from '@/hooks/mainStructureFragmentsStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import resolvePuestoUbicacionCoordinates from '@/hooks/resolvePuestoUbicacionCoordinates';
 
 async function getHoraAccionSafeMs(): Promise<number> {
     try {
@@ -330,6 +329,7 @@ export default function PuestoUbicacionScreen() {
 
     // Ubicación del dispositivo
     const [deviceLocation, setDeviceLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+    const [locationError, setLocationError] = useState<string | null>(null);
     const [isGettingLocation, setIsGettingLocation] = useState(false);
 
     const [manualUbicacionModalVisible, setManualUbicacionModalVisible] = useState(false);
@@ -341,8 +341,8 @@ export default function PuestoUbicacionScreen() {
 
     /** Snapshot de AsyncStorage current_marca; se combina con la estructura mergeada al aplicar filtros. */
     const currentMarcaRef = useRef<Record<string, unknown> | null>(null);
-    /** Se incrementa en cada foco para volver a aplicar la jerarquía desde current_marca. */
-    const [marcaHierarchyRevision, setMarcaHierarchyRevision] = useState(0);
+    /** Evita volver a pisar filtros desde `current_marca` en cada foco. */
+    const listFiltersSyncedFromMarcaOnceRef = useRef(false);
 
     /** Coordenadas GPS guardadas al confirmar en el dispositivo (clave = id de puesto en string). */
     const [dispositivoUbicacionMap, setDispositivoUbicacionMap] = useState<
@@ -436,86 +436,16 @@ export default function PuestoUbicacionScreen() {
         }
     }, []);
 
-    // Nodos computados: con fragmentos, listas desde claves `divisiones`, `cliente_X_division_Y_contratos`, etc.
-    const filterEmpresas = useMemo(() => {
-        if (mainFragments && Array.isArray(mainFragments.empresas)) {
-            return mainFragments.empresas;
-        }
-        return Array.isArray(structure) ? structure : [];
-    }, [mainFragments, structure]);
+    const handleFilterHierarchyChange = (v: HierarchyPickerValues) => {
+        setFilterEmpresaId(v.empresaId);
+        setFilterClienteId(v.clienteId);
+        setFilterDivisionId(v.divisionId);
+        setFilterContratoId(v.contratoId);
+        setFilterCorpoId(v.sucursalId);
+        setFilterPuestoId(v.puestoId ?? null);
+    };
 
-    const filterClientes = useMemo(() => {
-        const empresaFromTree = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
-        const fallback = empresaFromTree?.clientes || [];
-        if (mainFragments && filterEmpresaId != null) {
-            const k = `empresa_${filterEmpresaId}_clientes`;
-            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
-        }
-        return fallback;
-    }, [mainFragments, filterEmpresaId, filterEmpresas]);
-
-    const filterDivisiones = useMemo(() => {
-        if (!filterClienteId) return [];
-        const clienteFromTree = filterClientes.find((c: any) => Number(c.id) === Number(filterClienteId));
-        const fallback = getClienteDivisionArray(clienteFromTree);
-        if (mainFragments && Array.isArray(mainFragments.divisiones)) {
-            return mainFragments.divisiones.length > 0 ? mainFragments.divisiones : fallback;
-        }
-        return fallback;
-    }, [mainFragments, filterClienteId, filterClientes]);
-
-    const filterContratos = useMemo(() => {
-        const divisionFromTree = filterDivisiones.find((d: any) => Number(d.id) === Number(filterDivisionId));
-        const fallback = divisionFromTree?.contratos || [];
-        if (
-            mainFragments &&
-            filterClienteId != null &&
-            filterDivisionId != null
-        ) {
-            const k = `cliente_${filterClienteId}_division_${filterDivisionId}_contratos`;
-            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
-        }
-        return fallback;
-    }, [mainFragments, filterClienteId, filterDivisionId, filterDivisiones]);
-
-    const filterSucursales = useMemo(() => {
-        const contratoFromTree = filterContratos.find((c: any) => Number(c.id) === Number(filterContratoId));
-        const fallback = contratoFromTree?.sucursales || [];
-        if (mainFragments && filterContratoId != null) {
-            const k = `contrato_${filterContratoId}_sucursales`;
-            return Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
-        }
-        return fallback;
-    }, [mainFragments, filterContratoId, filterContratos]);
-
-    const filterPuestos = useMemo(() => {
-        const sucursalFromTree = filterSucursales.find((s: any) => Number(s.id) === Number(filterCorpoId));
-        const fallback = sucursalFromTree?.puestos || [];
-        if (mainFragments && filterCorpoId != null) {
-            const k = `sucursal_${filterCorpoId}_puestos`;
-            const puestos = Array.isArray(mainFragments[k]) ? mainFragments[k] : fallback;
-            return puestos;
-        }
-        return fallback;
-    }, [mainFragments, filterCorpoId, filterSucursales]);
-
-    // Al entrar a la pantalla: aplicar jerarquía desde current_marca (refuerzo con árbol mergeado si existe)
-    useEffect(() => {
-        if (!marcaHierarchyRevision) return;
-
-        const ids = resolveMarcaIdsFromCurrentMarca(
-            Array.isArray(structure) ? structure : [],
-            currentMarcaRef.current
-        );
-        setFilterEmpresaId(ids.empresaId);
-        setFilterClienteId(ids.clienteId);
-        setFilterDivisionId(ids.divisionId);
-        setFilterContratoId(ids.contratoId);
-        setFilterCorpoId(ids.corpoId);
-        setFilterPuestoId(ids.puestoId);
-    }, [structure, marcaHierarchyRevision]);
-
-    // Cargar datos del puesto cuando se selecciona (IDs numéricos: el Picker puede devolver string)
+    // Cargar datos del puesto cuando se selecciona
     useEffect(() => {
         const pid = numOrNull(filterPuestoId);
         const corpoNum = numOrNull(filterCorpoId);
@@ -542,31 +472,35 @@ export default function PuestoUbicacionScreen() {
         }
     }, [filterPuestoId, filterCorpoId, structure, mainFragments, dispositivoUbicacionMap]);
 
-    // Obtener ubicación del dispositivo
-    const getDeviceLocation = useCallback(async (showError: boolean = true) => {
+    // Obtener ubicación del dispositivo (cada intento es independiente; reintentos tras activar GPS).
+    const getDeviceLocation = useCallback(async (showError: boolean = true): Promise<{
+        latitude: number;
+        longitude: number;
+    } | null> => {
+        setIsGettingLocation(true);
         try {
-            setIsGettingLocation(true);
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== 'granted') {
-                if (showError) {
-                    Alert.alert('Permisos', 'Se necesitan permisos de ubicación para obtener las coordenadas del dispositivo.');
-                }
-                return;
+            const result = await resolvePuestoUbicacionCoordinates({ silent: !showError });
+            if (result.ok) {
+                const loc = {
+                    latitude: result.latitude,
+                    longitude: result.longitude,
+                };
+                setDeviceLocation(loc);
+                setLocationError(null);
+                return loc;
             }
-
-            const location = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.High,
-            });
-
-            setDeviceLocation({
-                latitude: location.coords.latitude,
-                longitude: location.coords.longitude,
-            });
+            setDeviceLocation(null);
+            setLocationError(result.message);
+            return null;
         } catch (error) {
             console.error('Error getting location:', error);
+            setDeviceLocation(null);
+            const message = 'No se pudo obtener la ubicación del dispositivo.';
+            setLocationError(message);
             if (showError) {
-                Alert.alert('Error', 'No se pudo obtener la ubicación del dispositivo.');
+                Alert.alert('Error', message);
             }
+            return null;
         } finally {
             setIsGettingLocation(false);
         }
@@ -575,7 +509,12 @@ export default function PuestoUbicacionScreen() {
     // Obtener ubicación automáticamente cuando se selecciona un puesto
     useEffect(() => {
         if (filterPuestoId) {
-            getDeviceLocation(false);
+            setDeviceLocation(null);
+            setLocationError(null);
+            void getDeviceLocation(false);
+        } else {
+            setDeviceLocation(null);
+            setLocationError(null);
         }
     }, [filterPuestoId, getDeviceLocation]);
 
@@ -703,18 +642,6 @@ export default function PuestoUbicacionScreen() {
         [filterPuestoId, filterCorpoId, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache],
     );
 
-    const updatePuestoUbicacion = useCallback(async () => {
-        if (!filterPuestoId) {
-            Alert.alert('Error', 'Por favor selecciona un puesto');
-            return;
-        }
-        if (!deviceLocation) {
-            Alert.alert('Error', 'Por favor obtén la ubicación del dispositivo primero');
-            return;
-        }
-        await putPuestoUbicacion(deviceLocation.latitude, deviceLocation.longitude);
-    }, [filterPuestoId, deviceLocation, putPuestoUbicacion]);
-
     const requestConfirmClearUbicacion = useCallback(() => {
         if (!filterPuestoId) {
             Alert.alert('Error', 'Por favor selecciona un puesto');
@@ -737,15 +664,13 @@ export default function PuestoUbicacionScreen() {
         return a.length > 0 && b.length > 0;
     }, [puestoData]);
 
-    const requestConfirmAndUpdateUbicacion = useCallback(() => {
+    const requestConfirmAndUpdateUbicacion = useCallback(async () => {
         if (!filterPuestoId) {
             Alert.alert('Error', 'Por favor selecciona un puesto');
             return;
         }
-        if (!deviceLocation) {
-            Alert.alert('Error', 'Por favor obtén la ubicación del dispositivo primero');
-            return;
-        }
+        const loc = deviceLocation ?? (await getDeviceLocation(true));
+        if (!loc) return;
 
         Alert.alert(
             'Confirmar ubicación',
@@ -755,12 +680,12 @@ export default function PuestoUbicacionScreen() {
                 {
                     text: 'Aceptar',
                     onPress: () => {
-                        void updatePuestoUbicacion();
+                        void putPuestoUbicacion(loc.latitude, loc.longitude);
                     },
                 },
             ]
         );
-    }, [filterPuestoId, deviceLocation, updatePuestoUbicacion]);
+    }, [filterPuestoId, deviceLocation, putPuestoUbicacion, getDeviceLocation]);
 
     const openManualUbicacionModal = useCallback(() => {
         if (!filterPuestoId) {
@@ -902,17 +827,32 @@ export default function PuestoUbicacionScreen() {
     useFocusEffect(
         useCallback(() => {
             let cancelled = false;
-            (async () => {
+            void (async () => {
                 await loadMarcaContext();
                 if (cancelled) return;
-                await loadMainStructureCache();
+                const tree = await loadMainStructureCache();
                 if (cancelled) return;
-                setMarcaHierarchyRevision((r) => r + 1);
+                if (!listFiltersSyncedFromMarcaOnceRef.current) {
+                    const currentMarca = currentMarcaRef.current as Record<string, any> | null;
+                    if (currentMarca?.id) {
+                        const ids = resolveMarcaIdsFromCurrentMarca(
+                            Array.isArray(tree) ? tree : [],
+                            currentMarca,
+                        );
+                        setFilterEmpresaId(ids.empresaId);
+                        setFilterClienteId(ids.clienteId);
+                        setFilterDivisionId(ids.divisionId);
+                        setFilterContratoId(ids.contratoId);
+                        setFilterCorpoId(ids.corpoId);
+                        setFilterPuestoId(ids.puestoId);
+                    }
+                    listFiltersSyncedFromMarcaOnceRef.current = true;
+                }
             })();
             return () => {
                 cancelled = true;
             };
-        }, [loadMarcaContext, loadMainStructureCache])
+        }, [loadMarcaContext, loadMainStructureCache]),
     );
 
     return (
@@ -931,157 +871,33 @@ export default function PuestoUbicacionScreen() {
                         <ThemedText style={styles.subtitle}>Actualizar coordenadas GPS del puesto</ThemedText>
                     </ThemedView>
 
-                    {isStructureLoading ? (
-                        <View style={styles.loadingContainer}>
-                            <ActivityIndicator size="large" color="#007AFF" />
-                            <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
-                        </View>
-                    ) : (
-                        <>
+                    <ThemedView style={styles.formCard}>
+                        <ThemedText style={styles.formTitle}>Seleccionar Puesto</ThemedText>
+                        {(structure ?? []).length === 0 && !isStructureLoading ? (
+                            <ThemedText style={styles.emptySectionText}>Sin estructura en caché.</ThemedText>
+                        ) : (
+                            <HierarchyPickerFields
+                                structure={structure}
+                                levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                                isLoading={isStructureLoading}
+                                emptyPickerValue={''}
+                                values={{
+                                    empresaId: filterEmpresaId,
+                                    clienteId: filterClienteId,
+                                    divisionId: filterDivisionId,
+                                    contratoId: filterContratoId,
+                                    sucursalId: filterCorpoId,
+                                    puestoId: filterPuestoId,
+                                }}
+                                onChange={handleFilterHierarchyChange}
+                                renderLabel={(text) => <ThemedText style={styles.label}>{text}</ThemedText>}
+                                pickerWrapperStyle={styles.pickerContainer}
+                                pickerStyle={styles.picker}
+                            />
+                        )}
+                    </ThemedView>
 
-                            {/* Formulario principal */}
-                            <ThemedView style={styles.formCard}>
-                                <ThemedText style={styles.formTitle}>Seleccionar Puesto</ThemedText>
-
-                                {/* Empresa */}
-                                <ThemedText style={styles.label}>Empresa</ThemedText>
-                                <View style={styles.pickerContainer}>
-                                    <Picker
-                                        selectedValue={filterEmpresaId}
-                                        onValueChange={(value) => {
-                                            setFilterEmpresaId(numOrNull(value));
-                                            setFilterClienteId(null);
-                                            setFilterDivisionId(null);
-                                            setFilterContratoId(null);
-                                            setFilterCorpoId(null);
-                                            setFilterPuestoId(null);
-                                        }}
-                                        style={styles.picker}
-                                    >
-                                        <Picker.Item label="Seleccionar empresa..." value={null} color="#000000" />
-                                        {filterEmpresas.map((empresa: any) => (
-                                            <Picker.Item key={empresa.id} label={empresa.nombre} value={empresa.id} color="#000000" />
-                                        ))}
-                                    </Picker>
-                                </View>
-
-                                {/* Cliente */}
-                                {filterEmpresaId && (
-                                    <>
-                                        <ThemedText style={styles.label}>Cliente</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterClienteId}
-                                                onValueChange={(value) => {
-                                                    setFilterClienteId(numOrNull(value));
-                                                    setFilterDivisionId(null);
-                                                    setFilterContratoId(null);
-                                                    setFilterCorpoId(null);
-                                                    setFilterPuestoId(null);
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar cliente..." value={null} color="#000000" />
-                                                {filterClientes.map((cliente: any) => (
-                                                    <Picker.Item key={cliente.id} label={cliente.nombre} value={cliente.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </>
-                                )}
-
-                                {/* División */}
-                                {filterClienteId && (
-                                    <>
-                                        <ThemedText style={styles.label}>División</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterDivisionId}
-                                                onValueChange={(value) => {
-                                                    setFilterDivisionId(numOrNull(value));
-                                                    setFilterContratoId(null);
-                                                    setFilterCorpoId(null);
-                                                    setFilterPuestoId(null);
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar división..." value={null} color="#000000" />
-                                                {filterDivisiones.map((division: any) => (
-                                                    <Picker.Item key={division.id} label={division.nombre} value={division.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </>
-                                )}
-
-                                {/* Contrato */}
-                                {filterDivisionId && (
-                                    <>
-                                        <ThemedText style={styles.label}>Contrato</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterContratoId}
-                                                onValueChange={(value) => {
-                                                    setFilterContratoId(numOrNull(value));
-                                                    setFilterCorpoId(null);
-                                                    setFilterPuestoId(null);
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar contrato..." value={null} color="#000000" />
-                                                {filterContratos.map((contrato: any) => (
-                                                    <Picker.Item key={contrato.id} label={contrato.nombre} value={contrato.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </>
-                                )}
-
-                                {/* Sucursal */}
-                                {filterContratoId && (
-                                    <>
-                                        <ThemedText style={styles.label}>Sucursal</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterCorpoId}
-                                                onValueChange={(value) => {
-                                                    setFilterCorpoId(numOrNull(value));
-                                                    setFilterPuestoId(null);
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar sucursal..." value={null} color="#000000" />
-                                                {filterSucursales.map((sucursal: any) => (
-                                                    <Picker.Item key={sucursal.id} label={sucursal.nombre} value={sucursal.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </>
-                                )}
-
-                                {/* Puesto */}
-                                {filterCorpoId && (
-                                    <>
-                                        <ThemedText style={styles.label}>Puesto</ThemedText>
-                                        <View style={styles.pickerContainer}>
-                                            <Picker
-                                                selectedValue={filterPuestoId}
-                                                onValueChange={(value) => {
-                                                    setFilterPuestoId(numOrNull(value));
-                                                }}
-                                                style={styles.picker}
-                                            >
-                                                <Picker.Item label="Seleccionar puesto..." value={null} color="#000000" />
-                                                {filterPuestos.map((puesto: any) => (
-                                                    <Picker.Item key={puesto.id} label={puesto.nombre} value={puesto.id} color="#000000" />
-                                                ))}
-                                            </Picker>
-                                        </View>
-                                    </>
-                                )}
-                            </ThemedView>
-
-                            {/* Datos del puesto seleccionado */}
+                    {/* Datos del puesto seleccionado */}
                             {filterPuestoId && puestoData && (
                                 <ThemedView style={styles.infoSection}>
                                     <ThemedText style={styles.sectionTitle}>Ubicación Actual del Puesto</ThemedText>
@@ -1126,7 +942,19 @@ export default function PuestoUbicacionScreen() {
                                         </ThemedView>
                                     )}
                                     {!deviceLocation && !isGettingLocation && (
-                                        <ThemedText style={styles.emptySectionText}>Esperando ubicación del dispositivo...</ThemedText>
+                                        <ThemedView style={styles.bitacoraCard}>
+                                            <ThemedText style={styles.emptySectionText}>
+                                                {locationError ?? 'Esperando ubicación del dispositivo...'}
+                                            </ThemedText>
+                                            <TouchableOpacity
+                                                style={styles.retryLocationButton}
+                                                onPress={() => void getDeviceLocation(true)}
+                                                activeOpacity={0.85}
+                                            >
+                                                <Ionicons name="refresh" size={18} color="#007AFF" />
+                                                <ThemedText style={styles.retryLocationButtonText}>Reintentar</ThemedText>
+                                            </TouchableOpacity>
+                                        </ThemedView>
                                     )}
                                 </ThemedView>
                             )}
@@ -1186,8 +1014,6 @@ export default function PuestoUbicacionScreen() {
                                     </TouchableOpacity>
                                 </ThemedView>
                             )}
-                        </>
-                    )}
                 </ThemedView>
             </ScrollView>
 
@@ -1346,6 +1172,24 @@ const styles = StyleSheet.create({
         color: '#666666',
         marginTop: 4,
         marginBottom: 4,
+    },
+    retryLocationButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        marginTop: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        backgroundColor: '#E8F4FF',
+        borderWidth: 1,
+        borderColor: '#B8DAF8',
+    },
+    retryLocationButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#007AFF',
     },
 
     // Cards (igual que EntregaPuestosScreen)

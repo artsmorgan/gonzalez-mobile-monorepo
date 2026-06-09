@@ -29,10 +29,6 @@ export async function assertCorpoAllowedForMarca(
         req,
         data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoId } }
     });
-    const contratoClienteId = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
-    if (!Number.isFinite(contratoClienteId) || contratoClienteId !== marcaClienteId) {
-        return { ok: false, message: "La sucursal no pertenece al mismo cliente que la marca indicada" };
-    }
     return { ok: true };
 }
 

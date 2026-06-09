@@ -170,6 +170,7 @@ export async function getActivities(req: NextRequest, id: number) {
                 ? (Array.isArray(articlesParsed) ? articlesParsed : []).map((item: any) => ({
                     id: Number(item.id),
                     nombre: String(item.nombre || "Artículo"),
+                    tipo: String(item.tipo || ""),
                     cantidad_requerida: Number(item.cantidad_requerida || 0),
                     cantidad_real: Number(item.cantidad_real || 0),
                     estado: String(item.estado || "Bueno"),

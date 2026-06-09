@@ -48,7 +48,7 @@ import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
-import { Collapsible } from '@/components/Collapsible';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import {
@@ -278,6 +278,12 @@ const getMarcaRoleDivisionId = (current: any): number | null => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const numOrNull = (raw: unknown): number | null => {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
 const resolveHierarchyByPuestoId = (tree: MainStructureTree, puestoId: number | null): HierarchyPath | null => {
   if (!Array.isArray(tree) || tree.length === 0 || puestoId == null) return null;
   for (const empresa of tree as any[]) {
@@ -357,8 +363,9 @@ export default function OpeningClosingPositionScreen() {
 
   // Data states
   const [positions, setPositions] = useState<OpeningClosingPosition[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isListLoading, setIsListLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const listFetchGenRef = useRef(0);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
 
   // Modal: ver cambios (auditoría)
@@ -386,6 +393,7 @@ export default function OpeningClosingPositionScreen() {
   // Estructura principal (árbol) + loading + selección
   const [mainStructureFetched, setMainStructureFetched] = useState(false);
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
@@ -406,11 +414,14 @@ export default function OpeningClosingPositionScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
   const filterCorpoIdRef = useRef<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
 
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [queryAccessToken, setQueryAccessToken] = useState<string>('');
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
-  const fetchPositionsRef = useRef<(corpoIdOverride?: string | null) => Promise<void>>(async () => {});
+  const fetchPositionsListRef = useRef<(corpoId: number | null) => Promise<void>>(async () => {});
+  const refreshPositionsListAfterFormCloseRef = useRef<() => Promise<void>>(async () => {});
 
   // Catálogo artículos (inventario: divisiones que no son Seguridad ni Aseo y limpieza)
   const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
@@ -786,20 +797,31 @@ export default function OpeningClosingPositionScreen() {
     }
   };
 
-  const fetchMainStructure = useCallback(async () => {
-    if (mainStructureFetched) return;
+  useEffect(() => {
+    structureRef.current = structure;
+  }, [structure]);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (mainStructureFetched) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const mergedTree = await loadMainStructureTreeMerged();
-      if (Array.isArray(mergedTree)) setStructure(mergedTree as MainStructureTree);
-      else setStructure([]);
+      const tree = Array.isArray(mergedTree) ? (mergedTree as MainStructureTree) : [];
+      structureRef.current = tree;
+      setStructure(tree);
       setMainStructureFetched(true);
+      return tree;
     } catch (e) {
       console.error('Error fetching main structure for opening-closing-position:', e);
+      structureRef.current = [];
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, [mainStructureFetched]);
 
   const buildHierarchyFromCurrentMarca = useCallback((currentMarcaData: any, tree: MainStructureTree): HierarchyPath => {
     const marcaPuestoId = currentMarcaData?.puesto?.id != null ? Number(currentMarcaData.puesto.id) : null;
@@ -821,12 +843,143 @@ export default function OpeningClosingPositionScreen() {
     };
   }, []);
 
-  const applyFormHierarchySequential = useCallback((path: HierarchyPath) => {
-    pendingFormHierarchyRef.current = path;
-    isApplyingFormHierarchyRef.current = true;
+  const formHierarchyPreloadedRef = useRef(false);
+
+  const applyFormHierarchyPath = useCallback((path: HierarchyPath) => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = true;
     setSelectedEmpresaId(path.empresaId);
+    setSelectedClienteId(path.clienteId);
+    setSelectedDivisionId(path.divisionId);
+    setSelectedContratoId(path.contratoId);
+    setSelectedSucursalId(path.sucursalId);
+    setSelectedPuestoId(path.puestoId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        isRestoringHierarchyRef.current = false;
+      });
+    });
   }, []);
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean; structureTree?: MainStructureTree | null }) => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaId(null);
+        setMarcaDivisionId(null);
+        setMarcaContextPuestoId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterCorpoId(null);
+          filterCorpoIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current?.id) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        setMarcaId(numOrNull(current.id));
+        const divIdRaw =
+          current?.roleDivision?.division?.id ?? current?.role_division?.division?.id;
+        setMarcaDivisionId(numOrNull(divIdRaw));
+        const marcaPuestoRaw = current?.puesto?.id ?? current?.puesto_id;
+        setMarcaContextPuestoId(numOrNull(marcaPuestoRaw));
+        const rnRaw =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
+
+        const tree =
+          opts?.structureTree ??
+          (structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged());
+        const hierarchy = buildHierarchyFromCurrentMarca(current, Array.isArray(tree) ? tree : []);
+
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(hierarchy.empresaId);
+          setFilterClienteId(hierarchy.clienteId);
+          setFilterDivisionId(hierarchy.divisionId);
+          setFilterContratoId(hierarchy.contratoId);
+          setFilterCorpoId(hierarchy.sucursalId);
+          filterCorpoIdRef.current = hierarchy.sucursalId;
+        }
+
+        return { current, hierarchy, roleName: typeof rnRaw === 'string' ? rnRaw : null };
+      } catch {
+        setHasCurrentMarca(false);
+        return null;
+      }
+    },
+    [buildHierarchyFromCurrentMarca]
+  );
+
+  const handleFilterHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setFilterEmpresaId(v.empresaId);
+      setFilterClienteId(v.clienteId);
+      setFilterDivisionId(v.divisionId);
+      setFilterContratoId(v.contratoId);
+      filterCorpoIdRef.current = v.sucursalId;
+      setFilterCorpoId(v.sucursalId);
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      if (currentMarca?.id == null) return;
+      const tree = await loadMainStructureTreeMerged();
+      const hierarchy = buildHierarchyFromCurrentMarca(
+        currentMarca,
+        Array.isArray(tree) ? tree : []
+      );
+      setFilterEmpresaId(hierarchy.empresaId);
+      setFilterClienteId(hierarchy.clienteId);
+      setFilterDivisionId(hierarchy.divisionId);
+      setFilterContratoId(hierarchy.contratoId);
+      setFilterCorpoId(hierarchy.sucursalId);
+      filterCorpoIdRef.current = hierarchy.sucursalId;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (OCP):', e);
+    }
+  }, [buildHierarchyFromCurrentMarca]);
+
+  const handleFormHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      if (isApplyingFormHierarchyRef.current) return;
+      const divisionChanged = v.divisionId !== selectedDivisionId;
+      setSelectedEmpresaId(v.empresaId);
+      setSelectedClienteId(v.clienteId);
+      setSelectedContratoId(v.contratoId);
+      setSelectedSucursalId(v.sucursalId);
+      setSelectedPuestoId(v.puestoId ?? null);
+      if (divisionChanged) {
+        handleDivisionPickerChange(v.divisionId ?? 0);
+        setSelectedContratoId(v.contratoId);
+        setSelectedSucursalId(v.sucursalId);
+        setSelectedPuestoId(v.puestoId ?? null);
+      } else {
+        setSelectedDivisionId(v.divisionId);
+      }
+    },
+    [selectedDivisionId, handleDivisionPickerChange]
+  );
 
   const loadArticulosCatalog = useCallback(async () => {
     setIsArticulosLoading(true);
@@ -874,58 +1027,59 @@ export default function OpeningClosingPositionScreen() {
     }
   }, [refreshAccessToken, logout]);
 
-  const fetchPositions = useCallback(async (corpoIdOverride?: string | null) => {
-    let searchCorpoIdNum: number | null = null;
+  const readPositionsFromCache = useCallback(async (corpoIdNum: number | null): Promise<OpeningClosingPosition[]> => {
+    if (corpoIdNum == null || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) return [];
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    if (!cacheStr) return [];
     try {
-      setIsLoading(true);
-      setError(null);
-
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca) {
-        setHasCurrentMarca(false);
-        setMarcaContextPuestoId(null);
-        setIsLoading(false);
-        return;
-      }
-
-      setHasCurrentMarca(true);
-      const currentMarcaData = JSON.parse(currentMarca);
-      const marcaPuestoRaw = currentMarcaData?.puesto?.id;
-      setMarcaContextPuestoId(
-        marcaPuestoRaw !== undefined &&
-          marcaPuestoRaw !== null &&
-          Number.isFinite(Number(marcaPuestoRaw)) &&
-          Number(marcaPuestoRaw) > 0
-          ? Number(marcaPuestoRaw)
-          : null
+      const parsed = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed)) return [];
+      const forList = filterOcpFromEvaluationsCacheByCorpo(parsed, corpoIdNum).filter(
+        (it: any) => it?.isActive !== false
       );
-      const corpoIdFromMarca = currentMarcaData?.corpo?.id != null ? String(currentMarcaData.corpo.id) : null;
-      const effectiveCorpoId = (corpoIdOverride !== undefined && corpoIdOverride !== null ? corpoIdOverride : null) ?? corpoIdFromMarca;
+      return dedupeOcpRows(forList) as OpeningClosingPosition[];
+    } catch {
+      return [];
+    }
+  }, []);
 
-      setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
-      const divIdRaw =
-        currentMarcaData?.roleDivision?.division?.id ?? currentMarcaData?.role_division?.division?.id;
-      setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
+  const fetchPositionsList = useCallback(
+    async (corpoId: number | null) => {
+      const corpoIdNum =
+        corpoId != null && Number.isFinite(Number(corpoId)) && Number(corpoId) > 0 ? Number(corpoId) : null;
 
-      if (!effectiveCorpoId) {
-        setError('No se encontró el ID del corpo');
-        setIsLoading(false);
+      if (corpoIdNum == null) {
+        listFetchGenRef.current += 1;
+        setPositions([]);
+        setError(null);
+        setIsListLoading(false);
         return;
       }
 
-      const cid = Number(effectiveCorpoId);
-      searchCorpoIdNum = Number.isFinite(cid) && cid > 0 ? cid : null;
+      const gen = ++listFetchGenRef.current;
+      const isStale = () => gen !== listFetchGenRef.current;
 
-      const connected = await getConnectionStatus();
-      setIsConnected(connected);
+      try {
+        setIsListLoading(true);
+        setError(null);
 
-      if (connected) {
-        console.log('Buscando aperturas-cierres de puesto por corpo:', effectiveCorpoId);
+        const cached = await readPositionsFromCache(corpoIdNum);
+        if (!isStale()) setPositions(cached);
+
+        const connected = await getConnectionStatus();
+        if (!isStale()) setIsConnected(connected);
+
+        if (!connected) {
+          if (!isStale()) setError(null);
+          return;
+        }
+
         const result = await listOpeningClosingPositionByCorpo({
-          corpo_id: effectiveCorpoId,
+          corpo_id: String(corpoIdNum),
           refreshAccessToken,
           logout,
         });
+        if (isStale()) return;
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         let fullCache: any[] = [];
@@ -938,72 +1092,31 @@ export default function OpeningClosingPositionScreen() {
           }
         }
 
-        if (result.status && Array.isArray(result.data) && searchCorpoIdNum != null) {
-          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, searchCorpoIdNum);
+        if (result.status && Array.isArray(result.data)) {
+          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, corpoIdNum);
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
-          const forList = filterOcpFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
-          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
-        } else if (searchCorpoIdNum != null) {
-          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum);
+          const forList = filterOcpFromEvaluationsCacheByCorpo(merged, corpoIdNum);
           setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
         } else {
-          setPositions([]);
+          setPositions(cached);
         }
-      } else {
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        let fullCache: any[] = [];
-        if (cacheStr) {
-          try {
-            const p = JSON.parse(cacheStr);
-            if (Array.isArray(p)) fullCache = p;
-          } catch {
-            /* ignore */
-          }
+      } catch (err) {
+        console.error('Error fetching positions:', err);
+        if (!isStale()) {
+          setError('Error al cargar las aperturas-cierres de puesto');
+          const fallback = await readPositionsFromCache(corpoIdNum);
+          if (!isStale()) setPositions(fallback);
         }
-        const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, searchCorpoIdNum).filter((it: any) => it?.isActive !== false);
-        setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
+      } finally {
+        if (!isStale()) setIsListLoading(false);
       }
-    } catch (err) {
-      console.error('Error fetching positions:', err);
-      setError('Error al cargar las aperturas-cierres de puesto');
-      try {
-        const raw = await AsyncStorage.getItem('current_marca');
-        let currentMarcaData: any = null;
-        if (raw) {
-          try {
-            currentMarcaData = JSON.parse(raw);
-          } catch {
-            currentMarcaData = null;
-          }
-        }
-        const fallbackMc = Number(
-          filterCorpoIdRef.current ??
-            currentMarcaData?.corpo?.id ??
-            currentMarcaData?.corpo_id
-        );
-        const corpoForCache =
-          searchCorpoIdNum ??
-          (Number.isFinite(fallbackMc) && fallbackMc > 0 ? fallbackMc : null);
+    },
+    [readPositionsFromCache, refreshAccessToken, logout]
+  );
 
-        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-        if (cacheStr) {
-          let fullCache: any[] = [];
-          try {
-            const p = JSON.parse(cacheStr);
-            if (Array.isArray(p)) fullCache = p;
-          } catch {
-            /* ignore */
-          }
-          const forList = filterOcpFromEvaluationsCacheByCorpo(fullCache, corpoForCache).filter((it: any) => it?.isActive !== false);
-          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
-        }
-      } catch (cacheErr) {
-        console.error('Error loading from cache:', cacheErr);
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [refreshAccessToken, logout]);
+  const refreshPositionsListAfterFormClose = useCallback(async () => {
+    await fetchPositionsList(filterCorpoIdRef.current);
+  }, [fetchPositionsList]);
 
   useEffect(() => {
     filterCorpoIdRef.current = filterCorpoId;
@@ -1027,82 +1140,42 @@ export default function OpeningClosingPositionScreen() {
   }, []);
 
   useEffect(() => {
-    fetchPositionsRef.current = fetchPositions;
-  }, [fetchPositions]);
+    fetchPositionsListRef.current = fetchPositionsList;
+    refreshPositionsListAfterFormCloseRef.current = refreshPositionsListAfterFormClose;
+  }, [fetchPositionsList, refreshPositionsListAfterFormClose]);
 
   useFocusEffect(
     useCallback(() => {
-      (async () => {
+      let cancelled = false;
+      void (async () => {
         const connected = await getConnectionStatus();
-        setIsConnected(connected);
-        const currentMarca = await AsyncStorage.getItem('current_marca');
-        if (currentMarca) {
-          const currentMarcaData = JSON.parse(currentMarca);
-          setMarcaId(typeof currentMarcaData?.id === 'number' ? currentMarcaData.id : (currentMarcaData?.id ? Number(currentMarcaData.id) : null));
-          const divIdRaw =
-            currentMarcaData?.roleDivision?.division?.id ?? currentMarcaData?.role_division?.division?.id;
-          setMarcaDivisionId(divIdRaw !== undefined && divIdRaw !== null ? Number(divIdRaw) : null);
-          const marcaPuestoRawFm = currentMarcaData?.puesto?.id;
-          setMarcaContextPuestoId(
-            marcaPuestoRawFm !== undefined &&
-              marcaPuestoRawFm !== null &&
-              Number.isFinite(Number(marcaPuestoRawFm)) &&
-              Number(marcaPuestoRawFm) > 0
-              ? Number(marcaPuestoRawFm)
-              : null
-          );
-          const rnRaw =
-            currentMarcaData?.roleDivision?.role?.nombre ??
-            currentMarcaData?.role_division?.role?.nombre ??
-            null;
-          setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
-          await fetchMainStructure();
+        if (!cancelled) setIsConnected(connected);
+        await fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
           const tree = await loadMainStructureTreeMerged();
-          const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, tree);
-          if (rnRaw === 'OPERATIVO') {
-            setFilterEmpresaId(null);
-            setFilterClienteId(null);
-            setFilterDivisionId(null);
-            setFilterContratoId(null);
-            setFilterCorpoId(null);
+          if (currentMarca?.id != null) {
+            await syncMarcaFromStorage({
+              applyFiltersFromMarca: true,
+              structureTree: Array.isArray(tree) ? tree : [],
+            });
           } else {
-            setFilterEmpresaId(hierarchy.empresaId);
-            setFilterClienteId(hierarchy.clienteId);
-            setFilterDivisionId(hierarchy.divisionId);
-            setFilterContratoId(hierarchy.contratoId);
-            setFilterCorpoId(hierarchy.sucursalId);
+            await syncMarcaFromStorage({ applyFiltersFromMarca: false });
           }
-        } else {
-          setRoleName(null);
-          setMarcaContextPuestoId(null);
+          if (!cancelled) listFiltersSyncedFromMarcaOnceRef.current = true;
         }
       })();
       const onRestored = () => {
         setIsConnected(true);
-        void (async () => {
-          const raw = await AsyncStorage.getItem('current_marca');
-          let operativo = false;
-          if (raw) {
-            try {
-              const d = JSON.parse(raw);
-              const rn = d?.roleDivision?.role?.nombre ?? d?.role_division?.role?.nombre;
-              operativo = rn === 'OPERATIVO';
-            } catch {
-              operativo = false;
-            }
-          }
-          if (operativo) {
-            fetchPositionsRef.current(undefined);
-          } else if (filterCorpoIdRef.current != null) {
-            fetchPositionsRef.current(String(filterCorpoIdRef.current));
-          }
-        })();
+        void fetchPositionsListRef.current(filterCorpoIdRef.current);
       };
       eventBus.on('connectionRestored', onRestored);
       return () => {
+        cancelled = true;
         eventBus.off('connectionRestored', onRestored);
       };
-    }, [fetchMainStructure, buildHierarchyFromCurrentMarca])
+    }, [fetchMainStructure, syncMarcaFromStorage])
   );
 
   const selectedEmpresaNode = useMemo(() => {
@@ -1172,57 +1245,6 @@ export default function OpeningClosingPositionScreen() {
     }
   }, [selectedSucursalNode]);
 
-  useEffect(() => {
-    const pending = pendingFormHierarchyRef.current;
-    if (!pending || !isApplyingFormHierarchyRef.current) return;
-    if (!isCreating && !editingRecord) return;
-
-    if ((pending.empresaId ?? null) !== (selectedEmpresaId ?? null)) {
-      setSelectedEmpresaId(pending.empresaId ?? null);
-      return;
-    }
-    if ((pending.clienteId ?? null) !== (selectedClienteId ?? null)) {
-      setSelectedClienteId(pending.clienteId ?? null);
-      return;
-    }
-    if ((pending.divisionId ?? null) !== (selectedDivisionId ?? null)) {
-      setSelectedDivisionId(pending.divisionId ?? null);
-      return;
-    }
-    if ((pending.contratoId ?? null) !== (selectedContratoId ?? null)) {
-      setSelectedContratoId(pending.contratoId ?? null);
-      return;
-    }
-    if ((pending.sucursalId ?? null) !== (selectedSucursalId ?? null)) {
-      setSelectedSucursalId(pending.sucursalId ?? null);
-      return;
-    }
-    if ((pending.puestoId ?? null) !== (selectedPuestoId ?? null)) {
-      setSelectedPuestoId(pending.puestoId ?? null);
-      return;
-    }
-
-    pendingFormHierarchyRef.current = null;
-    isApplyingFormHierarchyRef.current = false;
-    isRestoringHierarchyRef.current = false;
-  }, [
-    isCreating,
-    editingRecord,
-    selectedEmpresaId,
-    selectedClienteId,
-    selectedDivisionId,
-    selectedContratoId,
-    selectedSucursalId,
-    selectedPuestoId,
-  ]);
-
-  const empresaOptions = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
-  const clienteOptions = useMemo(() => (selectedEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedEmpresaNode]);
-  const divisionOptions = useMemo(() => (selectedClienteNode?.division || []).map((d) => ({ id: d.id, nombre: d.nombre })), [selectedClienteNode]);
-  const contratoOptions = useMemo(() => (selectedDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [selectedDivisionNode]);
-  const sucursalOptions = useMemo(() => (selectedContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [selectedContratoNode]);
-  const puestoOptions = useMemo(() => (selectedSucursalNode?.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre })), [selectedSucursalNode]);
-
   const filterEmpresaNode = useMemo(() => {
     if (filterEmpresaId === null) return null;
     return structure.find((e) => e.id === filterEmpresaId) ?? null;
@@ -1243,16 +1265,7 @@ export default function OpeningClosingPositionScreen() {
     return (filterDivisionNode.contratos || []).find((c) => c.id === filterContratoId) ?? null;
   }, [filterDivisionNode, filterContratoId]);
 
-  const filterEmpresas = useMemo(() => structure.map((e) => ({ id: e.id, nombre: e.nombre })), [structure]);
-  const filterClientes = useMemo(() => (filterEmpresaNode?.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre })), [filterEmpresaNode]);
-  const filterDivisiones = useMemo(() => (filterClienteNode?.division || []).map((d) => ({ id: d.id, nombre: d.nombre })), [filterClienteNode]);
-  const filterContratos = useMemo(() => (filterDivisionNode?.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre })), [filterDivisionNode]);
-  const filterSucursales = useMemo(() => (filterContratoNode?.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre })), [filterContratoNode]);
-
   const filteredPositions = useMemo(() => {
-    if (roleName === 'OPERATIVO') {
-      return dedupeOcpRows(positions || []);
-    }
     return dedupeOcpRows((positions || []).filter((record) => {
       const recordClienteId = Number(record.cliente_id);
       const recordDivisionId = Number(record.division_id);
@@ -1284,37 +1297,19 @@ export default function OpeningClosingPositionScreen() {
     filterContratoId,
     filterCorpoId,
     filterContratoNode,
-    roleName,
   ]);
 
-  /** Puesto efectivo para precargar inventario desde `puesto_<id>_articulos`: jerarquía o marca si OPERATIVO. */
+  /** Puesto efectivo para precargar inventario: selección manual o, si no hay, puesto de la marca. */
   const inventarioSourcePuestoId = useMemo(() => {
-    if (roleName === 'OPERATIVO') {
-      const m = marcaContextPuestoId;
-      return m !== null && Number.isFinite(m) && m > 0 ? m : null;
-    }
     const sp = selectedPuestoId;
-    return sp !== null && Number.isFinite(sp) && sp > 0 ? sp : null;
-  }, [roleName, marcaContextPuestoId, selectedPuestoId]);
+    if (sp !== null && Number.isFinite(sp) && sp > 0) return sp;
+    const m = marcaContextPuestoId;
+    return m !== null && Number.isFinite(m) && m > 0 ? m : null;
+  }, [marcaContextPuestoId, selectedPuestoId]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (roleName == null) return;
-      if (roleName === 'OPERATIVO') {
-        if (!cancelled) await fetchPositions(undefined);
-        return;
-      }
-      if (filterCorpoId == null) {
-        if (!cancelled) setPositions([]);
-        return;
-      }
-      if (!cancelled) await fetchPositions(String(filterCorpoId));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [filterCorpoId, fetchPositions, roleName]);
+    void fetchPositionsListRef.current(filterCorpoId);
+  }, [filterCorpoId]);
 
   /** Inventario visible en formulario: no Seguridad (4) ni Aseo y limpieza (5). */
   const showInventarioSection = useMemo(
@@ -1435,13 +1430,23 @@ export default function OpeningClosingPositionScreen() {
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
     await resetForm();
     setIsCreating(true);
+    const tree = await fetchMainStructure();
+    if (formHierarchyPreloadedRef.current) return;
     const currentMarca = await AsyncStorage.getItem('current_marca');
     if (currentMarca) {
-      const currentMarcaData = JSON.parse(currentMarca);
-      const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, Array.isArray(structure) ? structure : []);
-      applyFormHierarchySequential(hierarchy);
+      try {
+        const currentMarcaData = JSON.parse(currentMarca);
+        if (currentMarcaData?.id != null) {
+          const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, tree);
+          applyFormHierarchyPath(hierarchy);
+          formHierarchyPreloadedRef.current = true;
+        }
+      } catch {
+        /* ignore */
+      }
     }
   };
 
@@ -1450,8 +1455,10 @@ export default function OpeningClosingPositionScreen() {
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
     setIsCreating(false);
     await resetForm();
+    await refreshPositionsListAfterFormCloseRef.current();
   };
 
   const startEditing = async (record: OpeningClosingPosition) => {
@@ -1459,6 +1466,7 @@ export default function OpeningClosingPositionScreen() {
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
     setIsCreating(false);
     let actividadesArray: ActividadItem[] = [];
     let inventarioArray: InventarioItem[] = [];
@@ -1479,21 +1487,24 @@ export default function OpeningClosingPositionScreen() {
 
     setEditingRecord({ id: record.id, id_local: record.id_local });
 
-    const pathByPuesto = resolveHierarchyByPuestoId(Array.isArray(structure) ? structure : [], Number(record.puesto_id));
-    if (pathByPuesto) {
-      applyFormHierarchySequential(pathByPuesto);
-    } else {
-      // fallback por datos directos del registro si no aparece en el árbol
-      applyFormHierarchySequential({
-        empresaId:
-          record.empresa_id != null && Number(record.empresa_id) > 0 ? Number(record.empresa_id) : null,
-        clienteId: Number(record.cliente_id),
-        divisionId: Number(record.division_id),
-        contratoId:
-          record.contrato_id != null && Number(record.contrato_id) > 0 ? Number(record.contrato_id) : null,
-        sucursalId: Number(record.corpo_id),
-        puestoId: Number(record.puesto_id),
-      });
+    const tree = await fetchMainStructure();
+    if (!formHierarchyPreloadedRef.current) {
+      const pathByPuesto = resolveHierarchyByPuestoId(tree, Number(record.puesto_id));
+      if (pathByPuesto) {
+        applyFormHierarchyPath(pathByPuesto);
+      } else {
+        applyFormHierarchyPath({
+          empresaId:
+            record.empresa_id != null && Number(record.empresa_id) > 0 ? Number(record.empresa_id) : null,
+          clienteId: Number(record.cliente_id),
+          divisionId: Number(record.division_id),
+          contratoId:
+            record.contrato_id != null && Number(record.contrato_id) > 0 ? Number(record.contrato_id) : null,
+          sucursalId: Number(record.corpo_id),
+          puestoId: Number(record.puesto_id),
+        });
+      }
+      formHierarchyPreloadedRef.current = true;
     }
 
     const horaAccion = await getHoraAccion();
@@ -1531,8 +1542,10 @@ export default function OpeningClosingPositionScreen() {
     pendingFormHierarchyRef.current = null;
     isApplyingFormHierarchyRef.current = false;
     isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
     setEditingRecord(null);
     await resetForm();
+    await refreshPositionsListAfterFormCloseRef.current();
   };
 
   const handleDateChange = (event: any, selectedDate?: Date) => {
@@ -1817,8 +1830,7 @@ export default function OpeningClosingPositionScreen() {
           await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
           Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto guardado correctamente');
           setTimeout(() => {
-            cancelCreating();
-            fetchPositions();
+            void cancelCreating();
           }, 2000);
         } else {
           Alert.alert('Error', result.message || 'Error al guardar la apertura-cierre de puesto');
@@ -1872,8 +1884,7 @@ export default function OpeningClosingPositionScreen() {
 
         Alert.alert('Éxito', 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
-          cancelCreating();
-          fetchPositions();
+          void cancelCreating();
         }, 2000);
       }
     } catch (err) {
@@ -1963,8 +1974,7 @@ export default function OpeningClosingPositionScreen() {
           await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
           Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto actualizado correctamente');
           setTimeout(() => {
-            cancelEditing();
-            fetchPositions();
+            void cancelEditing();
           }, 2000);
         } else {
           Alert.alert('Error', result.message || 'Error al actualizar la apertura-cierre de puesto');
@@ -2042,8 +2052,7 @@ export default function OpeningClosingPositionScreen() {
 
         Alert.alert('Éxito', 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.');
         setTimeout(() => {
-          cancelEditing();
-          fetchPositions();
+          void cancelEditing();
         }, 2000);
       }
     } catch (err) {
@@ -2098,8 +2107,32 @@ export default function OpeningClosingPositionScreen() {
                 });
 
                 if (result.status) {
+                  const corpoIdNum = filterCorpoIdRef.current;
+                  if (corpoIdNum != null) {
+                    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                    if (cacheStr) {
+                      try {
+                        const cache = JSON.parse(cacheStr);
+                        if (Array.isArray(cache)) {
+                          const updatedCache = cache.filter(
+                            (item: any) =>
+                              !(
+                                (item.id === recordIdStr ||
+                                  String(item.id) === recordIdStr ||
+                                  item.id_local === recordIdStr) &&
+                                item.type === 'opening_closing_position'
+                              )
+                          );
+                          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                    }
+                    const cached = await readPositionsFromCache(corpoIdNum);
+                    setPositions(cached);
+                  }
                   Alert.alert('Éxito', 'Apertura-Cierre de Puesto eliminado correctamente');
-                  fetchPositions();
                 } else {
                   Alert.alert('Error', result.message || 'Error al eliminar la apertura-cierre de puesto');
                 }
@@ -2166,7 +2199,11 @@ export default function OpeningClosingPositionScreen() {
                 }
 
                 Alert.alert('Modo Offline', 'Apertura-Cierre de Puesto marcado para eliminación localmente. Se sincronizará cuando haya conexión.');
-                fetchPositions();
+                const corpoIdNum = filterCorpoIdRef.current;
+                if (corpoIdNum != null) {
+                  const cached = await readPositionsFromCache(corpoIdNum);
+                  setPositions(cached);
+                }
               }
             } catch (err) {
               console.error('Error deleting position:', err);
@@ -2273,7 +2310,11 @@ export default function OpeningClosingPositionScreen() {
         };
       });
       await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-      await fetchPositions();
+      const corpoIdNum = filterCorpoIdRef.current;
+      if (corpoIdNum != null) {
+        const cached = await readPositionsFromCache(corpoIdNum);
+        setPositions(cached);
+      }
     }
   };
 
@@ -2301,8 +2342,61 @@ export default function OpeningClosingPositionScreen() {
     }
   };
 
+  const renderListFilters = () => (
+    <ThemedView style={styles.listFilterCard}>
+      <ThemedView style={styles.listFilterHeaderRow}>
+        <TouchableOpacity
+          style={styles.filterToggleButton}
+          onPress={() => setIsListFiltersExpanded((e) => !e)}
+          activeOpacity={0.85}
+        >
+          <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+          <Ionicons name={isListFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
+        </TouchableOpacity>
+        {isListFiltersExpanded ? (
+          <TouchableOpacity
+            style={styles.resetFiltersButton}
+            onPress={() => {
+              void resetListFiltersFromCurrentMarca();
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="refresh" size={16} color="#FF3B30" />
+            <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+          </TouchableOpacity>
+        ) : null}
+      </ThemedView>
+      {isListFiltersExpanded ? (
+        <ThemedView style={styles.filterContent}>
+          {structure.length === 0 ? (
+            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+          ) : (
+            <HierarchyPickerFields
+              structure={structure}
+              levels={['cliente', 'contrato', 'sucursal']}
+              isLoading={false}
+              emptyPickerValue={0}
+              values={{
+                empresaId: filterEmpresaId,
+                clienteId: filterClienteId,
+                divisionId: filterDivisionId,
+                contratoId: filterContratoId,
+                sucursalId: filterCorpoId,
+              }}
+              onChange={handleFilterHierarchyChange}
+              labels={{ sucursal: 'Sucursal (corpo)' }}
+              renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+              pickerStyle={styles.picker}
+              fieldGroupStyle={styles.filterGroup}
+            />
+          )}
+        </ThemedView>
+      ) : null}
+    </ThemedView>
+  );
+
   const renderPositionList = () => {
-    if (isLoading) {
+    if (isListLoading && positions.length === 0) {
       return (
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
@@ -2311,7 +2405,7 @@ export default function OpeningClosingPositionScreen() {
       );
     }
 
-    if (error) {
+    if (error && positions.length === 0) {
       return (
         <ThemedView style={styles.errorContainer}>
           <ThemedText style={styles.errorText}>{error}</ThemedText>
@@ -2319,7 +2413,7 @@ export default function OpeningClosingPositionScreen() {
       );
     }
 
-    if (filteredPositions.length === 0) {
+    if (filteredPositions.length === 0 && !isListLoading) {
       return (
         <ThemedView style={styles.emptyContainer}>
           <ThemedText style={styles.emptyText}>No hay aperturas-cierres de puesto para los filtros seleccionados.</ThemedText>
@@ -2818,11 +2912,11 @@ export default function OpeningClosingPositionScreen() {
             </ThemedText>
           </ThemedView>
 
-          {!hasCurrentMarca && (
+          {!hasCurrentMarca && !isCreating && !editingRecord && (
             <ThemedView style={styles.noMarcaContainer}>
               <ThemedText style={styles.noMarcaTitle}>Marca no seleccionada</ThemedText>
               <ThemedText style={styles.noMarcaMessage}>
-                No se encontró una marca seleccionada. Por favor, selecciona una marca desde el menú principal.
+                Puede filtrar y registrar manualmente la jerarquía, o seleccionar una marca desde el menú para precargar los campos.
               </ThemedText>
             </ThemedView>
           )}
@@ -2835,183 +2929,35 @@ export default function OpeningClosingPositionScreen() {
                   <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
                 </ThemedView>
 
-                {isStructureLoading ? (
-                  <ThemedView style={styles.loadingInline}>
-                    <ActivityIndicator size="small" color="#007AFF" />
-                    <ThemedText style={styles.loadingInlineText}>Cargando estructura...</ThemedText>
-                  </ThemedView>
-                ) : roleName == null ? (
-                  <ThemedView style={styles.sectionBody}>
-                    <ThemedText style={[styles.hintText, { opacity: 0.85 }]}>Cargando contexto de marca...</ThemedText>
-                  </ThemedView>
-                ) : roleName === 'OPERATIVO' ? (
-                  <ThemedView style={styles.sectionBody}>
+                <ThemedView style={styles.sectionBody}>
+                  {structure.length === 0 ? (
                     <ThemedText style={[styles.hintText, { opacity: 0.85, marginBottom: 8 }]}>
-                      La ubicación (empresa, cliente, división, contrato, sucursal y puesto) se define desde tu marca actual.
+                      Sin estructura en caché.
                     </ThemedText>
-                  </ThemedView>
-                ) : (
-                  <ThemedView style={styles.sectionBody}>
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Empresa</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedEmpresaId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || null;
-                            setSelectedEmpresaId(next);
-                            setSelectedClienteId(null);
-                            setSelectedDivisionId(null);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                          }}
-                          style={styles.picker}
-                        >
-                          <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                          {empresaOptions.map((e) => (
-                            <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                    </ThemedView>
-
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedClienteId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || null;
-                            setSelectedClienteId(next);
-                            setSelectedContratoId(null);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                          }}
-                          enabled={selectedEmpresaId !== null && clienteOptions.length > 0}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label={selectedEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                            value={0}
-                            color="#000000"
-                          />
-                          {clienteOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedEmpresaId !== null && clienteOptions.length === 0 && (
-                        <ThemedText style={styles.hintText}>No hay clientes disponibles para esta empresa.</ThemedText>
-                      )}
-                    </ThemedView>
-
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>División *</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedDivisionId ?? 0}
-                          onValueChange={(v) => handleDivisionPickerChange(Number(v))}
-                          enabled={selectedClienteId !== null && divisionOptions.length > 0}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label={selectedClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                            value={0}
-                            color="#000000"
-                          />
-                          {divisionOptions.map((d) => (
-                            <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedClienteId !== null && divisionOptions.length === 0 && (
-                        <ThemedText style={styles.hintText}>No hay divisiones disponibles para este cliente.</ThemedText>
-                      )}
-                    </ThemedView>
-
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Contrato</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedContratoId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || null;
-                            setSelectedContratoId(next);
-                            setSelectedSucursalId(null);
-                            setSelectedPuestoId(null);
-                          }}
-                          enabled={selectedDivisionId !== null && contratoOptions.length > 0}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label={selectedDivisionId ? 'Seleccione contrato...' : 'Seleccione cliente primero'}
-                            value={0}
-                            color="#000000"
-                          />
-                          {contratoOptions.map((c) => (
-                            <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedDivisionId !== null && contratoOptions.length === 0 && (
-                        <ThemedText style={styles.hintText}>No hay contratos disponibles para esta división.</ThemedText>
-                      )}
-                    </ThemedView>
-
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedSucursalId ?? 0}
-                          onValueChange={(v) => {
-                            const next = Number(v) || null;
-                            setSelectedSucursalId(next);
-                            setSelectedPuestoId(null);
-                          }}
-                          enabled={selectedContratoId !== null && sucursalOptions.length > 0}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label={selectedContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                            value={0}
-                            color="#000000"
-                          />
-                          {sucursalOptions.map((s) => (
-                            <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedContratoId !== null && sucursalOptions.length === 0 && (
-                        <ThemedText style={styles.hintText}>No hay sucursales disponibles para este contrato.</ThemedText>
-                      )}
-                    </ThemedView>
-
-                    <ThemedView style={styles.formGroup}>
-                      <ThemedText style={styles.formLabel}>Puesto (1 por registro)</ThemedText>
-                      <ThemedView style={styles.pickerWrapper}>
-                        <Picker
-                          selectedValue={selectedPuestoId ?? 0}
-                          onValueChange={(v) => setSelectedPuestoId((Number(v) || null))}
-                          enabled={selectedSucursalId !== null && puestoOptions.length > 0}
-                          style={styles.picker}
-                        >
-                          <Picker.Item
-                            label={selectedSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
-                            value={0}
-                            color="#000000"
-                          />
-                          {puestoOptions.map((p) => (
-                            <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                          ))}
-                        </Picker>
-                      </ThemedView>
-                      {selectedSucursalId !== null && puestoOptions.length === 0 && (
-                        <ThemedText style={styles.hintText}>No hay puestos disponibles para esta sucursal.</ThemedText>
-                      )}
-                    </ThemedView>
-                  </ThemedView>
-                )}
+                  ) : null}
+                  <HierarchyPickerFields
+                    structure={structure}
+                    levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                    isLoading={false}
+                    emptyPickerValue={0}
+                    values={{
+                      empresaId: selectedEmpresaId,
+                      clienteId: selectedClienteId,
+                      divisionId: selectedDivisionId,
+                      contratoId: selectedContratoId,
+                      sucursalId: selectedSucursalId,
+                      puestoId: selectedPuestoId,
+                    }}
+                    onChange={handleFormHierarchyChange}
+                    labels={{
+                      division: 'División *',
+                      puesto: 'Puesto (1 por registro) *',
+                    }}
+                    renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                    pickerStyle={styles.picker}
+                    fieldGroupStyle={styles.formGroup}
+                  />
+                </ThemedView>
               </ThemedView>
 
               {/* Fecha en que se realizó */}
@@ -3305,144 +3251,11 @@ export default function OpeningClosingPositionScreen() {
             </ThemedView>
           ) : (
             <ThemedView style={styles.listSection}>
-              {roleName != null && roleName !== 'OPERATIVO' && (
-                <Collapsible title="Filtros jerárquicos">
-                  <ThemedView style={styles.hierarchyFiltersContainer}>
-                    <ThemedView style={styles.hierarchyFiltersHeader}>
-                      <TouchableOpacity
-                        style={styles.hierarchyResetButton}
-                        onPress={() => {
-                          setFilterEmpresaId(null);
-                          setFilterClienteId(null);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                        }}
-                      >
-                        <Ionicons name="refresh" size={16} color="#FF3B30" />
-                        <ThemedText style={styles.hierarchyResetText}>Reiniciar</ThemedText>
-                      </TouchableOpacity>
-                    </ThemedView>
+              {renderListFilters()}
 
-                    <ThemedView style={styles.hierarchyFiltersContent}>
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Empresa</ThemedText>
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterEmpresaId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || null;
-                          setFilterEmpresaId(next);
-                          setFilterClienteId(null);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                        }}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label="Todas" value={0} color="#000000" />
-                        {filterEmpresas.map((e) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterClienteId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || null;
-                          setFilterClienteId(next);
-                          setFilterDivisionId(null);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                        }}
-                        enabled={filterEmpresaId !== null && filterClientes.length > 0}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={filterEmpresaId !== null ? 'Todos' : 'Seleccione empresa primero'} value={0} color="#000000" />
-                        {filterClientes.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>División</ThemedText>
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterDivisionId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || null;
-                          setFilterDivisionId(next);
-                          setFilterContratoId(null);
-                          setFilterCorpoId(null);
-                        }}
-                        enabled={filterClienteId !== null && filterDivisiones.length > 0}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={filterClienteId !== null ? 'Todas' : 'Seleccione cliente primero'} value={0} color="#000000" />
-                        {filterDivisiones.map((d) => (
-                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Contrato</ThemedText>
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterContratoId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || null;
-                          setFilterContratoId(next);
-                          setFilterCorpoId(null);
-                        }}
-                        enabled={filterDivisionId !== null && filterContratos.length > 0}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={filterDivisionId !== null ? 'Todos' : 'Seleccione división primero'} value={0} color="#000000" />
-                        {filterContratos.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  </ThemedView>
-
-                  <ThemedView style={styles.formGroup}>
-                    <ThemedText style={styles.formLabel}>Sucursal</ThemedText>
-                    <ThemedView style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={filterCorpoId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || null;
-                          setFilterCorpoId(next);
-                        }}
-                        enabled={filterContratoId !== null && filterSucursales.length > 0}
-                        style={styles.picker}
-                      >
-                        <Picker.Item label={filterContratoId !== null ? 'Todas' : 'Seleccione contrato primero'} value={0} color="#000000" />
-                        {filterSucursales.map((s) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </ThemedView>
-                  </ThemedView>
-                </ThemedView>
-              </ThemedView>
-                </Collapsible>
-              )}
-
-              {!isLoading && (
-                <TouchableOpacity style={styles.createButton} onPress={startCreating}>
-                  <Ionicons name="add" size={24} color="#FFFFFF" />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
+              </TouchableOpacity>
               {renderPositionList()}
             </ThemedView>
           )}
@@ -4123,50 +3936,32 @@ const styles = StyleSheet.create({
   listSection: {
     width: '100%',
   },
-  hierarchyFiltersContainer: {
-    width: '100%',
+  listFilterCard: {
     backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#E5E5EA',
-    borderRadius: 12,
-    overflow: 'hidden',
-    marginBottom: 10,
+    borderColor: '#E0E0E0',
   },
-  hierarchyFiltersHeader: {
+  listFilterHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 12,
-    backgroundColor: '#F8F9FA',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E5EA',
+    marginBottom: 4,
   },
-  hierarchyFiltersTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#007AFF',
-  },
-  hierarchyResetButton: {
+  filterToggleButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#FF3B30',
-    backgroundColor: '#FFF5F5',
-  },
-  hierarchyResetText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FF3B30',
-  },
-  hierarchyFiltersContent: {
-    padding: 12,
     gap: 8,
-    backgroundColor: '#F8F9FA',
+    flex: 1,
   },
+  filterToggleText: { color: '#007AFF', fontWeight: '700', fontSize: 15 },
+  resetFiltersButton: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  resetFiltersText: { color: '#FF3B30', fontWeight: '600', fontSize: 13 },
+  filterContent: { gap: 4 },
+  filterGroup: { marginBottom: 10 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
   listContainer: {
     width: '100%',
     marginTop: 10,
@@ -4413,7 +4208,6 @@ const styles = StyleSheet.create({
   changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
   changeDescriptionContainer: { marginBottom: 8 },
   cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
-  filterGroupSearch: { marginBottom: 12 },
-  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
+  filterGroupSearch: { marginBottom: 12 }
 });
 

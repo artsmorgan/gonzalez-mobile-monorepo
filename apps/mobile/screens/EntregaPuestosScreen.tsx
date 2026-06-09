@@ -22,6 +22,12 @@ import authedFetch from '@/hooks/authedFetch';
 import { Collapsible } from '@/components/Collapsible';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
+import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
+import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
+import {
+  hydrateArticulosPuestoFilesForApi,
+  serializeArticulosPuestoForStorage,
+} from '@/utils/articuloMantenimientoFiles';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -105,6 +111,8 @@ interface ArticuloForm {
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
   observaciones?: string;
+  ultimo_mantenimiento_id?: number | null;
+  mantenimiento_files?: ArticuloMantenimientoPendingFile[];
 }
 
 type MainStructurePuestoNode = { id: number; nombre: string };
@@ -188,7 +196,7 @@ const signatureWebStyle = `
 `;
 
 export default function EntregaPuestosScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<EntregaPuestosScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
@@ -216,6 +224,7 @@ export default function EntregaPuestosScreen() {
   const [currentMarca, setCurrentMarca] = useState<CurrentMarca | null>(null);
   const [info, setInfo] = useState<EntregaPuestosInfo | null>(null);
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
+  const [archivosModalIndex, setArchivosModalIndex] = useState<number | null>(null);
   const [observaciones, setObservaciones] = useState('');
   const [firmaRecibe, setFirmaRecibe] = useState<string>('');
   const [firmaEntrega, setFirmaEntrega] = useState<string>('');
@@ -510,6 +519,9 @@ export default function EntregaPuestosScreen() {
           cantidad_real,
           estado,
           observaciones: art.observaciones || '',
+          ultimo_mantenimiento_id:
+            ultimo?.id != null && Number(ultimo.id) > 0 ? Number(ultimo.id) : null,
+          mantenimiento_files: [],
         };
       });
       setArticulos(articulosForm);
@@ -660,6 +672,15 @@ export default function EntregaPuestosScreen() {
     setArticulos(newArticulos);
   };
 
+  const handleArticuloMantenimientoFilesChange = (
+    index: number,
+    files: ArticuloMantenimientoPendingFile[],
+  ) => {
+    setArticulos((prev) =>
+      prev.map((a, i) => (i === index ? { ...a, mantenimiento_files: files } : a)),
+    );
+  };
+
   const openSignatureModal = (target: 'firma_recibe' | 'firma_entrega') => {
     setSignatureTarget(target);
     setIsSignatureModalVisible(true);
@@ -802,7 +823,20 @@ export default function EntregaPuestosScreen() {
               const horaEntradaRecibe = formatTime(currentMarca.hora_inicio);
               const horaSalidaRecibe = formatTime(currentMarca.hora_fin);
 
-              const articulosPuesto = articulos && articulos.length > 0 ? JSON.stringify(articulos) : '[]';
+              const horaAccion = await getHoraAccion();
+              if (!horaAccion) {
+                throw new Error('No se pudo obtener la hora de acción');
+              }
+              const horaAccionIso = new Date(horaAccion).toISOString();
+              const articulosPuestoStorage =
+                articulos && articulos.length > 0
+                  ? serializeArticulosPuestoForStorage(articulos, horaAccionIso)
+                  : '[]';
+
+              const isConnected = await getConnectionStatus();
+              const articulosPuestoForRequest = isConnected
+                ? await hydrateArticulosPuestoFilesForApi(articulosPuestoStorage)
+                : articulosPuestoStorage;
 
               const requestData = {
                 cliente_id: currentMarca.cliente.id,
@@ -821,7 +855,7 @@ export default function EntregaPuestosScreen() {
                 hora_entrada_recibe: isTimeParsable(horaEntradaRecibe) ? horaEntradaRecibe : '1970-01-01T00:00',
                 hora_salida_recibe: isTimeParsable(horaSalidaRecibe) ? horaSalidaRecibe : '1970-01-01T00:00',
                 turno_recibe: currentMarca.tipo_turno,
-                articulos_puesto: articulosPuesto,
+                articulos_puesto: articulosPuestoForRequest,
                 observaciones: observaciones,
                 firma_recibe: firmaRecibe,
                 firma_entrega: firmaEntrega || null,
@@ -829,7 +863,6 @@ export default function EntregaPuestosScreen() {
                 marca_id: currentMarca.id,
               };
 
-              const isConnected = await getConnectionStatus();
               if (isConnected) {
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                 if (!apiUrl) {
@@ -1346,6 +1379,9 @@ export default function EntregaPuestosScreen() {
                         <View style={styles.tableHeaderCell}>
                           <ThemedText style={styles.tableHeaderText}>Observaciones</ThemedText>
                         </View>
+                        <View style={styles.tableHeaderCellArchivos}>
+                          <ThemedText style={styles.tableHeaderText}>Archivos</ThemedText>
+                        </View>
                       </View>
                       {/* Filas de datos */}
                       {articulos.map((articulo, index) => (
@@ -1391,6 +1427,19 @@ export default function EntregaPuestosScreen() {
                               multiline
                               numberOfLines={3}
                             />
+                          </View>
+                          <View style={styles.tableCellArchivos}>
+                            <TouchableOpacity
+                              style={styles.archivosBtn}
+                              onPress={() => setArchivosModalIndex(index)}
+                            >
+                              <Ionicons name="attach" size={20} color="#007AFF" />
+                              {(articulo.mantenimiento_files?.length ?? 0) > 0 ? (
+                                <ThemedText style={styles.archivosBadge}>
+                                  {articulo.mantenimiento_files!.length}
+                                </ThemedText>
+                              ) : null}
+                            </TouchableOpacity>
                           </View>
                         </View>
                       ))}
@@ -1769,6 +1818,23 @@ export default function EntregaPuestosScreen() {
         </View>
       </Modal>
 
+      {archivosModalIndex != null && currentMarca?.puesto?.id && articulos[archivosModalIndex] ? (
+        <ArticuloMantenimientoArchivosModal
+          visible
+          onClose={() => setArchivosModalIndex(null)}
+          puestoId={Number(currentMarca.puesto.id)}
+          articuloId={articulos[archivosModalIndex].id}
+          articuloNombre={articulos[archivosModalIndex].nombre}
+          formEstado={articulos[archivosModalIndex].estado}
+          ultimoMantenimientoId={articulos[archivosModalIndex].ultimo_mantenimiento_id ?? null}
+          pendingFiles={articulos[archivosModalIndex].mantenimiento_files ?? []}
+          onPendingFilesChange={(files) =>
+            handleArticuloMantenimientoFilesChange(archivosModalIndex, files)
+          }
+          accessToken={accessToken}
+        />
+      ) : null}
+
       <AppFooter />
       <SlideMenu
         isVisible={isMenuVisible}
@@ -2038,6 +2104,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: 50,
   },
+  tableHeaderCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    height: 50,
+  },
   tableHeaderText: {
     color: '#333',
     fontWeight: '600',
@@ -2057,6 +2131,31 @@ const styles = StyleSheet.create({
     width: 150,
     justifyContent: 'center',
     height: 70,
+  },
+  tableCellArchivos: {
+    padding: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+    width: 80,
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: 70,
+  },
+  archivosBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#F0F8FF',
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  archivosBadge: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#007AFF',
   },
   tableCellFirst: {
     padding: 10,

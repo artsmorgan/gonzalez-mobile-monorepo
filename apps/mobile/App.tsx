@@ -13,6 +13,12 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './contexts/AuthContext';
 import { useColorScheme } from './hooks/useColorScheme';
 import saveLunchTime from './hooks/saveLunchTime';
+import {
+  computeLunchEndTimeMs,
+  mergeCurrentMarcaHierarchyIntoLunchRequest,
+  releaseLunchTimerCompletionLock,
+  tryAcquireLunchTimerCompletionLock,
+} from './hooks/lunchTimeMarcaHierarchy';
 import { useAuth } from './contexts/AuthContext';
 import { createVehicle, updateVehicle, deleteVehicle, deleteVehicleAttachment } from './hooks/vehiclesFunctions';
 import { getFile, deleteFile } from './hooks/fileStorage';
@@ -3026,26 +3032,20 @@ function AppContent() {
             const newId = Number((result as any).id ?? (result as any).data?.id ?? 0);
             const serverPayload = (result as any).data;
             if (newId > 0) {
-              const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+              const { patchChecklistSupervisionCacheAfterSync } = await import(
                 '@/hooks/checklistSupervisionCacheStorage'
               );
-              const flat = await loadChecklistSupervisionCacheFlat();
-              const idl = String(action?.id_local ?? '');
-              const updatedCache = flat.map((it: any) => {
-                if (it.id_local != null && String(it.id_local) === idl) {
-                  const { id_local: _r1, id: _i1, ...restServer } =
-                    serverPayload && typeof serverPayload === 'object' ? serverPayload : {};
-                  return {
-                    ...it,
-                    ...restServer,
-                    id: newId,
-                    id_local: '',
-                    images: serverPayload?.images ?? it.images,
-                  };
-                }
-                return it;
+              await patchChecklistSupervisionCacheAfterSync({
+                matchIdLocal: action?.id_local,
+                matchServerId: newId,
+                serverPayload: serverPayload && typeof serverPayload === 'object' ? serverPayload : { id: newId },
+                requestData: action.requestData,
               });
-              await saveChecklistSupervisionCacheFlat(updatedCache);
+            }
+            const puestoId = Number(action?.requestData?.puesto_id ?? 0);
+            if (puestoId > 0) {
+              const { refreshPuestoArticulosFromServer } = await import('@/hooks/puestoArticulosSync');
+              await refreshPuestoArticulosFromServer({ puestoId, refreshAccessToken, logout });
             }
             success = true;
           }
@@ -3072,29 +3072,22 @@ function AppContent() {
           });
 
           if (result.status) {
-            const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+            const { patchChecklistSupervisionCacheAfterSync } = await import(
               '@/hooks/checklistSupervisionCacheStorage'
             );
-            const flat = await loadChecklistSupervisionCacheFlat();
             const aid = Number(resolvedId);
             const serverData = (result as any).data;
-            const updatedCache = flat.map((it: any) => {
-              const sameServer = Number(it.id) === aid || Number(it.id) === Number(action.id);
-              const sameLocal =
-                action.id_local != null &&
-                String(action.id_local).trim() !== '' &&
-                String(it.id_local || '') === String(action.id_local);
-              if (!sameServer && !sameLocal) return it;
-              const { id_local: _removed, ...restIt } = it;
-              return {
-                ...restIt,
-                ...(serverData && typeof serverData === 'object' ? serverData : {}),
-                id: serverData?.id ?? aid ?? it.id,
-                id_local: '',
-                images: serverData?.images ?? it.images,
-              };
+            await patchChecklistSupervisionCacheAfterSync({
+              matchIdLocal: action.id_local,
+              matchServerId: aid,
+              serverPayload: serverData,
+              requestData: action.requestData,
             });
-            await saveChecklistSupervisionCacheFlat(updatedCache);
+            const puestoId = Number(action?.requestData?.puesto_id ?? 0);
+            if (puestoId > 0) {
+              const { refreshPuestoArticulosFromServer } = await import('@/hooks/puestoArticulosSync');
+              await refreshPuestoArticulosFromServer({ puestoId, refreshAccessToken, logout });
+            }
             success = true;
           }
         } else if (action.type === 'update_supervisor_firma') {
@@ -3109,20 +3102,13 @@ function AppContent() {
           if (result.status) {
             const serverData = (result as any).data;
             if (serverData && typeof serverData === 'object') {
-              const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+              const { patchChecklistSupervisionCacheAfterSync } = await import(
                 '@/hooks/checklistSupervisionCacheStorage'
               );
-              const flat = await loadChecklistSupervisionCacheFlat();
-              const updatedCache = flat.map((it: any) =>
-                Number(it.id) === Number(action.id)
-                  ? {
-                      ...it,
-                      ...serverData,
-                      firma_supervisor: serverData.firma_supervisor ?? it.firma_supervisor,
-                    }
-                  : it
-              );
-              await saveChecklistSupervisionCacheFlat(updatedCache);
+              await patchChecklistSupervisionCacheAfterSync({
+                matchServerId: Number(action.id),
+                serverPayload: serverData,
+              });
             }
             success = true;
           }
@@ -3135,15 +3121,14 @@ function AppContent() {
           });
 
           if (result.status) {
-            const { loadChecklistSupervisionCacheFlat, saveChecklistSupervisionCacheFlat } = await import(
+            const { patchChecklistSupervisionCacheAfterSync } = await import(
               '@/hooks/checklistSupervisionCacheStorage'
             );
-            const flat = await loadChecklistSupervisionCacheFlat();
-            const updatedCache = flat.filter(
-              (it: any) =>
-                Number(it.id) !== Number(action.id) && String(it.id_local || '') !== String(action.id_local || '')
-            );
-            await saveChecklistSupervisionCacheFlat(updatedCache);
+            await patchChecklistSupervisionCacheAfterSync({
+              matchServerId: action.id,
+              matchIdLocal: action.id_local,
+              remove: true,
+            });
             success = true;
           }
         }
@@ -3183,6 +3168,29 @@ function AppContent() {
 
           if (result.status) {
             console.log('Notificaciones marcadas como leídas correctamente');
+
+            const notificationsStr = await AsyncStorage.getItem('notifications');
+            if (notificationsStr) {
+              try {
+                const notificationsData = JSON.parse(notificationsStr);
+                if (Array.isArray(notificationsData)) {
+                  const refs: { id: number; is_plaza: boolean }[] = Array.isArray(action.notificationIds)
+                    ? action.notificationIds
+                    : [];
+                  const markRef = (n: any) =>
+                    refs.some(
+                      (r) => Number(r.id) === Number(n.id) && Boolean(r.is_plaza) === Boolean(n.is_plaza)
+                    );
+                  const updatedNotifications = notificationsData.map((n: any) =>
+                    markRef(n) ? { ...n, watched: true } : n
+                  );
+                  await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
+                }
+              } catch {
+                /* ignore parse errors */
+              }
+            }
+
             // Eliminar esta acción específica del array
             const updatedActions = actions.filter((a: any) =>
               !(a.type === 'markAsRead' && JSON.stringify(a.notificationIds) === JSON.stringify(action.notificationIds))
@@ -3191,6 +3199,7 @@ function AppContent() {
 
             // Emitir evento para actualizar la UI
             eventBus.emit('notificationsUpdated');
+            eventBus.emit('notificationsUpdatedCounter');
           }
         }
       } catch (error) {
@@ -7773,7 +7782,7 @@ function AppContent() {
     // Se evita redirigir cuando ya estamos en esa pantalla.
     try {
       const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca && navigationRef.current) {
+      if (!currentMarca && navigationRef.current && employee?.id != null) {
         const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
         if (currentRoute !== 'MarcarIngresoSalida') {
           navigationRef.current?.navigate('MarcarIngresoSalida');
@@ -7787,65 +7796,146 @@ function AppContent() {
     return horaAccion;
   }
 
-  // ✅ Aquí agregas la función que se ejecutará cada 30 segundos
-  useEffect(() => {
-    // Define la función de consulta (puedes personalizarla)
-    const fetchData = async () => {
-      const horaAccion = await getUpdatedHoraAccion();
-      console.log('Consultando estado del temporizador...');
-      const connectivity = await resolveAppConnectivity();
-      if (!connectivity.ok) {
-        console.log('[lunchTimer] Omitido: sin conexión', connectivity.reason);
+  const checkLunchTime = useCallback(async (
+    temp_state: any,
+    employeeId?: string,
+    refreshAccessTokenFn?: () => Promise<boolean>,
+    logoutFn?: () => Promise<{ status: boolean; message: string }>
+  ) => {
+    const stillRaw = await AsyncStorage.getItem('temp_state');
+    if (!stillRaw) return;
+
+    let stillParsed: any;
+    try {
+      stillParsed = JSON.parse(stillRaw);
+    } catch {
+      return;
+    }
+    if (!stillParsed?.running) return;
+
+    const acquired = await tryAcquireLunchTimerCompletionLock();
+    if (!acquired) return;
+
+    try {
+      const startTime = new Date(temp_state.startTime).getTime();
+      const endTimeMs = computeLunchEndTimeMs(temp_state);
+      const firma_empleado = temp_state.firma_empleado;
+
+      const requestData: Record<string, any> = {
+        empleadoId: employeeId,
+        inicio: new Date(startTime),
+        fin: new Date(endTimeMs),
+        pausas: JSON.stringify(temp_state.inactivities ?? []),
+        es_manual: false,
+        firma_empleado: firma_empleado,
+      };
+
+      await mergeCurrentMarcaHierarchyIntoLunchRequest(requestData);
+
+      const marcaId = Number(requestData.marca_id);
+      if (!Number.isFinite(marcaId) || marcaId <= 0) {
+        console.warn('[lunchTimer] No se encontró marca_id para completar el almuerzo');
         return;
       }
-      const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      if (!validAccessToken) {
-        console.log('Sincronización cancelada: token inválido o expirado');
-        return;
-      }
-      console.log(0);
-      const temp_state_async = await AsyncStorage.getItem('temp_state');
-      if (!temp_state_async) {
-        return;
-      }
-      console.log(1);
-      const temp_state = JSON.parse(temp_state_async);
-      if (!temp_state.running) {
-        return;
-      }
-      console.log(2);
-      const current = navigationRef.current?.getCurrentRoute()?.name;
-      let exist_lunch_time = false;
-      for (let i = 0; i < navigationRef.current?.getRootState()?.routes.length; i++) {
-        if (navigationRef.current?.getRootState()?.routes[i].name === 'LunchTime') {
-          exist_lunch_time = true;
+
+      const lunchConnectivity = await resolveAppConnectivity();
+      if (lunchConnectivity.ok) {
+        const responseData = await saveLunchTime({
+          requestData,
+          employeeId,
+          refreshAccessToken: refreshAccessTokenFn,
+          logout: logoutFn,
+        });
+
+        if (!responseData.status) {
+          Alert.alert('Error', responseData.message);
+          return;
         }
+
+        await AsyncStorage.removeItem('temp_state');
+
+        Alert.alert(
+          '🎉 ¡Tiempo de Almuerzo Completado!',
+          'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
+          [{ text: 'OK', onPress: async () => {} }]
+        );
+      } else {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        let localId = '';
+        for (let i = 0; i < 10; i++) {
+          localId += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+
+        const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          requestData,
+          id: localId,
+          type: 'create',
+        });
+        await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
+
+        await AsyncStorage.removeItem('temp_state');
+        Alert.alert(
+          'Modo Offline',
+          'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
+          [{ text: 'OK', onPress: async () => {} }]
+        );
       }
-      console.log(3);
-      if (current == 'LunchTime') {
+    } finally {
+      await releaseLunchTimerCompletionLock();
+    }
+  }, []);
+
+  const lunchTimerPollInFlightRef = useRef(false);
+
+  // Comprueba cada 30 s si el almuerzo terminó mientras el usuario está fuera del módulo.
+  useEffect(() => {
+    const pollLunchTimer = async () => {
+      if (lunchTimerPollInFlightRef.current) return;
+
+      let horaAccion: number;
+      try {
+        const connectivity = await resolveAppConnectivity();
+        if (connectivity.ok) {
+          await updateServerTime();
+        }
+        horaAccion = await getHoraAccion();
+      } catch (error) {
+        console.error('[lunchTimer] Error obteniendo hora de referencia:', error);
+        horaAccion = await getHoraAccion();
+      }
+
+      const temp_state_async = await AsyncStorage.getItem('temp_state');
+      if (!temp_state_async) return;
+
+      let temp_state: any;
+      try {
+        temp_state = JSON.parse(temp_state_async);
+      } catch {
         return;
       }
-      console.log(4);
-      if (exist_lunch_time) {
-        return;
+
+      if (!temp_state?.running) return;
+
+      const currentRoute = navigationRef.current?.getCurrentRoute()?.name;
+      if (currentRoute === 'LunchTime') return;
+
+      const endTimeMs = computeLunchEndTimeMs(temp_state);
+      if (!Number.isFinite(endTimeMs) || endTimeMs > horaAccion) return;
+
+      lunchTimerPollInFlightRef.current = true;
+      try {
+        await checkLunchTime(temp_state, employee?.id, refreshAccessToken, logout);
+      } finally {
+        lunchTimerPollInFlightRef.current = false;
       }
-      console.log(5);
-      if (new Date(temp_state.currentTimestamp + temp_state.remainingSeconds).getTime() > horaAccion) {
-        return;
-      }
-      console.log(6);
-      await checkLunchTime(temp_state, employee?.id, refreshAccessToken, logout);
     };
 
-    // Ejecuta una vez al inicio
-    fetchData();
-
-    // Ejecuta cada 30 segundos (30,000 ms)
-    const interval = setInterval(fetchData, 30000);
-
-    // Limpieza al desmontar el componente
+    pollLunchTimer();
+    const interval = setInterval(pollLunchTimer, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [employee?.id, refreshAccessToken, logout, checkLunchTime]);
 
 
   const check_conection_time = async () => {
@@ -7918,21 +8008,22 @@ function AppContent() {
   }
 
   const get_notifications = async () => {
+    console.log('+++++++++++++++++++++++++++++++++++++++++ Getting notifications...');
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) {
       console.log('[notifications] Omitido: sin conexión', connectivity.reason);
       return;
     }
     const current_marca = await AsyncStorage.getItem('current_marca');
-    if (!current_marca) {
-      return;
-    }
-    const current_marca_obj = JSON.parse(current_marca);
-    if (!current_marca_obj.id) {
-      return;
-    }
-    if (current_marca_obj.hora_inicio_digitada == null || current_marca_obj.hora_salida_digitada != null) {
-      return;
+    let employee_id = Number(employee?.id ?? 0);
+    let marca_id = 0;
+    if (current_marca) {
+      const current_marca_obj = JSON.parse(current_marca);
+      if (current_marca_obj.id) {
+        if (current_marca_obj.hora_inicio_digitada == null || current_marca_obj.hora_salida_digitada != null) {
+          marca_id = current_marca_obj.id;
+        }
+      }
     }
     // Obtener notificaciones actuales en AsyncStorage antes de eliminarlas
     const currentNotificationsStr = await AsyncStorage.getItem('notifications');
@@ -7948,7 +8039,7 @@ function AppContent() {
     }
 
     const response = await authedFetchCb({
-      url: `${apiUrl}/api/notification?m=${current_marca_obj.id}`,
+      url: `${apiUrl}/api/notification?m=${marca_id}&e=${employee_id}`,
       init: {
         method: 'GET',
         headers: {
@@ -7970,10 +8061,37 @@ function AppContent() {
 
     if (data.status) {
 
-      await AsyncStorage.setItem('notifications', JSON.stringify(data.notifications));
+      const serverNotifications = Array.isArray(data.notifications) ? data.notifications : [];
+      let mergedNotifications = serverNotifications;
+
+      if (currentNotificationsStr) {
+        try {
+          const currentNotifications = JSON.parse(currentNotificationsStr);
+          if (Array.isArray(currentNotifications)) {
+            const localByKey = new Map<string, { watched?: boolean }>(
+              currentNotifications.map((n: any) => [
+                `${Number(n.id)}:${n.is_plaza ? '1' : '0'}`,
+                n,
+              ])
+            );
+            mergedNotifications = serverNotifications.map((serverN: any) => {
+              const key = `${Number(serverN.id)}:${serverN.is_plaza ? '1' : '0'}`;
+              const local = localByKey.get(key);
+              return {
+                ...serverN,
+                watched: Boolean(local?.watched || serverN.watched),
+              };
+            });
+          }
+        } catch {
+          mergedNotifications = serverNotifications;
+        }
+      }
+
+      await AsyncStorage.setItem('notifications', JSON.stringify(mergedNotifications));
 
       // Contar notificaciones no leídas en la respuesta del servidor
-      const newUnwatchedCount = data.notifications.filter((n: any) => !n.watched).length;
+      const newUnwatchedCount = mergedNotifications.filter((n: any) => !n.watched).length;
 
       // Si hay más notificaciones no leídas en el servidor, recargar la ventana
       if (newUnwatchedCount > currentUnwatchedCount) {
@@ -8023,90 +8141,6 @@ function AppContent() {
       },
     },
   };
-
-  const checkLunchTime = async (
-    temp_state: any,
-    employeeId?: string,
-    refreshAccessToken?: () => Promise<boolean>,
-    logout?: () => Promise<{ status: boolean; message: string }>
-  ) => {
-
-    const startTime = new Date(temp_state.startTime).getTime();
-    const current = temp_state.currentTimestamp;
-    const remainingSeconds = temp_state.remainingSeconds;
-    const firma_empleado = temp_state.firma_empleado;
-
-    const requestData = {
-      empleadoId: employeeId,
-      inicio: new Date(startTime),
-      fin: new Date(current + remainingSeconds),
-      pausas: JSON.stringify(temp_state.inactivities),
-      es_manual: false,
-      firma_empleado: firma_empleado,
-    };
-
-    const lunchConnectivity = await resolveAppConnectivity();
-    if (lunchConnectivity.ok) {
-      // Con internet: llamar a la función API
-      const responseData = await saveLunchTime({
-        requestData,
-        employeeId,
-        refreshAccessToken,
-        logout
-      });
-
-      if (!responseData.status) {
-        Alert.alert('Error', responseData.message);
-        return;
-      }
-
-      await AsyncStorage.removeItem('temp_state');
-
-      Alert.alert(
-        '🎉 ¡Tiempo de Almuerzo Completado!',
-        'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
-        [
-          {
-            text: 'OK',
-            onPress: async () => {
-
-            },
-          },
-        ]
-      );
-    } else {
-      // Sin internet: modo offline
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-      let localId = '';
-      for (let i = 0; i < 10; i++) {
-        localId += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-
-      // Crear entrada en lunchtime_actions
-      const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
-      const actions = actionsStr ? JSON.parse(actionsStr) : [];
-      actions.push({
-        requestData: requestData,
-        id: localId,
-        type: 'create',
-      });
-      await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
-
-      await AsyncStorage.removeItem('temp_state');
-      Alert.alert(
-        'Modo Offline',
-        'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
-        [
-          {
-            text: 'OK',
-            onPress: async () => {
-
-            },
-          },
-        ]
-      );
-    }
-  }
 
   console.log('Estado de conexión:', isConnected);
 

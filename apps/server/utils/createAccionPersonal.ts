@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 
-export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number, usuario_insercion: string) {
+export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number, coordinador_id: number, usuario_insercion: string) {
 
     console.log("Procedemos a crear la acción personal");
     try {
@@ -182,11 +182,14 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     fecha_vence_subir_adjunto: futureDateString,
                     tipoContratacion_id: tipoContratacionId,
                     coordinadoPor_id: coordinadoPor_id,
+                    coordinador_id: coordinador_id,
                     usuario_insercion: usuario_insercion,
                     mobile_upload: true,
                 }
             }
         });
+
+        console.log("accionPersonal created: ", accionPersonal);
         
         return { status: true, data: accionPersonal, message: "Acción personal creada correctamente" };
     } catch (error) {

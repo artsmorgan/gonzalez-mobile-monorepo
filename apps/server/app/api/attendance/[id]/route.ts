@@ -6,6 +6,7 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
 import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 import getRoleDivision from "../../../../utils/getRoleDivision";
+import { createLoginMarca } from "../../../../utils/createLoginMarca";
 
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
     const empleado = await callDynamicPrisma({
@@ -121,11 +122,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "GET",
                         table: "e_estructura_puesto",
                         operation: "findUnique",
-                        where: { id: marcaDia.puesto_id }
+                        where: { id: marcaDia.puesto_id ?? 0 }
                     }
                 });
                 if (!puesto) {
-                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                    puesto = null;
                 }
 
                 plaza = await callDynamicPrisma({
@@ -134,11 +135,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "GET",
                         table: "e_estructura_plazas",
                         operation: "findUnique",
-                        where: { id: marcaDia.plaza_id }
+                        where: { id: marcaDia.plaza_id ?? 0 }
                     }
                 });
                 if (!plaza) {
-                    return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+                    plaza = null;
                 }
 
                 horario = await callDynamicPrisma({
@@ -151,7 +152,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     }
                 });
                 if (!horario) {
-                    return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 200 });
+                    horario = null;
                 }
 
                 const previousUserMarca = await callDynamicPrisma({
@@ -166,7 +167,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 });
 
                 if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
-                    const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason);
+                    const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason, payload);
                 }
 
                 marcaDia.usuario_marca_entrada = await getUsuarioInsercion(req, marcaDia.empleadoFijo_id ?? 0);
@@ -183,6 +184,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 if (!updated) {
                     return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
                 }
+
+                const marca_hora_entrada = updated.hora_inicio ? new Date(updated.hora_inicio).toISOString().split('T')[1] : "00:00:00";
+                const marca_fecha = updated.fecha ? new Date(updated.fecha).toISOString().split('T')[0] : "1970-01-01";
+
+                const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
+                const hora_entrada_digitada = new Date(updated.hora_entrada_digitada);
+
+                await updateOrCreateLoginMarca(req, marcaDia.id, puesto.id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, hora_entrada_digitada, null, null, true);
 
                 empleado = await callDynamicPrisma({
                     req,
@@ -208,22 +217,28 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                         action: "GET",
                         table: "e_estructura_puesto",
                         operation: "findUnique",
-                        where: { id: marcaDia.puesto_id }
+                        where: { id: marcaDia.puesto_id ?? 0 }
                     }
                 });
-                if (empleado && current_corpo && current_puesto) {
-                    if (marcaDia.hora_inicio && marcaDia.fecha && marcaDia.hora_entrada_digitada) {
-                        const momentoEntrada = new Date(marcaDia.fecha).getTime() + new Date(marcaDia.hora_inicio).getTime();
+                let puesto_name = "Indefinido";
+                if (current_puesto) {
+                    puesto_name = current_puesto.nombre;
+                }
+                if (empleado && current_corpo) {
+                    if (marcaDia.fecha && marcaDia.hora_entrada_digitada) {
                         let desc_tardia = "";
-                        if (momentoEntrada < new Date(marcaDia.hora_entrada_digitada).getTime()) {
-                            const lateTime = await getLateTime(req, marcaDia.id, new Date(marcaDia.hora_entrada_digitada).getTime());
-                            if (lateTime) {
-                                desc_tardia = " con una tardía de " + lateTime;
+                        if (marcaDia.hora_inicio) {
+                            const momentoEntrada = new Date(marcaDia.fecha).getTime() + new Date(marcaDia.hora_inicio).getTime();
+                            if (momentoEntrada < new Date(marcaDia.hora_entrada_digitada).getTime()) {
+                                const lateTime = await getLateTime(req, marcaDia.id, new Date(marcaDia.hora_entrada_digitada).getTime());
+                                if (lateTime) {
+                                    desc_tardia = " con una tardía de " + lateTime;
+                                }
                             }
                         }
                         const title = "Ingreso de trabajo confirmado";
-                        const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${current_puesto.nombre}${desc_tardia}`;
-                        await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                        const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha ingresado a su puesto de ${puesto_name}${desc_tardia}`;
+                        await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id ?? 0], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
                     }
                 }
                 break;
@@ -232,7 +247,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
                 }
 
-                const response = await marcar_salida(req, marcaDia.id, horaAccion, reason);
+                const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload);
                 if (!response.status) {
                     return NextResponse.json({ status: false, message: response.message }, { status: 200 });
                 }
@@ -313,7 +328,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 }
 
-async function marcar_salida(req: NextRequest, id: number, horaAccion: string, reason: string) {
+async function marcar_salida(req: NextRequest, id: number, horaAccion: string, reason: string, payload: any) {
     try {
         const now = new Date(horaAccion);
 
@@ -335,53 +350,72 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
 
         marcaDia.hora_salida_digitada = now;
 
-        if (!marcaDia.hora_fin || !marcaDia.hora_inicio) {
-            return { status: false, message: "Hora de fin o inicio no establecida" };
-        }
-
         if (!marcaDia.fecha) {
             return { status: false, message: "Fecha no establecida" };
         }
 
-        const fechaMarca = new Date(marcaDia.fecha);
-        const horaFinMarca = new Date(marcaDia.hora_fin);
-        const endDate = new Date(fechaMarca.toISOString().split('T')[0]+'T'+horaFinMarca.toISOString().split('T')[1]);
-
-        console.log("endDate", endDate);
-
         let salidaAnticipada = null;
-        if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
-            let horaInicio = new Date(marcaDia.hora_inicio).toISOString().split('T')[1];
-            let horaFin = new Date(marcaDia.hora_fin).toISOString().split('T')[1];
-            horaInicio = horaInicio.split('.')[0];
-            horaFin = horaFin.split('.')[0];
-            let horaInicioSplit = horaInicio.split(':');
-            let horaFinSplit = horaFin.split(':');
+        if (marcaDia.hora_inicio && marcaDia.hora_fin) {
+            const fechaMarca = new Date(marcaDia.fecha);
+            const horaFinMarca = new Date(marcaDia.hora_fin);
+            const endDate = new Date(fechaMarca.toISOString().split('T')[0]+'T'+horaFinMarca.toISOString().split('T')[1]);
+    
+            console.log("endDate", endDate);
 
-            salidaAnticipada = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "POST",
-                    table: "c_salida_anticipada",
+            if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
+                let horaInicio = new Date(marcaDia.hora_inicio).toISOString().split('T')[1];
+                let horaFin = new Date(marcaDia.hora_fin).toISOString().split('T')[1];
+                horaInicio = horaInicio.split('.')[0];
+                horaFin = horaFin.split('.')[0];
+                let horaInicioSplit = horaInicio.split(':');
+                let horaFinSplit = horaFin.split(':');
+
+                salidaAnticipada = await callDynamicPrisma({
+                    req,
                     data: {
-                        tipo_turno: marcaDia.tipo_turno,
-                        horario_str: `${horaInicioSplit[0]}:${horaInicioSplit[1]}-${horaFinSplit[0]}:${horaFinSplit[1]}`,
-                        cantidad_horas: marcaDia.horas_duracion || 0,
-                        hora_salida_anticipada: now.toISOString(),
-                        minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
-                        motivo: reason
+                        action: "POST",
+                        table: "c_salida_anticipada",
+                        data: {
+                            tipo_turno: marcaDia.tipo_turno,
+                            horario_str: `${horaInicioSplit[0]}:${horaInicioSplit[1]}-${horaFinSplit[0]}:${horaFinSplit[1]}`,
+                            cantidad_horas: marcaDia.horas_duracion || 0,
+                            hora_salida_anticipada: now.toISOString(),
+                            minutos_descuento: (endDate.getTime() - now.getTime()) / 60000,
+                            motivo: reason
+                        }
                     }
-                }
-            });
+                });
+            }
         }
 
         let usuario_insercion = await getUsuarioInsercion(req, marcaDia.empleadoFijo_id ?? 0);
         if (salidaAnticipada) {
-            const coordinadoPorId = await getCoordinadoPorId(req, marcaDia);
-            const accionPersonal_response = await createAccionPersonal(req, marcaDia.id, 13, 0, 0, salidaAnticipada.id, reason, coordinadoPorId, usuario_insercion);
-            if (accionPersonal_response.status) {
-                const accionPersonal = accionPersonal_response.data;
-                marcaDia.accionPersonal_id = accionPersonal.id;
+            console.log("salidaAnticipada: ", salidaAnticipada);
+            const coordinadoPorId = 3;
+            const corpo = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_estructura_sucursal",
+                    operation: "findUnique",
+                    where: { id: marcaDia.corpo_id }
+                }
+            });
+            if (corpo) {
+                if (corpo.ejecutivoCuenta_id) {
+                  const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
+                    req,
+                    data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: corpo.ejecutivoCuenta_id } },
+                  });
+                  if (ejecutivo_cuenta_coordinador) {
+                    let coordinador_id = ejecutivo_cuenta_coordinador.coordinador_id;
+                    const accionPersonal_response = await createAccionPersonal(req, marcaDia.id, 13, 0, 0, salidaAnticipada.id, reason, coordinadoPorId, coordinador_id, usuario_insercion);
+                    if (accionPersonal_response.status) {
+                        const accionPersonal = accionPersonal_response.data;
+                        marcaDia.accionPersonal_id = accionPersonal.id;
+                    }
+                  }
+                }
             }
             const time = now.toISOString().split('T')[1];
             marcaDia.hora_salida = '1970-01-01T' + time;
@@ -400,7 +434,7 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
                 const fecha_salida_string = now.toISOString().split('T')[0];
                 const hora_salida_string = now.toISOString().split('T')[1].split('.')[0];
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha salido anticipadamente el día ${fecha_salida_string} a las ${hora_salida_string}. Motivo: ${reason}`;
-                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id ?? 0], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 
@@ -420,12 +454,100 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
             return { status: false, message: "No se pudo actualizar la marca del dia" };
         }
 
+        // Función para definir el momento de salida (Fecha + hora) teniendo en cuenta de que puede terminar al día día siguiente
+
+        const marca_hora_entrada = updated.hora_inicio ? new Date(updated.hora_inicio).toISOString().split('T')[1] : "00:00:00";
+        const marca_fecha = updated.fecha ? new Date(updated.fecha).toISOString().split('T')[0] : "1970-01-01";
+
+        const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
+
+        let hora_salida_real = null;
+        
+        if (new Date(marcaDia.hora_inicio) < new Date(marcaDia.hora_fin)) {
+            const marca_hora_salida = marcaDia.hora_fin ? new Date(marcaDia.hora_fin).toISOString().split('T')[1] : "00:00:00";
+            const marca_fecha_salida = marcaDia.fecha ? new Date(marcaDia.fecha).toISOString().split('T')[0] : "1970-01-01";
+
+            hora_salida_real = new Date(`${marca_fecha_salida}T${marca_hora_salida}`);
+        }
+        else {
+            let fecha_mas_uno = new Date(marcaDia.fecha);
+            fecha_mas_uno.setDate(fecha_mas_uno.getDate() + 1);
+
+            const marca_hora_salida = marcaDia.hora_fin ? new Date(marcaDia.hora_fin).toISOString().split('T')[1] : "00:00:00";
+            const marca_fecha_salida = fecha_mas_uno ? new Date(fecha_mas_uno).toISOString().split('T')[0] : "1970-01-01";
+            hora_salida_real = new Date(`${marca_fecha_salida}T${marca_hora_salida}`);
+        }
+        
+        await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, null, hora_salida_real, now, false);
+
         const response = await check_unmarked_activities(req, marcaDia.id);
         if (!response.status) {
             return { status: false, message: response.message };
         }
 
         return { status: true, message: "Salida marcada correctamente" };
+    }
+    catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
+        return { status: false, message: errorMessage };
+    }
+}
+
+async function updateOrCreateLoginMarca(req: NextRequest, marca_id: number, puesto_id: number, sessionId: string, empleado_id: number, hora_entrada_teorica: Date | null, hora_entrada_real: Date | null, hora_salida_teorica: Date | null, hora_salida_real: Date | null, isEntrada: boolean) {
+    try {
+        const session = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "refresh_token", operation: "findFirst", where: { sessionId: sessionId } }
+        });
+        if (!session) {
+            return { status: false, message: "Session no encontrada" };
+        }
+        const marcaDia = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } }
+        });
+        if (!marcaDia) {
+            return { status: false, message: "Marca no encontrada" };
+        }
+        let loginMarca = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "c_login_marca_almuerzo", operation: "findFirst", where: { session_id: sessionId } }
+        });
+        if (!loginMarca) {
+            const loginMarcaResponse = await createLoginMarca(req, empleado_id, session.createdAt, session.device, sessionId);
+            if (loginMarcaResponse) {
+                loginMarca = loginMarcaResponse;
+            }
+            else {
+                return { status: false, message: "No se pudo crear la login marca" };
+            }
+        }
+        
+        const body = isEntrada ? {
+            marca_id: marca_id,
+            puesto_id: puesto_id,
+            fecha_hora: session.createdAt,
+            marca_entrada_teorica: hora_entrada_teorica,
+            marca_entrada_real: hora_entrada_real
+        } : {
+            marca_id: marca_id,
+            puesto_id: puesto_id,
+            fecha_hora: session.createdAt,
+            marca_entrada_teorica: hora_entrada_teorica,
+            marca_entrada_real: marcaDia.hora_entrada_digitada,
+            marca_salida_teorica: hora_salida_teorica ?? null,
+            marca_salida_real: hora_salida_real ?? null
+        };
+
+        const updated = await callDynamicPrisma({
+            req,
+            data: { action: "UPDATE", table: "c_login_marca_almuerzo", where: { id: loginMarca.id }, data: body }
+        });
+        if (!updated) {
+            return { status: false, message: "No se pudo actualizar la login marca" };
+        }
+        return { status: true, message: "Login marca actualizado correctamente" };
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -487,7 +609,7 @@ async function check_unmarked_activities(req: NextRequest, id: number) {
                 unmarked_activities = unmarked_activities.slice(0, -2);
                 const title = "Actividades sin marcar";
                 const description = `El empleado ${empleado.nombre} ${empleado.primer_apellido} marcó salida sin haber marcado las siguientes actividades: ${unmarked_activities}`;
-                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marcaDia.corpo_id, [marcaDia.plaza_id ?? 0], title, description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
     }

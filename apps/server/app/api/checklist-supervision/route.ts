@@ -6,6 +6,10 @@ import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { mapChecklistSupervisionPublicRow } from "./mapPublicRow";
 import { processChecklistSupervisionArticulosMantenimiento } from "./articulosMantenimiento";
+import {
+  sanitizeArticulosPuestoForPersistence,
+  stripMantenimientoFilesFromArticulosPuesto,
+} from "../../../utils/sanitizeArticulosPuestoForPersistence";
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -123,6 +127,8 @@ export async function GET(req: NextRequest) {
     const rowsArray = (Array.isArray(rows) ? rows : []).filter((r: any) => r?.isActive !== false);
     const mapped = rowsArray.map((r: any) => mapChecklistSupervisionPublicRow(r, baseUrl));
 
+    console.log("mapped", mapped.length);
+
     return NextResponse.json({ status: true, data: mapped }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -239,7 +245,7 @@ export async function POST(req: NextRequest) {
           fecha: fechaDate.toISOString(),
           ejecutivo_cuenta: String(sucursal.ejecutivoCuenta_id ?? 0),
           evaluacion: '[]', // Temporal, se actualizará después
-          articulos_puesto: articulos_puesto ? String(articulos_puesto) : '',
+          articulos_puesto: sanitizeArticulosPuestoForPersistence(articulos_puesto),
           firma_supervisor:
             firma_supervisor != null && typeof firma_supervisor === "string" && firma_supervisor.trim().length > 0
               ? firma_supervisor.trim()
@@ -289,6 +295,20 @@ export async function POST(req: NextRequest) {
         fechaNotificacion: createdAt,
         isUpdate: false,
       });
+
+      const articulosStored = stripMantenimientoFilesFromArticulosPuesto(
+        sanitizeArticulosPuestoForPersistence(articulos_puesto),
+      );
+      await callDynamicPrisma({
+        req,
+        data: {
+          action: "UPDATE",
+          table: "c_checklist_supervision",
+          where: { id: created.id },
+          data: { articulos_puesto: articulosStored },
+        },
+      });
+      (created as any).articulos_puesto = articulosStored;
     }
 
     // Registrar cambio de creación

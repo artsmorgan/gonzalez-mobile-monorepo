@@ -2,6 +2,55 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import authedFetch from './authedFetch';
 import { getFile } from './fileStorage';
+import { hydrateArticulosPuestoFilesForApi } from '@/utils/articuloMantenimientoFiles';
+
+/** Hidrata `mantenimiento_files` en cada ítem de `articles_state` antes del PUT. */
+async function hydrateArticlesStateForApi(requestData: any): Promise<any> {
+  const rd = { ...requestData };
+  if (!Array.isArray(rd.articles_state) || rd.articles_state.length === 0) {
+    return hydrateMarkRequestFileField(rd);
+  }
+
+  const rows = rd.articles_state.map((a: any) => ({
+    id: a.id,
+    nombre: a.nombre ?? 'Artículo',
+    tipo: a.tipo ?? '',
+    cantidad_requerida: a.cantidad_requerida ?? 1,
+    cantidad_real: a.cantidad_real ?? 0,
+    estado: a.estado ?? 'Bueno',
+    observaciones: a.observaciones ?? '',
+    created_at: a.created_at,
+    mantenimiento_files: a.mantenimiento_files,
+  }));
+
+  let hydratedRows: any[] = rows;
+  try {
+    const hydratedStr = await hydrateArticulosPuestoFilesForApi(JSON.stringify(rows));
+    const parsed = JSON.parse(hydratedStr);
+    if (Array.isArray(parsed)) hydratedRows = parsed;
+  } catch (e) {
+    console.warn('[activitiesFunctions] hydrate articles_state files:', e);
+  }
+
+  rd.articles_state = rd.articles_state.map((orig: any, i: number) => {
+    const hydrated = hydratedRows[i]?.mantenimiento_files;
+    const hadPending =
+      Array.isArray(orig.mantenimiento_files) && orig.mantenimiento_files.length > 0;
+    const hydratedOk = Array.isArray(hydrated) && hydrated.length > 0;
+    if (hadPending && !hydratedOk) {
+      console.warn(
+        '[activitiesFunctions] No se pudieron hidratar archivos de mantenimiento para artículo',
+        orig.id,
+      );
+    }
+    return {
+      ...orig,
+      mantenimiento_files: hydratedOk ? hydrated : [],
+    };
+  });
+
+  return hydrateMarkRequestFileField(rd);
+}
 
 /** Convierte `file_local_file_name` en `file` (data URL) antes del PUT; idempotente si ya viene `file`. */
 async function hydrateMarkRequestFileField(requestData: any): Promise<any> {
@@ -276,7 +325,7 @@ export const updateActivity = async ({
       throw new Error('Server URL not configured');
     }
 
-    const payload = await hydrateMarkRequestFileField(requestData);
+    const payload = await hydrateArticlesStateForApi(requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/activities/${activityId}`,

@@ -246,6 +246,7 @@ export async function GET(req: NextRequest) {
             { status: 200 }
         );
     } catch (error: unknown) {
+        console.log('error: ', error);
         const errorMessage =
             error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/job-manuals:", errorMessage);

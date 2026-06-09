@@ -5,11 +5,10 @@ import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { Collapsible } from '../components/Collapsible';
 import { useAuth } from '../contexts/AuthContext';
-import * as Location from 'expo-location';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, TouchableOpacity, ScrollView, Modal, TextInput, View } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -23,9 +22,16 @@ import updateNomenclator from '@/hooks/updateNomenclator';
 import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
 import {
   appendAttendanceAction,
+  readAttendanceActions,
   removePendingSalidaActionsForMarca,
 } from '@/hooks/attendanceActionsStorage';
+import {
+  computeChangeAvailable,
+  evaluateLocalMarcaRules,
+  validateMarcaLocation,
+} from '@/hooks/attendanceLocalMarcaValidation';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import resolveMarcaIngresoCoordinates from '@/hooks/resolveMarcaIngresoCoordinates';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import { deleteAllFiles } from '@/hooks/fileStorage';
@@ -121,9 +127,12 @@ interface AttendanceSuccessResponse {
 interface AttendanceErrorResponse {
   status: false;
   message: string;
-  absent?: boolean; // Dato absent puede ser opcional
+  absent?: boolean;
   should_response?: boolean;
   marca_id?: number;
+  mark_blocked?: boolean;
+  current_time?: number;
+  marca?: AttendanceSuccessResponse['marca'];
 }
 
 type AttendanceResponse = AttendanceSuccessResponse | AttendanceErrorResponse;
@@ -143,9 +152,6 @@ export default function MarcarIngresoSalidaScreen() {
   const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoadingData, setIsLoadingData] = useState(true);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [locationError, setLocationError] = useState<string | null>(null);
-  const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [attendanceData, setAttendanceData] = useState<AttendanceSuccessResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -159,8 +165,13 @@ export default function MarcarIngresoSalidaScreen() {
   const [shouldResponseAbsentReason, setShouldResponseAbsentReason] = useState(false);
   const [absentReason, setAbsentReason] = useState('');
   const [isSubmittingAbsentReason, setIsSubmittingAbsentReason] = useState(false);
-  /** Sin red y salida ya registrada en caché: vista solo mensaje + revertir (sin ficha de marca). */
-  const [minimalOfflineSalidaView, setMinimalOfflineSalidaView] = useState(false);
+  /** Bloqueo por validación local (ausencia, salida marcada, etc.). */
+  const [markingBlocked, setMarkingBlocked] = useState(false);
+  const [localCanMarkEntrada, setLocalCanMarkEntrada] = useState(true);
+  const [localCanMarkSalida, setLocalCanMarkSalida] = useState(true);
+  /** Aviso de ubicación para ingreso: mostrar botón Reintentar comprobación GPS. */
+  const [showEntradaLocationRetry, setShowEntradaLocationRetry] = useState(false);
+  const [isRefreshingEntradaLocation, setIsRefreshingEntradaLocation] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -243,6 +254,288 @@ export default function MarcarIngresoSalidaScreen() {
     return () => clearInterval(id);
   }, [attendanceData]);
 
+  const applyLocalValidationState = (
+    validation: ReturnType<typeof evaluateLocalMarcaRules>,
+    marcaId: number | null
+  ) => {
+    setMarkingBlocked(validation.markingBlocked);
+    if (validation.message) {
+      setErrorMessage(validation.message);
+    } else if (!validation.markingBlocked) {
+      setErrorMessage(null);
+    }
+
+    if (validation.absent) {
+      setAbsentMarcaId(marcaId);
+      setShouldResponseAbsentReason(validation.should_response === true);
+      setShowAbsentReasonForm(validation.should_response === true);
+      setRevertMarcaId(null);
+      setShowEntradaLocationRetry(false);
+    } else {
+      setAbsentMarcaId(null);
+      if (!validation.should_response) {
+        setShouldResponseAbsentReason(false);
+        setShowAbsentReasonForm(false);
+      }
+      if (validation.revertMarcaId != null) {
+        setRevertMarcaId(validation.revertMarcaId);
+      } else if (!validation.markingBlocked) {
+        setRevertMarcaId(null);
+      }
+    }
+
+    if (validation.revertMarcaId != null && !validation.absent) {
+      setRevertMarcaId(validation.revertMarcaId);
+    }
+
+    setLocalCanMarkEntrada(validation.canMarkEntrada);
+    setLocalCanMarkSalida(validation.canMarkSalida);
+  };
+
+  const runLocalValidationForMarca = async (
+    marca: Record<string, unknown>,
+    nowMs: number,
+    opts?: { validateLocationForEntrada?: boolean; lat?: number | null; lng?: number | null }
+  ) => {
+    const pendingActions = await readAttendanceActions();
+    const mid = marca.id != null ? Number(marca.id) : NaN;
+    const pendingAbsentReason =
+      Number.isFinite(mid) &&
+      mid > 0 &&
+      pendingActions.some((a) => a.type === 'absent_reason' && Number(a.marcaId) === mid);
+
+    return evaluateLocalMarcaRules(marca, nowMs, {
+      pendingAbsentReason,
+      lat: opts?.lat ?? null,
+      lng: opts?.lng ?? null,
+      validateLocationForEntrada: opts?.validateLocationForEntrada ?? false,
+    });
+  };
+
+  /** Revalida reglas locales (incl. ausencia por hora de entrada) usando getHoraAccion. */
+  const revalidateLocalMarcaOffline = useCallback(
+    async (marca: Record<string, unknown>, marcaId: number | null) => {
+      const nowMs = await getHoraAccion();
+      setHoraAccion(nowMs);
+
+      const marcaWithTime: Record<string, unknown> = { ...marca, current_time: nowMs };
+      await setCurrentAttendanceData(marcaWithTime, nowMs);
+
+      const validation = await runLocalValidationForMarca(marcaWithTime, nowMs, {
+        validateLocationForEntrada: false,
+      });
+      applyLocalValidationState(validation, marcaId);
+
+      const pendingActions = await readAttendanceActions();
+      const mid = marcaId ?? NaN;
+      const hasPendingAbsent =
+        Number.isFinite(mid) &&
+        pendingActions.some((a) => a.type === 'absent_reason' && Number(a.marcaId) === mid);
+      if (hasPendingAbsent && validation.absent) {
+        setShowAbsentReasonForm(false);
+        setShouldResponseAbsentReason(false);
+        setErrorMessage(
+          (validation.message || '') +
+            ' Motivo de ausencia guardado localmente; se sincronizará al conectar.'
+        );
+      }
+
+      await AsyncStorage.setItem('current_marca', JSON.stringify(marcaWithTime));
+      return { nowMs, validation };
+    },
+    []
+  );
+
+  /** Si la marca permite marcar ingreso (horario), exige GPS activo y radio de 50 m del puesto. */
+  const refreshEntradaLocationEligibility = async (
+    marca: Record<string, unknown>,
+    nowMs: number,
+    opts?: { silent?: boolean }
+  ) => {
+    const silent = opts?.silent !== false;
+    const estado = marca.hora_entrada_digitada != null ? 'Ingresado' : 'No ingresado';
+    if (estado !== 'No ingresado' || !computeChangeAvailable(marca, nowMs)) {
+      setShowEntradaLocationRetry(false);
+      return;
+    }
+
+    const timeValidation = await runLocalValidationForMarca(marca, nowMs, {
+      validateLocationForEntrada: false,
+    });
+
+    if (
+      timeValidation.absent ||
+      timeValidation.markingBlocked ||
+      !timeValidation.canMarkEntrada
+    ) {
+      setShowEntradaLocationRetry(false);
+      return;
+    }
+
+    const coords = await resolveMarcaIngresoCoordinates({ silent });
+    if (!coords.ok) {
+      setLocalCanMarkEntrada(false);
+      setErrorMessage(coords.message);
+      setShowEntradaLocationRetry(true);
+      return;
+    }
+
+    const loc = validateMarcaLocation(marca, coords.latitude, coords.longitude);
+    if (!loc.ok) {
+      setLocalCanMarkEntrada(false);
+      setErrorMessage(loc.message);
+      setShowEntradaLocationRetry(true);
+      return;
+    }
+
+    setLocalCanMarkEntrada(true);
+    setShowEntradaLocationRetry(false);
+    if (!timeValidation.message) {
+      setErrorMessage(null);
+    }
+  };
+
+  const handleRetryEntradaLocationCheck = async () => {
+    if (!attendanceData?.marca || isRefreshingEntradaLocation) return;
+    setIsRefreshingEntradaLocation(true);
+    try {
+      const nowMs = await getHoraAccion();
+      setHoraAccion(nowMs);
+      await refreshEntradaLocationEligibility(
+        attendanceData.marca as Record<string, unknown>,
+        nowMs,
+        { silent: false }
+      );
+    } finally {
+      setIsRefreshingEntradaLocation(false);
+    }
+  };
+
+  const resolveMarcaPayloadFromBlockedError = async (
+    errorData: AttendanceErrorResponse,
+    horaAccionValue: number
+  ): Promise<Record<string, unknown> | null> => {
+    if (errorData.marca && typeof errorData.marca === 'object') {
+      const m = { ...errorData.marca } as Record<string, unknown>;
+      m.current_time = errorData.current_time ?? horaAccionValue ?? Date.now();
+      return m;
+    }
+    if (errorData.marca_id != null) {
+      const cacheStr = await AsyncStorage.getItem('current_marca');
+      const cachedMarca = cacheStr ? JSON.parse(cacheStr) : null;
+      if (cachedMarca && Number(cachedMarca.id) === Number(errorData.marca_id)) {
+        cachedMarca.current_time = errorData.current_time ?? horaAccionValue ?? Date.now();
+        return cachedMarca;
+      }
+    }
+    return null;
+  };
+
+  const presentBlockedMarcaFromError = async (
+    errorData: AttendanceErrorResponse,
+    horaAccionValue: number
+  ): Promise<boolean> => {
+    const marcaPayload = await resolveMarcaPayloadFromBlockedError(errorData, horaAccionValue);
+    if (!marcaPayload) return false;
+
+    const nowMs = Number(marcaPayload.current_time) || horaAccionValue || Date.now();
+    await AsyncStorage.setItem('current_marca', JSON.stringify(marcaPayload));
+    await setCurrentAttendanceData(marcaPayload, nowMs);
+
+    const validation = await runLocalValidationForMarca(marcaPayload, nowMs, {
+      validateLocationForEntrada: false,
+    });
+    applyLocalValidationState(
+      validation,
+      marcaPayload.id != null ? Number(marcaPayload.id) : null
+    );
+
+    if (errorData.absent === true) {
+      setAbsentMarcaId(errorData.marca_id ?? (marcaPayload.id != null ? Number(marcaPayload.id) : null));
+      setShouldResponseAbsentReason(errorData.should_response === true);
+      setShowAbsentReasonForm(errorData.should_response === true);
+    } else {
+      setShouldResponseAbsentReason(false);
+      if (errorData.absent === false && errorData.marca_id != null) {
+        setRevertMarcaId(errorData.marca_id);
+      }
+    }
+
+    if (errorData.mark_blocked || errorData.absent != null || errorData.marca_id != null) {
+      setMarkingBlocked(true);
+      setLocalCanMarkEntrada(false);
+      setLocalCanMarkSalida(false);
+    }
+
+    setErrorMessage(errorData.message);
+    return true;
+  };
+
+  // Sin internet: revalidar ausencia y hora de acción periódicamente en dispositivo.
+  useEffect(() => {
+    if (!isAuthenticated || !employee || !attendanceData?.marca || isProcessingMark || isLoadingData) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled || isProcessingMark || isLoadingData) return;
+      const online = await evaluateInternetConnection();
+      if (online) return;
+
+      const marca = attendanceData.marca as Record<string, unknown>;
+      await revalidateLocalMarcaOffline(
+        marca,
+        marca.id != null ? Number(marca.id) : null
+      );
+    };
+
+    const id = setInterval(tick, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [
+    isAuthenticated,
+    employee,
+    attendanceData?.marca?.id,
+    isProcessingMark,
+    isLoadingData,
+    revalidateLocalMarcaOffline,
+  ]);
+
+  // Cuando se puede marcar ingreso: revalidar GPS y radio de 50 m (sin bloquear la descarga de la marca).
+  useEffect(() => {
+    if (!attendanceData?.marca || isProcessingMark || isLoadingData) return;
+    if (attendanceData.estado !== 'No ingresado') return;
+
+    let cancelled = false;
+
+    const tick = async () => {
+      if (cancelled || isProcessingMark || isLoadingData) return;
+      const nowMs = await getHoraAccion();
+      setHoraAccion(nowMs);
+      await refreshEntradaLocationEligibility(
+        attendanceData.marca as Record<string, unknown>,
+        nowMs
+      );
+    };
+
+    void tick();
+    const id = setInterval(tick, 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [
+    attendanceData?.marca?.id,
+    attendanceData?.estado,
+    attendanceData?.change_available,
+    isProcessingMark,
+    isLoadingData,
+  ]);
+
   const fetchAttendanceStatus = async () => {
     try {
       if (intervalRef.current) {
@@ -258,51 +551,41 @@ export default function MarcarIngresoSalidaScreen() {
       const online = await evaluateInternetConnection();
 
       if (!online) {
-        setShowAbsentReasonForm(false);
-        setShouldResponseAbsentReason(false);
         if (!employee?.id) {
-          setMinimalOfflineSalidaView(false);
           setErrorMessage('No se encontró el empleado');
           return;
         }
         setIsLoadingData(true);
         setErrorMessage(null);
-        setAttendanceData(null);
-        setLocationError(null);
+
         const cache = await AsyncStorage.getItem('current_marca');
         if (!cache || cache.trim() === '') {
           setAttendanceData(null);
-          setMinimalOfflineSalidaView(false);
+          setMarkingBlocked(false);
           setErrorMessage(
             'Sin conexión. No hay marca guardada en caché; conéctate o marca ingreso con red en este dispositivo.'
           );
           setIsLoadingData(false);
           return;
         }
+
         try {
           const marca_send = JSON.parse(cache);
-          const server_time = await AsyncStorage.getItem('server_time');
-          if (!server_time) {
-            throw new Error('Server time not found');
-          }
-          const server_time_obj = JSON.parse(server_time);
-          marca_send.current_time = parseInt(server_time_obj.server_time, 10);
-          setRevertMarcaId(null);
-          await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
-          setErrorMessage(null);
-          setMinimalOfflineSalidaView(marca_send?.hora_salida_digitada != null);
+          const { nowMs } = await revalidateLocalMarcaOffline(
+            marca_send,
+            marca_send.id != null ? Number(marca_send.id) : null
+          );
+          await refreshEntradaLocationEligibility(marca_send, nowMs);
         } catch (e) {
           console.error(e);
           setAttendanceData(null);
-          setMinimalOfflineSalidaView(false);
+          setMarkingBlocked(false);
           setErrorMessage('Error al cargar la marca guardada.');
         } finally {
           setIsLoadingData(false);
         }
         return;
       }
-
-      setMinimalOfflineSalidaView(false);
 
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
@@ -312,49 +595,6 @@ export default function MarcarIngresoSalidaScreen() {
       if (!employee?.id) {
         throw new Error('Employee ID not found');
       }
-
-      setIsLoadingLocation(true);
-      setLocationError(null);
-
-      let currentLocation: Location.LocationObject | null = null;
-
-      const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
-      if (permissionStatus !== 'granted') {
-        setLocationError('Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.');
-        setIsLoadingLocation(false);
-        return;
-      }
-
-      const isLocationEnabled = await Location.hasServicesEnabledAsync();
-      if (!isLocationEnabled) {
-        setLocationError('Los servicios de ubicación están desactivados. Por favor, activa la ubicación en tu dispositivo.');
-        setIsLoadingLocation(false);
-        return;
-      }
-
-      try {
-        currentLocation = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.High,
-        });
-        setLocation(currentLocation);
-      } catch (locErr) {
-        console.error('Error obteniendo ubicación GPS:', locErr);
-        setLocationError('Error al obtener la ubicación GPS. Por favor, verifica que los servicios de ubicación estén habilitados.');
-        setIsLoadingLocation(false);
-        return;
-      }
-
-      if (!currentLocation || !currentLocation.coords) {
-        setLocationError('No se pudo obtener la ubicación GPS. Por favor, intenta nuevamente.');
-        setIsLoadingLocation(false);
-        return;
-      }
-
-      const lat = currentLocation.coords.latitude;
-      const long = currentLocation.coords.longitude;
-
-      setIsLoadingLocation(false);
-      setLocationError(null);
 
       setIsLoadingData(true);
       setErrorMessage(null);
@@ -367,7 +607,7 @@ export default function MarcarIngresoSalidaScreen() {
       let shouldUpdateData = false;
 
       const response = await authedFetch({
-        url: `${apiUrl}/api/attendance/user/${employee.id}?lat=${lat}&long=${long}`,
+        url: `${apiUrl}/api/attendance/user/${employee.id}`,
         init: {
           method: 'GET',
           headers: {
@@ -424,22 +664,20 @@ export default function MarcarIngresoSalidaScreen() {
         await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
       }
 
-      if (marca_send && marca_send.hora_entrada_digitada === null && marca_send.puesto && marca_send.puesto.ubicacion && marca_send.puesto.ubicacion.lat && marca_send.puesto.ubicacion.lng) {
-        //const distance = getDistanceFromLatLonInMeters(lat, long, marca_send.puesto.ubicacion.lat, marca_send.puesto.ubicacion.lng);
-        const distance = 25;
-        if (distance > 50) {
-          result = false;
-          const marca_ubicacion = marca_send.puesto.ubicacion.lat + ', ' + marca_send.puesto.ubicacion.lng;
-          const ubicacion_actual = lat + ', ' + long;
-          marca_send = null;
-          data = { status: false, message: 'Ubicación no válida \n\nDebes estar dentro del radio de 50 metros del puesto para marcar la asistencia.\n\nPuesto: ' + marca_ubicacion + '\nTu ubicación: ' + ubicacion_actual };
-        }
-      }
-
       if (result) {
-        // Si la actualización periódica fue exitosa, limpiamos cualquier posible marca pendiente de revertir
+        setMarkingBlocked(false);
         setRevertMarcaId(null);
         await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
+
+        const validation = await runLocalValidationForMarca(marca_send, horaAccionValue || Date.now(), {
+          validateLocationForEntrada: false,
+        });
+        applyLocalValidationState(validation, marca_send.id != null ? Number(marca_send.id) : null);
+        await refreshEntradaLocationEligibility(
+          marca_send as Record<string, unknown>,
+          horaAccionValue || Date.now()
+        );
+
         console.log("shouldUpdateData", shouldUpdateData);
         if (shouldUpdateData && marca_send) {
           // Mostrar el mismo loader y mensaje de espera que al marcar entrada manualmente
@@ -455,31 +693,20 @@ export default function MarcarIngresoSalidaScreen() {
         }
       } else {
         const errorData = data as AttendanceErrorResponse;
-
-        // Ausencia: solo con respuesta en línea del servidor (ya no aplica en modo offline)
-        if (
-          errorData &&
-          typeof errorData === 'object' &&
-          errorData.absent === true &&
-          online
-        ) {
-          console.log("Error data", errorData);
-          setAbsentMarcaId(errorData.marca_id ?? null);
-          setShouldResponseAbsentReason(errorData.should_response === true);
-          setShowAbsentReasonForm(true);
+        const presented = await presentBlockedMarcaFromError(
+          errorData,
+          horaAccionValue || Date.now()
+        );
+        if (!presented) {
+          if (errorData.absent === false && errorData.marca_id != null) {
+            setRevertMarcaId(errorData.marca_id);
+            setMarkingBlocked(true);
+            setLocalCanMarkEntrada(false);
+            setLocalCanMarkSalida(false);
+          }
+          setShouldResponseAbsentReason(false);
           setErrorMessage(errorData.message);
-          setIsLoadingData(false);
-          return;
         }
-
-        // Si viene un marca_id junto con status:false, habilitamos el botón de "Revertir salida"
-        if (errorData && errorData.absent === false && errorData.marca_id !== undefined && errorData.marca_id !== null) {
-          console.log("Marca ID", errorData.marca_id);
-          setRevertMarcaId(errorData.marca_id);
-        }
-        setShouldResponseAbsentReason(false);
-
-        setErrorMessage(errorData.message);
       }
     } catch (error) {
       console.error('Error fetching attendance status:', error);
@@ -563,23 +790,64 @@ export default function MarcarIngresoSalidaScreen() {
     );
   };
 
-  function getDistanceFromLatLonInMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
-    const R = 6371000; // radio de la Tierra en metros
-    const toRad = (value: number) => (value * Math.PI) / 180;
+  const validateBeforeMarkAction = async (
+    type: 'entrada' | 'salida'
+  ): Promise<{ ok: true } | { ok: false; message: string }> => {
+    if (!attendanceData?.marca) {
+      return { ok: false, message: 'No se encontró la marca.' };
+    }
 
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
+    const nowMs = await getHoraAccion();
+    setHoraAccion(nowMs);
 
-    const a =
-      Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(lat1)) *
-      Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) ** 2;
+    let lat: number | null = null;
+    let lng: number | null = null;
 
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    if (type === 'entrada') {
+      const coords = await resolveMarcaIngresoCoordinates();
+      if (!coords.ok) {
+        return { ok: false, message: '' };
+      }
+      lat = coords.latitude;
+      lng = coords.longitude;
+    }
 
-    return R * c;
-  }
+    const validation = await runLocalValidationForMarca(
+      attendanceData.marca as Record<string, unknown>,
+      nowMs,
+      {
+        lat,
+        lng,
+        validateLocationForEntrada: type === 'entrada',
+      }
+    );
+
+    applyLocalValidationState(
+      validation,
+      attendanceData.marca.id != null ? Number(attendanceData.marca.id) : null
+    );
+
+    if (validation.absent) {
+      return {
+        ok: false,
+        message: validation.message || 'No has marcado la entrada para este turno.',
+      };
+    }
+
+    if (type === 'entrada' && !validation.canMarkEntrada) {
+      return {
+        ok: false,
+        message: validation.message || 'No puedes marcar entrada en este momento.',
+      };
+    }
+    if (type === 'salida' && !validation.canMarkSalida) {
+      return {
+        ok: false,
+        message: validation.message || 'No puedes marcar salida en este momento.',
+      };
+    }
+    return { ok: true };
+  };
 
   const executeToggleAttendance = async () => {
     if (!attendanceData) return;
@@ -617,7 +885,6 @@ export default function MarcarIngresoSalidaScreen() {
         next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, attendanceData.marca.hora_inicio > attendanceData.marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
 
         if (now < (next_time.getTime() - 15 * 60 * 1000)) {
-          // Show modal for early exit reason
           setIsModalVisible(true);
           return;
         }
@@ -703,6 +970,17 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     let data = null;
+    const markType = type === 'salida' ? 'salida' : 'entrada';
+    const preCheck = await validateBeforeMarkAction(markType);
+    if (!preCheck.ok) {
+      setIsProcessingMark(false);
+      setProcessingType(null);
+      if (preCheck.message?.trim()) {
+        Alert.alert('No permitido', preCheck.message);
+      }
+      return;
+    }
+
     if (await evaluateInternetConnection()) {
       data = await saveMarca({
         data_params: { type, reason, horaAccion: horaAccion },
@@ -1122,18 +1400,28 @@ const getActivities = async (marcaId: number) => {
     try {
       setIsSubmittingAbsentReason(true);
 
-      if (!(await evaluateInternetConnection())) {
-        Alert.alert(
-          'Sin conexión',
-          'El motivo de ausencia solo puede enviarse con conexión a internet, tras la respuesta del sistema.'
-        );
-        return false;
-      }
-
       const horaA = await getHoraAccion();
       if (!horaA) {
         Alert.alert('Error', 'No se pudo obtener la hora del servidor');
         return false;
+      }
+
+      if (!(await evaluateInternetConnection())) {
+        await appendAttendanceAction({
+          type: 'absent_reason',
+          marcaId: Number(absentMarcaId),
+          reason,
+          horaAccion: horaA,
+        });
+        Alert.alert(
+          'Guardado localmente',
+          'El motivo de ausencia se sincronizará al recuperar conexión.'
+        );
+        setShouldResponseAbsentReason(false);
+        setShowAbsentReasonForm(false);
+        setAbsentReason('');
+        await fetchAttendanceStatus();
+        return true;
       }
 
       const data = await saveAbsentReason({
@@ -1196,6 +1484,8 @@ const getActivities = async (marcaId: number) => {
   const getDisability = () => {
     if (!attendanceData) return true;
 
+    if (markingBlocked) return true;
+
     if (
       attendanceData.estado === 'Ingresado' &&
       attendanceData.marca?.hora_salida_digitada != null
@@ -1203,7 +1493,14 @@ const getActivities = async (marcaId: number) => {
       return true;
     }
 
-    if (attendanceData.estado === 'Ingresado' && !attendanceData.change_available) return true;
+    if (attendanceData.estado === 'No ingresado') {
+      if (!localCanMarkEntrada || !attendanceData.change_available) return true;
+    }
+
+    if (attendanceData.estado === 'Ingresado') {
+      if (!localCanMarkSalida) return true;
+      if (!attendanceData.change_available) return true;
+    }
 
     return false;
   }
@@ -1727,58 +2024,7 @@ const getActivities = async (marcaId: number) => {
           )}
 
           {/* Content Section */}
-          {isLoadingLocation ? (
-            <ThemedView style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#007AFF" />
-              <ThemedText style={styles.loadingDataText}>
-                Obteniendo ubicación...
-              </ThemedText>
-            </ThemedView>
-          ) : locationError ? (
-            <ThemedView style={styles.errorContainer}>
-              <ThemedText style={styles.errorText}>{getActionIcon('warning')} {locationError}</ThemedText>
-              <TouchableOpacity
-                style={styles.retryButton}
-                onPress={async () => {
-                  setLocationError(null);
-                  setIsLoadingLocation(true);
-                  try {
-                    // Verificar permisos
-                    const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
-                    if (permissionStatus !== 'granted') {
-                      setLocationError('Permiso de ubicación denegado. Por favor, activa la ubicación en la configuración de tu dispositivo.');
-                      setIsLoadingLocation(false);
-                      return;
-                    }
-
-                    // Verificar que los servicios de ubicación estén habilitados
-                    const isLocationEnabled = await Location.hasServicesEnabledAsync();
-                    if (!isLocationEnabled) {
-                      setLocationError('Los servicios de ubicación están desactivados. Por favor, activa la ubicación en tu dispositivo.');
-                      setIsLoadingLocation(false);
-                      return;
-                    }
-
-                    // Obtener ubicación
-                    const loc = await Location.getCurrentPositionAsync({
-                      accuracy: Location.Accuracy.High,
-                    });
-                    setLocation(loc);
-                    setIsLoadingLocation(false);
-
-                    // Llamar a fetchAttendanceStatus para cargar los datos inmediatamente
-                    await fetchAttendanceStatus();
-                  } catch (err) {
-                    console.error('Error obteniendo ubicación GPS:', err);
-                    setLocationError('Error al obtener la ubicación GPS. Por favor, verifica que los servicios de ubicación estén habilitados.');
-                    setIsLoadingLocation(false);
-                  }
-                }}
-              >
-                <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-          ) : isProcessingMark ? (
+          {isProcessingMark ? (
             <ThemedView style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#007AFF" />
               <ThemedText style={styles.loadingDataText}>
@@ -1801,77 +2047,7 @@ const getActivities = async (marcaId: number) => {
                 Enviando motivo de ausencia, por favor no cierre la ventana...
               </ThemedText>
             </ThemedView>
-          ) : errorMessage ? (
-            <ThemedView style={styles.errorContainer}>
-              {/* Absent Reason Form */}
-              {showAbsentReasonForm && shouldResponseAbsentReason && (
-                <ThemedView style={styles.absentReasonContainer}>
-                  <ThemedText style={styles.absentReasonTitle}>
-                    Motivo de ausencia
-                  </ThemedText>
-                  <ThemedText style={styles.absentReasonSubtitle}>
-                    Por favor, ingresa el motivo de tu ausencia:
-                  </ThemedText>
-
-                  <TextInput
-                    style={styles.absentReasonInput}
-                    value={absentReason}
-                    onChangeText={setAbsentReason}
-                    placeholder="Ej: Enfermedad, emergencia familiar, cita médica..."
-                    placeholderTextColor="#999"
-                    multiline={true}
-                    numberOfLines={3}
-                    textAlignVertical="top"
-                    editable={!isSubmittingAbsentReason}
-                  />
-
-                  <ThemedView style={styles.absentReasonButtons}>
-                    <TouchableOpacity
-                      style={[styles.absentReasonButton, styles.absentReasonSubmitButton]}
-                      onPress={handleAbsentReasonSubmit}
-                      disabled={isSubmittingAbsentReason}
-                    >
-                      <ThemedText style={styles.absentReasonSubmitButtonText}>
-                        {isSubmittingAbsentReason ? 'Enviando...' : getActionIcon('confirm')}
-                      </ThemedText>
-                    </TouchableOpacity>
-                  </ThemedView>
-                </ThemedView>
-              )}
-
-              <ThemedText style={styles.errorText}>{getActionIcon('warning')} {errorMessage}</ThemedText>
-                {revertMarcaId !== null && (
-                  <TouchableOpacity
-                    style={styles.revertButton}
-                    onPress={handleRevertLeaving}
-                  >
-                    <ThemedText style={styles.revertButtonText}>
-                      Revertir salida
-                    </ThemedText>
-                  </TouchableOpacity>
-                )}
-              <TouchableOpacity
-                style={styles.retryButton}
-                onPress={fetchAttendanceStatus}
-              >
-                <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
           ) : attendanceData ? (
-            minimalOfflineSalidaView && attendanceData.marca?.hora_salida_digitada != null ? (
-              <ThemedView style={styles.contentContainer}>
-                <ThemedView style={{ marginTop: 24, alignItems: 'center' }}>
-                  <ThemedText style={styles.salidaMarcadaMensaje}>
-                    {getActionIcon('warning')} Ya has marcado la salida  { /* Esto debe tener un emoji de alerta */}
-                  </ThemedText>
-                </ThemedView>
-                <ThemedView style={{ alignItems: 'center' }}>
-                  <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
-                    <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              </ThemedView>
-            ) : (
             <ThemedView style={styles.contentContainer}>
               {/* Work Information Card */}
               <ThemedView style={styles.infoCard}>
@@ -1955,9 +2131,6 @@ const getActivities = async (marcaId: number) => {
                   {attendanceData.estado === 'Ingresado' &&
                     attendanceData.marca.hora_salida_digitada != null && (
                     <ThemedView style={styles.enterAtContainer}>
-                      <ThemedText style={styles.salidaMarcadaMensaje}>
-                        Ya has marcado la salida
-                      </ThemedText>
                       <ThemedText style={styles.enterAtLabel}>Fecha y hora de salida:</ThemedText>
                       <ThemedText style={styles.enterAtText}>
                         {convertDateToLocal(attendanceData.marca.hora_salida_digitada)}
@@ -1975,7 +2148,7 @@ const getActivities = async (marcaId: number) => {
                 </ThemedView>
 
                 {/* Late Warning */}
-                {attendanceData.is_late && (
+                {attendanceData.marca.hora_inicio != null && attendanceData.is_late && (
                   <ThemedView style={styles.lateWarning}>
                     <ThemedText style={styles.lateWarningText}>
                       {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}
@@ -1983,6 +2156,82 @@ const getActivities = async (marcaId: number) => {
                   </ThemedView>
                 )}
               </ThemedView>
+
+              {(errorMessage || showAbsentReasonForm || revertMarcaId != null) && (
+                <ThemedView style={styles.marcaWarningsSection}>
+                  {showAbsentReasonForm && shouldResponseAbsentReason && (
+                    <ThemedView style={styles.absentReasonContainer}>
+                      <ThemedText style={styles.absentReasonTitle}>
+                        Motivo de ausencia
+                      </ThemedText>
+                      <ThemedText style={styles.absentReasonSubtitle}>
+                        Por favor, ingresa el motivo de tu ausencia:
+                      </ThemedText>
+
+                      <TextInput
+                        style={styles.absentReasonInput}
+                        value={absentReason}
+                        onChangeText={setAbsentReason}
+                        placeholder="Ej: Enfermedad, emergencia familiar, cita médica..."
+                        placeholderTextColor="#999"
+                        multiline={true}
+                        numberOfLines={3}
+                        textAlignVertical="top"
+                        editable={!isSubmittingAbsentReason}
+                      />
+
+                      <ThemedView style={styles.absentReasonButtons}>
+                        <TouchableOpacity
+                          style={[styles.absentReasonButton, styles.absentReasonSubmitButton]}
+                          onPress={handleAbsentReasonSubmit}
+                          disabled={isSubmittingAbsentReason}
+                        >
+                          <ThemedText style={styles.absentReasonSubmitButtonText}>
+                            {isSubmittingAbsentReason ? 'Enviando...' : getActionIcon('confirm')}
+                          </ThemedText>
+                        </TouchableOpacity>
+                      </ThemedView>
+                    </ThemedView>
+                  )}
+
+                  {errorMessage ? (
+                    <ThemedView style={styles.entradaLocationErrorBlock}>
+                      <ThemedText style={styles.errorText}>
+                        {getActionIcon('warning')} {errorMessage}
+                      </ThemedText>
+                      {showEntradaLocationRetry &&
+                        attendanceData.estado === 'No ingresado' && (
+                          <TouchableOpacity
+                            style={[
+                              styles.entradaLocationRetryButton,
+                              isRefreshingEntradaLocation && styles.actionButtonDisabled,
+                            ]}
+                            onPress={() => void handleRetryEntradaLocationCheck()}
+                            disabled={isRefreshingEntradaLocation}
+                            activeOpacity={0.85}
+                          >
+                            {isRefreshingEntradaLocation ? (
+                              <ActivityIndicator size="small" color="#007AFF" />
+                            ) : (
+                              <>
+                                <Ionicons name="refresh" size={18} color="#007AFF" />
+                                <ThemedText style={styles.entradaLocationRetryButtonText}>
+                                  Reintentar
+                                </ThemedText>
+                              </>
+                            )}
+                          </TouchableOpacity>
+                        )}
+                    </ThemedView>
+                  ) : null}
+
+                  {(revertMarcaId != null || attendanceData.marca.hora_salida_digitada != null) && (
+                    <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
+                      <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
+                    </TouchableOpacity>
+                  )}
+                </ThemedView>
+              )}
 
               {/* Action Button */}
               <ThemedView style={styles.actionContainer}>
@@ -2015,16 +2264,17 @@ const getActivities = async (marcaId: number) => {
                   )}
                 </TouchableOpacity>
               </ThemedView>
-
-              {(revertMarcaId != null || attendanceData.marca.hora_salida_digitada != null) && (
-                <ThemedView style={{ marginTop: 12, alignItems: 'center' }}>
-                  <TouchableOpacity style={styles.revertButton} onPress={handleRevertLeaving}>
-                    <ThemedText style={styles.revertButtonText}>Revertir salida</ThemedText>
-                  </TouchableOpacity>
-                </ThemedView>
-              )}
             </ThemedView>
-            )
+          ) : errorMessage ? (
+            <ThemedView style={styles.errorContainer}>
+              <ThemedText style={styles.errorText}>{getActionIcon('warning')} {errorMessage}</ThemedText>
+              <TouchableOpacity
+                style={styles.retryButton}
+                onPress={fetchAttendanceStatus}
+              >
+                <ThemedText style={styles.retryButtonText}>{getActionIcon('retry')}</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
           ) : null}
         </ThemedView>
       </ScrollView>
@@ -2251,6 +2501,35 @@ const styles = StyleSheet.create({
     padding: 20,
     gap: 20,
     minHeight: 300,
+  },
+  marcaWarningsSection: {
+    width: '100%',
+    marginTop: 16,
+    marginBottom: 8,
+    gap: 16,
+    alignItems: 'center',
+  },
+  entradaLocationErrorBlock: {
+    width: '100%',
+    alignItems: 'center',
+    gap: 12,
+  },
+  entradaLocationRetryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8DAF8',
+  },
+  entradaLocationRetryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
   },
   errorText: {
     fontSize: 16,

@@ -67,6 +67,47 @@ function mergeMarkAsReadQueue(existingActions: any[], newRefs: NotifReadRef[]): 
   return rest;
 }
 
+function notificationMatchesRef(n: Notification, ref: NotifReadRef): boolean {
+  return Number(n.id) === Number(ref.id) && Boolean(n.is_plaza) === Boolean(ref.is_plaza);
+}
+
+async function readNotificationsFromStorage(): Promise<Notification[]> {
+  const notificationsStr = await AsyncStorage.getItem('notifications');
+  if (!notificationsStr) {
+    await AsyncStorage.setItem('notifications', JSON.stringify([]));
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(notificationsStr);
+    return Array.isArray(parsed) ? (parsed as Notification[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+async function persistNotificationsLocally(
+  updated: Notification[],
+  setNotifications: React.Dispatch<React.SetStateAction<Notification[]>>
+): Promise<void> {
+  await AsyncStorage.setItem('notifications', JSON.stringify(updated));
+  setNotifications(updated);
+  eventBus.emit('notificationsUpdated');
+  eventBus.emit('notificationsUpdatedCounter');
+}
+
+function markNotificationsAsWatchedInList(
+  list: Notification[],
+  refs: NotifReadRef[],
+  markAll: boolean
+): Notification[] {
+  if (markAll) {
+    return list.map((n) => ({ ...n, watched: true }));
+  }
+  return list.map((n) =>
+    refs.some((r) => notificationMatchesRef(n, r)) ? { ...n, watched: true } : n
+  );
+}
+
 export default function NotificationsScreen() {
   const { employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -102,18 +143,13 @@ export default function NotificationsScreen() {
   const fetchNotifications = async () => {
     try {
       setIsLoading(true);
-
-      // Verificar si existe la variable notifications en AsyncStorage
-      let notificationsStr = await AsyncStorage.getItem('notifications');
-
-      // Si no existe, crear un array vacío
-      if (!notificationsStr) {
-        await AsyncStorage.setItem('notifications', JSON.stringify([]));
-        setNotifications([]);
-      } else {
-        const notificationsData = JSON.parse(notificationsStr);
-        setNotifications(notificationsData);
-      }
+      const notificationsData = await readNotificationsFromStorage();
+      setNotifications(
+        notificationsData.map((n) => ({
+          ...n,
+          watched: n.watched === true,
+        }))
+      );
     } catch (err) {
       console.error('Error fetching notifications:', err);
       Alert.alert('Error', 'No se pudieron cargar las notificaciones');
@@ -134,8 +170,13 @@ export default function NotificationsScreen() {
   };
 
   const executeMarkAsRead = async (notificationId: number, is_plaza: boolean) => {
-    setSingleMarkLoadingKey(notifReadRefKey({ id: notificationId, is_plaza }));
+    const ref: NotifReadRef = { id: notificationId, is_plaza };
+    setSingleMarkLoadingKey(notifReadRefKey(ref));
     try {
+      const current = await readNotificationsFromStorage();
+      const updatedLocal = markNotificationsAsWatchedInList(current, [ref], false);
+      await persistNotificationsLocally(updatedLocal, setNotifications);
+
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
@@ -146,17 +187,6 @@ export default function NotificationsScreen() {
         });
 
         if (data.status) {
-          const notificationsStr = await AsyncStorage.getItem('notifications');
-          if (notificationsStr) {
-            const notificationsData = JSON.parse(notificationsStr);
-            const updatedNotifications = notificationsData.map((n: Notification) =>
-              n.id === notificationId && n.is_plaza === is_plaza ? { ...n, watched: true } : n
-            );
-            await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-            setNotifications(updatedNotifications);
-            eventBus.emit('notificationsUpdated');
-            eventBus.emit('notificationsUpdatedCounter');
-          }
           Alert.alert('Éxito', 'Notificación marcada como leída');
         } else {
           Alert.alert('Error', data.message || 'Error al marcar la notificación como leída');
@@ -164,20 +194,8 @@ export default function NotificationsScreen() {
       } else {
         const actionsStr = await AsyncStorage.getItem('notifications_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        const nextActions = mergeMarkAsReadQueue(actions, [{ id: notificationId, is_plaza }]);
+        const nextActions = mergeMarkAsReadQueue(actions, [ref]);
         await AsyncStorage.setItem('notifications_actions', JSON.stringify(nextActions));
-
-        const notificationsStr = await AsyncStorage.getItem('notifications');
-        if (notificationsStr) {
-          const notificationsData = JSON.parse(notificationsStr);
-          const updatedNotifications = notificationsData.map((n: Notification) =>
-            n.id === notificationId && n.is_plaza === is_plaza ? { ...n, watched: true } : n
-          );
-          await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-          setNotifications(updatedNotifications);
-          eventBus.emit('notificationsUpdated');
-          eventBus.emit('notificationsUpdatedCounter');
-        }
 
         Alert.alert(
           'Modo Offline',
@@ -204,6 +222,15 @@ export default function NotificationsScreen() {
     setMarkAllLoading(true);
     try {
       const unreadIds = unreadNotifications.map((n) => ({ id: n.id, is_plaza: n.is_plaza }));
+      const refs: NotifReadRef[] = unreadIds.map((u) => ({
+        id: Number(u.id),
+        is_plaza: !!u.is_plaza,
+      }));
+
+      const current = await readNotificationsFromStorage();
+      const updatedLocal = markNotificationsAsWatchedInList(current, refs, true);
+      await persistNotificationsLocally(updatedLocal, setNotifications);
+
       const isConnected = await getConnectionStatus();
 
       if (isConnected) {
@@ -214,18 +241,6 @@ export default function NotificationsScreen() {
         });
 
         if (data.status) {
-          const notificationsStr = await AsyncStorage.getItem('notifications');
-          if (notificationsStr) {
-            const notificationsData = JSON.parse(notificationsStr);
-            const updatedNotifications = notificationsData.map((n: Notification) => ({
-              ...n,
-              watched: true,
-            }));
-            await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-            setNotifications(updatedNotifications);
-            eventBus.emit('notificationsUpdated');
-            eventBus.emit('notificationsUpdatedCounter');
-          }
           Alert.alert('Éxito', 'Todas las notificaciones han sido marcadas como leídas');
         } else {
           Alert.alert('Error', data.message || 'Error al marcar las notificaciones como leídas');
@@ -233,25 +248,8 @@ export default function NotificationsScreen() {
       } else {
         const actionsStr = await AsyncStorage.getItem('notifications_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        const refs: NotifReadRef[] = unreadIds.map((u) => ({
-          id: Number(u.id),
-          is_plaza: !!u.is_plaza,
-        }));
         const nextActions = mergeMarkAsReadQueue(actions, refs);
         await AsyncStorage.setItem('notifications_actions', JSON.stringify(nextActions));
-
-        const notificationsStr = await AsyncStorage.getItem('notifications');
-        if (notificationsStr) {
-          const notificationsData = JSON.parse(notificationsStr);
-          const updatedNotifications = notificationsData.map((n: Notification) => ({
-            ...n,
-            watched: true,
-          }));
-          await AsyncStorage.setItem('notifications', JSON.stringify(updatedNotifications));
-          setNotifications(updatedNotifications);
-          eventBus.emit('notificationsUpdated');
-          eventBus.emit('notificationsUpdatedCounter');
-        }
 
         Alert.alert(
           'Modo Offline',

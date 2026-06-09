@@ -4452,6 +4452,7 @@ model security_fos_user {
   permiso_marcar_horario_plaza        Boolean?
   permiso_limite_extras_semanal       Boolean?
   password_expires_at                 DateTime?                             @db.DateTime(0)
+  dashboard_layout                    dashboard_layout[]
   e_estructura_cliente_usuario        e_estructura_cliente_usuario[]
   n_ejecutivo_cuenta                  n_ejecutivo_cuenta?                   @relation(fields: [ejecutivoCuenta_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_F611E3AB5CAEAC5D")
   n_coordinado_por                    n_coordinado_por?                     @relation(fields: [coordinadoPor_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_F611E3AB81B56B3")
@@ -4460,6 +4461,7 @@ model security_fos_user {
   security_fos_users_groups           security_fos_users_groups[]
   security_fos_users_roles_monitoreo  security_fos_users_roles_monitoreo[]
   security_fos_users_roles_tipoaccion security_fos_users_roles_tipoaccion[]
+  user_dashboard_config               user_dashboard_config[]
 
   @@index([ejecutivoCuenta_id], map: "IDX_F611E3AB5CAEAC5D")
   @@index([coordinadoPor_id], map: "IDX_F611E3AB81B56B3")
@@ -4609,7 +4611,7 @@ model v_vacacion_solicitud {
   fecha_fin                                                DateTime?                            @db.Date
   dias                                                     Int
   semanas                                                  Int
-  observaciones                                            String?                              @db.VarChar(254)
+  observaciones                                            String?                              @db.VarChar(1000)
   monto                                                    Decimal?                             @db.Decimal(10, 2)
   consecutivo                                              String?                              @db.VarChar(15)
   estado_aprobacion                                        String?                              @db.VarChar(30)
@@ -5022,6 +5024,7 @@ model c_empleado_almuerzo {
   corpo_id         Int        @default(0)
   puesto_id        Int        @default(0)
   isActive         Boolean    @default(true)
+  marca_id         Int
   c_empleado       c_empleado @relation(fields: [empleadoId], references: [id], onDelete: Cascade)
 
   @@index([empleadoId], map: "empleadoId_almuerzo_fkey")
@@ -6351,4 +6354,74 @@ model c_ubicacion_puesto_registro_cambios {
   longitud_nueva    String?  @db.VarChar(255)
   created_at        DateTime @db.DateTime(0)
   created_by        Int
+}
+
+model c_login_marca_almuerzo {
+  id                    Int       @id @default(autoincrement())
+  nombre_empleado       String    @db.VarChar(255)
+  cedula_empleado       String    @db.VarChar(25)
+  fecha_hora            DateTime  @db.DateTime(0)
+  device                String    @db.LongText
+  lat                   String?   @db.VarChar(255)
+  lng                   String?   @db.VarChar(255)
+  puesto_id             Int?
+  marca_id              Int?
+  marca_entrada_teorica DateTime? @db.DateTime(0)
+  marca_entrada_real    DateTime? @db.DateTime(0)
+  marca_salida_teorica  DateTime? @db.DateTime(0)
+  marca_salida_real     DateTime? @db.DateTime(0)
+  hora_inicio_almuerzo  DateTime? @db.DateTime(0)
+  hora_fin_almuerzo     DateTime? @db.DateTime(0)
+  session_id            String    @db.VarChar(255)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model dash_board_visualisation {
+  id                    Int                     @id @default(autoincrement())
+  chart_family          String?                 @db.VarChar(255)
+  chartType             String                  @db.VarChar(50)
+  unique_name           String?                 @unique(map: "UNIQ_60893DA798AB450A") @db.VarChar(50)
+  data_adapter          String?                 @db.VarChar(255)
+  query                 String                  @db.LongText
+  title                 String                  @db.VarChar(255)
+  description           String?                 @db.LongText
+  createdAt             DateTime                @db.DateTime(0)
+  updatedAt             DateTime?               @db.DateTime(0)
+  active                Boolean
+  is_default            Boolean
+  filterCriteria        Json?
+  chart_cfg             Json?
+  user_dashboard_config user_dashboard_config[]
+}
+
+model dashboard_layout {
+  id                    Int                     @id @default(autoincrement())
+  owner_id              Int
+  title                 String                  @db.VarChar(255)
+  is_default            Boolean
+  security_fos_user     security_fos_user       @relation(fields: [owner_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_D50162D97E3C61F9")
+  user_dashboard_config user_dashboard_config[]
+
+  @@index([owner_id], map: "IDX_D50162D97E3C61F9")
+}
+
+model user_dashboard_config {
+  id                       Int                      @id @default(autoincrement())
+  user_id                  Int
+  visualisation_id         Int
+  layout_id                Int?
+  sortOrder                Int
+  dash_board_visualisation dash_board_visualisation @relation(fields: [visualisation_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_46A4649A1A36181E")
+  dashboard_layout         dashboard_layout?        @relation(fields: [layout_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_46A4649A8C22AA1A")
+  security_fos_user        security_fos_user        @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "FK_46A4649AA76ED395")
+
+  @@index([visualisation_id], map: "IDX_46A4649A1A36181E")
+  @@index([layout_id], map: "IDX_46A4649A8C22AA1A")
+  @@index([user_id], map: "IDX_46A4649AA76ED395")
+}
+
+model n_ejecutivo_cuenta_coordinador {
+  id                  Int @id @default(autoincrement())
+  ejecutivo_cuenta_id Int
+  coordinador_id      Int
 }

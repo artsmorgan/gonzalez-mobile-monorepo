@@ -120,6 +120,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             where: { id: marca_reemplaza.id },
             data: {
               empleadoReemplaza_id: marca_ausente.empleadoFijo_id,
+              motivo_ausente: 'V_MUT',
             },
           },
         });
@@ -133,7 +134,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             operation: "update",
             where: { id: marca_ausente.id },
             data: {
-              empleadoReemplaza_id: marca_reemplaza.empleadoFijo_id,
+              empleadoReemplaza_id: marca_reemplaza.empleadoFijo_id, motivo_ausente: 'V_MUT',
             },
           },
         });
@@ -210,6 +211,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           }
         }
 
+        const ejecutivo_cuenta_id = (existing as any)?.ejecutivo_cuenta;
+        let coordinador_id = null;
+        if (ejecutivo_cuenta_id) {
+          const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
+            req,
+            data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: ejecutivo_cuenta_id } },
+          });
+          if (ejecutivo_cuenta_coordinador) {
+            coordinador_id = ejecutivo_cuenta_coordinador.coordinador_id;
+          }
+        }
+
         const cambioGuardiaCreated = await callDynamicPrisma({
           req,
           data: {
@@ -232,6 +245,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
               tipo: 'MUT',
               consecutivo: consecutivo,
               coordinadoPor_id: 3,
+              coordinador_id: coordinador_id,
+              descripcion: updated.motivo ?? "",
               mobile_upload: true,
             },
           },

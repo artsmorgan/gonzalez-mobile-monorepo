@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -12,6 +12,7 @@ import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
@@ -22,13 +23,7 @@ import {
   deleteVehicle as deleteVehicleAPI,
   deleteVehicleAttachment as deleteVehicleAttachmentAPI,
 } from '@/hooks/vehiclesFunctions';
-import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import {
-  loadMainStructureFragmentsObjectAllowPartial,
-  persistMainStructureFragments,
-} from '@/hooks/mainStructureFragmentsStorage';
-import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri as getStoredFileDisplayUri } from '@/hooks/fileStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
@@ -375,7 +370,7 @@ export default function VehiclesScreen() {
     return `${date}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:00.000Z`;
   };
 
-  const openFechaEntradaPicker = () => async () => {
+  const openFechaEntradaPicker = async () => {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
@@ -397,7 +392,7 @@ export default function VehiclesScreen() {
     setFechaEntradaPickerValue(selectedDate);
   };
 
-  const openFechaSalidaPicker = () => async () => {
+  const openFechaSalidaPicker = async () => {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
@@ -639,180 +634,42 @@ export default function VehiclesScreen() {
     }
   }, []);
 
+  /** Solo caché local (main_structure_cache); no llama a /api/main-structure. */
   const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
     setIsStructureLoading(true);
-
-    const loadMergedTreeFromCache = async (): Promise<MainStructureTree> => {
-      const fragments = await loadMainStructureFragmentsObjectAllowPartial();
-      if (fragments && Object.keys(fragments).length > 0) {
-        const merged = mergeMainStructureFragments(fragments) as MainStructureTree;
-        if (Array.isArray(merged) && merged.length > 0) {
-          return merged;
-        }
-      }
-      const fallback = (await loadMainStructureTreeMerged().catch(() => [])) as MainStructureTree;
-      return Array.isArray(fallback) ? fallback : [];
-    };
-
     try {
-      let tree = await loadMergedTreeFromCache();
-      setStructure(tree);
-
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) {
-        return tree;
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged) && merged.length > 0) {
+        setStructure(merged);
+        return merged;
       }
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) {
-        return tree;
-      }
-
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: { 'Content-Type': 'application/json' },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response?.ok) {
-        return tree;
-      }
-      const data = await response.json().catch(() => ({}));
-      if (!data.status) {
-        return tree;
-      }
-
-      if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
-        await persistMainStructureFragments(data.fragments as Record<string, unknown>);
-        const reloaded = await loadMainStructureFragmentsObjectAllowPartial();
-        if (reloaded && Object.keys(reloaded).length > 0) {
-          const merged = mergeMainStructureFragments(reloaded) as MainStructureTree;
-          if (Array.isArray(merged) && merged.length > 0) {
-            tree = merged;
-            setStructure(tree);
-            if (data.created_at != null && data.created_at !== undefined) {
-              await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-            }
-            return tree;
-          }
-        }
-        tree = await loadMergedTreeFromCache();
-        setStructure(tree);
-      } else {
-        let rawStructure = data.structure;
-        if (typeof rawStructure === 'string') {
-          try {
-            rawStructure = JSON.parse(rawStructure);
-          } catch {
-            rawStructure = null;
-          }
-        }
-        if (Array.isArray(rawStructure)) {
-          await persistMainStructureFragments({});
-          await writeMainStructureCacheString(JSON.stringify(rawStructure));
-          tree = rawStructure as MainStructureTree;
-          setStructure(tree);
-        }
-      }
-
-      if (data.created_at != null && data.created_at !== undefined) {
-        await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-      }
-
-      return tree;
+      setStructure([]);
+      return [];
     } catch (e) {
       console.error('Error loading main structure (Vehicles):', e);
-      try {
-        const recovered = await loadMergedTreeFromCache();
-        setStructure(recovered);
-        return recovered;
-      } catch {
-        setStructure([]);
-        return [];
-      }
+      setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
-  const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
-  const filterClienteOptionsMemo = useMemo(() => {
-    const empresa = structure.find((e) => e.id === filterEmpresaId);
-    return empresa?.clientes ?? [];
-  }, [structure, filterEmpresaId]);
-  const filterDivisionOptionsMemo = useMemo(() => {
-    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
-    return getClienteDivisionArray(cliente);
-  }, [filterClienteOptionsMemo, filterClienteId]);
-  const filterContratoOptionsMemo = useMemo(() => {
-    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
-    return division?.contratos ?? [];
-  }, [filterDivisionOptionsMemo, filterDivisionId]);
-  const filterSucursalOptionsMemo = useMemo(() => {
-    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
-    return contrato?.sucursales ?? [];
-  }, [filterContratoOptionsMemo, filterContratoId]);
-
-  const formEmpresaNode = useMemo(() => {
-    if (formEmpresaId === null) return null;
-    return structure.find((e) => e.id === formEmpresaId) ?? null;
-  }, [structure, formEmpresaId]);
-  const formClienteOptions = useMemo(() => {
-    if (!formEmpresaNode) return [];
-    return (formEmpresaNode.clientes || []).map((c) => ({ id: c.id, nombre: c.nombre }));
-  }, [formEmpresaNode]);
-  const formClienteNode = useMemo(() => {
-    if (!formEmpresaNode || formClienteId === null) return null;
-    return formEmpresaNode.clientes.find((c) => c.id === formClienteId) ?? null;
-  }, [formEmpresaNode, formClienteId]);
-  const formDivisionOptions = useMemo(() => {
-    if (!formClienteNode) return [];
-    return getClienteDivisionArray(formClienteNode).map((d) => ({ id: d.id, nombre: d.nombre }));
-  }, [formClienteNode]);
-  const formDivisionNode = useMemo(() => {
-    if (!formClienteNode || formDivisionId === null) return null;
-    return getClienteDivisionArray(formClienteNode).find((d) => d.id === formDivisionId) ?? null;
-  }, [formClienteNode, formDivisionId]);
-  const formContratoOptions = useMemo(() => {
-    if (!formDivisionNode) return [];
-    return (formDivisionNode.contratos || []).map((c) => ({ id: c.id, nombre: c.nombre }));
-  }, [formDivisionNode]);
-  const formContratoNode = useMemo(() => {
-    if (!formDivisionNode || formContratoId === null) return null;
-    return (formDivisionNode.contratos || []).find((c) => c.id === formContratoId) ?? null;
-  }, [formDivisionNode, formContratoId]);
-  const formSucursalOptions = useMemo(() => {
-    if (!formContratoNode) return [];
-    return (formContratoNode.sucursales || []).map((s) => ({ id: s.id, nombre: s.nombre }));
-  }, [formContratoNode]);
-  const formSucursalNode = useMemo(() => {
-    if (!formContratoNode || formSucursalId === null) return null;
-    return (formContratoNode.sucursales || []).find((s) => s.id === formSucursalId) ?? null;
-  }, [formContratoNode, formSucursalId]);
-  const formPuestoOptions = useMemo(() => {
-    if (!formSucursalNode) return [];
-    return (formSucursalNode.puestos || []).map((p) => ({ id: p.id, nombre: p.nombre }));
-  }, [formSucursalNode]);
-
-  const handleFormEmpresaChange = (empresaId: number | null) => {
-    setFormEmpresaId(empresaId);
-    setFormClienteId(null);
-    setFormDivisionId(null);
-    setFormContratoId(null);
-    setFormSucursalId(null);
-    setFormPuestoId(null);
-  };
-
-  const handleFormClienteChange = (clienteId: number | null) => {
-    setFormClienteId(clienteId);
-    setFormDivisionId(null);
-    setFormContratoId(null);
-    setFormSucursalId(null);
-    setFormPuestoId(null);
-  };
+  const applyVehicleHierarchyToForm = useCallback((vehicle: Vehicle): boolean => {
+    const empresaId = numOrNull(vehicle.empresa_id);
+    const clienteId = numOrNull(vehicle.cliente_id);
+    const divisionId = numOrNull(vehicle.division_id);
+    const contratoId = numOrNull(vehicle.contrato_id);
+    if (empresaId && clienteId && divisionId && contratoId) {
+      setFormEmpresaId(empresaId);
+      setFormClienteId(clienteId);
+      setFormDivisionId(divisionId);
+      setFormContratoId(contratoId);
+      setFormSucursalId(numOrNull(vehicle.corpo_id));
+      setFormPuestoId(numOrNull(vehicle.puesto_id));
+      return true;
+    }
+    return false;
+  }, []);
 
   const resetFormHierarchyFields = useCallback(() => {
     setFormEmpresaId(null);
@@ -828,8 +685,7 @@ export default function VehiclesScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const marca = JSON.parse(currentMarcaStr);
-      const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
-      if (rn === 'OPERATIVO') return;
+      if (marca?.id == null) return;
 
       setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
       setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
@@ -849,25 +705,21 @@ export default function VehiclesScreen() {
   }, []);
 
   const resolveCorpoIdForSave = useCallback(async (): Promise<number | null> => {
+    const fromForm = numOrNull(formSucursalId);
+    if (fromForm) return fromForm;
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) return null;
     const marca = JSON.parse(currentMarcaStr);
-    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
-    if (rn === 'OPERATIVO') {
-      return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
-    }
-    return numOrNull(formSucursalId) ?? numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+    return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
   }, [formSucursalId]);
 
   const resolvePuestoIdForSave = useCallback(async (): Promise<number | null> => {
+    const fromForm = numOrNull(formPuestoId);
+    if (fromForm) return fromForm;
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (!currentMarcaStr) return null;
     const marca = JSON.parse(currentMarcaStr);
-    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
-    if (rn === 'OPERATIVO') {
-      return numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
-    }
-    return numOrNull(formPuestoId);
+    return numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
   }, [formPuestoId]);
 
   const resolveHierarchyIdsForSave = useCallback(async (): Promise<{
@@ -877,24 +729,12 @@ export default function VehiclesScreen() {
     contrato_id: number | null;
   }> => {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-    if (!currentMarcaStr) {
-      return { empresa_id: null, cliente_id: null, division_id: null, contrato_id: null };
-    }
-    const marca = JSON.parse(currentMarcaStr);
-    const rn = marca?.roleDivision?.role?.nombre ?? marca?.role_division?.role?.nombre ?? null;
-    if (rn === 'OPERATIVO') {
-      return {
-        empresa_id: numOrNull(marca?.empresa?.id ?? marca?.empresa_id),
-        cliente_id: numOrNull(marca?.cliente?.id ?? marca?.cliente_id),
-        division_id: getDivisionIdFromMarcaJson(marca),
-        contrato_id: numOrNull(marca?.contrato?.id ?? marca?.contrato_id),
-      };
-    }
+    const marca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
     return {
-      empresa_id: numOrNull(formEmpresaId),
-      cliente_id: numOrNull(formClienteId),
-      division_id: numOrNull(formDivisionId),
-      contrato_id: numOrNull(formContratoId),
+      empresa_id: numOrNull(formEmpresaId) ?? numOrNull(marca?.empresa?.id ?? marca?.empresa_id),
+      cliente_id: numOrNull(formClienteId) ?? numOrNull(marca?.cliente?.id ?? marca?.cliente_id),
+      division_id: numOrNull(formDivisionId) ?? getDivisionIdFromMarcaJson(marca),
+      contrato_id: numOrNull(formContratoId) ?? numOrNull(marca?.contrato?.id ?? marca?.contrato_id),
     };
   }, [formEmpresaId, formClienteId, formDivisionId, formContratoId]);
 
@@ -929,8 +769,6 @@ export default function VehiclesScreen() {
         setIsLoading(true);
         setError(null);
         setOfflineMessage(null);
-
-        await fetchMainStructure();
 
         const marcaId = numOrNull(snap.current?.id);
         const corpoId = snap.isOperativo
@@ -1028,7 +866,7 @@ export default function VehiclesScreen() {
       setIsLoading(false);
     }
     },
-    [fetchMainStructure, refreshAccessToken, logout, syncMarcaFromStorage]
+    [refreshAccessToken, logout, syncMarcaFromStorage]
   );
 
   const fetchVehicles = useCallback(async () => {
@@ -1040,6 +878,30 @@ export default function VehiclesScreen() {
     });
   }, [syncMarcaFromStorage, runFetchVehicles]);
 
+  const handleFilterHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setFilterEmpresaId(v.empresaId);
+      setFilterClienteId(v.clienteId);
+      setFilterDivisionId(v.divisionId);
+      setFilterContratoId(v.contratoId);
+      filterSucursalIdRef.current = v.sucursalId;
+      setFilterSucursalId(v.sucursalId);
+      if (v.sucursalId != null) {
+        void fetchVehicles();
+      }
+    },
+    [fetchVehicles],
+  );
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFormEmpresaId(v.empresaId);
+    setFormClienteId(v.clienteId);
+    setFormDivisionId(v.divisionId);
+    setFormContratoId(v.contratoId);
+    setFormSucursalId(v.sucursalId);
+    setFormPuestoId(v.puestoId ?? null);
+  }, []);
+
   useEffect(() => {
     filterSucursalIdRef.current = filterSucursalId;
   }, [filterSucursalId]);
@@ -1048,10 +910,16 @@ export default function VehiclesScreen() {
     useCallback(() => {
       let cancelled = false;
       void (async () => {
+        void fetchMainStructure();
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
-          listFiltersSyncedFromMarcaOnceRef.current = true;
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          const snap =
+            currentMarca?.id != null
+              ? await syncMarcaFromStorage({ applyFiltersFromMarca: true })
+              : await syncMarcaFromStorage({ applyFiltersFromMarca: false });
           if (cancelled) return;
+          listFiltersSyncedFromMarcaOnceRef.current = true;
           if (snap) await runFetchVehicles(snap);
           else await fetchVehicles();
         } else {
@@ -1066,7 +934,7 @@ export default function VehiclesScreen() {
         cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [syncMarcaFromStorage, runFetchVehicles, fetchVehicles])
+    }, [syncMarcaFromStorage, runFetchVehicles, fetchVehicles, fetchMainStructure])
   );
 
   const closeCambiosModal = () => {
@@ -1589,45 +1457,39 @@ export default function VehiclesScreen() {
                 razon_visita: razonVisitaRef.current,
               };
 
-              const rnEdit =
-                currentMarcaData?.roleDivision?.role?.nombre ??
-                currentMarcaData?.role_division?.role?.nombre ??
-                null;
-              if (rnEdit !== 'OPERATIVO') {
-                const corpoUp = await resolveCorpoIdForSave();
-                const puestoUp = await resolvePuestoIdForSave();
-                if (!corpoUp || corpoUp <= 0) {
-                  Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
-                  return;
-                }
-                if (!puestoUp || puestoUp <= 0) {
-                  Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
-                  return;
-                }
-                requestBody.corpo_id = corpoUp;
-                requestBody.puesto_id = puestoUp;
-                const hierarchyUp = await resolveHierarchyIdsForSave();
-                if (
-                  hierarchyUp.empresa_id == null ||
-                  hierarchyUp.empresa_id <= 0 ||
-                  hierarchyUp.cliente_id == null ||
-                  hierarchyUp.cliente_id <= 0 ||
-                  hierarchyUp.division_id == null ||
-                  hierarchyUp.division_id <= 0 ||
-                  hierarchyUp.contrato_id == null ||
-                  hierarchyUp.contrato_id <= 0
-                ) {
-                  Alert.alert(
-                    'Error',
-                    'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía.'
-                  );
-                  return;
-                }
-                requestBody.empresa_id = hierarchyUp.empresa_id;
-                requestBody.cliente_id = hierarchyUp.cliente_id;
-                requestBody.division_id = hierarchyUp.division_id;
-                requestBody.contrato_id = hierarchyUp.contrato_id;
+              const corpoUp = await resolveCorpoIdForSave();
+              const puestoUp = await resolvePuestoIdForSave();
+              if (!corpoUp || corpoUp <= 0) {
+                Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
+                return;
               }
+              if (!puestoUp || puestoUp <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
+                return;
+              }
+              requestBody.corpo_id = corpoUp;
+              requestBody.puesto_id = puestoUp;
+              const hierarchyUp = await resolveHierarchyIdsForSave();
+              if (
+                hierarchyUp.empresa_id == null ||
+                hierarchyUp.empresa_id <= 0 ||
+                hierarchyUp.cliente_id == null ||
+                hierarchyUp.cliente_id <= 0 ||
+                hierarchyUp.division_id == null ||
+                hierarchyUp.division_id <= 0 ||
+                hierarchyUp.contrato_id == null ||
+                hierarchyUp.contrato_id <= 0
+              ) {
+                Alert.alert(
+                  'Error',
+                  'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía.'
+                );
+                return;
+              }
+              requestBody.empresa_id = hierarchyUp.empresa_id;
+              requestBody.cliente_id = hierarchyUp.cliente_id;
+              requestBody.division_id = hierarchyUp.division_id;
+              requestBody.contrato_id = hierarchyUp.contrato_id;
 
               const newFilePayload = await buildVehicleFilePayloadForApi();
               requestBody.file = newFilePayload || null;
@@ -1742,9 +1604,7 @@ export default function VehiclesScreen() {
                     base64_image: nextBase64,
                     local_attachment_file: nextLocalAtt,
                     file_name: nextFileName,
-                    ...(rnEdit !== 'OPERATIVO' &&
-                    requestBody.corpo_id != null &&
-                    requestBody.puesto_id != null
+                    ...(requestBody.corpo_id != null && requestBody.puesto_id != null
                       ? {
                           corpo_id: requestBody.corpo_id,
                           puesto_id: requestBody.puesto_id,
@@ -1946,163 +1806,36 @@ export default function VehiclesScreen() {
           {isCreating ? 'Nuevo Vehículo' : 'Editar Vehículo'}
         </ThemedText>
 
-        {roleName != null && roleName !== 'OPERATIVO' ? (
-          <ThemedView style={styles.formHierarchySection}>
-            <ThemedText style={styles.formHierarchyHint}>
-              Ubicación del registro (empresa → puesto)
-            </ThemedText>
-            {isStructureLoading ? (
-              <ThemedView style={styles.inlineLoading}>
-                <ActivityIndicator size="small" color="#007AFF" />
-                <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
-              </ThemedView>
-            ) : structure.length === 0 ? (
-              <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
-            ) : (
-              <>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Empresa</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      selectedValue={formEmpresaId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        handleFormEmpresaChange(next === 0 ? null : next);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                      {structure.map((e) => (
-                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Cliente</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      enabled={formEmpresaId != null && formClienteOptions.length > 0}
-                      selectedValue={formClienteId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        handleFormClienteChange(next === 0 ? null : next);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item
-                        label={formEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {formClienteOptions.map((c) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>División</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      enabled={formClienteId != null && formDivisionOptions.length > 0}
-                      selectedValue={formDivisionId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setFormDivisionId(next === 0 ? null : next);
-                        setFormContratoId(null);
-                        setFormSucursalId(null);
-                        setFormPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item
-                        label={formClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {formDivisionOptions.map((d) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Contrato</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      enabled={formDivisionId != null && formContratoOptions.length > 0}
-                      selectedValue={formContratoId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setFormContratoId(next === 0 ? null : next);
-                        setFormSucursalId(null);
-                        setFormPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item
-                        label={formDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {formContratoOptions.map((c) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Sucursal *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      enabled={formContratoId != null && formSucursalOptions.length > 0}
-                      selectedValue={formSucursalId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setFormSucursalId(next === 0 ? null : next);
-                        setFormPuestoId(null);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item
-                        label={formContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {formSucursalOptions.map((s) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.formLabel}>Puesto *</ThemedText>
-                  <View style={styles.pickerContainer}>
-                    <Picker
-                      enabled={formSucursalId != null && formPuestoOptions.length > 0}
-                      selectedValue={formPuestoId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setFormPuestoId(next === 0 ? null : next);
-                      }}
-                      style={styles.picker}
-                    >
-                      <Picker.Item
-                        label={formSucursalId ? 'Seleccione puesto...' : 'Seleccione sucursal primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {formPuestoOptions.map((p) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              </>
-            )}
-          </ThemedView>
-        ) : null}
+        <ThemedView style={styles.formHierarchySection}>
+          <ThemedText style={styles.formHierarchyHint}>
+            Ubicación del registro (empresa → puesto)
+          </ThemedText>
+          {structure.length === 0 ? (
+            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+          ) : null}
+          <HierarchyPickerFields
+            structure={structure}
+            levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+            isLoading={false}
+            emptyPickerValue={0}
+            values={{
+              empresaId: formEmpresaId,
+              clienteId: formClienteId,
+              divisionId: formDivisionId,
+              contratoId: formContratoId,
+              sucursalId: formSucursalId,
+              puestoId: formPuestoId,
+            }}
+            onChange={handleFormHierarchyChange}
+            labels={{
+              sucursal: 'Sucursal *',
+              puesto: 'Puesto *',
+            }}
+            renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+            pickerStyle={styles.picker}
+            fieldGroupStyle={styles.formGroup}
+          />
+        </ThemedView>
 
         {/* Tipo */}
         <ThemedView style={styles.formGroup}>
@@ -2192,7 +1925,7 @@ export default function VehiclesScreen() {
         {/* Fecha y hora Entrada */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Entrada (fecha y hora):</ThemedText>
-          <TouchableOpacity style={styles.timePickerButton} onPress={openFechaEntradaPicker}>
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => void openFechaEntradaPicker()}>
             <ThemedText style={styles.timePickerButtonText}>
               {fechaEntradaDisplay || 'Seleccionar fecha'}
             </ThemedText>
@@ -2229,7 +1962,7 @@ export default function VehiclesScreen() {
         {/* Fecha y hora Salida */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Salida (fecha y hora, opcional):</ThemedText>
-          <TouchableOpacity style={styles.timePickerButton} onPress={openFechaSalidaPicker}>
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => void openFechaSalidaPicker()}>
             <ThemedText style={styles.timePickerButtonText}>
               {fechaSalidaDisplay || 'Seleccionar fecha'}
             </ThemedText>
@@ -2440,59 +2173,57 @@ export default function VehiclesScreen() {
     }
 
     /**
-     * Cargar jerarquía ANTES de `setEditingVehicle`: si el formulario se pinta con Pickers
-     * cuyo `selectedValue` no existe entre los `Picker.Item`, Android puede cerrar la app.
+     * Jerarquía ANTES de `setEditingVehicle`: IDs guardados en el registro o caché local
+     * (sin /api/main-structure). Evita Pickers con selectedValue inexistente en Android.
      */
-    const tree = await fetchMainStructure();
-    const marcaStrEdit = await AsyncStorage.getItem('current_marca');
-    const marcaJsonEdit = marcaStrEdit ? JSON.parse(marcaStrEdit) : null;
-    const rnStart =
-      marcaJsonEdit?.roleDivision?.role?.nombre ?? marcaJsonEdit?.role_division?.role?.nombre ?? null;
-    if (rnStart !== 'OPERATIVO' && tree.length > 0) {
-      const pid = numOrNull(vehicle.puesto_id);
-      const byPuesto = pid ? findHierarchyByPuestoIn(tree, pid) : null;
-      if (byPuesto) {
-        setFormEmpresaId(byPuesto.empresaId);
-        setFormClienteId(byPuesto.clienteId);
-        setFormDivisionId(byPuesto.divisionId);
-        setFormContratoId(byPuesto.contratoId);
-        setFormSucursalId(byPuesto.corpoId);
-        setFormPuestoId(byPuesto.puestoId);
-      } else {
-        const cid = numOrNull(vehicle.corpo_id);
-        const h = cid ? findHierarchyByCorpoIn(tree, cid) : null;
-        if (h) {
-          setFormEmpresaId(h.empresaId);
-          setFormClienteId(h.clienteId);
-          setFormDivisionId(h.divisionId);
-          setFormContratoId(h.contratoId);
-          setFormSucursalId(h.corpoId);
-          let pId = numOrNull(vehicle.puesto_id);
-          if (!pId || pId <= 0) {
-            outerLoop:
-            for (const empresa of tree) {
-              for (const cliente of empresa.clientes || []) {
-                for (const division of getClienteDivisionArray(cliente)) {
-                  for (const contrato of division.contratos || []) {
-                    for (const sucursal of contrato.sucursales || []) {
-                      if (Number(sucursal.id) === h.corpoId) {
-                        const first = sucursal.puestos?.[0];
-                        pId = first?.id != null ? Number(first.id) : null;
-                        break outerLoop;
+    const tree = structure.length > 0 ? structure : await fetchMainStructure();
+    if (!applyVehicleHierarchyToForm(vehicle)) {
+      if (tree.length > 0) {
+        const pid = numOrNull(vehicle.puesto_id);
+        const byPuesto = pid ? findHierarchyByPuestoIn(tree, pid) : null;
+        if (byPuesto) {
+          setFormEmpresaId(byPuesto.empresaId);
+          setFormClienteId(byPuesto.clienteId);
+          setFormDivisionId(byPuesto.divisionId);
+          setFormContratoId(byPuesto.contratoId);
+          setFormSucursalId(byPuesto.corpoId);
+          setFormPuestoId(byPuesto.puestoId);
+        } else {
+          const cid = numOrNull(vehicle.corpo_id);
+          const h = cid ? findHierarchyByCorpoIn(tree, cid) : null;
+          if (h) {
+            setFormEmpresaId(h.empresaId);
+            setFormClienteId(h.clienteId);
+            setFormDivisionId(h.divisionId);
+            setFormContratoId(h.contratoId);
+            setFormSucursalId(h.corpoId);
+            let pId = numOrNull(vehicle.puesto_id);
+            if (!pId || pId <= 0) {
+              outerLoop:
+              for (const empresa of tree) {
+                for (const cliente of empresa.clientes || []) {
+                  for (const division of getClienteDivisionArray(cliente)) {
+                    for (const contrato of division.contratos || []) {
+                      for (const sucursal of contrato.sucursales || []) {
+                        if (Number(sucursal.id) === h.corpoId) {
+                          const first = sucursal.puestos?.[0];
+                          pId = first?.id != null ? Number(first.id) : null;
+                          break outerLoop;
+                        }
                       }
                     }
                   }
                 }
               }
             }
+            setFormPuestoId(pId);
+          } else {
+            resetFormHierarchyFields();
           }
-          setFormPuestoId(pId);
-        } else {
-          resetFormHierarchyFields();
         }
+      } else {
+        resetFormHierarchyFields();
       }
-    } else {
-      resetFormHierarchyFields();
     }
 
     const razonSafe = vehicle.razon_visita != null ? String(vehicle.razon_visita) : '';
@@ -2619,7 +2350,6 @@ export default function VehiclesScreen() {
     horaSalidaMRef.current = '';
     razonVisitaRef.current = '';
     void clearPendingVehicleCaptureFiles();
-    await fetchMainStructure();
     await applyCurrentMarcaToCreateFormHierarchy();
   };
 
@@ -2659,10 +2389,8 @@ export default function VehiclesScreen() {
   const resetAllFilters = () => {
     setSearchText('');
     setSelectedTipo('all');
-    if (roleName != null && roleName !== 'OPERATIVO') {
-      void resetListFiltersFromCurrentMarca();
-      void fetchVehicles();
-    }
+    void resetListFiltersFromCurrentMarca();
+    void fetchVehicles();
   };
 
   const filteredVehicles = vehicles.filter(vehicle => {
@@ -2792,157 +2520,34 @@ export default function VehiclesScreen() {
             {/* Filter Content */}
             {isFiltersExpanded && (
               <ThemedView style={styles.filterContent}>
-                {hasCurrentMarca && roleName != null && roleName !== 'OPERATIVO' ? (
-                  <>
-                    <ThemedView style={styles.filterGroupSearch}>
-                      <ThemedText style={styles.filterLabel}>
-                        Ubicación del listado (empresa → sucursal)
-                      </ThemedText>
-                    </ThemedView>
-                    {isStructureLoading ? (
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedView style={styles.inlineLoading}>
-                          <ActivityIndicator size="small" color="#007AFF" />
-                          <ThemedText style={styles.inlineLoadingText}>Cargando estructura...</ThemedText>
-                        </ThemedView>
-                      </ThemedView>
-                    ) : structure.length === 0 ? (
-                      <ThemedView style={styles.filterGroupSearch}>
-                        <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
-                      </ThemedView>
-                    ) : (
-                      <>
-                        <ThemedView style={styles.filterGroupSearch}>
-                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              selectedValue={filterEmpresaId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterEmpresaId(next === 0 ? null : next);
-                                setFilterClienteId(null);
-                                setFilterDivisionId(null);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                filterSucursalIdRef.current = null;
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item label="Seleccione empresa..." value={0} color="#000000" />
-                              {filterEmpresaOptions.map((e) => (
-                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                        <ThemedView style={styles.filterGroupSearch}>
-                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
-                              selectedValue={filterClienteId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterClienteId(next === 0 ? null : next);
-                                setFilterDivisionId(null);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                filterSucursalIdRef.current = null;
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterEmpresaId ? 'Seleccione cliente...' : 'Seleccione empresa primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterClienteOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                        <ThemedView style={styles.filterGroupSearch}>
-                          <ThemedText style={styles.filterLabel}>División</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
-                              selectedValue={filterDivisionId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterDivisionId(next === 0 ? null : next);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                filterSucursalIdRef.current = null;
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterClienteId ? 'Seleccione división...' : 'Seleccione cliente primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterDivisionOptionsMemo.map((d) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                        <ThemedView style={styles.filterGroupSearch}>
-                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
-                              selectedValue={filterContratoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterContratoId(next === 0 ? null : next);
-                                setFilterSucursalId(null);
-                                filterSucursalIdRef.current = null;
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterDivisionId ? 'Seleccione contrato...' : 'Seleccione división primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterContratoOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                        <ThemedView style={styles.filterGroupSearch}>
-                          <ThemedText style={styles.filterLabel}>Sucursal (sincroniza listado)</ThemedText>
-                          <View style={styles.pickerContainer}>
-                            <Picker
-                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
-                              selectedValue={filterSucursalId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                const nextSuc = next === 0 ? null : next;
-                                filterSucursalIdRef.current = nextSuc;
-                                setFilterSucursalId(nextSuc);
-                                void fetchVehicles();
-                              }}
-                              style={styles.picker}
-                            >
-                              <Picker.Item
-                                label={filterContratoId ? 'Seleccione sucursal...' : 'Seleccione contrato primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterSucursalOptionsMemo.map((s) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      </>
-                    )}
-                  </>
+                <ThemedView style={styles.filterGroupSearch}>
+                  <ThemedText style={styles.filterLabel}>
+                    Ubicación del listado (empresa → sucursal)
+                  </ThemedText>
+                </ThemedView>
+                {structure.length === 0 ? (
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                  </ThemedView>
                 ) : null}
+                <HierarchyPickerFields
+                  structure={structure}
+                  levels={['cliente', 'contrato', 'sucursal']}
+                  isLoading={false}
+                  emptyPickerValue={0}
+                  values={{
+                    empresaId: filterEmpresaId,
+                    clienteId: filterClienteId,
+                    divisionId: filterDivisionId,
+                    contratoId: filterContratoId,
+                    sucursalId: filterSucursalId,
+                  }}
+                  onChange={handleFilterHierarchyChange}
+                  labels={{ sucursal: 'Sucursal (sincroniza listado)' }}
+                  renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                  pickerStyle={styles.picker}
+                  fieldGroupStyle={styles.filterGroupSearch}
+                />
 
                 <ThemedView style={styles.filterGroupSearch}>
                   <ThemedText style={styles.filterLabel}>Buscar por placa, conductor, cédula, departamento, persona, razón o responsable:</ThemedText>

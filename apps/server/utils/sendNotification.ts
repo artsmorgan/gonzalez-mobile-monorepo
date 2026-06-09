@@ -207,7 +207,6 @@ export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: numb
 
 export async function sendNotificationByEmployee(req: NextRequest, corpoId: number, empleadoSenderIds: number[], title: string, description: string, employeeIds: number[]) {
     if (employeeIds.length > 0) {
-        console.log(employeeIds.length);
         const notification = await callDynamicPrisma({
             req,
             data: {

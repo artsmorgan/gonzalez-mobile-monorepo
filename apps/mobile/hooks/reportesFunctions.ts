@@ -830,6 +830,34 @@ export async function previewTiempoAlmuerzo(params: {
   return { status: true, data: j.data, count: j.count };
 }
 
+export async function previewLoginMarca(params: {
+  moduleFilters: Record<string, unknown>;
+  order_by: string;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; count?: number; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation: 'previewLoginMarca',
+        moduleFilters: params.moduleFilters,
+        order_by: params.order_by,
+      }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data, count: j.count };
+}
+
 export async function previewCambiosUbicacionPuesto(params: {
   moduleFilters: Record<string, unknown>;
   order_by: string;

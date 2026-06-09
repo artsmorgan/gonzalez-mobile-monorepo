@@ -5,6 +5,94 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { createReport, updateReport } from "../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
+import { uploadArticuloMantenimientoFiles } from "../../../../utils/uploadArticuloMantenimientoFiles";
+import {
+    articuloIncomingTimestamp,
+    cantidadNecesariaFromArticulo,
+} from "../../checklist-supervision/articulosMantenimiento";
+
+function isPlanTipoArticulo(tipo: unknown): boolean {
+    const s = String(tipo ?? "").trim().toLowerCase();
+    if (!s) return false;
+    if (s === "plan" || s.includes("plan de")) return true;
+    if (s === "asignado" || s.includes("asignado")) return false;
+    return s === "plan";
+}
+
+function resolveArticuloTipoMantenimiento(tipo: unknown): "Plan" | "Asignado" | null {
+    const raw = String(tipo ?? "").trim();
+    if (!raw) return null;
+    if (isPlanTipoArticulo(raw)) return "Plan";
+    const s = raw.toLowerCase();
+    if (s === "asignado" || s.includes("asignado")) return "Asignado";
+    if (raw === "Plan" || raw === "Asignado") return raw;
+    return null;
+}
+
+function mergeArticlesStateIntoStored(stored: any[], articles_state: any[]): any[] {
+    const overridesByKey = new Map<string, any>();
+    for (const a of articles_state) {
+        const id = Number(a?.id || 0);
+        if (!Number.isFinite(id) || id <= 0) continue;
+        const tipoKey = resolveArticuloTipoMantenimiento(a?.tipo) ?? "";
+        overridesByKey.set(`${tipoKey}:${id}`, a);
+        overridesByKey.set(`:${id}`, a);
+    }
+
+    return stored.map((item: any) => {
+        const id = Number(item?.id || 0);
+        const tipoResolved = resolveArticuloTipoMantenimiento(item?.tipo) ?? "";
+        const override =
+            overridesByKey.get(`${tipoResolved}:${id}`) ?? overridesByKey.get(`:${id}`);
+        if (!override) return item;
+        const tipoFromOverride = resolveArticuloTipoMantenimiento(override.tipo);
+        return {
+            ...item,
+            ...(tipoFromOverride ? { tipo: tipoFromOverride } : {}),
+            estado: override.estado ?? item.estado,
+            cantidad_real:
+                override.cantidad_real !== undefined && override.cantidad_real !== null
+                    ? Number(override.cantidad_real)
+                    : item.cantidad_real,
+            cantidad_requerida:
+                override.cantidad_requerida !== undefined && override.cantidad_requerida !== null
+                    ? Number(override.cantidad_requerida)
+                    : item.cantidad_requerida,
+            observaciones:
+                override.observaciones !== undefined && override.observaciones !== null
+                    ? String(override.observaciones)
+                    : item.observaciones,
+            created_at: override.created_at ?? item.created_at,
+            mantenimiento_files: Array.isArray(override.mantenimiento_files)
+                ? override.mantenimiento_files
+                : item.mantenimiento_files,
+        };
+    });
+}
+
+function buildArticlesFromClientState(articles_state: any[]): any[] {
+    return articles_state
+        .map((a: any) => {
+            const id = Number(a?.id || 0);
+            if (!Number.isFinite(id) || id <= 0) return null;
+            const tipo = resolveArticuloTipoMantenimiento(a?.tipo);
+            if (!tipo) return null;
+            return {
+                id,
+                nombre: String(a?.nombre || "Artículo"),
+                tipo,
+                marca: a?.marca ?? "",
+                serie: a?.serie ?? "",
+                cantidad_requerida: cantidadNecesariaFromArticulo(a),
+                cantidad_real: Number(a?.cantidad_real ?? 0),
+                estado: String(a?.estado || "Bueno"),
+                observaciones: String(a?.observaciones ?? ""),
+                created_at: a?.created_at,
+                mantenimiento_files: Array.isArray(a?.mantenimiento_files) ? a.mantenimiento_files : [],
+            };
+        })
+        .filter(Boolean) as any[];
+}
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -114,59 +202,55 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 }
             }
 
-            if (actividad.es_revision_equipo && typeof actividad_marcada.articles === "string" && actividad_marcada.articles.trim()) {
+            if (
+                actividad.es_revision_equipo &&
+                ((Array.isArray(articles_state) && articles_state.length > 0) ||
+                    (typeof actividad_marcada.articles === "string" && actividad_marcada.articles.trim()))
+            ) {
                 try {
-                    const parsedArticles = JSON.parse(actividad_marcada.articles);
-                    let articlesForEvaluation: any[] = Array.isArray(parsedArticles) ? parsedArticles : [];
-
-                    // Si el cliente envía el estado actual de los artículos (tal como se ve en la tabla), fusionarlo con los artículos almacenados
-                    if (Array.isArray(articles_state) && articles_state.length > 0 && articlesForEvaluation.length > 0) {
-                        const overridesById = new Map<number, any>(
-                            articles_state
-                                .map((a: any) => [Number(a?.id || 0), a] as [number, any])
-                                .filter(([id]) => Number.isFinite(id) && id > 0)
-                        );
-
-                        articlesForEvaluation = articlesForEvaluation.map((item: any) => {
-                            const id = Number(item?.id || 0);
-                            const override = overridesById.get(id);
-                            if (!override) return item;
-                            return {
-                                ...item,
-                                estado: override.estado ?? item.estado,
-                                cantidad_real:
-                                    override.cantidad_real !== undefined && override.cantidad_real !== null
-                                        ? Number(override.cantidad_real)
-                                        : item.cantidad_real,
-                                observaciones:
-                                    override.observaciones !== undefined && override.observaciones !== null
-                                        ? String(override.observaciones)
-                                        : item.observaciones,
-                            };
-                        });
+                    let articlesForEvaluation: any[] = [];
+                    if (typeof actividad_marcada.articles === "string" && actividad_marcada.articles.trim()) {
+                        const parsedArticles = JSON.parse(actividad_marcada.articles);
+                        articlesForEvaluation = Array.isArray(parsedArticles) ? parsedArticles : [];
                     }
 
-                    // Persistir el estado más reciente de artículos en la marca de actividad.
-                    await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "UPDATE",
-                            table: "e_actividades_puesto_plaza",
-                            where: { id: actividad_marcada.id },
-                            data: { articles: JSON.stringify(articlesForEvaluation), updated_at: now },
-                            returning: false,
-                        },
-                    });
+                    if (Array.isArray(articles_state) && articles_state.length > 0) {
+                        if (articlesForEvaluation.length > 0) {
+                            articlesForEvaluation = mergeArticlesStateIntoStored(
+                                articlesForEvaluation,
+                                articles_state,
+                            );
+                        } else {
+                            articlesForEvaluation = buildArticlesFromClientState(articles_state);
+                        }
+                    }
 
-                    await evaluateAndNotifyArticles(
-                        req,
-                        articlesForEvaluation,
-                        actividad_marcada.plaza_id,
-                        actividad.nombre_actividad || "actividad",
-                        accionAtMs
-                    );
-                } catch {
-                    // ignore malformed articles payload
+                    if (articlesForEvaluation.length === 0) {
+                        console.warn(
+                            "[activities PUT] es_revision_equipo sin artículos evaluables tras merge",
+                        );
+                    } else {
+                        await callDynamicPrisma({
+                            req,
+                            data: {
+                                action: "UPDATE",
+                                table: "e_actividades_puesto_plaza",
+                                where: { id: actividad_marcada.id },
+                                data: { articles: JSON.stringify(articlesForEvaluation), updated_at: now },
+                                returning: false,
+                            },
+                        });
+
+                        await evaluateAndNotifyArticles(
+                            req,
+                            articlesForEvaluation,
+                            actividad_marcada.plaza_id,
+                            actividad.nombre_actividad || "actividad",
+                            accionAtMs,
+                        );
+                    }
+                } catch (err) {
+                    console.error("[activities PUT] Error procesando artículos de revisión:", err);
                 }
             }
 
@@ -207,17 +291,14 @@ async function evaluateAndNotifyArticles(
     let sendNotification = false;
 
     for (const art of articles) {
-        const tipo = String(art?.tipo || "");
         const id = Number(art?.id || 0);
-        if (!id || (tipo !== "Plan" && tipo !== "Asignado")) continue;
+        const tipo = resolveArticuloTipoMantenimiento(art?.tipo);
+        if (!id || !tipo) continue;
 
-        const incomingTs = (() => {
-            if (art?.created_at != null && String(art.created_at).trim()) {
-                const d = new Date(art.created_at);
-                if (!isNaN(d.getTime())) return d;
-            }
-            return new Date(accionAtMs);
-        })();
+        const accionAt = new Date(accionAtMs);
+        const incomingTs = articuloIncomingTimestamp(art, accionAt);
+        const cantidad_requerida = cantidadNecesariaFromArticulo(art);
+        const cantidad_real = Number(art?.cantidad_real || 0);
 
         const last_mantenimiento = await callDynamicPrisma({
             req,
@@ -225,7 +306,7 @@ async function evaluateAndNotifyArticles(
                 action: "GET",
                 table: "c_articulo_mantenimiento",
                 operation: "findFirst",
-                where: tipo === "Plan" ? { articulo_plan_id: id } : { articulo_asignado_id: id },
+                where: isPlanTipoArticulo(tipo) ? { articulo_plan_id: id } : { articulo_asignado_id: id },
                 orderBy: { updated_at: "desc" },
             },
         });
@@ -238,12 +319,11 @@ async function evaluateAndNotifyArticles(
         }
 
         const estado_actual = String(art?.estado || "Bueno");
-        const cantidad_requerida = Number(art?.cantidad_requerida || 0);
-        const cantidad_real = Number(art?.cantidad_real || 0);
         const serverNow = toZonedTime(new Date(), "America/Costa_Rica");
         const observaciones = String(art?.observaciones || "");
         const marca = art?.marca || "";
         const serie = art?.serie || "";
+        const mantenimientoFiles = Array.isArray(art?.mantenimiento_files) ? art.mantenimiento_files : [];
 
         const pushCreate = () => {
             articulosReporte.push({
@@ -258,11 +338,11 @@ async function evaluateAndNotifyArticles(
                 observaciones,
                 created_at: incomingTs,
                 updated_at: incomingTs,
+                mantenimiento_files: mantenimientoFiles,
             });
         };
 
         if (!last_mantenimiento?.id) {
-            // Sin mantenimiento previo: crear nuevo registro.
             pushCreate();
             if (estado_actual !== "Bueno") sendNotification = true;
             continue;
@@ -271,7 +351,6 @@ async function evaluateAndNotifyArticles(
         const last_estado = String(last_mantenimiento.estado || "").trim();
 
         if (last_estado !== "Bueno" && estado_actual === "Bueno") {
-            // No Bueno -> Bueno: editar el último registro (no crear) y cerrar con fecha_solucion.
             articulosReporteUpdate.push({
                 id: last_mantenimiento.id,
                 estado: estado_actual,
@@ -282,9 +361,9 @@ async function evaluateAndNotifyArticles(
                 marca,
                 serie_placa: serie,
                 updated_at: serverNow,
+                mantenimiento_files: mantenimientoFiles,
             });
         } else if (last_estado !== "Bueno" && estado_actual !== "Bueno") {
-            // No Bueno -> No Bueno: editar último registro.
             const upd: Record<string, unknown> = {
                 id: last_mantenimiento.id,
                 estado: estado_actual,
@@ -294,17 +373,16 @@ async function evaluateAndNotifyArticles(
                 marca,
                 serie_placa: serie,
                 updated_at: serverNow,
+                mantenimiento_files: mantenimientoFiles,
             };
             if (last_estado !== estado_actual) {
                 upd.fecha_solucion = null;
             }
             articulosReporteUpdate.push(upd);
         } else if (last_estado === "Bueno" && estado_actual !== "Bueno") {
-            // Bueno -> No Bueno: crear nuevo registro.
             sendNotification = true;
             pushCreate();
         } else {
-            // Estado no cambia: editar último registro igualmente con nueva data.
             articulosReporteUpdate.push({
                 id: last_mantenimiento.id,
                 estado: estado_actual,
@@ -314,15 +392,40 @@ async function evaluateAndNotifyArticles(
                 marca,
                 serie_placa: serie,
                 updated_at: serverNow,
+                mantenimiento_files: mantenimientoFiles,
             });
         }
     }
 
-    if (articulosReporte.length > 0) {
-        await createReport(req, articulosReporte);
-    }
     if (articulosReporteUpdate.length > 0) {
         await updateReport(req, articulosReporteUpdate);
+        for (const upd of articulosReporteUpdate) {
+            const files = Array.isArray(upd.mantenimiento_files) ? upd.mantenimiento_files : [];
+            if (files.length > 0 && upd.id) {
+                try {
+                    await uploadArticuloMantenimientoFiles(req, Number(upd.id), files);
+                } catch (e) {
+                    console.error("Error subiendo archivos de mantenimiento (update actividad):", e);
+                }
+            }
+        }
+    }
+    if (articulosReporte.length > 0) {
+        const created = await createReport(req, articulosReporte);
+        const reporteByArticuloId = new Map(
+            articulosReporte.map((item) => [Number(item.id), item] as const),
+        );
+        for (const item of created) {
+            const art = reporteByArticuloId.get(item.articuloId);
+            const files = Array.isArray(art?.mantenimiento_files) ? art.mantenimiento_files : [];
+            if (files.length > 0 && item.mantenimientoId) {
+                try {
+                    await uploadArticuloMantenimientoFiles(req, item.mantenimientoId, files);
+                } catch (e) {
+                    console.error("Error subiendo archivos de mantenimiento (create actividad):", e);
+                }
+            }
+        }
     }
 
     if (sendNotification) {

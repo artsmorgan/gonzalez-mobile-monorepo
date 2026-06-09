@@ -215,6 +215,12 @@ import {
     type TiempoAlmuerzoOrderKey,
 } from "./reports-functions/tiempoAlmuerzoReport";
 import {
+    buildLoginMarcaExcelConsolidado,
+    normalizeLoginMarcaFilters,
+    queryLoginMarcaRows,
+    type LoginMarcaOrderKey,
+} from "./reports-functions/loginMarcaReport";
+import {
     buildSolicitudesPermisoExcelConsolidado,
     buildSolicitudesPermisoExcelIndividual,
     normalizeSolicitudesPermisoFilters,
@@ -248,11 +254,10 @@ function sanitizeFilePart(v: string): string {
 async function buildUniqueReportFileName(
     dir: string,
     nomenclatura: string,
-    tipoReporte: string,
     ext: string = "xlsx",
 ): Promise<string> {
     const cleanExt = ext.replace(/^\./, "").toLowerCase() || "xlsx";
-    const base = `${sanitizeFilePart(nomenclatura)}_${sanitizeFilePart(tipoReporte)}`;
+    const base = sanitizeFilePart(nomenclatura);
     const existing = new Set<string>();
     try {
         const files = await fs.readdir(dir);
@@ -303,7 +308,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -328,7 +333,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -354,7 +359,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -379,7 +384,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -404,7 +409,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -429,7 +434,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -454,7 +459,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -479,7 +484,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -504,7 +509,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -529,7 +534,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -550,7 +555,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -574,7 +579,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -599,7 +604,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -624,7 +629,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -645,7 +650,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -670,7 +675,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -691,7 +696,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -716,7 +721,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -738,7 +743,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -764,7 +769,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -790,7 +795,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -812,7 +817,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -834,7 +839,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -856,7 +861,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -878,7 +883,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -904,8 +909,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const tipoLabel = reportType === "Individual" ? "Individual" : "Consolidado";
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, tipoLabel, "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -932,7 +936,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, row.tipo_reporte, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -954,7 +958,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -976,7 +980,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -998,7 +1002,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -1025,7 +1029,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -1047,7 +1051,29 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "Consolidado", "xlsx");
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
+            const abs = path.join(dir, fileName);
+            await fs.writeFile(abs, buf);
+            await prisma.e_reportes_mobile.update({
+                where: { id: reportId },
+                data: {
+                    estado: "completado",
+                    filters: mergeFiltersWithOutputFile(row.filters, fileName),
+                },
+            });
+            return;
+        }
+
+        if (moduleKey === "login_marca") {
+            const mf = normalizeLoginMarcaFilters(parsed.moduleFilters || {});
+            const lmOrder = String(row.order_by || "cedula_empleado").trim() as LoginMarcaOrderKey;
+            const rows = await queryLoginMarcaRows(prisma, mf, lmOrder);
+            const buf = await buildLoginMarcaExcelConsolidado(rows);
+            const uploadsRoot = path.resolve(process.cwd(), "public", "uploads");
+            const relDir = "reportes_mobile";
+            const dir = path.join(uploadsRoot, relDir);
+            await fs.mkdir(dir, { recursive: true });
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, "xlsx");
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -1074,7 +1100,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({
@@ -1101,7 +1127,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const relDir = "reportes_mobile";
             const dir = path.join(uploadsRoot, relDir);
             await fs.mkdir(dir, { recursive: true });
-            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, reportType, ext);
+            const fileName = await buildUniqueReportFileName(dir, row.nomenclatura, ext);
             const abs = path.join(dir, fileName);
             await fs.writeFile(abs, buf);
             await prisma.e_reportes_mobile.update({

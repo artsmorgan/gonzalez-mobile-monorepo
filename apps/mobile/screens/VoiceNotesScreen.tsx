@@ -6,11 +6,10 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  View,
   Platform,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from "@react-native-community/datetimepicker";
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -473,20 +472,8 @@ export default function VoiceNotesScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
-      const rn =
-        currentMarca?.roleDivision?.role?.nombre ??
-        currentMarca?.role_division?.role?.nombre ??
-        null;
-      if (rn === 'OPERATIVO') {
-        setFilterEmpresaId(null);
-        setFilterClienteId(null);
-        setFilterDivisionId(null);
-        setFilterContratoId(null);
-        setFilterSucursalId(null);
-        setFilterPuestoId(null);
-      } else {
-        applyMarcaToHierarchyIds(currentMarca);
-      }
+      if (currentMarca?.id == null) return;
+      applyMarcaToHierarchyIds(currentMarca);
     } catch (e) {
       console.error('resetListFiltersFromCurrentMarca:', e);
     }
@@ -497,6 +484,7 @@ export default function VoiceNotesScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const marca = JSON.parse(currentMarcaStr);
+      if (marca?.id == null) return;
       const divId = getDivisionIdFromMarcaJson(marca);
       setCreateEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
       setCreateClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
@@ -589,6 +577,49 @@ export default function VoiceNotesScreen() {
     [refreshAccessToken, logout]
   );
 
+  const handleFilterHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setFilterEmpresaId(v.empresaId);
+      setFilterClienteId(v.clienteId);
+      setFilterDivisionId(v.divisionId);
+      setFilterContratoId(v.contratoId);
+      setFilterSucursalId(v.sucursalId);
+      setFilterPuestoId(v.puestoId ?? null);
+      const suc = v.sucursalId;
+      const puesto = v.puestoId ?? null;
+      if (suc != null && Number(suc) > 0) {
+        if (puesto != null && Number(puesto) > 0) {
+          void refetchVoiceNotesForFilter(Number(suc), Number(puesto));
+        } else {
+          setVoiceNotes([]);
+        }
+      }
+    },
+    [refetchVoiceNotesForFilter]
+  );
+
+  const handleFormHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      if (editingVoiceNote) {
+        setEditEmpresaId(v.empresaId);
+        setEditClienteId(v.clienteId);
+        setEditDivisionId(v.divisionId);
+        setEditContratoId(v.contratoId);
+        setEditSucursalId(v.sucursalId);
+        setEditPuestoId(v.puestoId ?? null);
+        setEditSetPuesto(false);
+      } else {
+        setCreateEmpresaId(v.empresaId);
+        setCreateClienteId(v.clienteId);
+        setCreateDivisionId(v.divisionId);
+        setCreateContratoId(v.contratoId);
+        setCreateSucursalId(v.sucursalId);
+        setCreatePuestoId(v.puestoId ?? null);
+      }
+    },
+    [editingVoiceNote]
+  );
+
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -610,14 +641,7 @@ export default function VoiceNotesScreen() {
 
       setMarcaPuestoIdFromMarca(getMarcaPuestoIdFromJson(marca));
 
-      if (role === 'OPERATIVO') {
-        setFilterEmpresaId(null);
-        setFilterClienteId(null);
-        setFilterDivisionId(null);
-        setFilterContratoId(null);
-        setFilterSucursalId(null);
-        setFilterPuestoId(null);
-      } else {
+      if (marca?.id != null) {
         applyMarcaToHierarchyIds(marca);
       }
       await fetchMainStructure();
@@ -1520,7 +1544,7 @@ export default function VoiceNotesScreen() {
     const corpoId = corpoRaw != null && Number.isFinite(corpoRaw) && corpoRaw > 0 ? corpoRaw : null;
     const puestoId = puestoRaw != null && Number.isFinite(puestoRaw) && puestoRaw > 0 ? puestoRaw : null;
 
-    if (roleName !== 'OPERATIVO' && structure.length > 0 && corpoId != null) {
+    if (structure.length > 0 && corpoId != null) {
       const traced = traceVoiceNoteInStructure(structure, corpoId, puestoId);
       if (traced) {
         setEditEmpresaId(traced.empresaId);
@@ -1538,14 +1562,6 @@ export default function VoiceNotesScreen() {
         setEditPuestoId(puestoId);
       }
       setEditSetPuesto(false);
-    } else if (roleName === 'OPERATIVO') {
-      setEditEmpresaId(null);
-      setEditClienteId(null);
-      setEditDivisionId(null);
-      setEditContratoId(null);
-      setEditSucursalId(null);
-      setEditPuestoId(null);
-      setEditSetPuesto(puestoId != null);
     } else {
       setEditEmpresaId(null);
       setEditClienteId(null);
@@ -1986,91 +2002,9 @@ export default function VoiceNotesScreen() {
     return `${day}-${month}-${year}`;
   };
 
-  const filterClienteOptionsMemo = useMemo(() => {
-    const empresa = structure.find((e) => e.id === filterEmpresaId);
-    return empresa?.clientes ?? [];
-  }, [structure, filterEmpresaId]);
-
-  const filterDivisionOptionsMemo = useMemo(() => {
-    const cliente = filterClienteOptionsMemo.find((c) => c.id === filterClienteId);
-    return cliente?.division ?? [];
-  }, [filterClienteOptionsMemo, filterClienteId]);
-
-  const filterContratoOptionsMemo = useMemo(() => {
-    const division = filterDivisionOptionsMemo.find((d) => d.id === filterDivisionId);
-    return division?.contratos ?? [];
-  }, [filterDivisionOptionsMemo, filterDivisionId]);
-
-  const filterSucursalOptionsMemo = useMemo(() => {
-    const contrato = filterContratoOptionsMemo.find((c) => c.id === filterContratoId);
-    return contrato?.sucursales ?? [];
-  }, [filterContratoOptionsMemo, filterContratoId]);
-
-  const filterPuestoOptionsMemo = useMemo(() => {
-    const sucursal = filterSucursalOptionsMemo.find((s) => s.id === filterSucursalId);
-    return sucursal?.puestos ?? [];
-  }, [filterSucursalOptionsMemo, filterSucursalId]);
-
-  const createClienteOptionsMemo = useMemo(() => {
-    const empresa = structure.find((e) => e.id === createEmpresaId);
-    return empresa?.clientes ?? [];
-  }, [structure, createEmpresaId]);
-
-  const createDivisionOptionsMemo = useMemo(() => {
-    const cliente = createClienteOptionsMemo.find((c) => c.id === createClienteId);
-    return cliente?.division ?? [];
-  }, [createClienteOptionsMemo, createClienteId]);
-
-  const createContratoOptionsMemo = useMemo(() => {
-    const division = createDivisionOptionsMemo.find((d) => d.id === createDivisionId);
-    return division?.contratos ?? [];
-  }, [createDivisionOptionsMemo, createDivisionId]);
-
-  const createSucursalOptionsMemo = useMemo(() => {
-    const contrato = createContratoOptionsMemo.find((c) => c.id === createContratoId);
-    return contrato?.sucursales ?? [];
-  }, [createContratoOptionsMemo, createContratoId]);
-
-  const createPuestoOptionsMemo = useMemo(() => {
-    const sucursal = createSucursalOptionsMemo.find((s) => s.id === createSucursalId);
-    return sucursal?.puestos ?? [];
-  }, [createSucursalOptionsMemo, createSucursalId]);
-
-  const editClienteOptionsMemo = useMemo(() => {
-    const empresa = structure.find((e) => e.id === editEmpresaId);
-    return empresa?.clientes ?? [];
-  }, [structure, editEmpresaId]);
-
-  const editDivisionOptionsMemo = useMemo(() => {
-    const cliente = editClienteOptionsMemo.find((c) => c.id === editClienteId);
-    return cliente?.division ?? [];
-  }, [editClienteOptionsMemo, editClienteId]);
-
-  const editContratoOptionsMemo = useMemo(() => {
-    const division = editDivisionOptionsMemo.find((d) => d.id === editDivisionId);
-    return division?.contratos ?? [];
-  }, [editDivisionOptionsMemo, editDivisionId]);
-
-  const editSucursalOptionsMemo = useMemo(() => {
-    const contrato = editContratoOptionsMemo.find((c) => c.id === editContratoId);
-    return contrato?.sucursales ?? [];
-  }, [editContratoOptionsMemo, editContratoId]);
-
-  const editPuestoOptionsMemo = useMemo(() => {
-    const sucursal = editSucursalOptionsMemo.find((s) => s.id === editSucursalId);
-    return sucursal?.puestos ?? [];
-  }, [editSucursalOptionsMemo, editSucursalId]);
-
   const listScopedVoiceNotes = useMemo(() => {
-    if (roleName === 'OPERATIVO') {
-      const cid = corpoId;
-      const pid = marcaPuestoIdFromMarca;
-      if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) return [];
-      if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) return [];
-      return voiceNotes.filter((vn) => voiceNoteInPuestoFetchScope(vn, Number(cid), Number(pid)));
-    }
-    const cid = filterSucursalId;
-    const pid = filterPuestoId;
+    const cid = filterSucursalId ?? corpoId;
+    const pid = filterPuestoId ?? marcaPuestoIdFromMarca;
     if (cid == null || !Number.isFinite(Number(cid)) || Number(cid) <= 0) return [];
     if (pid == null || !Number.isFinite(Number(pid)) || Number(pid) <= 0) {
       return voiceNotes.filter(
@@ -2080,14 +2014,7 @@ export default function VoiceNotesScreen() {
       );
     }
     return voiceNotes.filter((vn) => voiceNoteInPuestoFetchScope(vn, Number(cid), Number(pid)));
-  }, [
-    voiceNotes,
-    filterSucursalId,
-    filterPuestoId,
-    roleName,
-    corpoId,
-    marcaPuestoIdFromMarca,
-  ]);
+  }, [voiceNotes, filterSucursalId, filterPuestoId, corpoId, marcaPuestoIdFromMarca]);
 
   const resetAllFilters = () => {
     void resetListFiltersFromCurrentMarca();
@@ -2283,182 +2210,28 @@ export default function VoiceNotesScreen() {
             {isFiltersExpanded && (
               <ThemedView style={styles.filtersContent}>
                 <>
-                  {roleName != null && roleName !== 'OPERATIVO' && (
-                    <>
-                    <ThemedText style={styles.hierarchyHint}>
-                      Filtro por sucursal y puesto (precarga hasta sucursal desde la marca actual):
-                    </ThemedText>
-                    {isStructureLoading ? (
-                      <ThemedView style={styles.inlineLoader}>
-                        <ActivityIndicator size="small" color="#007AFF" />
-                        <ThemedText style={styles.inlineLoaderText}>Cargando estructura…</ThemedText>
-                      </ThemedView>
-                    ) : structure.length === 0 ? (
-                      <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
-                    ) : (
-                      <>
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              selectedValue={filterEmpresaId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterEmpresaId(next === 0 ? null : next);
-                                setFilterClienteId(null);
-                                setFilterDivisionId(null);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                setFilterPuestoId(null);
-                              }}
-                            >
-                              <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
-                              {structure.map((e) => (
-                                <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterEmpresaId != null && filterClienteOptionsMemo.length > 0}
-                              selectedValue={filterClienteId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterClienteId(next === 0 ? null : next);
-                                setFilterDivisionId(null);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                setFilterPuestoId(null);
-                              }}
-                            >
-                              <Picker.Item
-                                label={filterEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterClienteOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>División</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterClienteId != null && filterDivisionOptionsMemo.length > 0}
-                              selectedValue={filterDivisionId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterDivisionId(next === 0 ? null : next);
-                                setFilterContratoId(null);
-                                setFilterSucursalId(null);
-                                setFilterPuestoId(null);
-                              }}
-                            >
-                              <Picker.Item
-                                label={filterClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterDivisionOptionsMemo.map((d) => (
-                                <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterDivisionId != null && filterContratoOptionsMemo.length > 0}
-                              selectedValue={filterContratoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                setFilterContratoId(next === 0 ? null : next);
-                                setFilterSucursalId(null);
-                                setFilterPuestoId(null);
-                              }}
-                            >
-                              <Picker.Item
-                                label={filterDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterContratoOptionsMemo.map((c) => (
-                                <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterContratoId != null && filterSucursalOptionsMemo.length > 0}
-                              selectedValue={filterSucursalId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                const nextSuc = next === 0 ? null : next;
-                                setFilterSucursalId(nextSuc);
-                                setFilterPuestoId(null);
-                                setVoiceNotes([]);
-                              }}
-                            >
-                              <Picker.Item
-                                label={filterContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterSucursalOptionsMemo.map((s) => (
-                                <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-
-                        <ThemedView style={styles.filterGroup}>
-                          <ThemedText style={styles.filterLabel}>Puesto</ThemedText>
-                          <View style={styles.pickerWrapper}>
-                            <Picker
-                              enabled={filterSucursalId != null && filterPuestoOptionsMemo.length > 0}
-                              selectedValue={filterPuestoId ?? 0}
-                              onValueChange={(v) => {
-                                const next = Number(v) || 0;
-                                const nextP = next === 0 ? null : next;
-                                setFilterPuestoId(nextP);
-                                if (filterSucursalId != null && filterSucursalId > 0) {
-                                  void refetchVoiceNotesForFilter(filterSucursalId, nextP);
-                                }
-                              }}
-                            >
-                              <Picker.Item
-                                label={filterSucursalId ? 'Seleccione puesto…' : 'Seleccione sucursal primero'}
-                                value={0}
-                                color="#000000"
-                              />
-                              {filterPuestoOptionsMemo.map((p) => (
-                                <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                              ))}
-                            </Picker>
-                          </View>
-                        </ThemedView>
-                      </>
-                    )}
-                    </>
-                  )}
-                  {roleName === 'OPERATIVO' && (
-                    <ThemedText style={[styles.hierarchyHint, { marginBottom: 8 }]}>
-                      La lista muestra las notas de la sucursal y puesto de tu marca actual; edita los filtros de texto abajo para acotar resultados.
-                    </ThemedText>
-                  )}
+                  <ThemedText style={styles.hierarchyHint}>
+                    Filtro por sucursal y puesto (precarga desde la marca actual cuando hay marca):
+                  </ThemedText>
+                  <HierarchyPickerFields
+                    structure={structure}
+                    levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                    isLoading={false}
+                    emptyPickerValue={0}
+                    values={{
+                      empresaId: filterEmpresaId,
+                      clienteId: filterClienteId,
+                      divisionId: filterDivisionId,
+                      contratoId: filterContratoId,
+                      sucursalId: filterSucursalId,
+                      puestoId: filterPuestoId,
+                    }}
+                    onChange={handleFilterHierarchyChange}
+                    labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto' }}
+                    renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                    pickerWrapperStyle={styles.pickerWrapper}
+                    fieldGroupStyle={styles.filterGroup}
+                  />
                 </>
 
                 <ThemedView style={styles.filterGroup}>
@@ -2565,153 +2338,28 @@ export default function VoiceNotesScreen() {
               />
             </ThemedView>
 
-            {roleName !== 'OPERATIVO' && structure.length > 0 && (
-              <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      selectedValue={createEmpresaId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreateEmpresaId(next === 0 ? null : next);
-                        setCreateClienteId(null);
-                        setCreateDivisionId(null);
-                        setCreateContratoId(null);
-                        setCreateSucursalId(null);
-                        setCreatePuestoId(null);
-                      }}
-                    >
-                      <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
-                      {structure.map((e) => (
-                        <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={createEmpresaId != null && createClienteOptionsMemo.length > 0}
-                      selectedValue={createClienteId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreateClienteId(next === 0 ? null : next);
-                        setCreateDivisionId(null);
-                        setCreateContratoId(null);
-                        setCreateSucursalId(null);
-                        setCreatePuestoId(null);
-                      }}
-                    >
-                      <Picker.Item
-                        label={createEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {createClienteOptionsMemo.map((c) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>División</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={createClienteId != null && createDivisionOptionsMemo.length > 0}
-                      selectedValue={createDivisionId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreateDivisionId(next === 0 ? null : next);
-                        setCreateContratoId(null);
-                        setCreateSucursalId(null);
-                        setCreatePuestoId(null);
-                      }}
-                    >
-                      <Picker.Item
-                        label={createClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {createDivisionOptionsMemo.map((d) => (
-                        <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={createDivisionId != null && createContratoOptionsMemo.length > 0}
-                      selectedValue={createContratoId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreateContratoId(next === 0 ? null : next);
-                        setCreateSucursalId(null);
-                        setCreatePuestoId(null);
-                      }}
-                    >
-                      <Picker.Item
-                        label={createDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {createContratoOptionsMemo.map((c) => (
-                        <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={createContratoId != null && createSucursalOptionsMemo.length > 0}
-                      selectedValue={createSucursalId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreateSucursalId(next === 0 ? null : next);
-                        setCreatePuestoId(null);
-                      }}
-                    >
-                      <Picker.Item
-                        label={createContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {createSucursalOptionsMemo.map((s) => (
-                        <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-                <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Puesto (opcional)</ThemedText>
-                  <View style={styles.pickerWrapper}>
-                    <Picker
-                      enabled={createSucursalId != null && createPuestoOptionsMemo.length > 0}
-                      selectedValue={createPuestoId ?? 0}
-                      onValueChange={(v) => {
-                        const next = Number(v) || 0;
-                        setCreatePuestoId(next === 0 ? null : next);
-                      }}
-                    >
-                      <Picker.Item
-                        label={createSucursalId ? 'Sin puesto específico' : 'Seleccione sucursal primero'}
-                        value={0}
-                        color="#000000"
-                      />
-                      {createPuestoOptionsMemo.map((p) => (
-                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                      ))}
-                    </Picker>
-                  </View>
-                </ThemedView>
-              </ThemedView>
-            )}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
+              <HierarchyPickerFields
+                structure={structure}
+                levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                isLoading={false}
+                emptyPickerValue={0}
+                values={{
+                  empresaId: createEmpresaId,
+                  clienteId: createClienteId,
+                  divisionId: createDivisionId,
+                  contratoId: createContratoId,
+                  sucursalId: createSucursalId,
+                  puestoId: createPuestoId,
+                }}
+                onChange={handleFormHierarchyChange}
+                labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto (opcional)' }}
+                renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                pickerWrapperStyle={styles.pickerWrapper}
+                fieldGroupStyle={styles.filterGroup}
+              />
+            </ThemedView>
 
             {roleName === 'OPERATIVO' && (
               <ThemedView style={styles.formGroup}>
@@ -2917,153 +2565,28 @@ export default function VoiceNotesScreen() {
                 />
               </ThemedView>
 
-              {roleName !== 'OPERATIVO' && structure.length > 0 && (
-                <ThemedView style={styles.formGroup}>
-                  <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Empresa</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        selectedValue={editEmpresaId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditEmpresaId(next === 0 ? null : next);
-                          setEditClienteId(null);
-                          setEditDivisionId(null);
-                          setEditContratoId(null);
-                          setEditSucursalId(null);
-                          setEditPuestoId(null);
-                        }}
-                      >
-                        <Picker.Item label="Seleccione empresa…" value={0} color="#000000" />
-                        {structure.map((e) => (
-                          <Picker.Item key={e.id} label={e.nombre} value={e.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Cliente</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={editEmpresaId != null && editClienteOptionsMemo.length > 0}
-                        selectedValue={editClienteId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditClienteId(next === 0 ? null : next);
-                          setEditDivisionId(null);
-                          setEditContratoId(null);
-                          setEditSucursalId(null);
-                          setEditPuestoId(null);
-                        }}
-                      >
-                        <Picker.Item
-                          label={editEmpresaId ? 'Seleccione cliente…' : 'Seleccione empresa primero'}
-                          value={0}
-                          color="#000000"
-                        />
-                        {editClienteOptionsMemo.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>División</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={editClienteId != null && editDivisionOptionsMemo.length > 0}
-                        selectedValue={editDivisionId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditDivisionId(next === 0 ? null : next);
-                          setEditContratoId(null);
-                          setEditSucursalId(null);
-                          setEditPuestoId(null);
-                        }}
-                      >
-                        <Picker.Item
-                          label={editClienteId ? 'Seleccione división…' : 'Seleccione cliente primero'}
-                          value={0}
-                          color="#000000"
-                        />
-                        {editDivisionOptionsMemo.map((d) => (
-                          <Picker.Item key={d.id} label={d.nombre} value={d.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Contrato</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={editDivisionId != null && editContratoOptionsMemo.length > 0}
-                        selectedValue={editContratoId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditContratoId(next === 0 ? null : next);
-                          setEditSucursalId(null);
-                          setEditPuestoId(null);
-                        }}
-                      >
-                        <Picker.Item
-                          label={editDivisionId ? 'Seleccione contrato…' : 'Seleccione división primero'}
-                          value={0}
-                          color="#000000"
-                        />
-                        {editContratoOptionsMemo.map((c) => (
-                          <Picker.Item key={c.id} label={c.nombre} value={c.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Sucursal (corpo)</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={editContratoId != null && editSucursalOptionsMemo.length > 0}
-                        selectedValue={editSucursalId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditSucursalId(next === 0 ? null : next);
-                          setEditPuestoId(null);
-                        }}
-                      >
-                        <Picker.Item
-                          label={editContratoId ? 'Seleccione sucursal…' : 'Seleccione contrato primero'}
-                          value={0}
-                          color="#000000"
-                        />
-                        {editSucursalOptionsMemo.map((s) => (
-                          <Picker.Item key={s.id} label={s.nombre} value={s.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                  <ThemedView style={styles.filterGroup}>
-                    <ThemedText style={styles.filterLabel}>Puesto (opcional)</ThemedText>
-                    <View style={styles.pickerWrapper}>
-                      <Picker
-                        enabled={editSucursalId != null && editPuestoOptionsMemo.length > 0}
-                        selectedValue={editPuestoId ?? 0}
-                        onValueChange={(v) => {
-                          const next = Number(v) || 0;
-                          setEditPuestoId(next === 0 ? null : next);
-                        }}
-                      >
-                        <Picker.Item
-                          label={editSucursalId ? 'Sin puesto específico' : 'Seleccione sucursal primero'}
-                          value={0}
-                          color="#000000"
-                        />
-                        {editPuestoOptionsMemo.map((p) => (
-                          <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
-                        ))}
-                      </Picker>
-                    </View>
-                  </ThemedView>
-                </ThemedView>
-              )}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.label}>Ubicación (empresa → sucursal) * — puesto opcional</ThemedText>
+                <HierarchyPickerFields
+                  structure={structure}
+                  levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                  isLoading={false}
+                  emptyPickerValue={0}
+                  values={{
+                    empresaId: editEmpresaId,
+                    clienteId: editClienteId,
+                    divisionId: editDivisionId,
+                    contratoId: editContratoId,
+                    sucursalId: editSucursalId,
+                    puestoId: editPuestoId,
+                  }}
+                  onChange={handleFormHierarchyChange}
+                  labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto (opcional)' }}
+                  renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                  pickerWrapperStyle={styles.pickerWrapper}
+                  fieldGroupStyle={styles.filterGroup}
+                />
+              </ThemedView>
 
               {roleName === 'OPERATIVO' && (
                 <ThemedView style={styles.formGroup}>

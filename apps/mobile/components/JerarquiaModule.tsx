@@ -22,6 +22,8 @@ import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { persistMainStructureFragments } from '@/hooks/mainStructureFragmentsStorage';
 import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import HierarchySearchModal, { type HierarchySearchLevel } from '@/components/HierarchySearchModal';
+import type { HierarchySelectionPath } from '@/hooks/hierarchySearch';
 
 type AnyNode = Record<string, any>;
 
@@ -62,6 +64,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const [activeSummary, setActiveSummary] = useState<
     'empresa' | 'cliente' | 'division' | 'contrato' | 'sucursal' | 'puesto' | 'plaza' | 'empleado' | null
   >(null);
+  const [hierarchySearchLevel, setHierarchySearchLevel] = useState<HierarchySearchLevel | null>(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -519,6 +522,58 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     notifySelectionChange({ empleadoId: id });
   };
 
+  const openHierarchySearch = (level: HierarchySearchLevel) => {
+    setHierarchySearchLevel(level);
+  };
+
+  const applyHierarchyPath = useCallback(
+    (path: HierarchySelectionPath) => {
+      setSelectedEmpresaId(path.empresaId);
+      setSelectedClienteId(path.clienteId);
+      setSelectedDivisionId(path.divisionId);
+      setSelectedContratoId(path.contratoId);
+      setSelectedSucursalId(path.sucursalId);
+      setSelectedPuestoId(path.puestoId);
+      setSelectedPlazaId(path.plazaId);
+      setSelectedEmpleadoId(null);
+
+      let summary: typeof activeSummary = 'empresa';
+      if (path.plazaId != null) summary = 'plaza';
+      else if (path.puestoId != null) summary = 'puesto';
+      else if (path.sucursalId != null) summary = 'sucursal';
+      else if (path.contratoId != null) summary = 'contrato';
+      else if (path.divisionId != null) summary = 'division';
+      else if (path.clienteId != null) summary = 'cliente';
+      setActiveSummary(summary);
+
+      notifySelectionChange({
+        empresaId: path.empresaId,
+        clienteId: path.clienteId,
+        divisionId: path.divisionId,
+        contratoId: path.contratoId,
+        sucursalId: path.sucursalId,
+        puestoId: path.puestoId,
+        plazaId: path.plazaId,
+        empleadoId: null,
+      });
+    },
+    [notifySelectionChange],
+  );
+
+  const hierarchySearchEnabled = empresas.length > 0 && !isStructureLoading;
+
+  const renderHierarchySearchButton = (level: HierarchySearchLevel) => (
+    <TouchableOpacity
+      style={[styles.searchIconBtn, !hierarchySearchEnabled && styles.searchIconBtnDisabled]}
+      onPress={() => hierarchySearchEnabled && openHierarchySearch(level)}
+      activeOpacity={0.85}
+      disabled={!hierarchySearchEnabled}
+      accessibilityLabel={`Buscar ${level}`}
+    >
+      <Ionicons name="search" size={20} color="#FFFFFF" />
+    </TouchableOpacity>
+  );
+
   const renderSummaryList = (title: string, items: AnyNode[], getLabel: (item: AnyNode) => string) => {
     if (!items || items.length === 0) return null;
     return (
@@ -585,14 +640,15 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
         </View>
 
         {/* Cliente */}
-        {selectedEmpresaId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Cliente</Text>
-            <View style={styles.pickerContainer}>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Cliente</Text>
+          <View style={styles.pickerRow}>
+            <View style={[styles.pickerContainer, styles.pickerContainerFlex, !selectedEmpresaId && styles.pickerDisabled]}>
               <Picker
                 selectedValue={selectedClienteId ?? ''}
                 onValueChange={handleClienteChange}
                 style={styles.picker}
+                enabled={!!selectedEmpresaId}
               >
                 <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {clientes.map((c: AnyNode) => (
@@ -600,41 +656,42 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ))}
               </Picker>
             </View>
-            {activeSummary === 'empresa' &&
-              renderSummaryList('Clientes de la empresa', clientes, (c: AnyNode) => String(c.nombre))}
+            {renderHierarchySearchButton('cliente')}
           </View>
-        )}
+          {activeSummary === 'empresa' &&
+            renderSummaryList('Clientes de la empresa', clientes, (c: AnyNode) => String(c.nombre))}
+        </View>
 
         {/* División */}
-        {selectedClienteId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>División</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={selectedDivisionId ?? ''}
-                onValueChange={handleDivisionChange}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                {divisiones.map((d: AnyNode) => (
-                  <Picker.Item key={String(d.id)} label={String(d.nombre)} value={d.id} color="#000000" />
-                ))}
-              </Picker>
-            </View>
-            {activeSummary === 'cliente' &&
-              renderSummaryList('Divisiones del cliente', divisiones, (d: AnyNode) => String(d.nombre))}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>División</Text>
+          <View style={[styles.pickerContainer, !selectedClienteId && styles.pickerDisabled]}>
+            <Picker
+              selectedValue={selectedDivisionId ?? ''}
+              onValueChange={handleDivisionChange}
+              style={styles.picker}
+              enabled={!!selectedClienteId}
+            >
+              <Picker.Item label="Seleccionar..." value="" color="#000000" />
+              {divisiones.map((d: AnyNode) => (
+                <Picker.Item key={String(d.id)} label={String(d.nombre)} value={d.id} color="#000000" />
+              ))}
+            </Picker>
           </View>
-        )}
+          {activeSummary === 'cliente' &&
+            renderSummaryList('Divisiones del cliente', divisiones, (d: AnyNode) => String(d.nombre))}
+        </View>
 
         {/* Contrato */}
-        {selectedDivisionId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Contrato</Text>
-            <View style={styles.pickerContainer}>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Contrato</Text>
+          <View style={styles.pickerRow}>
+            <View style={[styles.pickerContainer, styles.pickerContainerFlex, !selectedDivisionId && styles.pickerDisabled]}>
               <Picker
                 selectedValue={selectedContratoId ?? ''}
                 onValueChange={handleContratoChange}
                 style={styles.picker}
+                enabled={!!selectedDivisionId}
               >
                 <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {contratos.map((ct: AnyNode) => (
@@ -642,20 +699,22 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ))}
               </Picker>
             </View>
-            {activeSummary === 'division' &&
-              renderSummaryList('Contratos de la división', contratos, (ct: AnyNode) => String(ct.nombre))}
+            {renderHierarchySearchButton('contrato')}
           </View>
-        )}
+          {activeSummary === 'division' &&
+            renderSummaryList('Contratos de la división', contratos, (ct: AnyNode) => String(ct.nombre))}
+        </View>
 
         {/* Sucursal */}
-        {selectedContratoId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Sucursal</Text>
-            <View style={styles.pickerContainer}>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Sucursal</Text>
+          <View style={styles.pickerRow}>
+            <View style={[styles.pickerContainer, styles.pickerContainerFlex, !selectedContratoId && styles.pickerDisabled]}>
               <Picker
                 selectedValue={selectedSucursalId ?? ''}
                 onValueChange={handleSucursalChange}
                 style={styles.picker}
+                enabled={!!selectedContratoId}
               >
                 <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {sucursales.map((s: AnyNode) => (
@@ -663,26 +722,28 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ))}
               </Picker>
             </View>
-            {activeSummary === 'contrato' &&
-              renderSummaryList('Sucursales del contrato', sucursales, (s: AnyNode) => String(s.nombre))}
-            {activeSummary === 'sucursal' &&
-              renderSummaryList(
-                'Vehículos corporativos de la sucursal',
-                vehiculosSucursal,
-                (v: AnyNode) => `${v.placa || v.placa_vehiculo || 'Sin placa'} - ${v.marca || ''}`.trim(),
-              )}
+            {renderHierarchySearchButton('sucursal')}
           </View>
-        )}
+          {activeSummary === 'contrato' &&
+            renderSummaryList('Sucursales del contrato', sucursales, (s: AnyNode) => String(s.nombre))}
+          {activeSummary === 'sucursal' &&
+            renderSummaryList(
+              'Vehículos corporativos de la sucursal',
+              vehiculosSucursal,
+              (v: AnyNode) => `${v.placa || v.placa_vehiculo || 'Sin placa'} - ${v.marca || ''}`.trim(),
+            )}
+        </View>
 
         {/* Puesto */}
-        {selectedSucursalId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Puesto</Text>
-            <View style={styles.pickerContainer}>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Puesto</Text>
+          <View style={styles.pickerRow}>
+            <View style={[styles.pickerContainer, styles.pickerContainerFlex, !selectedSucursalId && styles.pickerDisabled]}>
               <Picker
                 selectedValue={selectedPuestoId ?? ''}
                 onValueChange={handlePuestoChange}
                 style={styles.picker}
+                enabled={!!selectedSucursalId}
               >
                 <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {puestos.map((p: AnyNode) => (
@@ -690,26 +751,28 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ))}
               </Picker>
             </View>
-            {activeSummary === 'sucursal' &&
-              renderSummaryList('Puestos de la sucursal', puestos, (p: AnyNode) => String(p.nombre))}
-            {activeSummary === 'puesto' &&
-              renderSummaryList(
-                'Artículos del puesto',
-                articulosPuesto,
-                (a: AnyNode) => `${a.nombre} (${a.tipo || 'N/A'})`,
-              )}
+            {renderHierarchySearchButton('puesto')}
           </View>
-        )}
+          {activeSummary === 'sucursal' &&
+            renderSummaryList('Puestos de la sucursal', puestos, (p: AnyNode) => String(p.nombre))}
+          {activeSummary === 'puesto' &&
+            renderSummaryList(
+              'Artículos del puesto',
+              articulosPuesto,
+              (a: AnyNode) => `${a.nombre} (${a.tipo || 'N/A'})`,
+            )}
+        </View>
 
         {/* Plaza */}
-        {selectedPuestoId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Plaza</Text>
-            <View style={styles.pickerContainer}>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Plaza</Text>
+          <View style={styles.pickerRow}>
+            <View style={[styles.pickerContainer, styles.pickerContainerFlex, !selectedPuestoId && styles.pickerDisabled]}>
               <Picker
                 selectedValue={selectedPlazaId ?? ''}
                 onValueChange={handlePlazaChange}
                 style={styles.picker}
+                enabled={!!selectedPuestoId}
               >
                 <Picker.Item label="Seleccionar..." value="" color="#000000" />
                 {plazas.map((pl: AnyNode) => (
@@ -717,48 +780,48 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
                 ))}
               </Picker>
             </View>
-            {activeSummary === 'puesto' &&
-              renderSummaryList('Plazas del puesto', plazas, (pl: AnyNode) =>
-                String(pl.nombre || pl.codigo || `Plaza #${pl.id}`),
-              )}
+            {renderHierarchySearchButton('plaza')}
           </View>
-        )}
+          {activeSummary === 'puesto' &&
+            renderSummaryList('Plazas del puesto', plazas, (pl: AnyNode) =>
+              String(pl.nombre || pl.codigo || `Plaza #${pl.id}`),
+            )}
+        </View>
 
         {/* Empleado */}
-        {selectedPlazaId && (
-          <View style={styles.fieldGroup}>
-            <Text style={styles.label}>Empleado</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={selectedEmpleadoId ?? ''}
-                onValueChange={handleEmpleadoChange}
-                style={styles.picker}
-              >
-                <Picker.Item label="Seleccionar..." value="" color="#000000" />
-                {empleados.map((emp: AnyNode) => (
-                  <Picker.Item
-                    key={String(emp.id)}
-                    label={String(
-                      `${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${
-                        emp.cedula || ''
-                      }`.trim(),
-                    )}
-                    value={emp.id}
-                    color="#000000"
-                  />
-                ))}
-              </Picker>
-            </View>
-            {activeSummary === 'plaza' &&
-              renderSummaryList('Empleados de la plaza', empleados, (emp: AnyNode) =>
-                String(
-                  `${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${
-                    emp.cedula || ''
-                  }`.trim(),
-                ),
-              )}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.label}>Empleado</Text>
+          <View style={[styles.pickerContainer, !selectedPlazaId && styles.pickerDisabled]}>
+            <Picker
+              selectedValue={selectedEmpleadoId ?? ''}
+              onValueChange={handleEmpleadoChange}
+              style={styles.picker}
+              enabled={!!selectedPlazaId}
+            >
+              <Picker.Item label="Seleccionar..." value="" color="#000000" />
+              {empleados.map((emp: AnyNode) => (
+                <Picker.Item
+                  key={String(emp.id)}
+                  label={String(
+                    `${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${
+                      emp.cedula || ''
+                    }`.trim(),
+                  )}
+                  value={emp.id}
+                  color="#000000"
+                />
+              ))}
+            </Picker>
           </View>
-        )}
+          {activeSummary === 'plaza' &&
+            renderSummaryList('Empleados de la plaza', empleados, (emp: AnyNode) =>
+              String(
+                `${emp.nombre || ''} ${emp.primer_apellido || ''} ${emp.segundo_apellido || ''} - ${
+                  emp.cedula || ''
+                }`.trim(),
+              ),
+            )}
+        </View>
 
         {createdAt && (
             <Text style={[styles.label, { marginBottom: 0 }]}>Tú actualización: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}</Text>
@@ -767,6 +830,14 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
             <Text style={[styles.label, { marginBottom: 0 }]}>Última actualización: {convertDateTimestampToLocalString(new Date(lastCreatedAt).toISOString())}</Text>
         )}
       </ScrollView>
+
+      <HierarchySearchModal
+        visible={hierarchySearchLevel != null}
+        level={hierarchySearchLevel ?? 'cliente'}
+        structure={structure}
+        onClose={() => setHierarchySearchLevel(null)}
+        onSelect={(path) => applyHierarchyPath(path)}
+      />
     </View>
   );
 };
@@ -839,12 +910,40 @@ const styles = StyleSheet.create({
     color: '#333',
     marginBottom: 4,
   },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pickerContainerFlex: {
+    flex: 1,
+    minWidth: 0,
+  },
+  searchIconBtn: {
+    backgroundColor: '#007AFF',
+    height: 52,
+    minHeight: 52,
+    width: 44,
+    minWidth: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  searchIconBtnDisabled: {
+    opacity: 0.45,
+    backgroundColor: '#9CA3AF',
+  },
+  pickerDisabled: {
+    opacity: 0.55,
+    backgroundColor: '#F3F4F6',
+  },
   pickerContainer: {
     borderWidth: 1,
     borderColor: '#E0E0E0',
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
+    height: 52,
     minHeight: 52,
   },
   picker: {

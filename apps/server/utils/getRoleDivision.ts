@@ -8,7 +8,7 @@ type RoleDivision = {
 
 export default async function getRoleDivision(req: NextRequest, plaza: any, contrato: any) {
     const roleDivision: RoleDivision = {
-        role: { id: 0, nombre: "Indeterminable" },
+        role: { id: 1, nombre: "OPERATIVO" },
         division: { id: 0, nombre: "Indeterminable" },
     };
 
@@ -30,7 +30,7 @@ export default async function getRoleDivision(req: NextRequest, plaza: any, cont
                 roleDivision.division.id = division.id;
                 roleDivision.division.nombre = division.nombre;
             }
-            if (plaza.categoriaSalarial_id) {
+            if (plaza && plaza.categoriaSalarial_id) {
                 const categoria_salarial = await callDynamicPrisma({
                     req,
                     data: {

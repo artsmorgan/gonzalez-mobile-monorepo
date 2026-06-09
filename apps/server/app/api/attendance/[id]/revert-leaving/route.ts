@@ -33,6 +33,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const accionPersonal_id = marcaDia.accionPersonal_id;
 
         marcaDia.hora_salida_digitada = null;
+        marcaDia.hora_salida = null;
         marcaDia.accionPersonal_id = null;
         const updated = await callDynamicPrisma({
             req,

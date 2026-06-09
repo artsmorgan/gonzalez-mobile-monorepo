@@ -4,6 +4,17 @@ import {
   loadMainStructureFragmentsObject,
   writeMainStructureFragmentPatch,
 } from '@/hooks/mainStructureFragmentsStorage';
+import Constants from 'expo-constants';
+import authedFetch from '@/hooks/authedFetch';
+import { syncPuestoArticulosFragmentFromReportesList } from '@/hooks/mantenimientoEquipoMainStructureSync';
+import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
+import {
+  pendingFileToArchivoAdjuntoRef,
+  sanitizeArchivosAdjuntosForCache,
+  sanitizeArticuloNodeForCache,
+  sanitizeArticulosArrayForCache,
+  sanitizeMantenimientoForCache,
+} from '@/utils/articuloMantenimientoFiles';
 
 export type PuestoArticuloEstado = 'Bueno' | 'Malo' | 'No está' | string;
 
@@ -15,6 +26,7 @@ export type PuestoArticuloFormInput = {
   estado: PuestoArticuloEstado;
   observaciones?: string;
   created_at?: string | number | Date;
+  mantenimiento_files?: ArticuloMantenimientoPendingFile[];
 };
 
 type EnqueueUpdatePayload = {
@@ -57,6 +69,58 @@ function incomingTimestampMs(form: PuestoArticuloFormInput, fallbackMs: number):
   return Number.isFinite(ms) ? ms : fallbackMs;
 }
 
+function mergePendingArchivosIntoUltimo(
+  nextUltimo: any,
+  existingUltimo: any | null,
+  pendingFiles: ArticuloMantenimientoPendingFile[] | undefined,
+  options?: { inheritPreviousArchivos?: boolean },
+): any {
+  const inherit = options?.inheritPreviousArchivos !== false;
+
+  const baseArchivos = inherit
+    ? sanitizeArchivosAdjuntosForCache(
+        nextUltimo?.c_archivos_adjuntos_articulo_mantenimiento ??
+          nextUltimo?.archivos ??
+          existingUltimo?.c_archivos_adjuntos_articulo_mantenimiento ??
+          existingUltimo?.archivos,
+      )
+    : sanitizeArchivosAdjuntosForCache(
+        nextUltimo?.c_archivos_adjuntos_articulo_mantenimiento ?? nextUltimo?.archivos,
+      );
+
+  if (!Array.isArray(pendingFiles) || pendingFiles.length === 0) {
+    if (baseArchivos.length === 0) {
+      return sanitizeMantenimientoForCache(nextUltimo);
+    }
+    return sanitizeMantenimientoForCache({
+      ...nextUltimo,
+      c_archivos_adjuntos_articulo_mantenimiento: baseArchivos,
+    });
+  }
+
+  const seen = new Set<string>();
+  const merged: ReturnType<typeof pendingFileToArchivoAdjuntoRef>[] = [];
+
+  for (const ref of baseArchivos) {
+    const key = ref.id_local || `${ref.id}-${ref.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(ref);
+  }
+  for (const f of pendingFiles) {
+    const ref = pendingFileToArchivoAdjuntoRef(f);
+    const key = ref.id_local || `${ref.id}-${ref.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(ref);
+  }
+
+  return sanitizeMantenimientoForCache({
+    ...nextUltimo,
+    c_archivos_adjuntos_articulo_mantenimiento: merged,
+  });
+}
+
 function mergeMantenimientosWithUpdatedUltimo(
   existingMaints: any[],
   existingUltimo: { id?: number } | null,
@@ -72,6 +136,40 @@ function mergeMantenimientosWithUpdatedUltimo(
     return replaced ? next : [nextUltimo, ...existingMaints];
   }
   return [nextUltimo, ...existingMaints];
+}
+
+/** Indica si al guardar se creará un nuevo c_articulo_mantenimiento (vs. actualizar el último). */
+export function willCreateNewMantenimientoRecord(
+  existingUltimo: any | null | undefined,
+  formEstado: string,
+): boolean {
+  const hasServerLast = existingUltimo != null && Number(existingUltimo.id) > 0;
+  if (!hasServerLast) return true;
+  const lastEst = String(existingUltimo?.estado || 'Bueno').trim();
+  const newEst = String(formEstado || '').trim();
+  return lastEst === 'Bueno' && newEst !== 'Bueno';
+}
+
+/** Registro de mantenimiento al que se adjuntarán archivos según estado actual del formulario. */
+export function resolveTargetMantenimientoForForm(
+  art: any,
+  form: Pick<PuestoArticuloFormInput, 'estado'>,
+): {
+  target: any | null;
+  targetId: number | null;
+  isNewRecord: boolean;
+} {
+  const existingUltimo =
+    art?.ultimo_mantenimiento ?? art?.ultimo_registro_mantenimiento ?? null;
+  if (willCreateNewMantenimientoRecord(existingUltimo, form.estado)) {
+    return { target: null, targetId: null, isNewRecord: true };
+  }
+  const id = existingUltimo?.id != null ? Number(existingUltimo.id) : 0;
+  return {
+    target: existingUltimo,
+    targetId: Number.isFinite(id) && id > 0 ? id : null,
+    isNewRecord: false,
+  };
 }
 
 export function extractArticulosForPuestoFromTree(tree: any[], puestoId: number): any[] | null {
@@ -171,11 +269,9 @@ export function patchPuestoArticulosWithForms(
     };
 
     let nextUltimo: any;
-    let nextMantenimientos: any[];
 
     if (!hasServerLast) {
       nextUltimo = { ...newBasic };
-      nextMantenimientos = mergeMantenimientosWithUpdatedUltimo(existingMaints, null, nextUltimo);
     } else if (lastEst !== 'Bueno' && newEst === 'Bueno') {
       nextUltimo = {
         ...existingUltimo,
@@ -189,7 +285,6 @@ export function patchPuestoArticulosWithForms(
         updated_at: horaIso,
         evaluacion_mantenimiento_origen: origin,
       };
-      nextMantenimientos = mergeMantenimientosWithUpdatedUltimo(existingMaints, existingUltimo, nextUltimo);
     } else if (lastEst !== 'Bueno' && newEst !== 'Bueno') {
       nextUltimo = {
         ...existingUltimo,
@@ -204,10 +299,8 @@ export function patchPuestoArticulosWithForms(
       };
       if (lastEst !== newEst) nextUltimo.fecha_solucion = null;
       else nextUltimo.fecha_solucion = existingUltimo.fecha_solucion ?? null;
-      nextMantenimientos = mergeMantenimientosWithUpdatedUltimo(existingMaints, existingUltimo, nextUltimo);
     } else if (lastEst === 'Bueno' && newEst !== 'Bueno') {
       nextUltimo = { ...newBasic };
-      nextMantenimientos = [nextUltimo, ...existingMaints];
     } else {
       nextUltimo = {
         ...existingUltimo,
@@ -222,10 +315,11 @@ export function patchPuestoArticulosWithForms(
         updated_at: horaIso,
         evaluacion_mantenimiento_origen: origin,
       };
-      nextMantenimientos = mergeMantenimientosWithUpdatedUltimo(existingMaints, existingUltimo, nextUltimo);
     }
 
-    if (enqueueUpdate && hasServerLast && !(lastEst === 'Bueno' && newEst !== 'Bueno') && puestoId) {
+    const createsNew = !hasServerLast || (lastEst === 'Bueno' && newEst !== 'Bueno');
+
+    if (enqueueUpdate && hasServerLast && !createsNew && puestoId) {
       const rd: Record<string, unknown> = {
         estado: newEst,
         cantidad_necesaria: nextUltimo.cantidad_necesaria,
@@ -246,12 +340,22 @@ export function patchPuestoArticulosWithForms(
       });
     }
 
-    return {
+    const ultimoFinal = mergePendingArchivosIntoUltimo(
+      nextUltimo,
+      existingUltimo,
+      form.mantenimiento_files,
+      { inheritPreviousArchivos: !createsNew },
+    );
+    const mantenimientosFinal = createsNew
+      ? [ultimoFinal, ...existingMaints]
+      : mergeMantenimientosWithUpdatedUltimo(existingMaints, existingUltimo, ultimoFinal);
+
+    return sanitizeArticuloNodeForCache({
       ...art,
-      mantenimientos: nextMantenimientos,
-      ultimo_mantenimiento: nextUltimo,
-      ultimo_registro_mantenimiento: nextUltimo,
-    };
+      mantenimientos: mantenimientosFinal,
+      ultimo_mantenimiento: ultimoFinal,
+      ultimo_registro_mantenimiento: ultimoFinal,
+    });
   });
 }
 
@@ -281,12 +385,14 @@ export async function rewritePuestoArticulosInMainStructure(params: {
       }
     }
     if (baseArticulos != null && baseArticulos.length > 0) {
-      const patched = patchPuestoArticulosWithForms(baseArticulos, formsById, {
-        origin,
-        horaAccionMs,
-        puestoId: pid,
-        enqueueUpdate,
-      });
+      const patched = sanitizeArticulosArrayForCache(
+        patchPuestoArticulosWithForms(baseArticulos, formsById, {
+          origin,
+          horaAccionMs,
+          puestoId: pid,
+          enqueueUpdate,
+        }),
+      );
       await writeMainStructureFragmentPatch(fragKey, patched);
       if (fr[legacyFragKey] != null) {
         await writeMainStructureFragmentPatch(legacyFragKey, patched);
@@ -322,12 +428,14 @@ export async function rewritePuestoArticulosInMainStructure(params: {
                         if (!puesto || Number(puesto.id) !== pid || !Array.isArray(puesto.articulos)) return puesto;
                         return {
                           ...puesto,
-                          articulos: patchPuestoArticulosWithForms(puesto.articulos, formsById, {
-                            origin,
-                            horaAccionMs,
-                            puestoId: pid,
-                            enqueueUpdate,
-                          }),
+                          articulos: sanitizeArticulosArrayForCache(
+                            patchPuestoArticulosWithForms(puesto.articulos, formsById, {
+                              origin,
+                              horaAccionMs,
+                              puestoId: pid,
+                              enqueueUpdate,
+                            }),
+                          ),
                         };
                       }),
                     };
@@ -353,9 +461,71 @@ export async function loadPuestoArticulosForTable(puestoId: number): Promise<any
     const bySingular = fr[`puesto_${pid}_articulos`];
     const byPlural = fr[`puestos_${pid}_articulos`];
     const pick = Array.isArray(bySingular) && bySingular.length > 0 ? bySingular : byPlural;
-    if (Array.isArray(pick)) return pick;
+    if (Array.isArray(pick)) return sanitizeArticulosArrayForCache(pick);
   }
   const merged = await loadMainStructureTreeMerged();
   const fromTree = extractArticulosForPuestoFromTree(merged, pid);
-  return Array.isArray(fromTree) ? fromTree : [];
+  return Array.isArray(fromTree) ? sanitizeArticulosArrayForCache(fromTree) : [];
+}
+
+/** Refresca el fragmento `puesto_{id}_articulos` desde el API tras guardar online o sync. */
+export async function refreshPuestoArticulosFromServer(params: {
+  puestoId: number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<void> {
+  const { puestoId, refreshAccessToken, logout } = params;
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return;
+
+  try {
+    const response = await authedFetch({
+      url: `${apiUrl}/api/articulo-mantenimiento/puesto/${pid}`,
+      init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response?.ok) return;
+    const data = await response.json();
+    if (!data?.status || !Array.isArray(data.data) || data.data.length === 0) return;
+
+    const items = data.data.map((it: any) => ({
+      key: it.key,
+      source: it.source === 'plan' ? 'plan' : 'asignado',
+      estructura_id: it.estructura_id,
+      articulo_nomenclador_id: it.articulo_nomenclador_id ?? null,
+      articulo_nombre: it.articulo_nombre ?? 'Desconocido',
+      tipo: it.tipo,
+      marca: it.marca ?? null,
+      serie: it.serie ?? null,
+      tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
+      mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos : [],
+      movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
+      ultimo_mantenimiento: it.ultimo_mantenimiento ?? it.ultimo_registro_mantenimiento ?? null,
+      ultimo_registro_mantenimiento: it.ultimo_registro_mantenimiento ?? it.ultimo_mantenimiento ?? null,
+    }));
+
+    await syncPuestoArticulosFragmentFromReportesList(
+      pid,
+      items.map((it: any) => ({
+        ...it,
+        mantenimientos: Array.isArray(it.mantenimientos)
+          ? it.mantenimientos.map(sanitizeMantenimientoForCache)
+          : [],
+        ultimo_mantenimiento: it.ultimo_mantenimiento
+          ? sanitizeMantenimientoForCache(it.ultimo_mantenimiento)
+          : null,
+        ultimo_registro_mantenimiento: it.ultimo_registro_mantenimiento
+          ? sanitizeMantenimientoForCache(it.ultimo_registro_mantenimiento)
+          : it.ultimo_mantenimiento
+            ? sanitizeMantenimientoForCache(it.ultimo_mantenimiento)
+            : null,
+      })),
+    );
+  } catch (e) {
+    console.error('refreshPuestoArticulosFromServer:', e);
+  }
 }

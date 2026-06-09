@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { createReport, updateReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { uploadArticuloMantenimientoFiles } from "../../../utils/uploadArticuloMantenimientoFiles";
 
 export function articuloIncomingTimestamp(articulo: any, fallbackAccion: Date): Date {
   if (articulo?.created_at != null && String(articulo.created_at).trim()) {
@@ -111,7 +112,9 @@ export async function processChecklistSupervisionArticulosMantenimiento(
         const serverNow = new Date();
         const estado_actual = String(articulo.estado || "").trim();
 
-        const isPlanTipo = String(articulo.tipo ?? "").trim().toLowerCase() === "plan";
+        const isPlanTipo =
+          String(articulo.tipo ?? "").trim().toLowerCase() === "plan" ||
+          String(articulo.tipo ?? "").toLowerCase().includes("plan de");
         const whereByTipo = isPlanTipo
           ? { articulo_plan_id: articulo.id }
           : { articulo_asignado_id: articulo.id };
@@ -134,6 +137,10 @@ export async function processChecklistSupervisionArticulosMantenimiento(
           }
         }
 
+        const mantenimientoFiles = Array.isArray(articulo.mantenimiento_files)
+          ? articulo.mantenimiento_files
+          : [];
+
         const pushCreate = () => {
           const ts = articuloIncomingTimestamp(articulo, accionAt);
           articulos_reporte.push({
@@ -148,6 +155,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             observaciones: articulo.observaciones ?? "",
             created_at: ts,
             updated_at: ts,
+            mantenimiento_files: mantenimientoFiles,
           });
         };
 
@@ -177,6 +185,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             marca: articulo.marca,
             serie_placa: articulo.serie,
             updated_at: serverNow,
+            mantenimiento_files: mantenimientoFiles,
           });
         } else if (last_estado !== "Bueno" && estado_actual !== "Bueno") {
           const upd: Record<string, unknown> = {
@@ -188,6 +197,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             marca: articulo.marca,
             serie_placa: articulo.serie,
             updated_at: serverNow,
+            mantenimiento_files: mantenimientoFiles,
           };
           if (last_estado !== estado_actual) {
             upd.fecha_solucion = null;
@@ -211,6 +221,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             marca: articulo.marca,
             serie_placa: articulo.serie,
             updated_at: serverNow,
+            mantenimiento_files: mantenimientoFiles,
           });
         }
       }
@@ -219,11 +230,35 @@ export async function processChecklistSupervisionArticulosMantenimiento(
     console.error("Error procesando artículos para notificación y reportes (checklist):", error);
   }
 
-  if (articulos_reporte.length > 0) {
-    await createReport(req, articulos_reporte);
-  }
   if (articulos_reporte_update.length > 0) {
     await updateReport(req, articulos_reporte_update);
+    for (const upd of articulos_reporte_update) {
+      const files = Array.isArray(upd.mantenimiento_files) ? upd.mantenimiento_files : [];
+      if (files.length > 0 && upd.id) {
+        try {
+          await uploadArticuloMantenimientoFiles(req, Number(upd.id), files);
+        } catch (e) {
+          console.error("Error subiendo archivos de mantenimiento (update checklist):", e);
+        }
+      }
+    }
+  }
+  if (articulos_reporte.length > 0) {
+    const created = await createReport(req, articulos_reporte);
+    const reporteByArticuloId = new Map(
+      articulos_reporte.map((art) => [Number(art.id), art] as const),
+    );
+    for (const item of created) {
+      const art = reporteByArticuloId.get(item.articuloId);
+      const files = Array.isArray(art?.mantenimiento_files) ? art.mantenimiento_files : [];
+      if (files.length > 0 && item.mantenimientoId) {
+        try {
+          await uploadArticuloMantenimientoFiles(req, item.mantenimientoId, files);
+        } catch (e) {
+          console.error("Error subiendo archivos de mantenimiento (create checklist):", e);
+        }
+      }
+    }
   }
 
   if (send_notification) {
