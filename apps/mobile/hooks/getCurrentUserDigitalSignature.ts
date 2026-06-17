@@ -1,113 +1,63 @@
 import { Alert } from 'react-native';
-import * as Location from 'expo-location';
-import * as Linking from 'expo-linking';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { jwtDecode } from 'jwt-decode';
 import getHoraAccion from './getHoraAccion';
+import resolveDeviceCoordinates, {
+  DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN,
+  DEVICE_COORDS_GPS_TIMEOUT_MS_SIGNATURE_DEFAULT,
+  DEVICE_COORDS_LABELS_DIGITAL_SIGNATURE,
+  DEVICE_COORDS_POLL_SILENT,
+  DEVICE_COORDS_USER_ACTION,
+} from './resolveDeviceCoordinates';
 
-const LOCATION_TIMEOUT_MS = 15_000;
+export { DEVICE_COORDS_POLL_SILENT as SIGNATURE_POLL_SILENT };
+export { DEVICE_COORDS_USER_ACTION as SIGNATURE_USER_ACTION };
+export { DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN as SIGNATURE_GPS_TIMEOUT_SCREEN_MS };
+export { DEVICE_COORDS_GPS_TIMEOUT_MS_SIGNATURE_DEFAULT as SIGNATURE_GPS_TIMEOUT_DEFAULT_MS };
 
-function promptEnableLocation(message: string) {
-  Alert.alert('Ubicación requerida', message, [
-    { text: 'Cancelar', style: 'cancel' },
-    { text: 'Abrir configuración', onPress: () => void Linking.openSettings() },
-  ]);
-}
+/** Firma en DigitalSignatureScreen / LunchTimeScreen (10 s). */
+export const SIGNATURE_USER_ACTION_SCREEN = {
+  silent: false as const,
+  gpsTimeoutMs: DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN,
+};
 
-function isValidCoords(latitude: unknown, longitude: unknown): boolean {
-  return (
-    typeof latitude === 'number' &&
-    typeof longitude === 'number' &&
-    Number.isFinite(latitude) &&
-    Number.isFinite(longitude)
-  );
-}
+export const SIGNATURE_POLL_SILENT_SCREEN = {
+  silent: true as const,
+  gpsTimeoutMs: DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN,
+};
+
+export type DigitalSignatureOptions = {
+  /** `true` = sondeo periódico, sin Alert de caché. `false` = acción del usuario (default). */
+  silent?: boolean;
+  /** Ms esperando GPS antes de caché/error. Default: 20 s (módulos generales). */
+  gpsTimeoutMs?: number;
+};
 
 /**
- * Obtiene coordenadas para la firma digital sin dejar estado global roto.
- * Cada intento es independiente: si falla, el usuario puede reintentar tras activar GPS.
+ * Firma digital con coordenadas GPS.
+ * Exige servicios de ubicación activos; `last_location` solo si el intento GPS falla con GPS encendido.
+ * Por defecto (`silent: false`): acción del usuario → Alert si usa coordenadas en caché.
  */
-async function resolveSignatureCoordinates(): Promise<{ latitude: number; longitude: number } | null> {
-  const isLocationEnabled = await Location.hasServicesEnabledAsync();
-  if (!isLocationEnabled) {
-    promptEnableLocation(
-      'Los servicios de ubicación están apagados. Actívalos y vuelve a pulsar Generar.',
-    );
-    return null;
-  }
+export default async function getCurrentUserDigitalSignature(
+  employee: unknown,
+  options?: DigitalSignatureOptions,
+): Promise<string | null> {
+  const silent = options?.silent === true;
 
-  const { status } = await Location.requestForegroundPermissionsAsync();
-  if (status !== 'granted') {
-    promptEnableLocation(
-      'Se necesita permiso de ubicación para generar la firma. Concede el permiso y vuelve a pulsar Generar.',
-    );
-    return null;
-  }
-  
-  // 🔥 Warm-up del provider (fix para Android)
-  let subscription: Location.LocationSubscription | null = null;
-
-  try {
-    subscription = await Location.watchPositionAsync(
-      {
-        accuracy: Location.Accuracy.Low,
-        timeInterval: 1000,
-        distanceInterval: 1,
-      },
-      () => {}
-    );
-
-    // Espera mínima para que el provider reaccione
-    await new Promise((res) => setTimeout(res, 1000));
-
-  } finally {
-    subscription?.remove();
-  }
-
-  try {
-    const location = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
-      new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('LOCATION_TIMEOUT')), LOCATION_TIMEOUT_MS);
-      }),
-    ]);
-
-    const { latitude, longitude } = location.coords;
-    if (isValidCoords(latitude, longitude)) {
-      return { latitude, longitude };
+  if (!employee || typeof employee !== 'object') {
+    if (!silent) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
     }
-  } catch (error) {
-    console.warn('getCurrentPositionAsync failed, trying last known position:', error);
-  }
-
-  try {
-    const lastKnown = await Location.getLastKnownPositionAsync();
-    if (lastKnown?.coords) {
-      const { latitude, longitude } = lastKnown.coords;
-      if (isValidCoords(latitude, longitude)) {
-        return { latitude, longitude };
-      }
-    }
-  } catch (error) {
-    console.warn('getLastKnownPositionAsync failed:', error);
-  }
-
-  Alert.alert(
-    'Ubicación no disponible',
-    'No se pudo obtener la ubicación. Activa el GPS, espera unos segundos y vuelve a pulsar Generar.',
-    [{ text: 'Aceptar', style: 'default' }],
-  );
-  return null;
-}
-
-export default async function getCurrentUserDigitalSignature(employee: any): Promise<string | null> {
-  if (!employee) {
-    Alert.alert('Error', 'No se pudo obtener la información del empleado');
     return null;
   }
 
-  const coords = await resolveSignatureCoordinates();
-  if (!coords) {
+  const coordsResult = await resolveDeviceCoordinates({
+    silent,
+    labels: DEVICE_COORDS_LABELS_DIGITAL_SIGNATURE,
+    gpsTimeoutMs:
+      options?.gpsTimeoutMs ?? DEVICE_COORDS_GPS_TIMEOUT_MS_SIGNATURE_DEFAULT,
+  });
+  if (!coordsResult.ok) {
     return null;
   }
 
@@ -137,6 +87,7 @@ export default async function getCurrentUserDigitalSignature(employee: any): Pro
     console.warn('getHoraAccion failed, using local time for signature:', error);
   }
 
-  const empleadoId = String(employee.id);
-  return btoa(`${sessionId}:${empleadoId}:${coords.latitude}:${coords.longitude}:${timestamp}`);
+  const empleadoId = String((employee as { id?: unknown }).id);
+  const { latitude, longitude } = coordsResult;
+  return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
 }

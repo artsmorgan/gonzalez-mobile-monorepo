@@ -65,7 +65,11 @@ interface CurrentMarca {
 }
 
 interface EntregaPuestosInfo {
+  is_self_delivery?: boolean;
+  marca_recibe_id?: number;
+  marca_entrega_id?: number | null;
   previous_marca: {
+    id?: number;
     fecha: string;
     hora_inicio: string;
     hora_fin: string;
@@ -135,18 +139,20 @@ interface EntregaPuestoRecordArticulo {
 
 interface EntregaPuestoRecord {
   id: number;
-  oficial_entrega: string;
-  fecha_entrada_entrega: string | Date;
-  fecha_salida_entrega: string | Date;
-  hora_entrada_entrega: string | Date;
-  hora_salida_entrega: string | Date;
-  turno_entrega: string;
+  oficial_entrega: string | null;
+  fecha_entrada_entrega: string | Date | null;
+  fecha_salida_entrega: string | Date | null;
+  hora_entrada_entrega: string | Date | null;
+  hora_salida_entrega: string | Date | null;
+  turno_entrega: string | null;
+  marca_entrega_id: number | null;
   oficial_recibe: string;
   fecha_entrada_recibe: string | Date;
   fecha_salida_recibe: string | Date;
   hora_entrada_recibe: string | Date;
   hora_salida_recibe: string | Date;
   turno_recibe: string;
+  marca_recibe_id: number | null;
   articulos_puesto: EntregaPuestoRecordArticulo[];
   observaciones: string;
   firma_recibe: string;
@@ -405,6 +411,33 @@ export default function EntregaPuestosScreen() {
     return convertDateTimestampToLocalString(new Date(date).toISOString(), false);
   };
 
+  const toApiDateYmd = (value: string | Date | null | undefined): string | null => {
+    if (value == null || value === '') return null;
+
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      const y = value.getFullYear();
+      const m = String(value.getMonth() + 1).padStart(2, '0');
+      const d = String(value.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+
+    const s = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    if (/^\d{2}-\d{2}-\d{4}$/.test(s)) {
+      const [day, month, year] = s.split('-');
+      return `${year}-${month}-${day}`;
+    }
+
+    const parsed = new Date(s);
+    if (Number.isNaN(parsed.getTime())) return null;
+
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   const formatTime = (time: string | Date): string => {
     if (!time) return 'No definido';
     if (typeof time === 'string') {
@@ -537,14 +570,6 @@ export default function EntregaPuestosScreen() {
     loadData();
   }, []);
 
-  const isDateParsable = (value: string | Date | null | undefined): boolean => {
-    if (!value) return false;
-    if (typeof value === 'string') {
-      return value.includes('T');
-    }
-    return true;
-  };
-
   const isTimeParsable = (value: string | Date | null | undefined): boolean => {
     if (!value) return false;
     if (typeof value === 'string') {
@@ -624,12 +649,14 @@ export default function EntregaPuestosScreen() {
         hora_entrada_entrega: r.hora_entrada_entrega,
         hora_salida_entrega: r.hora_salida_entrega,
         turno_entrega: r.turno_entrega,
+        marca_entrega_id: r.marca_entrega_id != null ? Number(r.marca_entrega_id) : null,
         oficial_recibe: r.oficial_recibe,
         fecha_entrada_recibe: r.fecha_entrada_recibe,
         fecha_salida_recibe: r.fecha_salida_recibe,
         hora_entrada_recibe: r.hora_entrada_recibe,
         hora_salida_recibe: r.hora_salida_recibe,
         turno_recibe: r.turno_recibe,
+        marca_recibe_id: r.marca_recibe_id != null ? Number(r.marca_recibe_id) : null,
         articulos_puesto: Array.isArray(r.articulos_puesto) ? r.articulos_puesto : [],
         observaciones: r.observaciones || '',
         firma_recibe: r.firma_recibe,
@@ -838,29 +865,54 @@ export default function EntregaPuestosScreen() {
                 ? await hydrateArticulosPuestoFilesForApi(articulosPuestoStorage)
                 : articulosPuestoStorage;
 
+              const isSelfDelivery = Boolean(info.is_self_delivery);
+              const marcaRecibeId = currentMarca.id;
+              const marcaEntregaId = isSelfDelivery
+                ? null
+                : (info.marca_entrega_id ?? info.previous_marca?.id ?? null);
+
+              const fechaEntradaEntregaApi = toApiDateYmd(fechaEntradaEntrega);
+              const fechaSalidaEntregaApi = toApiDateYmd(fechaSalidaEntrega);
+              const fechaEntradaRecibeApi = toApiDateYmd(fechaEntradaRecibe);
+              const fechaSalidaRecibeApi = toApiDateYmd(fechaSalidaRecibe);
+
               const requestData = {
                 cliente_id: currentMarca.cliente.id,
                 corpo_id: currentMarca.corpo.id,
                 puesto_id: currentMarca.puesto.id,
                 division: currentMarca.roleDivision.division.id,
-                oficial_entrega: info.previous_employee.nombre,
-                fecha_entrada_entrega: isDateParsable(fechaEntradaEntrega) ? fechaEntradaEntrega : '1970-01-01',
-                fecha_salida_entrega: isDateParsable(fechaSalidaEntrega) ? fechaSalidaEntrega : '1970-01-01',
-                hora_entrada_entrega: isTimeParsable(horaEntradaEntrega) ? horaEntradaEntrega : '1970-01-01T00:00',
-                hora_salida_entrega: isTimeParsable(horaSalidaEntrega) ? horaSalidaEntrega : '1970-01-01T00:00',
-                turno_entrega: info.previous_marca.tipo_turno,
+                oficial_entrega: isSelfDelivery ? null : info.previous_employee.nombre,
+                fecha_entrada_entrega: isSelfDelivery
+                  ? null
+                  : fechaEntradaEntregaApi ?? '1970-01-01',
+                fecha_salida_entrega: isSelfDelivery
+                  ? null
+                  : fechaSalidaEntregaApi ?? '1970-01-01',
+                hora_entrada_entrega: isSelfDelivery
+                  ? null
+                  : isTimeParsable(horaEntradaEntrega)
+                    ? horaEntradaEntrega
+                    : '1970-01-01T00:00',
+                hora_salida_entrega: isSelfDelivery
+                  ? null
+                  : isTimeParsable(horaSalidaEntrega)
+                    ? horaSalidaEntrega
+                    : '1970-01-01T00:00',
+                turno_entrega: isSelfDelivery ? null : info.previous_marca.tipo_turno,
+                marca_entrega_id: marcaEntregaId,
                 oficial_recibe: employee?.name || 'Desconocido',
-                fecha_entrada_recibe: isDateParsable(fechaEntradaRecibe) ? fechaEntradaRecibe : '1970-01-01',
-                fecha_salida_recibe: isDateParsable(fechaSalidaRecibe) ? fechaSalidaRecibe : '1970-01-01',
+                fecha_entrada_recibe: fechaEntradaRecibeApi ?? '1970-01-01',
+                fecha_salida_recibe: fechaSalidaRecibeApi ?? '1970-01-01',
                 hora_entrada_recibe: isTimeParsable(horaEntradaRecibe) ? horaEntradaRecibe : '1970-01-01T00:00',
                 hora_salida_recibe: isTimeParsable(horaSalidaRecibe) ? horaSalidaRecibe : '1970-01-01T00:00',
                 turno_recibe: currentMarca.tipo_turno,
+                marca_recibe_id: marcaRecibeId,
                 articulos_puesto: articulosPuestoForRequest,
                 observaciones: observaciones,
                 firma_recibe: firmaRecibe,
-                firma_entrega: firmaEntrega || null,
+                firma_entrega: isSelfDelivery ? null : (firmaEntrega || null),
                 firma_responsable: firmaResponsable,
-                marca_id: currentMarca.id,
+                marca_id: marcaRecibeId,
               };
 
               if (isConnected) {
@@ -989,9 +1041,20 @@ export default function EntregaPuestosScreen() {
     );
   }
 
-  const fechaEntradaEntrega = info ? formatDate(info.previous_marca.fecha) : '';
-  const horaEntradaEntrega = info ? formatTime(info.previous_marca.hora_inicio) : '';
-  const horaSalidaEntrega = info ? formatTime(info.previous_marca.hora_fin) : '';
+  const isSelfDelivery = Boolean(
+    info?.is_self_delivery ??
+    (
+      info?.previous_employee?.id &&
+      (
+        Number(employee?.id) === Number(info.previous_employee.id) ||
+        Number(currentMarca.empleadoFijo_id) === Number(info.previous_employee.id)
+      )
+    ),
+  );
+
+  const fechaEntradaEntrega = info && !isSelfDelivery ? formatDate(info.previous_marca.fecha) : '';
+  const horaEntradaEntrega = info && !isSelfDelivery ? formatTime(info.previous_marca.hora_inicio) : '';
+  const horaSalidaEntrega = info && !isSelfDelivery ? formatTime(info.previous_marca.hora_fin) : '';
 
   const fechaEntradaRecibe = formatDate(currentMarca.fecha);
   const horaEntradaRecibe = formatTime(currentMarca.hora_inicio);
@@ -1017,7 +1080,7 @@ export default function EntregaPuestosScreen() {
     return `${fecha} ${hora.split('T')[1]}`;
   };
 
-  const dataLecturaEntrega = info
+  const dataLecturaEntrega = info && !isSelfDelivery
     ? [
       { label: 'Cliente', value: currentMarca.cliente.nombre },
       { label: 'Sucursal', value: currentMarca.corpo.nombre },
@@ -1089,28 +1152,42 @@ export default function EntregaPuestosScreen() {
 
   const renderRecordCard = (record: EntregaPuestoRecord) => {
     const decodedFirma = decodeFirmaHash(record.firma_responsable);
+    const hasEntregaData = Boolean(record.oficial_entrega);
     return (
       <ThemedView key={record.id} style={styles.recordCard}>
         <ThemedText style={styles.recordTitle}>Registro #{record.id}</ThemedText>
-        <ThemedText style={styles.recordLine}>
-          <ThemedText style={styles.recordLabel}>Oficial entrega: </ThemedText>
-          <ThemedText style={styles.recordValue}>{record.oficial_entrega}</ThemedText>
-        </ThemedText>
+        {hasEntregaData ? (
+          <>
+            <ThemedText style={styles.recordLine}>
+              <ThemedText style={styles.recordLabel}>Oficial entrega: </ThemedText>
+              <ThemedText style={styles.recordValue}>{record.oficial_entrega}</ThemedText>
+            </ThemedText>
+            <ThemedText style={styles.recordLine}>
+              <ThemedText style={styles.recordLabel}>Entrada entrega: </ThemedText>
+              <ThemedText style={styles.recordValue}>
+                {formatDateOnly(record.fecha_entrada_entrega)} {formatTimeOnly(record.hora_entrada_entrega)}
+              </ThemedText>
+            </ThemedText>
+            <ThemedText style={styles.recordLine}>
+              <ThemedText style={styles.recordLabel}>Salida entrega: </ThemedText>
+              <ThemedText style={styles.recordValue}>
+                {formatDateOnly(record.fecha_salida_entrega)} {formatTimeOnly(record.hora_salida_entrega)}
+              </ThemedText>
+            </ThemedText>
+            <ThemedText style={styles.recordLine}>
+              <ThemedText style={styles.recordLabel}>Turno entrega: </ThemedText>
+              <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_entrega || '')}</ThemedText>
+            </ThemedText>
+          </>
+        ) : (
+          <ThemedText style={styles.recordLine}>
+            <ThemedText style={styles.recordLabel}>Entrega: </ThemedText>
+            <ThemedText style={styles.recordValue}>Recepción directa (sin oficial que entrega)</ThemedText>
+          </ThemedText>
+        )}
         <ThemedText style={styles.recordLine}>
           <ThemedText style={styles.recordLabel}>Oficial recibe: </ThemedText>
           <ThemedText style={styles.recordValue}>{record.oficial_recibe}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.recordLine}>
-          <ThemedText style={styles.recordLabel}>Entrada entrega: </ThemedText>
-          <ThemedText style={styles.recordValue}>
-            {formatDateOnly(record.fecha_entrada_entrega)} {formatTimeOnly(record.hora_entrada_entrega)}
-          </ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.recordLine}>
-          <ThemedText style={styles.recordLabel}>Salida entrega: </ThemedText>
-          <ThemedText style={styles.recordValue}>
-            {formatDateOnly(record.fecha_salida_entrega)} {formatTimeOnly(record.hora_salida_entrega)}
-          </ThemedText>
         </ThemedText>
         <ThemedText style={styles.recordLine}>
           <ThemedText style={styles.recordLabel}>Entrada recibe: </ThemedText>
@@ -1124,15 +1201,23 @@ export default function EntregaPuestosScreen() {
             {formatDateOnly(record.fecha_salida_recibe)} {formatTimeOnly(record.hora_salida_recibe)}
           </ThemedText>
         </ThemedText>
-        <ThemedText style={styles.recordLine}>
-          <ThemedText style={styles.recordLabel}>Turno entrega: </ThemedText>
-          <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_entrega)}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.recordLine}>
-          <ThemedText style={styles.recordLabel}>Turno recibe: </ThemedText>
-          <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_recibe)}</ThemedText>
-        </ThemedText>
-        <ThemedText style={styles.recordLine}>
+            <ThemedText style={styles.recordLine}>
+              <ThemedText style={styles.recordLabel}>Turno recibe: </ThemedText>
+              <ThemedText style={styles.recordValue}>{getTurnoLabel(record.turno_recibe)}</ThemedText>
+            </ThemedText>
+            {record.marca_recibe_id ? (
+              <ThemedText style={styles.recordLine}>
+                <ThemedText style={styles.recordLabel}>Marca recibe: </ThemedText>
+                <ThemedText style={styles.recordValue}>#{record.marca_recibe_id}</ThemedText>
+              </ThemedText>
+            ) : null}
+            {record.marca_entrega_id ? (
+              <ThemedText style={styles.recordLine}>
+                <ThemedText style={styles.recordLabel}>Marca entrega: </ThemedText>
+                <ThemedText style={styles.recordValue}>#{record.marca_entrega_id}</ThemedText>
+              </ThemedText>
+            ) : null}
+            <ThemedText style={styles.recordLine}>
           <ThemedText style={styles.recordLabel}>Observaciones: </ThemedText>
           <ThemedText style={styles.recordValue}>{record.observaciones || 'Sin observaciones'}</ThemedText>
         </ThemedText>
@@ -1150,18 +1235,22 @@ export default function EntregaPuestosScreen() {
           ) : (
             <ThemedText style={styles.recordValue}>No registrada</ThemedText>
           )}
-          <ThemedText style={[styles.recordLine, { marginTop: 6 }]}>
-            <ThemedText style={styles.recordLabel}>Firma entrega: </ThemedText>
-          </ThemedText>
-          {record.firma_entrega ? (
-            <Image
-              source={{ uri: record.firma_entrega }}
-              style={styles.signaturePreviewImageSmall}
-              resizeMode="contain"
-            />
-          ) : (
-            <ThemedText style={styles.recordValue}>No registrada</ThemedText>
-          )}
+          {hasEntregaData ? (
+            <>
+              <ThemedText style={[styles.recordLine, { marginTop: 6 }]}>
+                <ThemedText style={styles.recordLabel}>Firma entrega: </ThemedText>
+              </ThemedText>
+              {record.firma_entrega ? (
+                <Image
+                  source={{ uri: record.firma_entrega }}
+                  style={styles.signaturePreviewImageSmall}
+                  resizeMode="contain"
+                />
+              ) : (
+                <ThemedText style={styles.recordValue}>No registrada</ThemedText>
+              )}
+            </>
+          ) : null}
           <ThemedText style={[styles.recordLine, { marginTop: 6 }]}>
             <ThemedText style={styles.recordLabel}>Firma responsable (digital): </ThemedText>
           </ThemedText>
@@ -1262,8 +1351,16 @@ export default function EntregaPuestosScreen() {
             {/* Sección de datos informativos */}
             <ThemedView style={styles.infoSection}>
               <ThemedText style={styles.sectionTitle}>Datos de Lectura</ThemedText>
+              {isSelfDelivery ? (
+                <ThemedView style={styles.infoBanner}>
+                  <Ionicons name="information-circle-outline" size={18} color="#007AFF" />
+                  <ThemedText style={styles.infoBannerText}>
+                    Estás registrando la recepción del puesto para tu propio turno. No se requiere información del oficial que entrega.
+                  </ThemedText>
+                </ThemedView>
+              ) : null}
               <ThemedView style={styles.readingCardsContainer}>
-                {renderLecturaCard('Entrega', 'arrow-up-circle-outline', dataLecturaEntrega)}
+                {!isSelfDelivery ? renderLecturaCard('Entrega', 'arrow-up-circle-outline', dataLecturaEntrega) : null}
                 {renderLecturaCard('Recibe', 'arrow-down-circle-outline', dataLecturaRecibe)}
               </ThemedView>
             </ThemedView>
@@ -1486,26 +1583,30 @@ export default function EntregaPuestosScreen() {
             )}
 
             {/* Firma Entrega (opcional) */}
-            <ThemedText style={styles.sectionTitle}>Firma de quien entrega (opcional)</ThemedText>
-            <ThemedView style={styles.signatureButtons}>
-              <TouchableOpacity
-                style={styles.signatureButton}
-                onPress={() => openSignatureModal('firma_entrega')}
-              >
-                <Ionicons name="create-outline" size={18} color="#FFFFFF" />
-                <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
-              </TouchableOpacity>
-            </ThemedView>
-            {!firmaEntrega ? (
-              <ThemedText style={styles.signatureHintMuted}>No se agregó firma de quien entrega.</ThemedText>
-            ) : (
-              <ThemedView style={styles.signaturePreviewContainer}>
-                <Image source={{ uri: firmaEntrega }} style={styles.signaturePreviewImage} resizeMode="contain" />
-                <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaEntrega('')}>
-                  <Ionicons name="trash" size={18} color="#FFFFFF" />
-                </TouchableOpacity>
-              </ThemedView>
-            )}
+            {!isSelfDelivery ? (
+              <>
+                <ThemedText style={styles.sectionTitle}>Firma de quien entrega (opcional)</ThemedText>
+                <ThemedView style={styles.signatureButtons}>
+                  <TouchableOpacity
+                    style={styles.signatureButton}
+                    onPress={() => openSignatureModal('firma_entrega')}
+                  >
+                    <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Dibujar firma</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+                {!firmaEntrega ? (
+                  <ThemedText style={styles.signatureHintMuted}>No se agregó firma de quien entrega.</ThemedText>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: firmaEntrega }} style={styles.signaturePreviewImage} resizeMode="contain" />
+                    <TouchableOpacity style={styles.firmaClearButtonTiny} onPress={() => setFirmaEntrega('')}>
+                      <Ionicons name="trash" size={18} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </>
+            ) : null}
 
             {/* Firma Responsable */}
             <ThemedText style={styles.sectionTitle}>Firma responsable *</ThemedText>

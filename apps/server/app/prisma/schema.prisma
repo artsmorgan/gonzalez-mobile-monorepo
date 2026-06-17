@@ -5910,18 +5910,20 @@ model e_registro_entrega_puesto {
   cliente_id            Int
   corpo_id              Int
   puesto_id             Int
-  oficial_entrega       String                @db.VarChar(255)
-  fecha_entrada_entrega DateTime              @db.Date
-  fecha_salida_entrega  DateTime              @db.Date
-  hora_entrada_entrega  DateTime              @db.Time(0)
-  hora_salida_entrega   DateTime              @db.Time(0)
-  turno_entrega         String                @db.VarChar(55)
+  oficial_entrega       String?               @db.VarChar(255)
+  fecha_entrada_entrega DateTime?             @db.Date
+  fecha_salida_entrega  DateTime?             @db.Date
+  hora_entrada_entrega  DateTime?             @db.Time(0)
+  hora_salida_entrega   DateTime?             @db.Time(0)
+  turno_entrega         String?               @db.VarChar(55)
+  marca_entrega_id      Int?
   oficial_recibe        String                @db.VarChar(255)
   fecha_entrada_recibe  DateTime              @db.Date
   fecha_salida_recibe   DateTime              @db.Date
   hora_entrada_recibe   DateTime              @db.Time(0)
   hora_salida_recibe    DateTime              @db.Time(0)
   turno_recibe          String                @db.VarChar(55)
+  marca_recibe_id       Int?
   articulos_puesto      String                @db.LongText
   observaciones         String                @db.LongText
   firma_responsable     String                @db.LongText
@@ -6424,4 +6426,14 @@ model n_ejecutivo_cuenta_coordinador {
   id                  Int @id @default(autoincrement())
   ejecutivo_cuenta_id Int
   coordinador_id      Int
+}
+
+model n_mobile_variables {
+  id             Int      @id @default(autoincrement())
+  variable_name  String   @db.VarChar(100)
+  slug           String   @db.VarChar(100)
+  created_at     DateTime @db.DateTime(0)
+  updated_at     DateTime @db.DateTime(0)
+  variable_value String   @db.LongText
+  variable_type  String   @db.VarChar(50)
 }

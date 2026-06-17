@@ -23,6 +23,15 @@ import {
 } from '../hooks/getPendingSyncActions';
 import { eventBus } from '../hooks/eventBus';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import {
+  readExtrapolatedServerTimeMs,
+  SERVER_TIME_UPDATED_EVENT,
+} from '@/hooks/updateServerTime';
+import {
+  readLastLocationFromStorage,
+  LAST_LOCATION_UPDATED_EVENT,
+} from '@/hooks/updateLastLocation';
+import * as Location from 'expo-location';
 
 type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -32,19 +41,36 @@ const COMPANY_LOGOS: { [key: string]: any } = {
   'charmander': require('../assets/images/charmander-logo.png'),
 };
 
+type AppVersionInfo = {
+  id?: string;
+  name?: string;
+  version?: string;
+  created_at?: string;
+  title?: string;
+  description?: string;
+  notas?: Array<string | { title?: string; description?: string }>;
+};
+
 type MobileVersionPayload = {
   available: boolean;
   appVersion?: string;
-  data?: {
-    id?: string;
-    name?: string;
-    version?: string;
-    created_at?: string;
-    title?: string;
-    description?: string;
-    notas?: Array<string | { title?: string; description?: string }>;
-  } | null;
+  data?: AppVersionInfo | null;
 };
+
+function readEmbeddedAppVersionInfo(): AppVersionInfo {
+  const raw = Constants.expoConfig?.extra?.APP_VERSION_INFO;
+  if (!raw || typeof raw !== 'object') return {};
+  return raw as AppVersionInfo;
+}
+
+function formatVersionReleaseDate(createdAt?: string): string {
+  if (!createdAt || String(createdAt).trim() === '') return '';
+  try {
+    return convertDateTimestampToLocalString(createdAt, false);
+  } catch {
+    return '';
+  }
+}
 
 const appendTokenToUrl = (url: string, accessToken?: string | null): string => {
   if (!url) return '';
@@ -82,10 +108,21 @@ export default function HomeScreen() {
   const [isVersionModalVisible, setIsVersionModalVisible] = useState(false);
   const [versionModalMode, setVersionModalMode] = useState<'current' | 'update'>('current');
   const [mobileVersionInfo, setMobileVersionInfo] = useState<MobileVersionPayload['data']>(null);
-  const [currentAppVersion, setCurrentAppVersion] = useState<string>(String(Constants.expoConfig?.extra?.APP_VERSION_INFO?.version || '0.0.0'));
+  const embeddedVersionInfo = readEmbeddedAppVersionInfo();
+  const [currentAppVersion, setCurrentAppVersion] = useState<string>(
+    String(embeddedVersionInfo.version || '0.0.0'),
+  );
+  const versionReleaseDateLabel = formatVersionReleaseDate(embeddedVersionInfo.created_at);
+  const [horaAccionLabel, setHoraAccionLabel] = useState('—');
+  const [locationLabel, setLocationLabel] = useState('—');
+  const [isLocationGpsOff, setIsLocationGpsOff] = useState(false);
   const isNewerServerVersion =
     !!mobileVersionInfo?.version &&
     compareSemver(String(mobileVersionInfo.version || '0.0.0'), currentAppVersion) === 1;
+  const versionInfoForModal: AppVersionInfo =
+    versionModalMode === 'update' && isNewerServerVersion && mobileVersionInfo
+      ? mobileVersionInfo
+      : embeddedVersionInfo;
 
   useFocusEffect(
     useCallback(() => {
@@ -118,6 +155,60 @@ export default function HomeScreen() {
       eventBus.off('mobileVersionAvailabilityChanged', handler);
     };
   }, []);
+
+  const refreshHoraAccionLabel = useCallback(async () => {
+    const horaMs = await readExtrapolatedServerTimeMs();
+    if (!Number.isFinite(horaMs)) {
+      setHoraAccionLabel('—');
+      return;
+    }
+    const formatted = convertDateTimestampToLocalString(new Date(horaMs).toISOString());
+    setHoraAccionLabel(formatted.replace(/:\d{2}$/, ''));
+  }, []);
+
+  const refreshLocationLabel = useCallback(async () => {
+    const gpsOn = await Location.hasServicesEnabledAsync();
+    if (!gpsOn) {
+      setIsLocationGpsOff(true);
+      setLocationLabel('Activa la ubicación del dispositivo para registrar tu posición.');
+      return;
+    }
+
+    setIsLocationGpsOff(false);
+    const stored = await readLastLocationFromStorage();
+    if (stored) {
+      setLocationLabel(
+        `Lat: ${stored.latitude.toFixed(6)}, Lng: ${stored.longitude.toFixed(6)}`
+      );
+      return;
+    }
+
+    setLocationLabel('Esperando señal GPS...');
+  }, []);
+
+  const refreshDeviceStatusLabels = useCallback(async () => {
+    await Promise.all([refreshHoraAccionLabel(), refreshLocationLabel()]);
+  }, [refreshHoraAccionLabel, refreshLocationLabel]);
+
+  useEffect(() => {
+    void refreshDeviceStatusLabels();
+    eventBus.on(SERVER_TIME_UPDATED_EVENT, refreshHoraAccionLabel);
+    eventBus.on(LAST_LOCATION_UPDATED_EVENT, refreshLocationLabel);
+    return () => {
+      eventBus.off(SERVER_TIME_UPDATED_EVENT, refreshHoraAccionLabel);
+      eventBus.off(LAST_LOCATION_UPDATED_EVENT, refreshLocationLabel);
+    };
+  }, [refreshDeviceStatusLabels, refreshHoraAccionLabel, refreshLocationLabel]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshDeviceStatusLabels();
+      const horaTickId = setInterval(() => {
+        void refreshHoraAccionLabel();
+      }, 30000);
+      return () => clearInterval(horaTickId);
+    }, [refreshDeviceStatusLabels, refreshHoraAccionLabel])
+  );
 
   const getCurrentUserStatus = async () => {
     const current_marca = await AsyncStorage.getItem('current_marca');
@@ -460,9 +551,6 @@ export default function HomeScreen() {
 
           {/* Quick access buttons */}
           <ThemedView style={styles.quickAccessContainer}>
-            <ThemedText type="subtitle" style={styles.sectionTitle}>
-              Accesos Directos
-            </ThemedText>
 
             <View style={styles.buttonsRow}>
               <TouchableOpacity
@@ -499,6 +587,20 @@ export default function HomeScreen() {
                 <ThemedText style={styles.buttonText}>Sincronizaciones</ThemedText>
               </TouchableOpacity>
             </View>
+
+            <ThemedView style={styles.deviceStatusBox}>
+              <ThemedText style={styles.deviceStatusLabel}>
+                {horaAccionLabel}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.deviceStatusLabel,
+                  isLocationGpsOff && styles.deviceStatusLocationWarning,
+                ]}
+              >
+                {locationLabel}
+              </ThemedText>
+            </ThemedView>
           </ThemedView>
         </ThemedView>
       </ScrollView>
@@ -622,7 +724,8 @@ export default function HomeScreen() {
           <ThemedText style={styles.appVersionText}>
             Versión:{' '}
             <ThemedText style={styles.appVersionStrong}>
-              {currentAppVersion} (21-Mayo-2026)
+              {currentAppVersion}
+              {versionReleaseDateLabel ? ` (17-Junio-2026)` : ''}
             </ThemedText>
           </ThemedText>
         </TouchableOpacity>
@@ -676,23 +779,24 @@ export default function HomeScreen() {
                 </ThemedText>
               )}
               <ThemedText style={styles.cardLine}>
-                <ThemedText style={styles.cardLabel}>Nombre: </ThemedText>{mobileVersionInfo?.name || '-'}
+                <ThemedText style={styles.cardLabel}>Nombre: </ThemedText>{versionInfoForModal.name || '-'}
               </ThemedText>
               <ThemedText style={styles.cardLine}>
-                <ThemedText style={styles.cardLabel}>Título: </ThemedText>{mobileVersionInfo?.title || '-'}
+                <ThemedText style={styles.cardLabel}>Título: </ThemedText>{versionInfoForModal.title || '-'}
               </ThemedText>
               <ThemedText style={styles.cardLine}>
-                <ThemedText style={styles.cardLabel}>Descripción: </ThemedText>{mobileVersionInfo?.description || '-'}
+                <ThemedText style={styles.cardLabel}>Descripción: </ThemedText>{versionInfoForModal.description || '-'}
               </ThemedText>
-              {!!mobileVersionInfo?.created_at && (
+              {!!versionInfoForModal.created_at && (
                 <ThemedText style={styles.cardLine}>
-                  <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>{ convertDateTimestampToLocalString(mobileVersionInfo.created_at, false) }
+                  <ThemedText style={styles.cardLabel}>Fecha: </ThemedText>
+                  {formatVersionReleaseDate(versionInfoForModal.created_at)}
                 </ThemedText>
               )}
-              {Array.isArray(mobileVersionInfo?.notas) && mobileVersionInfo!.notas!.length > 0 && (
+              {Array.isArray(versionInfoForModal.notas) && versionInfoForModal.notas.length > 0 && (
                 <ThemedView style={{ marginTop: 8 }}>
                   <ThemedText style={[styles.cardLabel, { marginBottom: 6 }]}>Notas</ThemedText>
-                  {mobileVersionInfo!.notas!.map((n: any, idx: number) => (
+                  {versionInfoForModal.notas.map((n, idx) => (
                     <ThemedText key={`note-${idx}`} style={styles.cardLine}>
                       - {typeof n === 'string' ? n : `${n?.title ? `${n.title}: ` : ''}${n?.description || ''}`}
                     </ThemedText>
@@ -765,7 +869,8 @@ const styles = StyleSheet.create({
   },
   logoContainer: {
     alignItems: 'center',
-    marginVertical: 20,
+    marginBottom: 20,
+    marginTop: 10,
   },
   logo: {
     width: 200,
@@ -814,6 +919,30 @@ const styles = StyleSheet.create({
   syncPendingButton: {
     backgroundColor: '#5856D6',
     flex: 1,
+  },
+  deviceStatusBox: {
+    marginTop: 5,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F8F9FA',
+    gap: 8,
+  },
+  deviceStatusLabel: {
+    fontSize: 13,
+    color: '#333',
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  deviceStatusLocationWarning: {
+    color: '#DC2626',
+    fontWeight: '600',
+  },
+  deviceStatusTitle: {
+    fontWeight: '600',
+    color: '#007AFF',
   },
   loadingText: {
     textAlign: 'center',

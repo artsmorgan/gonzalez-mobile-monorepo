@@ -90,7 +90,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
         });
         if (!visitor) {
-            return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
+            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 200 });
         }
 
         // Preparar datos de actualización
@@ -342,7 +342,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
         }
 
-        return NextResponse.json({ status: true, message: "Visita actualizada correctamente" }, { status: 200 });
+        return NextResponse.json({ status: true, message: "Persona actualizada correctamente" }, { status: 200 });
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -369,7 +369,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
         });
         if (!existing) {
-            return NextResponse.json({ status: false, message: "Visita no encontrada" }, { status: 200 });
+            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 200 });
         }
 
         await callDynamicPrisma({
@@ -403,7 +403,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             }
         });
 
-        return NextResponse.json({ status: true, message: "Visita eliminada correctamente" }, { status: 200 });
+        return NextResponse.json({ status: true, message: "Persona eliminada correctamente" }, { status: 200 });
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";

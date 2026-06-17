@@ -176,6 +176,7 @@ import {
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
+import updateLastLocation from './hooks/updateLastLocation';
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult, appendJobManualPuestos } from './hooks/jobManualsFunctions';
@@ -197,6 +198,7 @@ import EntregaPuestosScreen from './screens/EntregaPuestosScreen';
 import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
+import NomencladoresScreen from './screens/NomencladoresScreen';
 import ReportesScreen from './screens/ReportesScreen';
 import {
   createStaffEvaluation,
@@ -336,6 +338,7 @@ export type RootStackParamList = {
   ChecklistSupervision: undefined;
   PuestoUbicacion: undefined;
   Jerarquia: undefined;
+  Nomencladores: undefined;
   Reportes: undefined;
 };
 
@@ -426,6 +429,7 @@ function RootNavigator() {
       <Stack.Screen name="ChecklistSupervision" component={ChecklistSupervisionScreen} />
       <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
+      <Stack.Screen name="Nomencladores" component={NomencladoresScreen} />
       <Stack.Screen name="Reportes" component={ReportesScreen} />
     </Stack.Navigator>
   );
@@ -619,7 +623,7 @@ function AppContent() {
 
       await Promise.all([
           updateServerTime(),
-          checkMobileVersionAvailability(),
+          //checkMobileVersionAvailability(),
       ]);
         await checkManualSignatureCache();
 
@@ -7898,9 +7902,24 @@ function AppContent() {
       try {
         const connectivity = await resolveAppConnectivity();
         if (connectivity.ok) {
-          await updateServerTime();
+          horaAccion = await getHoraAccion();
         }
-        horaAccion = await getHoraAccion();
+        else {
+          const server_time = await AsyncStorage.getItem('server_time');
+          if (server_time) {
+            const server_time_obj = JSON.parse(server_time);
+            const t = parseInt(String(server_time_obj.server_time), 10);
+            if (Number.isFinite(t)) {
+              horaAccion = t;
+            }
+            else {
+              horaAccion = new Date().getTime();
+            }
+          }
+          else {
+            horaAccion = new Date().getTime();
+          }
+        }
       } catch (error) {
         console.error('[lunchTimer] Error obteniendo hora de referencia:', error);
         horaAccion = await getHoraAccion();
@@ -8124,6 +8143,15 @@ function AppContent() {
       clearTimeout(timeoutId);
     };
   }, [isConnected]);
+
+  /** Sondeo GPS silencioso cada 30 s → AsyncStorage `last_location` (sin depender de internet). */
+  useEffect(() => {
+    void updateLastLocation();
+    const locationIntervalId = setInterval(() => {
+      void updateLastLocation();
+    }, 30000);
+    return () => clearInterval(locationIntervalId);
+  }, []);
 
   if (!loaded) {
     return null;

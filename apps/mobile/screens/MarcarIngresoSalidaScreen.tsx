@@ -18,7 +18,7 @@ import * as Network from 'expo-network';
 import { formatDateDMY } from '../utils/formatDate';
 import saveMarca from '@/hooks/saveMarca';
 import saveAbsentReason from '@/hooks/saveAbsentReason';
-import updateNomenclator from '@/hooks/updateNomenclator';
+import { applyNomenclatorsFromAttendanceMarca } from '@/hooks/updateNomenclator';
 import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
 import {
   appendAttendanceAction,
@@ -30,8 +30,16 @@ import {
   evaluateLocalMarcaRules,
   validateMarcaLocation,
 } from '@/hooks/attendanceLocalMarcaValidation';
+import {
+  getMonitoringPreviousMinutesFromStorage,
+  setMonitoringPreviousMinutesStorage,
+} from '@/hooks/monitoringPreviousMinutesStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import resolveMarcaIngresoCoordinates from '@/hooks/resolveMarcaIngresoCoordinates';
+import {
+  DEVICE_COORDS_POLL_SILENT,
+  DEVICE_COORDS_USER_ACTION,
+} from '@/hooks/resolveDeviceCoordinates';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import { deleteAllFiles } from '@/hooks/fileStorage';
@@ -132,6 +140,7 @@ interface AttendanceErrorResponse {
   marca_id?: number;
   mark_blocked?: boolean;
   current_time?: number;
+  monitoring_previous_minutes?: number;
   marca?: AttendanceSuccessResponse['marca'];
 }
 
@@ -146,6 +155,13 @@ async function evaluateInternetConnection(): Promise<boolean> {
     networkState.isConnected === true &&
     networkState.isInternetReachable === true
   );
+}
+
+/** GPS activo obligatorio; caché solo si falla la lectura nueva. Alert de caché solo con DEVICE_COORDS_USER_ACTION. */
+async function obtainEntradaCoordinates(opts?: { silent?: boolean }) {
+  return resolveMarcaIngresoCoordinates({
+    silent: opts?.silent ?? DEVICE_COORDS_POLL_SILENT.silent,
+  });
 }
 
 export default function MarcarIngresoSalidaScreen() {
@@ -181,8 +197,30 @@ export default function MarcarIngresoSalidaScreen() {
   const hasRequestedInitialFetchRef = useRef(false);
   /** Aviso informativo entrada (cerrable), mismo patrón que ChecklistSupervisionScreen. */
   const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
+  const [monitoringPreviousMinutes, setMonitoringPreviousMinutes] = useState<number>(15);
   /** Re-render del reloj cuando no hay `attendanceData` (hora local CR como respaldo). */
   const [clockTick, setClockTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const minutes = await getMonitoringPreviousMinutesFromStorage();
+      if (!cancelled) {
+        setMonitoringPreviousMinutes(minutes);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistMonitoringPreviousMinutesFromResponse = async (
+    payload: { monitoring_previous_minutes?: unknown } | null | undefined
+  ) => {
+    if (payload?.monitoring_previous_minutes == null) return;
+    const minutes = await setMonitoringPreviousMinutesStorage(payload.monitoring_previous_minutes);
+    setMonitoringPreviousMinutes(minutes);
+  };
   useEffect(() => {
     const handler = () => {
       fetchAttendanceStatus();
@@ -309,6 +347,7 @@ export default function MarcarIngresoSalidaScreen() {
       lat: opts?.lat ?? null,
       lng: opts?.lng ?? null,
       validateLocationForEntrada: opts?.validateLocationForEntrada ?? false,
+      monitoringPreviousMinutes: await getMonitoringPreviousMinutesFromStorage(),
     });
   };
 
@@ -347,14 +386,16 @@ export default function MarcarIngresoSalidaScreen() {
   );
 
   /** Si la marca permite marcar ingreso (horario), exige GPS activo y radio de 50 m del puesto. */
+  /** Sondeo ~30 s: silent. Reintentar / marcar entrada: Alert si usa caché. */
   const refreshEntradaLocationEligibility = async (
     marca: Record<string, unknown>,
     nowMs: number,
-    opts?: { silent?: boolean }
+    opts?: { silent?: boolean },
   ) => {
-    const silent = opts?.silent !== false;
+    const silent = opts?.silent ?? DEVICE_COORDS_POLL_SILENT.silent;
     const estado = marca.hora_entrada_digitada != null ? 'Ingresado' : 'No ingresado';
-    if (estado !== 'No ingresado' || !computeChangeAvailable(marca, nowMs)) {
+    const monitoringMinutes = await getMonitoringPreviousMinutesFromStorage();
+    if (estado !== 'No ingresado' || !computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
       setShowEntradaLocationRetry(false);
       return;
     }
@@ -372,7 +413,7 @@ export default function MarcarIngresoSalidaScreen() {
       return;
     }
 
-    const coords = await resolveMarcaIngresoCoordinates({ silent });
+    const coords = await obtainEntradaCoordinates({ silent });
     if (!coords.ok) {
       setLocalCanMarkEntrada(false);
       setErrorMessage(coords.message);
@@ -404,7 +445,7 @@ export default function MarcarIngresoSalidaScreen() {
       await refreshEntradaLocationEligibility(
         attendanceData.marca as Record<string, unknown>,
         nowMs,
-        { silent: false }
+        DEVICE_COORDS_USER_ACTION,
       );
     } finally {
       setIsRefreshingEntradaLocation(false);
@@ -437,6 +478,9 @@ export default function MarcarIngresoSalidaScreen() {
   ): Promise<boolean> => {
     const marcaPayload = await resolveMarcaPayloadFromBlockedError(errorData, horaAccionValue);
     if (!marcaPayload) return false;
+
+    await persistMonitoringPreviousMinutesFromResponse(errorData);
+    await applyNomenclatorsFromAttendanceMarca(marcaPayload);
 
     const nowMs = Number(marcaPayload.current_time) || horaAccionValue || Date.now();
     await AsyncStorage.setItem('current_marca', JSON.stringify(marcaPayload));
@@ -633,6 +677,8 @@ export default function MarcarIngresoSalidaScreen() {
 
       if (result) {
         marca_send = data.marca;
+        await persistMonitoringPreviousMinutesFromResponse(data);
+        await applyNomenclatorsFromAttendanceMarca(marca_send);
 
         const server_time = await AsyncStorage.getItem('server_time');
         if (!server_time) {
@@ -718,6 +764,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const setCurrentAttendanceData = async (data: any, horaAccionValue: number) => {
     const marca = data;
+    const monitoringMinutes = await getMonitoringPreviousMinutesFromStorage();
 
     const fecha = marca.fecha.split('-');
     fecha[2] = fecha[2].slice(0, 2);
@@ -729,7 +776,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     let next_change_time = new Date(next_time.getTime());
     next_change_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
-    next_change_time.setMinutes(next_change_time.getMinutes() - 15);
+    next_change_time.setMinutes(next_change_time.getMinutes() - monitoringMinutes);
 
     let change_available = true;
     let is_late = false;
@@ -737,7 +784,7 @@ export default function MarcarIngresoSalidaScreen() {
     const now = horaAccionValue;
 
     if (estado == "No ingresado") {
-      if (now < next_change_time.getTime()) { // Si la fecha del parámetro es menor a la fecha de la marca menos 15 menos minutos
+      if (now < next_change_time.getTime()) {
         change_available = false;
       }
     }
@@ -804,9 +851,12 @@ export default function MarcarIngresoSalidaScreen() {
     let lng: number | null = null;
 
     if (type === 'entrada') {
-      const coords = await resolveMarcaIngresoCoordinates();
+      const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
       if (!coords.ok) {
-        return { ok: false, message: '' };
+        return {
+          ok: false,
+          message: coords.message || 'No se pudo obtener la ubicación para marcar ingreso.',
+        };
       }
       lat = coords.latitude;
       lng = coords.longitude;
@@ -941,12 +991,10 @@ export default function MarcarIngresoSalidaScreen() {
         await fetchAttendanceStatus();
       }
 
-      Promise.all([
+      void Promise.all([
         getLunchTimeConfig(updatedMarca.id),
         getActivities(updatedMarca.id),
       ]);
-
-      await updateNomenclator(updatedMarca, refreshAccessToken, logout);
     } catch (storageError) {
       console.error('Error hydrating entrada context:', storageError);
     }
@@ -1082,7 +1130,9 @@ export default function MarcarIngresoSalidaScreen() {
         'puestos_corpo_cache',
         'categoria_mantenimiento_cache',
         'tipo_quejas_cache',
-        'tipo_clientes_quejas_cache'
+        'tipo_clientes_quejas_cache',
+        'last_location',
+        'monitoring_previous_minutes'
       ];
       const keys = await AsyncStorage.getAllKeys();
 
@@ -1977,7 +2027,7 @@ const getActivities = async (marcaId: number) => {
               <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
               <ThemedView style={styles.entradaMarcaHintTextRow}>
                 <ThemedText style={[styles.entradaMarcaHintText, { flex: 1 }]}>
-                  Para poder marcar entrada, asegúrate de estar mínimo 15 minutos antes del inicio o durante tu turno
+                  Para poder marcar entrada, asegúrate de estar mínimo {monitoringPreviousMinutes} minutos antes del inicio o durante tu turno
                 </ThemedText>
                 <TouchableOpacity
                   onPress={() => setIsEntradaMarcaHintVisible(false)}

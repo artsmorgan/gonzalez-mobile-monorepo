@@ -180,17 +180,74 @@ export function filtersMatchEntregaPuestoListQuery(parsedRowFilters: any, listMo
     return true;
 }
 
+const ENTREGA_NA = "N/A";
+
+function isEmptyEntregaValue(v: unknown): boolean {
+    if (v == null) return true;
+    if (typeof v === "string" && v.trim() === "") return true;
+    return false;
+}
+
 function fmtDate(d: unknown): string {
+    if (d == null || d === "") return "";
     if (d instanceof Date) return d.toISOString().slice(0, 10);
-    if (d == null) return "";
-    return String(d);
+    const s = String(d).trim();
+    if (s.includes("T")) return s.split("T")[0];
+    const ymd = s.slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
+    return s;
 }
 
 function fmtTime(d: unknown): string {
-    if (!(d instanceof Date)) return "";
-    const hh = String(d.getUTCHours()).padStart(2, "0");
-    const mm = String(d.getUTCMinutes()).padStart(2, "0");
-    return `${hh}:${mm}`;
+    if (d == null || d === "") return "";
+    if (d instanceof Date) {
+        const hh = String(d.getUTCHours()).padStart(2, "0");
+        const mm = String(d.getUTCMinutes()).padStart(2, "0");
+        return `${hh}:${mm}`;
+    }
+    const s = String(d).trim();
+    if (/^\d{2}:\d{2}/.test(s)) return s.slice(0, 5);
+    if (s.includes("T")) {
+        const part = s.split("T")[1]?.split(".")[0];
+        if (part && part.length >= 5) return part.slice(0, 5);
+    }
+    return s;
+}
+
+function fmtTipoTurno(turno: unknown): string {
+    const t = String(turno ?? "").trim().toUpperCase();
+    if (t === "D") return "Diurno";
+    if (t === "M") return "Mixto";
+    if (t === "N") return "Nocturno";
+    return String(turno ?? "").trim();
+}
+
+function displayEntregaText(v: unknown): string {
+    return isEmptyEntregaValue(v) ? ENTREGA_NA : String(v).trim();
+}
+
+function displayEntregaDate(v: unknown): string {
+    if (isEmptyEntregaValue(v)) return ENTREGA_NA;
+    const formatted = fmtDate(v);
+    return formatted === "" ? ENTREGA_NA : formatted;
+}
+
+function displayEntregaTime(v: unknown): string {
+    if (isEmptyEntregaValue(v)) return ENTREGA_NA;
+    const formatted = fmtTime(v);
+    return formatted === "" ? ENTREGA_NA : formatted;
+}
+
+function displayEntregaTurno(v: unknown): string {
+    if (isEmptyEntregaValue(v)) return ENTREGA_NA;
+    const formatted = fmtTipoTurno(v);
+    return formatted === "" ? ENTREGA_NA : formatted;
+}
+
+function displayMarcaId(v: unknown): string {
+    if (v == null || v === "") return ENTREGA_NA;
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? String(Math.floor(n)) : ENTREGA_NA;
 }
 
 function normalizeSignatureDataUri(raw: string | null | undefined): string | null {
@@ -338,6 +395,14 @@ export async function queryEntregaPuestoRows(
             firma_entrega_data_uri: normalizeSignatureDataUri(r.firma_entrega),
             firma_recibe_data_uri: normalizeSignatureDataUri(r.firma_recibe),
             articulos_puesto_preview: String(r.articulos_puesto ?? "").slice(0, 400),
+            oficial_entrega_display: displayEntregaText(r.oficial_entrega),
+            fecha_entrada_entrega_display: displayEntregaDate(r.fecha_entrada_entrega),
+            fecha_salida_entrega_display: displayEntregaDate(r.fecha_salida_entrega),
+            hora_entrada_entrega_display: displayEntregaTime(r.hora_entrada_entrega),
+            hora_salida_entrega_display: displayEntregaTime(r.hora_salida_entrega),
+            turno_entrega_display: displayEntregaTurno(r.turno_entrega),
+            marca_entrega_id_display: displayMarcaId(r.marca_entrega_id),
+            marca_recibe_id_display: displayMarcaId(r.marca_recibe_id),
         };
     });
 
@@ -467,11 +532,14 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         "Fecha de salida (entrega)",
         "Hora de entrada (entrega)",
         "Hora de salida (entrega)",
+        "Turno entrega",
+        "Marca entrega ID",
         "Oficial recibe",
         "Fecha de entrada (recibe)",
         "Fecha de salida (recibe)",
         "Hora de entrada (recibe)",
         "Hora de salida (recibe)",
+        "Marca recibe ID",
         "Artículos puesto",
         "Firma entrega",
         "Firma recibe",
@@ -498,8 +566,12 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         { width: 22 },
         { width: 14 },
         { width: 14 },
+        { width: 16 },
+        { width: 14 },
+        { width: 14 },
         { width: 22 },
         { width: 22 },
+        { width: 14 },
         { width: 14 },
         { width: 14 },
         { width: 24 },
@@ -526,6 +598,58 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         details.getCell(dRow, 1).value = `${r.empresa_nombre} · ${r.cliente_nombre} · ${r.puesto_nombre}`;
         details.getRow(dRow).outlineLevel = 1;
         dRow++;
+
+        details.getCell(dRow, 1).value = "Datos del registro";
+        details.getCell(dRow, 1).font = { bold: true };
+        details.getCell(dRow, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+        details.mergeCells(dRow, 1, dRow, 4);
+        details.getRow(dRow).outlineLevel = 1;
+        dRow++;
+
+        const infoRows: [string, string, string, string][] = [
+            ["Oficial entrega", displayEntregaText(r.oficial_entrega), "", ""],
+            [
+                "Fecha de entrada (entrega)",
+                displayEntregaDate(r.fecha_entrada_entrega),
+                "Hora de entrada (entrega)",
+                displayEntregaTime(r.hora_entrada_entrega),
+            ],
+            [
+                "Fecha de salida (entrega)",
+                displayEntregaDate(r.fecha_salida_entrega),
+                "Hora de salida (entrega)",
+                displayEntregaTime(r.hora_salida_entrega),
+            ],
+            ["Turno entrega", displayEntregaTurno(r.turno_entrega), "Marca entrega ID", displayMarcaId(r.marca_entrega_id)],
+            ["Oficial recibe", String(r.oficial_recibe ?? ""), "Marca recibe ID", displayMarcaId(r.marca_recibe_id)],
+            [
+                "Fecha de entrada (recibe)",
+                displayEntregaDate(r.fecha_entrada_recibe),
+                "Hora de entrada (recibe)",
+                displayEntregaTime(r.hora_entrada_recibe),
+            ],
+            [
+                "Fecha de salida (recibe)",
+                displayEntregaDate(r.fecha_salida_recibe),
+                "Hora de salida (recibe)",
+                displayEntregaTime(r.hora_salida_recibe),
+            ],
+        ];
+        for (const [label1, value1, label2, value2] of infoRows) {
+            details.getCell(dRow, 1).value = label1;
+            details.getCell(dRow, 1).font = { bold: true };
+            details.getCell(dRow, 2).value = value1;
+            if (label2) {
+                details.getCell(dRow, 3).value = label2;
+                details.getCell(dRow, 3).font = { bold: true };
+                details.getCell(dRow, 4).value = value2;
+            }
+            details.getRow(dRow).eachCell((c) => {
+                c.border = borderThin;
+            });
+            details.getRow(dRow).outlineLevel = 1;
+            dRow++;
+        }
 
         const articulos = parseArticulos(r.articulos_puesto);
         details.getCell(dRow, 1).value = "Artículos";
@@ -557,11 +681,16 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         }
 
         details.getCell(dRow, 1).value = "Firma entrega";
+        details.getCell(dRow, 2).value = displayEntregaText(r.oficial_entrega);
         details.getCell(dRow, 6).value = "Firma recibe";
+        details.getCell(dRow, 7).value = String(r.oficial_recibe ?? "");
         details.getCell(dRow, 1).font = { bold: true };
         details.getCell(dRow, 6).font = { bold: true };
+        details.getCell(dRow, 2).font = { italic: true };
+        details.getCell(dRow, 7).font = { italic: true };
         details.getCell(dRow, 1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2F0D9" } };
         details.getCell(dRow, 6).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2F0D9" } };
+        details.getRow(dRow).outlineLevel = 1;
         dRow++;
         const sigEntrega = parseDataUri(normalizeSignatureDataUri(r.firma_entrega));
         const sigRecibe = parseDataUri(normalizeSignatureDataUri(r.firma_recibe));
@@ -583,7 +712,7 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         }
     }
 
-    details.columns = [{ width: 28 }, { width: 14 }, { width: 12 }, { width: 12 }, { width: 14 }, { width: 36 }];
+    details.columns = [{ width: 28 }, { width: 22 }, { width: 28 }, { width: 14 }, { width: 14 }, { width: 18 }, { width: 28 }];
     details.properties.outlineProperties = {
         summaryBelow: true,
         summaryRight: true,
@@ -600,25 +729,28 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
             r.corpo_nombre,
             r.puesto_nombre,
             r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ""),
-            r.oficial_entrega,
-            fmtDate(r.fecha_entrada_entrega),
-            fmtDate(r.fecha_salida_entrega),
-            fmtTime(r.hora_entrada_entrega),
-            fmtTime(r.hora_salida_entrega),
+            displayEntregaText(r.oficial_entrega),
+            displayEntregaDate(r.fecha_entrada_entrega),
+            displayEntregaDate(r.fecha_salida_entrega),
+            displayEntregaTime(r.hora_entrada_entrega),
+            displayEntregaTime(r.hora_salida_entrega),
+            displayEntregaTurno(r.turno_entrega),
+            displayMarcaId(r.marca_entrega_id),
             r.oficial_recibe,
-            fmtDate(r.fecha_entrada_recibe),
-            fmtDate(r.fecha_salida_recibe),
-            fmtTime(r.hora_entrada_recibe),
-            fmtTime(r.hora_salida_recibe),
+            displayEntregaDate(r.fecha_entrada_recibe),
+            displayEntregaDate(r.fecha_salida_recibe),
+            displayEntregaTime(r.hora_entrada_recibe),
+            displayEntregaTime(r.hora_salida_recibe),
+            displayMarcaId(r.marca_recibe_id),
             "Ver artículos / firmas",
             "Ver artículos / firmas",
             "Ver artículos / firmas",
         ]);
         const link = `#'Detalles'!A${anchor}`;
-        row.getCell(19).value = { text: "Ver artículos / firmas", hyperlink: link };
-        row.getCell(20).value = { text: "Ver artículos / firmas", hyperlink: link };
-        row.getCell(21).value = { text: "Ver artículos / firmas", hyperlink: link };
-        [19, 20, 21].forEach((i) => {
+        row.getCell(22).value = { text: "Ver artículos / firmas", hyperlink: link };
+        row.getCell(23).value = { text: "Ver artículos / firmas", hyperlink: link };
+        row.getCell(24).value = { text: "Ver artículos / firmas", hyperlink: link };
+        [22, 23, 24].forEach((i) => {
             row.getCell(i).font = { color: { argb: "FF0563C1" }, underline: true };
         });
         row.eachCell((c) => {
@@ -656,14 +788,6 @@ function colLetter(n: number): string {
 
 function cellAddr(row: number, col: number): string {
     return `${colLetter(col)}${row}`;
-}
-
-function fmtTipoTurno(turno: unknown): string {
-    const t = String(turno ?? "").trim().toUpperCase();
-    if (t === "D") return "Diurno";
-    if (t === "M") return "Mixto";
-    if (t === "N") return "Nocturno";
-    return String(turno ?? "");
 }
 
 function mergeRng(ws: ExcelJS.Worksheet, r1: number, c1: number, r2: number, c2: number) {
@@ -783,25 +907,25 @@ async function drawEntregaForm(
     ws.getCell(leftTop, c0).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     mergeRng(ws, leftTop + 1, c0, leftTop + 1, c0 + 1);
-    ws.getCell(leftTop + 1, c0).value = `Fecha entrada: ${fmtDate(r.fecha_entrada_entrega)}`;
+    ws.getCell(leftTop + 1, c0).value = `Fecha entrada: ${displayEntregaDate(r.fecha_entrada_entrega)}`;
     ws.getCell(leftTop + 1, c0).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     mergeRng(ws, leftTop + 2, c0, leftTop + 2, c0 + 1);
-    ws.getCell(leftTop + 2, c0).value = `Hora entrada: ${fmtTime(r.hora_entrada_entrega)}`;
+    ws.getCell(leftTop + 2, c0).value = `Hora entrada: ${displayEntregaTime(r.hora_entrada_entrega)}`;
     ws.getCell(leftTop + 2, c0).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     mergeRng(ws, leftTop + 3, c0, leftTop + 3, c0 + 1);
-    ws.getCell(leftTop + 3, c0).value = `Turno: ${fmtTipoTurno(r.turno_entrega)}`;
+    ws.getCell(leftTop + 3, c0).value = `Turno: ${displayEntregaTurno(r.turno_entrega)}`;
     ws.getCell(leftTop + 3, c0).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     const rightTop = datosTopRow;
     // Dejar la primera fila de la cuadrícula derecha vacía; los datos inician una fila más abajo.
     mergeRng(ws, rightTop + 1, c0 + 2, rightTop + 1, c0 + 4);
-    ws.getCell(rightTop + 1, c0 + 2).value = `Fecha de salida: ${fmtDate(r.fecha_salida_entrega)}`;
+    ws.getCell(rightTop + 1, c0 + 2).value = `Fecha de salida: ${displayEntregaDate(r.fecha_salida_entrega)}`;
     ws.getCell(rightTop + 1, c0 + 2).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     mergeRng(ws, rightTop + 2, c0 + 2, rightTop + 2, c0 + 4);
-    ws.getCell(rightTop + 2, c0 + 2).value = `Hora de salida: ${fmtTime(r.hora_salida_entrega)}`;
+    ws.getCell(rightTop + 2, c0 + 2).value = `Hora de salida: ${displayEntregaTime(r.hora_salida_entrega)}`;
     ws.getCell(rightTop + 2, c0 + 2).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
 
     mergeRng(ws, rightTop + 3, c0 + 2, rightTop + 3, c0 + 4);
@@ -820,10 +944,10 @@ async function drawEntregaForm(
     row = datosBottomRow + 1;
 
     mergeRng(ws, row, c0, row, c0 + 2);
-    ws.getCell(row, c0).value = `Día: ${fmtDate(r.fecha_entrada_entrega)}`;
+    ws.getCell(row, c0).value = `Día: ${displayEntregaDate(r.fecha_entrada_entrega)}`;
     ws.getCell(row, c0).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
     mergeRng(ws, row, c0 + 3, row, c0 + 4);
-    ws.getCell(row, c0 + 3).value = `Turno: ${fmtTipoTurno(r.turno_entrega)}`;
+    ws.getCell(row, c0 + 3).value = `Turno: ${displayEntregaTurno(r.turno_entrega)}`;
     ws.getCell(row, c0 + 3).alignment = { horizontal: "left", vertical: "middle", wrapText: true };
     applyMediumOutsideBorder(ws, row, row, c0, c0 + 2);
     applyMediumOutsideBorder(ws, row, row, c0 + 3, c0 + 4);
@@ -868,7 +992,7 @@ async function drawEntregaForm(
     }
 
     mergeRng(ws, row, c0, row, cEnd);
-    ws.getCell(row, c0).value = `Oficial q/entrega: ${r.oficial_entrega ?? ""}`;
+    ws.getCell(row, c0).value = `Oficial q/entrega: ${displayEntregaText(r.oficial_entrega)}`;
     ws.getCell(row, c0).alignment = { vertical: "middle", wrapText: true };
     applyThinBorderToRange(ws, row, row, c0, cEnd);
     row++;

@@ -15,12 +15,82 @@ import {
 } from '@/hooks/notesCacheHelpers';
 import { getIncidentsCache, mergeIncidentsCacheForCorpo, setIncidentsCache } from '@/hooks/incidentsStorage';
 
+/** Payload `marca.nomencladores` devuelto por `GET /api/attendance/user/[id]`. */
+export type AttendanceMarcaNomencladores = {
+  categoriasMantenimiento?: unknown[];
+  tiposProductoNoConforme?: unknown[];
+  tipoDocumento?: unknown[];
+  clasificacionIncidentes?: unknown[];
+  categoriasNovedades?: unknown[];
+  tipoActivosVisitas?: unknown[];
+  tipoQuejasClientes?: unknown[];
+  tipoQuejas?: unknown[];
+};
+
+function asPersistableNomenclatorArray(value: unknown): unknown[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  return value;
+}
+
+/** Persiste en AsyncStorage los nomencladores embebidos en la marca de asistencia. */
+export async function applyNomenclatorsFromAttendanceMarca(marca: unknown): Promise<void> {
+  if (!marca || typeof marca !== 'object') return;
+  const nom = (marca as { nomencladores?: AttendanceMarcaNomencladores }).nomencladores;
+  if (!nom || typeof nom !== 'object') return;
+
+  const writes: Promise<void>[] = [];
+
+  const categoriasMantenimiento = asPersistableNomenclatorArray(nom.categoriasMantenimiento);
+  if (categoriasMantenimiento) {
+    writes.push(AsyncStorage.setItem('categoria_mantenimiento_cache', JSON.stringify(categoriasMantenimiento)));
+  }
+
+  const tiposProductoNoConforme = asPersistableNomenclatorArray(nom.tiposProductoNoConforme);
+  if (tiposProductoNoConforme) {
+    writes.push(AsyncStorage.setItem('tipos_producto_no_conforme_cache', JSON.stringify(tiposProductoNoConforme)));
+  }
+
+  const tipoDocumento = asPersistableNomenclatorArray(nom.tipoDocumento);
+  if (tipoDocumento) {
+    writes.push(AsyncStorage.setItem('document_types_cache', JSON.stringify(tipoDocumento)));
+  }
+
+  const clasificacionIncidentes = asPersistableNomenclatorArray(nom.clasificacionIncidentes);
+  if (clasificacionIncidentes) {
+    writes.push(AsyncStorage.setItem('incidents_classifications_cache', JSON.stringify(clasificacionIncidentes)));
+  }
+
+  const categoriasNovedades = asPersistableNomenclatorArray(nom.categoriasNovedades);
+  if (categoriasNovedades) {
+    writes.push(AsyncStorage.setItem('categories_cache', JSON.stringify(categoriasNovedades)));
+  }
+
+  const tipoActivosVisitas = asPersistableNomenclatorArray(nom.tipoActivosVisitas);
+  if (tipoActivosVisitas) {
+    writes.push(AsyncStorage.setItem('tipo_activos_cache', JSON.stringify(tipoActivosVisitas)));
+  }
+
+  const tipoQuejasClientes = asPersistableNomenclatorArray(nom.tipoQuejasClientes);
+  if (tipoQuejasClientes) {
+    writes.push(AsyncStorage.setItem('tipo_clientes_quejas_cache', JSON.stringify(tipoQuejasClientes)));
+  }
+
+  const tipoQuejas = asPersistableNomenclatorArray(nom.tipoQuejas);
+  if (tipoQuejas) {
+    writes.push(AsyncStorage.setItem('tipo_quejas_cache', JSON.stringify(tipoQuejas)));
+  }
+
+  if (writes.length > 0) {
+    await Promise.all(writes);
+  }
+}
+
 export default async function updateNomenclator(updatedMarca: any, refreshAccessToken: any, logout: any) {
 
     await Promise.all([
         //getNotes(Number(updatedMarca.puesto?.id) || 0, updatedMarca.puesto),
         getCategories(refreshAccessToken, logout),
-        //getTiposProductoNoConforme(),
+        getTiposProductoNoConforme(refreshAccessToken, logout),
         getTipoActivo(refreshAccessToken, logout),
         //getEmployeesCorpo(updatedMarca.corpo.id),
         //getIncidents(updatedMarca.corpo.id),

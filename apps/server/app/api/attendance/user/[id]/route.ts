@@ -3,6 +3,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import getRoleDivision from "../../../../../utils/getRoleDivision";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { getMonitoringPreviousMinutes } from "../../../../../utils/getMonitoringPreviousMinutes";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -41,8 +42,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
-        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        const monitoringPreviousMinutes = await getMonitoringPreviousMinutes(req);
+        const nowPlusMonitoringWindow = new Date(now.getTime() + monitoringPreviousMinutes * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
 
@@ -103,9 +105,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 if (!marcaDateTime) {
                     continue;
                 }
-                if (marcaDateTime >= now && marcaDateTime <= nowPlus15) {
+                if (marcaDateTime >= now && marcaDateTime <= nowPlusMonitoringWindow) {
                     marcaDia = marca;
-                    console.log("Usaremos próximo en ventana +15 min");
+                    console.log(`Usaremos próximo en ventana +${monitoringPreviousMinutes} min`);
                     break;
                 }
             }
@@ -264,6 +266,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const roleDivision = await getRoleDivision(req, plaza, contrato);
 
+        const nomenclatores = await getNomenclators(req);
+
         const marca_return = {
             id: marcaDia.id,
             hora_entrada_digitada: marcaDia.hora_entrada_digitada ?? null,
@@ -275,6 +279,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             horas_duracion: marcaDia.horas_duracion,
             roleDivision: roleDivision,
             empleadoFijo_id: empleado.id,
+            nomencladores: nomenclatores,
             empresa: {
                 id: empresa.id,
                 nombre: empresa.nombre
@@ -327,6 +332,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     current_time: currentTime,
                     marca: marca_return,
                     marca_id: marca_return.id,
+                    monitoring_previous_minutes: monitoringPreviousMinutes,
                     message,
                     ...extra,
                 },
@@ -468,8 +474,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
             next_time = new Date(estado == "No ingresado" ? inicio_marca : fin_marca);
             const next_change_time = new Date(next_time.getTime());
-            next_change_time.setMinutes(next_change_time.getMinutes() - 15);
-            if (toZonedTime(new Date(), "America/Costa_Rica") < next_change_time) { // Si la fecha del parámetro es menor a la fecha de la marca menos 15 menos minutos
+            next_change_time.setMinutes(next_change_time.getMinutes() - monitoringPreviousMinutes);
+            if (toZonedTime(new Date(), "America/Costa_Rica") < next_change_time) {
                 change_available = false;
             }
 
@@ -480,6 +486,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const data = {
             status: true,
             current_time: currentTime,
+            monitoring_previous_minutes: monitoringPreviousMinutes,
+            change_available,
+            is_late,
+            next_time,
             marca: marca_return
         }
 
@@ -489,5 +499,102 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         console.log("Error en attendance/user/[id]:", error);
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    }
+}
+
+async function getNomenclators(req: NextRequest) {
+    
+    /*
+    - Categorías de mantenimiento (Hace referencia a la tabla "c_categoria_mantenimiento")
+    - Tipos de producto no conforme (Hace referencia a la tabla "c_tipos_producto_no_conforme")
+    - Tipo de documento (Hace referencia a la tabla "e_tipo_documento")
+    - Clasificación de incidentes (Hace referencia a la tabla "n_clasificacion_incidente")
+    - Categorías de novedades (Hace referencia a la tabla "n_novedades_categoria")
+    - Tipo de activos de visitas (Hace referencia a la tabla "n_tipo_activo_visitas")
+    - Tipo de quejas de clientes (Hace referencia a la tabla "n_tipo_cliente_quejas")
+    - Tipo de quejas (Hace referencia a la tabla "n_tipo_quejas")
+    */
+
+    const categoriasMantenimiento = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "c_categoria_mantenimiento",
+            operation: "findMany"
+        }
+    });
+
+    const tiposProductoNoConforme = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "c_tipos_producto_no_conforme",
+            operation: "findMany"
+        }
+    });
+
+    const tipoDocumento = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "e_tipo_documento",
+            operation: "findMany"
+        }
+    });
+
+    const clasificacionIncidentes = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_clasificacion_incidente",
+            operation: "findMany"
+        }
+    });
+
+    const categoriasNovedades = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_novedades_categoria",
+            operation: "findMany"
+        }
+    });
+
+    const tipoActivosVisitas = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_tipo_activo_visitas",
+            operation: "findMany"
+        }
+    });
+
+    const tipoQuejasClientes = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_tipo_cliente_quejas",
+            operation: "findMany"
+        }
+    });
+
+    const tipoQuejas = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_tipo_quejas",
+            operation: "findMany"
+        }
+    });
+
+    return {
+        categoriasMantenimiento,
+        tiposProductoNoConforme,
+        tipoDocumento,
+        clasificacionIncidentes,
+        categoriasNovedades,
+        tipoActivosVisitas,
+        tipoQuejasClientes,
+        tipoQuejas,
     }
 }

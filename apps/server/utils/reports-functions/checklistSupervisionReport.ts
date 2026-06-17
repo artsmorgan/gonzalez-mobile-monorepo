@@ -336,21 +336,43 @@ function normalizeImageOrientation(raw: unknown): "horizontal" | "vertical" {
     return "horizontal";
 }
 
-/** Texto mostrado en columna valor (checkbox → Sí/No; no muestra type/file_name). */
+/**
+ * Alineado con ChecklistSupervisionScreen: la pregunta va en `subsection.title`;
+ * inputs sin título, con "Respuesta" o duplicando la subsección no muestran etiqueta.
+ */
+function shouldShowChecklistEvalInputTitle(inputTitle: unknown, subsectionTitle?: unknown): boolean {
+    const t = String(inputTitle ?? "").trim();
+    if (!t || t.toLowerCase() === "respuesta") return false;
+    const sub = String(subsectionTitle ?? "").trim();
+    return !sub || t !== sub;
+}
+
+function resolveChecklistEvalInputLabel(inp: any, subsectionTitle: string): string {
+    const title = excelCellString(inp?.title ?? "").trim();
+    return shouldShowChecklistEvalInputTitle(title || undefined, subsectionTitle) ? title : "";
+}
+
+/** Texto en columna valor para inputs de evaluación (text/textarea/select/date/photo/checkbox). */
 function formatEvalInputDisplayValue(inp: any): string {
     const inpType = String(inp?.type ?? "").trim().toLowerCase();
     if (inpType === "checkbox") {
         const v = inp?.value;
-        if (v === true || v === 1) return "Sí";
-        if (v === false || v === 0) return "No";
+        if (v === true || v === 1) return "Marcado";
+        if (v === false || v === 0) return "No marcado";
         const t = String(v ?? "")
             .trim()
             .toLowerCase();
-        if (t === "true" || t === "1" || t === "sí" || t === "si" || t === "yes" || t === "y") return "Sí";
-        if (t === "false" || t === "0" || t === "no" || t === "n") return "No";
-        return "No";
+        if (t === "true" || t === "1" || t === "sí" || t === "si" || t === "yes" || t === "y") return "Marcado";
+        return "No marcado";
     }
-    return excelCellString(inp?.value ?? "");
+    if (inpType === "photo") {
+        const fileName = String(inp?.file_name ?? "").trim();
+        const v = String(inp?.value ?? "").trim();
+        if (fileName || (v && (v.startsWith("data:image/") || v.length > 100))) return "Imagen adjunta";
+        return v || "—";
+    }
+    const raw = excelCellString(inp?.value ?? "").trim();
+    return raw || "—";
 }
 
 function tryEmbedEvalPhotoRow(params: {
@@ -465,7 +487,7 @@ async function appendEvaluacionDetalleBlock(params: {
             }
 
             for (const inp of inputs) {
-                const label = excelCellString(inp?.title ?? "");
+                const label = resolveChecklistEvalInputLabel(inp, subt);
                 const inpType = String(inp?.type ?? "").trim().toLowerCase();
                 const fileNameRaw = String(inp?.file_name ?? "").trim();
                 const imgOrient = normalizeImageOrientation(inp?.imageOrientation);

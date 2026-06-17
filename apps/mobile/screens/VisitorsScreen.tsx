@@ -904,7 +904,7 @@ export default function VisitorsScreen() {
           setError(
             snap.isOperativo
               ? 'No se encontró la sucursal (corpo) en la marca actual.'
-              : 'Seleccione sucursal en el filtro para cargar o sincronizar visitantes.'
+              : 'Seleccione sucursal en el filtro para cargar o sincronizar personas.'
           );
           return;
         }
@@ -924,8 +924,8 @@ export default function VisitorsScreen() {
           setVisitors(filtered as Visitor[]);
           setOfflineMessage(
             filtered.length > 0
-              ? 'Modo Offline: mostrando visitas guardadas para esta sucursal.'
-              : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
+              ? 'Modo Offline: mostrando personas guardadas para esta sucursal.'
+              : 'Sin conexión: no hay personas guardadas para esta sucursal.'
           );
           return;
         }
@@ -941,14 +941,14 @@ export default function VisitorsScreen() {
           await applyFilteredCache(null);
         } else {
           await applyFilteredCache(
-            'No se pudo actualizar desde el servidor; mostrando visitas en caché para esta sucursal.'
+            'No se pudo actualizar desde el servidor; mostrando personas en caché para esta sucursal.'
           );
           if (syncResult.message) {
             setError(syncResult.message);
         }
       }
     } catch (err) {
-      console.error('Error fetching visitors:', err);
+      console.error('Error fetching personas:', err);
         try {
           const snap2 = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
           const marcaId2 = numOrNull(snap2?.current?.id);
@@ -964,20 +964,20 @@ export default function VisitorsScreen() {
           if (filtered.length > 0) {
             setVisitors(filtered as Visitor[]);
             setOfflineMessage(
-              'Error de conexión. Mostrando visitas guardadas para esta sucursal.'
+              'Error de conexión. Mostrando personas guardadas para esta sucursal.'
             );
           } else if (isProbablyNetworkError(err)) {
-            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setOfflineMessage('Sin conexión: no hay personas guardadas para esta sucursal.');
             setVisitors([]);
         } else {
-          setError('Error al cargar las visitas');
+          setError('Error al cargar las personas');
           }
         } catch {
           if (isProbablyNetworkError(err)) {
-            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setOfflineMessage('Sin conexión: no hay personas guardadas para esta sucursal.');
             setVisitors([]);
           } else {
-        setError('Error al cargar las visitas');
+        setError('Error al cargar las personas');
           }
       }
     } finally {
@@ -1502,7 +1502,7 @@ export default function VisitorsScreen() {
       return;
     }
     if (!razonVisitaRef.current.trim()) {
-      Alert.alert('Error', 'La razón de visita es requerida');
+      Alert.alert('Error', 'La razón de visita es requerida'); 
       return;
     }
 
@@ -1545,7 +1545,7 @@ export default function VisitorsScreen() {
 
     Alert.alert(
       'Confirmar ubicación',
-      '¿Deseas registrar este visitante con los datos ingresados?',
+      '¿Deseas registrar esta persona con los datos ingresados?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1664,11 +1664,11 @@ export default function VisitorsScreen() {
                       console.warn('syncVisitorsCacheFromNetwork after create', e);
                     }
                   }
-                  Alert.alert('Éxito', 'Visitante creado correctamente');
+                  Alert.alert('Éxito', 'Persona creada correctamente');
                   cancelCreating();
                   fetchVisitors();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al crear visitante');
+                  Alert.alert('Error', data.message || 'Error al crear persona');
                 }
               } else {
                 // Sin internet: guardar en visitors_actions y visitors_cache
@@ -1744,13 +1744,13 @@ export default function VisitorsScreen() {
                 cache.push(newVisitorCache);
                 await AsyncStorage.setItem('visitors_cache', JSON.stringify(cache));
 
-                Alert.alert('Modo Offline', 'Visitante registrado localmente. Se sincronizará cuando haya conexión.');
+                Alert.alert('Modo Offline', 'Persona registrada localmente. Se sincronizará cuando haya conexión.');
                 cancelCreating();
                 fetchVisitors();
               }
             } catch (err) {
               console.error('Error creating visitor:', err);
-              Alert.alert('Error', 'No se pudo registrar el visitante');
+              Alert.alert('Error', 'No se pudo registrar la persona');
             } finally {
               setIsSubmittingForm(false);
             }
@@ -1824,7 +1824,7 @@ export default function VisitorsScreen() {
 
     Alert.alert(
       'Confirmar modificación',
-      '¿Deseas guardar los cambios en este visitante?',
+      '¿Deseas guardar los cambios en esta persona?',
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1940,11 +1940,11 @@ export default function VisitorsScreen() {
                       console.warn('syncVisitorsCacheFromNetwork after update', e);
                     }
                   }
-                  Alert.alert('Éxito', 'Visitante actualizado correctamente');
+                  Alert.alert('Éxito', 'Persona actualizada correctamente');
                   cancelEditing();
                   fetchVisitors();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al actualizar visitante');
+                  Alert.alert('Error', data.message || 'Error al actualizar persona');
                 }
               } else {
                 // Sin internet: guardar en visitors_actions y actualizar visitors_cache
@@ -2100,13 +2100,13 @@ export default function VisitorsScreen() {
                   await AsyncStorage.setItem('visitors_cache', JSON.stringify(cache));
                 }
 
-                Alert.alert('Modo Offline', 'Visitante actualizado localmente. Se sincronizará cuando haya conexión.');
+                Alert.alert('Modo Offline', 'Persona actualizada localmente. Se sincronizará cuando haya conexión.');
                 cancelEditing();
                 fetchVisitors();
               }
             } catch (err) {
               console.error('Error updating visitor:', err);
-              Alert.alert('Error', 'No se pudo actualizar el visitante');
+              Alert.alert('Error', 'No se pudo actualizar la persona');
             } finally {
               setIsSubmittingForm(false);
             }
@@ -2120,7 +2120,7 @@ export default function VisitorsScreen() {
     if (deletingVisitorKey) return;
     Alert.alert(
       'Confirmar eliminación',
-      `¿Está seguro de eliminar el registro de ${visitor.nombre}?`,
+      `¿Está seguro de eliminar el registro de la persona ${visitor.nombre}?`,
       [
         {
           text: 'Cancelar',
@@ -2160,10 +2160,10 @@ export default function VisitorsScreen() {
                       console.warn('syncVisitorsCacheFromNetwork after delete', e);
                     }
                   }
-                  Alert.alert('Éxito', 'Visitante eliminado correctamente');
+                  Alert.alert('Éxito', 'Persona eliminada correctamente');
                   fetchVisitors();
                 } else {
-                  Alert.alert('Error', data.message || 'Error al eliminar visitante');
+                  Alert.alert('Error', data.message || 'Error al eliminar persona');
                 }
               } else {
                 const actionsStr = await AsyncStorage.getItem('visitors_actions');
@@ -2189,12 +2189,12 @@ export default function VisitorsScreen() {
                 );
                 await AsyncStorage.setItem('visitors_cache', JSON.stringify(filteredCache));
 
-                Alert.alert('Modo Offline', 'Visitante eliminado localmente. Se sincronizará cuando haya conexión.');
+                Alert.alert('Modo Offline', 'Persona eliminada localmente. Se sincronizará cuando haya conexión.');
                 fetchVisitors();
               }
             } catch (err) {
               console.error('Error deleting visitor:', err);
-              Alert.alert('Error', 'No se pudo eliminar el visitante');
+              Alert.alert('Error', 'No se pudo eliminar la persona');
               } finally {
                 setDeletingVisitorKey(null);
             }
@@ -2581,7 +2581,7 @@ export default function VisitorsScreen() {
   };
 
   const clearFirmaVisitanteFromForm = (forEdit: boolean) => {
-    Alert.alert('Quitar firma', '¿Eliminar la firma del visitante?', [
+    Alert.alert('Quitar firma', '¿Eliminar la firma de la persona?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Eliminar',
@@ -2653,7 +2653,7 @@ export default function VisitorsScreen() {
     return (
       <ThemedView style={styles.formContainer}>
         <ThemedText style={styles.formTitle}>
-          {isEditing ? 'Editar Visitante' : 'Nuevo Visitante'}
+          {isEditing ? 'Editar Persona' : 'Nueva Persona'}
         </ThemedText>
 
         <ThemedView style={styles.formHierarchySection}>
@@ -2692,7 +2692,7 @@ export default function VisitorsScreen() {
             style={styles.input}
             defaultValue={visitor.nombre}
             onChangeText={(text) => { nombreRef.current = text; }}
-            placeholder="Nombre del visitante"
+            placeholder="Nombre de la persona"
             placeholderTextColor="#999"
             key={`nombre-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
           />
@@ -2811,7 +2811,7 @@ export default function VisitorsScreen() {
             style={styles.input}
             defaultValue={visitor.razon_visita}
             onChangeText={(text) => { razonVisitaRef.current = text; }}
-            placeholder="Razón de visita"
+            placeholder="Razón de la visita"
             placeholderTextColor="#999"
             key={`razon-visita-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
           />
@@ -2824,7 +2824,7 @@ export default function VisitorsScreen() {
             style={styles.input}
             defaultValue={visitor.dep_pers_visita}
             onChangeText={(text) => { depPersVisitaRef.current = text; }}
-            placeholder="Persona o departamento que visita"
+            placeholder="Persona o departamento de la visita"
             placeholderTextColor="#999"
             key={`dep-pers-visita-${isEditing ? 'edit' : 'create'}-${isEditing ? visitor.id : 'new'}`}
           />
@@ -2832,7 +2832,7 @@ export default function VisitorsScreen() {
 
         {/* Tipo de visitante */}
         <ThemedView style={styles.formGroup}>
-          <ThemedText style={styles.label}>Tipo de Visitante</ThemedText>
+          <ThemedText style={styles.label}>Tipo de Persona</ThemedText>
           <ThemedView style={styles.radioContainer}>
             <TouchableOpacity
               style={styles.radioOption}
@@ -2910,10 +2910,10 @@ export default function VisitorsScreen() {
           </>
         )}
 
-        {/* Activos de la visita */}
+        {/* Movimientos de activos */}
         <ThemedView style={styles.formGroup}>
           <ThemedView style={styles.sectionHeader}>
-            <ThemedText style={styles.sectionTitle}>Activos de la Visita (Opcional)</ThemedText>
+            <ThemedText style={styles.sectionTitle}>Movimientos de activos (Opcional)</ThemedText>
             <TouchableOpacity
               style={styles.addButton}
               onPress={() => addActivo(isEditing)}
@@ -3211,7 +3211,7 @@ export default function VisitorsScreen() {
         {isExpanded && (
           <ThemedView style={styles.expandedDetails}>
             <ThemedView style={styles.fotoCedulaSection}>
-              <ThemedText style={styles.sectionTitle}>Firma del visitante</ThemedText>
+              <ThemedText style={styles.sectionTitle}>Firma de la persona</ThemedText>
               {(() => {
                 const raw = visitor.firma_visitante;
                 if (raw == null || String(raw).trim() === '') {
@@ -3341,10 +3341,10 @@ export default function VisitorsScreen() {
               style={styles.changesButton}
               onPress={() => {
                 if (visitor.id_local || visitor.id === 0) {
-                  Alert.alert('Sin conexión', 'Este visitante es local/offline. Los cambios solo se pueden consultar en el servidor.');
+                  Alert.alert('Sin conexión', 'Esta persona es local/offline. Los cambios solo se pueden consultar en el servidor.');
                   return;
                 }
-                setCambiosTitle(`Cambios - Visitante #${visitor.id}`);
+                setCambiosTitle(`Cambios - Persona #${visitor.id}`);
                 fetchCambios('e_registro_personas', visitor.id);
               }}
             >
@@ -3371,7 +3371,7 @@ export default function VisitorsScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Registro de Visitantes" />
+      <AppHeader onMenuPress={() => setIsMenuVisible(true)} title="Registro de personas" />
       {!!error && (
         <ThemedView style={styles.errorBanner}>
           <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
@@ -3388,14 +3388,14 @@ export default function VisitorsScreen() {
       {isLoading ? (
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <ThemedText style={styles.loadingText}>Cargando visitantes...</ThemedText>
+          <ThemedText style={styles.loadingText}>Cargando personas...</ThemedText>
         </ThemedView>
       ) : !hasCurrentMarca ? (
         <ThemedView style={styles.noMarcaContainer}>
           <Ionicons name="alert-circle-outline" size={80} color="#FF9500" />
           <ThemedText style={styles.noMarcaTitle}>No hay marca registrada</ThemedText>
           <ThemedText style={styles.noMarcaMessage}>
-            Debes registrar una marca de ingreso antes de acceder al registro de visitantes.
+            Debes registrar una marca de ingreso antes de acceder al registro de personas.
           </ThemedText>
           <TouchableOpacity
             style={styles.goBackButton}
@@ -3415,10 +3415,10 @@ export default function VisitorsScreen() {
             {/* Module Title */}
             <ThemedView style={styles.titleContainer}>
               <ThemedText type="title" style={styles.title}>
-                Visitantes
+                Personas
               </ThemedText>
               <ThemedText style={styles.subtitle}>
-                Gestiona el registro de visitantes
+                Gestiona el registro de personas
               </ThemedText>
             </ThemedView>
 
@@ -3495,7 +3495,7 @@ export default function VisitorsScreen() {
                   </ThemedView>
 
                   <ThemedView style={styles.filterGroupSearch}>
-                    <ThemedText style={styles.filterLabel}>Tipo de Visitante:</ThemedText>
+                    <ThemedText style={styles.filterLabel}>Tipo de Persona:</ThemedText>
                     <ThemedView style={styles.pickerContainer}>
                       <Picker
                         selectedValue={selectedTipoVisitante}
@@ -3592,13 +3592,13 @@ export default function VisitorsScreen() {
             {/* Formulario de edición */}
             {editingVisitor && renderVisitorForm(editingVisitor, true)}
 
-            {/* Lista de visitantes */}
+            {/* Lista de personas */}
             {!isCreating && !editingVisitor ? (
               <ThemedView style={styles.visitorsList}>
                 {filteredVisitors.length === 0 ? (
                   <ThemedView style={styles.emptyContainer}>
                     <Ionicons name="people-outline" size={60} color="#999" />
-                    <ThemedText style={styles.emptyText}>No hay visitantes registrados</ThemedText>
+                    <ThemedText style={styles.emptyText}>No hay personas registradas</ThemedText>
                   </ThemedView>
                 ) : (
                   filteredVisitors.map(visitor => renderVisitorItem(visitor))
@@ -3619,13 +3619,13 @@ export default function VisitorsScreen() {
         <View style={styles.overlay}>
           <ThemedView style={styles.floatModalCardSignature}>
             <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>Firma del visitante</ThemedText>
+              <ThemedText style={styles.modalTitle}>Firma de la persona</ThemedText>
               <TouchableOpacity onPress={closeFirmaVisitanteModal} accessibilityLabel="Cerrar">
                 <Ionicons name="close" size={24} color="#333" />
               </TouchableOpacity>
             </ThemedView>
             <ThemedText style={styles.signatureModalHintVisitors}>
-              Dibuje la firma dentro del recuadro.
+              Dibuje la firma de la persona dentro del recuadro.
             </ThemedText>
             <View style={styles.signaturePadBoxVisitors}>
               {firmaVisitanteModalVisible ? (

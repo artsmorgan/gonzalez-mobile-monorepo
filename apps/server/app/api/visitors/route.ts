@@ -419,8 +419,8 @@ export async function POST(req: NextRequest) {
                 const fecha_entrada = entrada.split("T")[0];
                 const hora_entrada = entrada.split("T")[1].split(".")[0];
                 const tipo_visitante = es_funcionario ? "Funcionario" : "Visitante";
-                const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de ${nombre} con la cedula ${cedula} el día ${fecha_entrada} a las ${hora_entrada}. Tipo de visitante: ${tipo_visitante}. Razón de la visita: ${razon_visita}`;
-                await sendNotificationByRole(req, targetCorpoId, [marcaDia.plaza_id], "Visita registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                const desc = `El empleado ${empleado.nombre} ${empleado.primer_apellido} ha registrado la visita de ${nombre} con la cedula ${cedula} el día ${fecha_entrada} a las ${hora_entrada}. Tipo de persona: ${tipo_visitante}. Razón de la visita: ${razon_visita}`;
+                await sendNotificationByRole(req, targetCorpoId, [marcaDia.plaza_id], "Persona registrada", desc, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
 
             if (activos.length > 0) {
@@ -477,7 +477,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
             {
                 status: true,
-                message: "Visita registrada correctamente",
+                message: "Persona registrada correctamente", 
                 data: { id: new_visita?.id != null ? Number(new_visita.id) : null }
             },
             { status: 200 }

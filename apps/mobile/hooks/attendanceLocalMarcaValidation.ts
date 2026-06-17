@@ -1,6 +1,7 @@
 /** Reglas de asistencia en dispositivo (alineadas con attendance/user/[id]/route.ts). */
 
 import { toZonedTime } from 'date-fns-tz';
+import { DEFAULT_MONITORING_PREVIOUS_MINUTES } from './monitoringPreviousMinutesStorage';
 
 export const MARCA_LOCATION_RADIUS_METERS = 50;
 const COSTA_RICA_TZ = 'America/Costa_Rica';
@@ -116,14 +117,18 @@ export function computeMarcaShiftBounds(marca: Record<string, unknown>): {
   return { inicio, fin };
 }
 
-export function computeChangeAvailable(marca: Record<string, unknown>, nowMs: number): boolean {
+export function computeChangeAvailable(
+  marca: Record<string, unknown>,
+  nowMs: number,
+  monitoringPreviousMinutes: number = DEFAULT_MONITORING_PREVIOUS_MINUTES
+): boolean {
   const estado = marca.hora_entrada_digitada != null ? 'Ingresado' : 'No ingresado';
   const { inicio, fin } = computeMarcaShiftBounds(marca);
   if (!inicio || !fin) return true;
 
   const nextTime = estado === 'No ingresado' ? inicio : fin;
   const nextChangeTime = new Date(nextTime.getTime());
-  nextChangeTime.setMinutes(nextChangeTime.getMinutes() - 15);
+  nextChangeTime.setMinutes(nextChangeTime.getMinutes() - monitoringPreviousMinutes);
 
   if (estado === 'No ingresado' && nowMs < nextChangeTime.getTime()) {
     return false;
@@ -177,8 +182,11 @@ export function evaluateLocalMarcaRules(
     lng?: number | null;
     /** Si true, incluye validación de ubicación para marcar entrada. */
     validateLocationForEntrada?: boolean;
+    monitoringPreviousMinutes?: number;
   }
 ): LocalMarcaValidationResult {
+  const monitoringPreviousMinutes =
+    opts?.monitoringPreviousMinutes ?? DEFAULT_MONITORING_PREVIOUS_MINUTES;
   const marcaId = marca.id != null ? Number(marca.id) : null;
   let canMarkEntrada = marca.hora_entrada_digitada == null && marca.hora_salida_digitada == null;
   let canMarkSalida =
@@ -238,7 +246,7 @@ export function evaluateLocalMarcaRules(
 
   if (marca.hora_entrada_digitada == null) {
     const nextChangeTime = new Date(inicio.getTime());
-    nextChangeTime.setMinutes(nextChangeTime.getMinutes() - 15);
+    nextChangeTime.setMinutes(nextChangeTime.getMinutes() - monitoringPreviousMinutes);
     if (nowMs < nextChangeTime.getTime()) {
       canMarkEntrada = false;
       return {
@@ -246,7 +254,7 @@ export function evaluateLocalMarcaRules(
         canMarkEntrada: false,
         canMarkSalida: false,
         message:
-          'Aún no puedes marcar entrada. Debes estar mínimo 15 minutos antes del inicio del turno.',
+          `Aún no puedes marcar entrada. Debes estar mínimo ${monitoringPreviousMinutes} minutos antes del inicio del turno.`,
       };
     }
   }

@@ -36,6 +36,10 @@ import {
 } from '@/hooks/mainStructureFragmentsStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import resolvePuestoUbicacionCoordinates from '@/hooks/resolvePuestoUbicacionCoordinates';
+import {
+  DEVICE_COORDS_POLL_SILENT,
+  DEVICE_COORDS_USER_ACTION,
+} from '@/hooks/resolveDeviceCoordinates';
 
 async function getHoraAccionSafeMs(): Promise<number> {
     try {
@@ -472,14 +476,15 @@ export default function PuestoUbicacionScreen() {
         }
     }, [filterPuestoId, filterCorpoId, structure, mainFragments, dispositivoUbicacionMap]);
 
-    // Obtener ubicación del dispositivo (cada intento es independiente; reintentos tras activar GPS).
-    const getDeviceLocation = useCallback(async (showError: boolean = true): Promise<{
+    /** `userAction=false` → sondeo periódico; `true` → exige GPS activo (caché solo tras intento fallido). */
+    const getDeviceLocation = useCallback(async (userAction: boolean = true): Promise<{
         latitude: number;
         longitude: number;
     } | null> => {
         setIsGettingLocation(true);
         try {
-            const result = await resolvePuestoUbicacionCoordinates({ silent: !showError });
+            const coordsOpts = userAction ? DEVICE_COORDS_USER_ACTION : DEVICE_COORDS_POLL_SILENT;
+            const result = await resolvePuestoUbicacionCoordinates(coordsOpts);
             if (result.ok) {
                 const loc = {
                     latitude: result.latitude,
@@ -497,7 +502,7 @@ export default function PuestoUbicacionScreen() {
             setDeviceLocation(null);
             const message = 'No se pudo obtener la ubicación del dispositivo.';
             setLocationError(message);
-            if (showError) {
+            if (userAction) {
                 Alert.alert('Error', message);
             }
             return null;
@@ -518,13 +523,13 @@ export default function PuestoUbicacionScreen() {
         }
     }, [filterPuestoId, getDeviceLocation]);
 
-    // Actualizar ubicación cada 15 segundos cuando hay un puesto seleccionado
+    // Actualizar ubicación cada 30 segundos cuando hay un puesto seleccionado
     useEffect(() => {
         if (!filterPuestoId) return;
 
         const interval = setInterval(() => {
             getDeviceLocation(false);
-        }, 15000); // 15 segundos
+        }, 30000); // 30 segundos
 
         return () => clearInterval(interval);
     }, [filterPuestoId, getDeviceLocation]);

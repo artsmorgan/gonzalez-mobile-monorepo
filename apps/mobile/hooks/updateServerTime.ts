@@ -2,6 +2,30 @@ import Constants from "expo-constants";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Network from 'expo-network';
 import { Alert } from "react-native";
+import { eventBus } from './eventBus';
+
+export const SERVER_TIME_UPDATED_EVENT = 'serverTimeUpdated';
+
+export async function readExtrapolatedServerTimeMs(): Promise<number> {
+  try {
+    const server_time = await AsyncStorage.getItem('server_time');
+    if (!server_time) return Date.now();
+    const server_time_obj = JSON.parse(server_time);
+    const serverMs = parseInt(String(server_time_obj.server_time), 10);
+    const localMs = parseInt(String(server_time_obj.local_time), 10);
+    if (!Number.isFinite(serverMs)) return Date.now();
+    if (!Number.isFinite(localMs)) return serverMs;
+    const now = Date.now();
+    const diff = Math.abs(now - localMs);
+    return now >= localMs ? serverMs + diff : serverMs - diff;
+  } catch {
+    return Date.now();
+  }
+}
+
+function emitServerTimeUpdated(): void {
+  eventBus.emit(SERVER_TIME_UPDATED_EVENT);
+}
 
   const getConnectionStatus = async (): Promise<boolean> => {
     //return false;
@@ -20,27 +44,26 @@ import { Alert } from "react-native";
         await setDisconnectedTime();
         return;
       }
-      else {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) {
-          throw new Error('Server URL not configured');
-        }
-        const response = await fetch(`${apiUrl}/api/server-time`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420',
-          },
-        });
-        const data = await response.json();
 
-        if (data.status) {
-          const time_to_store = { server_time: String(data.current_time), local_time: String(new Date().getTime()) };
-          await AsyncStorage.setItem('server_time', JSON.stringify(time_to_store));
-        }
-        else {
-          await setDisconnectedTime();
-        }
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) {
+        throw new Error('Server URL not configured');
+      }
+      const response = await fetch(`${apiUrl}/api/server-time`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+      });
+      const data = await response.json();
+
+      if (data.status) {
+        const time_to_store = { server_time: String(data.current_time), local_time: String(new Date().getTime()) };
+        await AsyncStorage.setItem('server_time', JSON.stringify(time_to_store));
+        emitServerTimeUpdated();
+      } else {
+        await setDisconnectedTime();
       }
     } catch (error) {
       console.error('Error updating server time:', error);
@@ -70,8 +93,10 @@ import { Alert } from "react-native";
 
 
       await AsyncStorage.setItem('server_time', JSON.stringify(server_time_obj));
+      emitServerTimeUpdated();
     } catch (error) {
       await AsyncStorage.setItem('server_time', default_server_time);
+      emitServerTimeUpdated();
       console.error('Error setting disconnected time:', error);
     }
   };

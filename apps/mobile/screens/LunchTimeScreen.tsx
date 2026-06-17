@@ -13,11 +13,20 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import saveLunchTime from '../hooks/saveLunchTime';
-import { mergeCurrentMarcaHierarchyIntoLunchRequest, releaseLunchTimerCompletionLock, tryAcquireLunchTimerCompletionLock } from '../hooks/lunchTimeMarcaHierarchy';
+import {
+  buildLunchTempState,
+  computeLunchEndTimeMs,
+  computeRemainingSecondsFromTempState,
+  mergeCurrentMarcaHierarchyIntoLunchRequest,
+  releaseLunchTimerCompletionLock,
+  tryAcquireLunchTimerCompletionLock,
+} from '../hooks/lunchTimeMarcaHierarchy';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
-import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
+import getCurrentUserDigitalSignature, {
+  SIGNATURE_USER_ACTION_SCREEN,
+} from '../hooks/getCurrentUserDigitalSignature';
 import { eventBus } from '@/hooks/eventBus';
 
 type LunchTimeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'LunchTime'>;
@@ -31,6 +40,11 @@ interface LunchTimeConfig {
 function isValidLunchMinutes(minutos: unknown): boolean {
   const n = Number(minutos);
   return Number.isFinite(n) && n > 0;
+}
+
+/** Iniciar timer / registro manual: exige GPS activo; Alert de caché solo tras intento fallido. */
+async function obtainFirmaWithDeviceLocation(employee: unknown): Promise<string | null> {
+  return getCurrentUserDigitalSignature(employee, SIGNATURE_USER_ACTION_SCREEN);
 }
 
 interface InactivityData {
@@ -111,9 +125,7 @@ export default function LunchTimeScreen() {
           setFirmaEmpleado(temp_state_obj.firma_empleado || '');
 
           const horaAccion = await getUpdatedHoraAccion();
-          const remaining_time =
-            temp_state_obj.remainingSeconds / 1000 -
-            (horaAccion - temp_state_obj.currentTimestamp) / 1000;
+          const remaining_time = computeRemainingSecondsFromTempState(temp_state_obj, horaAccion);
 
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
           setCurrentInactivityStart(
@@ -121,6 +133,8 @@ export default function LunchTimeScreen() {
               ? new Date(temp_state_obj.currentInactivityStart)
               : null
           );
+          setEndTimeMode('calculated');
+          setEndTime(new Date(computeLunchEndTimeMs(temp_state_obj)));
 
           if (remaining_time <= 0) {
             setIsTimerActive(false);
@@ -130,8 +144,7 @@ export default function LunchTimeScreen() {
           }
 
           setIsTimerActive(true);
-          setEndTimeMode('current');
-          setTimeRemaining(parseInt(remaining_time.toFixed(0)));
+          setTimeRemaining(remaining_time);
         } catch (error) {
           console.error('Error syncing lunch timer from temp_state:', error);
         }
@@ -195,7 +208,22 @@ export default function LunchTimeScreen() {
   const getUpdatedHoraAccion = async () => {
     const horaAccion = await getHoraAccion();
     return horaAccion;
-  }
+  };
+
+  const persistLunchTimerState = async (params: {
+    running: boolean;
+    remainingMs: number;
+    horaAccion: number;
+    startTime: Date | null;
+    inactivities: InactivityData[];
+    currentInactivityStart: Date | null;
+    firma_empleado: string;
+  }) => {
+    const state = buildLunchTempState(params);
+    await AsyncStorage.setItem('temp_state', JSON.stringify(state));
+    setEndTimeMode('calculated');
+    setEndTime(new Date(state.endTimeMs));
+  };
 
   // Timer effect (solo en pantalla; fuera de ella App.tsx completa el almuerzo vía temp_state)
   useEffect(() => {
@@ -242,26 +270,18 @@ export default function LunchTimeScreen() {
   }, []);
 
   const saveCurrentState = async () => {
-    // Segundos restantes del temporizador
-    const remainingSeconds = timeRemainingRef.current * 1000; // En milisegundos
+    const remainingMs = timeRemainingRef.current * 1000;
     const horaAccion = await getUpdatedHoraAccion();
-    const current_state = {
+    await persistLunchTimerState({
       running: timerActiveRef.current,
-      remainingSeconds: remainingSeconds, // En milisegundos
-      currentTimestamp: horaAccion, // En milisegundos
+      remainingMs,
+      horaAccion,
       startTime: startTimeRef.current,
       inactivities: inactivitiesRef.current,
       currentInactivityStart: currentInactivityStartRef.current,
       firma_empleado: firmaEmpleadoRef.current,
-    }
-
-    await AsyncStorage.setItem('temp_state', JSON.stringify(current_state));
-
-    setEndTimeMode('calculated');
-    setEndTime(new Date(current_state.currentTimestamp + current_state.remainingSeconds));
-
-    console.log('✅ Saved current state');
-  }
+    });
+  };
 
   const restoreCurrentState = async () => {
     console.log('Restoring current state...');
@@ -288,27 +308,26 @@ export default function LunchTimeScreen() {
           keepTempState = true;
           setIsTimerActive(true);
           const horaAccion = await getUpdatedHoraAccion();
-          const remaining_time = (temp_state_obj.remainingSeconds / 1000) - ((horaAccion - temp_state_obj.currentTimestamp) / 1000);
+          const remaining_time = computeRemainingSecondsFromTempState(temp_state_obj, horaAccion);
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
           setCurrentInactivityStart(temp_state_obj.currentInactivityStart ? new Date(temp_state_obj.currentInactivityStart) : null);
+          setEndTimeMode('calculated');
+          setEndTime(new Date(computeLunchEndTimeMs(temp_state_obj)));
           if (remaining_time <= 0) {
-            console.log('remaining_time <= 0 - Ejecutando handleTimerComplete');
             setIsTimerActive(false);
             setTimeRemaining(0);
-            // Ejecutar la lógica de guardado cuando el tiempo se agotó mientras la app estaba minimizada
             await handleTimerComplete();
             keepTempState = false;
           } else {
-            setEndTimeMode('current');
-            setTimeRemaining(parseInt(remaining_time.toFixed(0)));
+            setTimeRemaining(remaining_time);
           }
         }
         else {
           setIsTimerActive(false);
-          setTimeRemaining(parseInt((temp_state_obj.remainingSeconds / 1000).toFixed(0)));
+          setTimeRemaining(computeRemainingSecondsFromTempState(temp_state_obj, await getUpdatedHoraAccion()));
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
-          setEndTimeMode('current');
-          setEndTime(null);
+          setEndTimeMode('calculated');
+          setEndTime(new Date(computeLunchEndTimeMs(temp_state_obj)));
           setCurrentInactivityStart(temp_state_obj.currentInactivityStart ? new Date(temp_state_obj.currentInactivityStart) : null);
         }
       } catch (error) {
@@ -328,14 +347,22 @@ export default function LunchTimeScreen() {
     }
 
     setIsTimerActive(false);
-    console.log('endTimeMode', endTimeModeRef.current);
     await AsyncStorage.setItem('alert_lunch_time', 'false');
-    let endTimeUse = null;
-    if (endTimeModeRef.current == 'current') {
-      const horaAccion = await getUpdatedHoraAccion();
-      endTimeUse = horaAccion;
-    }
-    else {
+
+    const horaAccion = await getUpdatedHoraAccion();
+    let endTimeUse: number | Date | null = horaAccion;
+    const tempRaw = await AsyncStorage.getItem('temp_state');
+    if (tempRaw) {
+      try {
+        const tempObj = JSON.parse(tempRaw);
+        const scheduledEnd = computeLunchEndTimeMs(tempObj);
+        if (Number.isFinite(scheduledEnd) && scheduledEnd > 0) {
+          endTimeUse = Math.min(horaAccion, scheduledEnd);
+        }
+      } catch {
+        /* usar horaAccion */
+      }
+    } else if (endTimeRef.current) {
       endTimeUse = endTimeRef.current;
     }
 
@@ -618,52 +645,87 @@ export default function LunchTimeScreen() {
   };
 
   const handleStart = async () => {
-    if (timerConfig && timeRemaining > 0) {
-      // Firma + ubicación solo al iniciar el contador por primera vez en esta sesión
-      // (no al reanudar tras pausa ni al restaurar estado guardado).
-      const isFirstStartOfSession =
-        !firmaEmpleadoRef.current?.trim() && startTimeRef.current == null;
+    if (!timerConfig || timeRemaining <= 0) return;
 
-      if (isFirstStartOfSession) {
-        if (isGeneratingFirmaEmpleado) return;
-        setIsGeneratingFirmaEmpleado(true);
-        try {
-          const generatedFirma = await getCurrentUserDigitalSignature(employee);
-          if (!generatedFirma) {
-            return;
-          }
-          setFirmaEmpleado(generatedFirma);
-        } finally {
-          setIsGeneratingFirmaEmpleado(false);
+    const isFirstStartOfSession =
+      !firmaEmpleadoRef.current?.trim() && startTimeRef.current == null;
+
+    if (isFirstStartOfSession) {
+      if (isGeneratingFirmaEmpleado) return;
+      setIsGeneratingFirmaEmpleado(true);
+      try {
+        const generatedFirma = await obtainFirmaWithDeviceLocation(employee);
+        if (!generatedFirma) {
+          return;
         }
-      }
-      const horaAccion = await getUpdatedHoraAccion();
-      if (startTimeRef.current == null) {
-        setStartTime(new Date(horaAccion));
-      }
-      setIsTimerActive(true);
-      setEndTimeMode('current');
-      setEndTime(null);
-
-      // Si había una inactividad en curso, guardarla
-      if (currentInactivityStart) {
-        const newInactivity: InactivityData = {
-          startTime: currentInactivityStart,
-          endTime: new Date(horaAccion),
-          reason: inactivityReason.trim() || 'Sin razón determinada'
-        };
-        setInactivities(prev => [...prev, newInactivity]);
-        setCurrentInactivityStart(null);
-        setInactivityReason('');
+        setFirmaEmpleado(generatedFirma);
+        firmaEmpleadoRef.current = generatedFirma;
+      } finally {
+        setIsGeneratingFirmaEmpleado(false);
       }
     }
+
+    const horaAccion = await getUpdatedHoraAccion();
+    const remainingMs = timeRemainingRef.current * 1000;
+    const isFirstStart = startTimeRef.current == null;
+    const newStartTime = isFirstStart ? new Date(horaAccion) : startTimeRef.current;
+
+    if (isFirstStart) {
+      setStartTime(newStartTime);
+      startTimeRef.current = newStartTime;
+    }
+
+    let updatedInactivities = inactivitiesRef.current;
+    let updatedInactivityStart = currentInactivityStartRef.current;
+
+    if (currentInactivityStart) {
+      const newInactivity: InactivityData = {
+        startTime: currentInactivityStart,
+        endTime: new Date(horaAccion),
+        reason: inactivityReason.trim() || 'Sin razón determinada',
+      };
+      updatedInactivities = [...inactivitiesRef.current, newInactivity];
+      updatedInactivityStart = null;
+      setInactivities(updatedInactivities);
+      inactivitiesRef.current = updatedInactivities;
+      setCurrentInactivityStart(null);
+      currentInactivityStartRef.current = null;
+      setInactivityReason('');
+    }
+
+    setIsTimerActive(true);
+    timerActiveRef.current = true;
+
+    await persistLunchTimerState({
+      running: true,
+      remainingMs,
+      horaAccion,
+      startTime: newStartTime,
+      inactivities: updatedInactivities,
+      currentInactivityStart: updatedInactivityStart,
+      firma_empleado: firmaEmpleadoRef.current,
+    });
   };
 
   const handleStop = async () => {
-    setIsTimerActive(false);
-    // Iniciar tracking de inactividad
     const horaAccion = await getUpdatedHoraAccion();
-    setCurrentInactivityStart(new Date(horaAccion));
+    const remainingMs = timeRemainingRef.current * 1000;
+    const inactivityStart = new Date(horaAccion);
+
+    setIsTimerActive(false);
+    timerActiveRef.current = false;
+    setCurrentInactivityStart(inactivityStart);
+    currentInactivityStartRef.current = inactivityStart;
+
+    await persistLunchTimerState({
+      running: false,
+      remainingMs,
+      horaAccion,
+      startTime: startTimeRef.current,
+      inactivities: inactivitiesRef.current,
+      currentInactivityStart: inactivityStart,
+      firma_empleado: firmaEmpleadoRef.current,
+    });
   };
 
   const handleReset = async () => {
@@ -1051,7 +1113,7 @@ export default function LunchTimeScreen() {
           onPress: async () => {
             let firmaToUse = firmaEmpleadoRef.current || '';
             if (!firmaToUse) {
-              const generatedFirma = await getCurrentUserDigitalSignature(employee);
+              const generatedFirma = await obtainFirmaWithDeviceLocation(employee);
               if (!generatedFirma) {
                 return;
               }
