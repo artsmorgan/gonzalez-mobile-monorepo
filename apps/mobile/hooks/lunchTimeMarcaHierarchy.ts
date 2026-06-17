@@ -2,11 +2,69 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const LUNCH_TIMER_COMPLETING_KEY = 'lunch_timer_completing';
 
+export type LunchTempState = {
+  running: boolean;
+  /** Milisegundos restantes al momento de guardar el estado. */
+  remainingSeconds: number;
+  /** Hora de referencia (`getHoraAccion`) al guardar o reanudar. */
+  currentTimestamp: number;
+  /** Fin programado del almuerzo en ms (epoch). */
+  endTimeMs: number;
+  startTime: string | Date | null;
+  inactivities: unknown[];
+  currentInactivityStart: string | Date | null;
+  firma_empleado: string;
+};
+
 export function computeLunchEndTimeMs(tempState: {
   currentTimestamp: number;
   remainingSeconds: number;
+  endTimeMs?: number;
 }): number {
+  const explicit = Number(tempState.endTimeMs);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return explicit;
+  }
   return Number(tempState.currentTimestamp) + Number(tempState.remainingSeconds);
+}
+
+/** Segundos restantes según `horaAccion` actual y el estado persistido. */
+export function computeRemainingSecondsFromTempState(
+  tempState: {
+    currentTimestamp: number;
+    remainingSeconds: number;
+    endTimeMs?: number;
+    running?: boolean;
+  },
+  horaAccion: number
+): number {
+  if (!tempState.running) {
+    return Math.max(0, Math.round(Number(tempState.remainingSeconds) / 1000));
+  }
+  const endMs = computeLunchEndTimeMs(tempState);
+  return Math.max(0, Math.round((endMs - horaAccion) / 1000));
+}
+
+export function buildLunchTempState(params: {
+  running: boolean;
+  remainingMs: number;
+  horaAccion: number;
+  startTime: Date | null;
+  inactivities: unknown[];
+  currentInactivityStart: Date | null;
+  firma_empleado: string;
+}): LunchTempState {
+  const endTimeMs = params.horaAccion + params.remainingMs;
+  return {
+    running: params.running,
+    remainingSeconds: params.remainingMs,
+    currentTimestamp: params.horaAccion,
+    endTimeMs,
+    startTime: params.startTime,
+    inactivities: params.inactivities,
+    currentInactivityStart: params.currentInactivityStart,
+    firma_empleado: params.firma_empleado,
+  };
 }
 
 export async function tryAcquireLunchTimerCompletionLock(): Promise<boolean> {

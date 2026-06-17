@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import {
+    mergeNotesWhereWithDateRange,
+    validateNotesDateRange,
+} from "../../../../../../utils/notesUpdatedAtDateFilter";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ puesto_id: string }> }) {
   try {
@@ -13,6 +17,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
     const puestoId = parseInt(String(resolved.puesto_id), 10);
     if (!puestoId || Number.isNaN(puestoId)) {
       return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
+    }
+
+    const fechaInicio = req.nextUrl.searchParams.get("fecha_inicio");
+    const fechaFin = req.nextUrl.searchParams.get("fecha_fin");
+    const rangeValidation = validateNotesDateRange(fechaInicio, fechaFin);
+    if (!rangeValidation.valid) {
+      return NextResponse.json({ status: false, message: rangeValidation.message }, { status: 400 });
     }
 
     const puesto = await callDynamicPrisma({
@@ -29,7 +40,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
         action: "GET",
         table: "c_puesto_notas",
         operation: "findMany",
-        where: { puesto_id: puestoId, isActive: true },
+        where: mergeNotesWhereWithDateRange(
+          { puesto_id: puestoId, isActive: true },
+          fechaInicio,
+          fechaFin
+        ),
         orderBy: { updated_at: "desc" },
       },
     });

@@ -234,7 +234,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'puestos_corpo_cache',
             'categoria_mantenimiento_cache',
             'tipo_quejas_cache',
-            'tipo_clientes_quejas_cache'
+            'tipo_clientes_quejas_cache',
+            'last_location',
+            'monitoring_previous_minutes'
           ];
           const keys = await AsyncStorage.getAllKeys();
     

@@ -1,5 +1,6 @@
 import resolveDeviceCoordinates, {
   type DeviceCoordsResult,
+  DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN,
   DEVICE_COORDS_LABELS_PUESTO_UBICACION,
 } from './resolveDeviceCoordinates';
 
@@ -14,5 +15,6 @@ export default async function resolvePuestoUbicacionCoordinates(options?: {
   return resolveDeviceCoordinates({
     silent: options?.silent,
     labels: DEVICE_COORDS_LABELS_PUESTO_UBICACION,
+    gpsTimeoutMs: DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN,
   });
 }

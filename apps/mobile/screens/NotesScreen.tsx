@@ -354,6 +354,10 @@ export default function NotesScreen() {
   const [sendSucursalId, setSendSucursalId] = useState<number | null>(null);
   const [sendPuestoId, setSendPuestoId] = useState<number | null>(null);
   const [sendEmail, setSendEmail] = useState('');
+  const [sendFechaInicio, setSendFechaInicio] = useState<Date | null>(null);
+  const [sendFechaFin, setSendFechaFin] = useState<Date | null>(null);
+  const [showSendFechaInicioPicker, setShowSendFechaInicioPicker] = useState(false);
+  const [showSendFechaFinPicker, setShowSendFechaFinPicker] = useState(false);
   const [sendNotesPreview, setSendNotesPreview] = useState<Note[]>([]);
   const [isLoadingSendPreview, setIsLoadingSendPreview] = useState(false);
   const [imageAccessToken, setImageAccessToken] = useState<string | null>(null);
@@ -931,6 +935,21 @@ export default function NotesScreen() {
     return `${day}-${month}-${year}`;
   };
 
+  const ymd = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const dateOnlyMs = (date: Date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+
+  const isSendDateRangeInvalid = () =>
+    !!sendFechaInicio &&
+    !!sendFechaFin &&
+    dateOnlyMs(sendFechaInicio) > dateOnlyMs(sendFechaFin);
+
   const fetchCategories = async () => {
     try {
       setIsLoadingCategories(true);
@@ -1306,7 +1325,11 @@ export default function NotesScreen() {
     }, [fetchMainStructure, syncMarcaFromStorage])
   );
 
-  const fetchNotesByPuestoForSend = async (puestoId: number) => {
+  const fetchNotesByPuestoForSend = async (
+    puestoId: number,
+    fechaInicio?: Date | null,
+    fechaFin?: Date | null,
+  ) => {
     try {
       setIsLoadingSendPreview(true);
       const isConnected = await getConnectionStatus();
@@ -1314,10 +1337,18 @@ export default function NotesScreen() {
         Alert.alert('Sin conexión', 'Esta función solo está disponible con internet.');
         return;
       }
+      if (fechaInicio && fechaFin && dateOnlyMs(fechaInicio) > dateOnlyMs(fechaFin)) {
+        setSendNotesPreview([]);
+        return;
+      }
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
+      const params = new URLSearchParams();
+      if (fechaInicio) params.set('fecha_inicio', ymd(fechaInicio));
+      if (fechaFin) params.set('fecha_fin', ymd(fechaFin));
+      const qs = params.toString();
       const response = await authedFetch({
-        url: `${apiUrl}/api/puestos/notas/puesto/${puestoId}`,
+        url: `${apiUrl}/api/puestos/notas/puesto/${puestoId}${qs ? `?${qs}` : ''}`,
         init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
         refreshAccessToken,
         logout,
@@ -1352,6 +1383,10 @@ export default function NotesScreen() {
         Alert.alert('Validación', 'Ingresa un correo electrónico.');
         return;
       }
+      if (isSendDateRangeInvalid()) {
+        Alert.alert('Validación', 'La fecha inicio no puede ser posterior a la fecha fin.');
+        return;
+      }
 
       Alert.alert('Confirmación', '¿Deseas enviar las notas al correo indicado?', [
         { text: 'Cancelar', style: 'cancel' },
@@ -1366,7 +1401,12 @@ export default function NotesScreen() {
                 init: {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ puesto_id: sendPuestoId, email: sendEmail.trim() }),
+                  body: JSON.stringify({
+                    puesto_id: sendPuestoId,
+                    email: sendEmail.trim(),
+                    fecha_inicio: sendFechaInicio ? ymd(sendFechaInicio) : undefined,
+                    fecha_fin: sendFechaFin ? ymd(sendFechaFin) : undefined,
+                  }),
                 },
                 refreshAccessToken,
                 logout,
@@ -2050,8 +2090,12 @@ export default function NotesScreen() {
       setSendNotesPreview([]);
       return;
     }
-    fetchNotesByPuestoForSend(sendPuestoId);
-  }, [sendPuestoId]);
+    if (isSendDateRangeInvalid()) {
+      setSendNotesPreview([]);
+      return;
+    }
+    fetchNotesByPuestoForSend(sendPuestoId, sendFechaInicio, sendFechaFin);
+  }, [sendPuestoId, sendFechaInicio, sendFechaFin]);
 
   // Handle menu press from header
   const handleMenuPress = () => {
@@ -3216,6 +3260,76 @@ export default function NotesScreen() {
               </ThemedView>
 
               <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Fecha inicio:</ThemedText>
+                <ThemedView style={styles.dateFilterRow}>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => setShowSendFechaInicioPicker(true)}
+                    activeOpacity={0.85}
+                  >
+                    <ThemedText style={styles.dateButtonText}>
+                      {sendFechaInicio ? formatDateForDisplay(sendFechaInicio) : 'Seleccionar fecha'}
+                    </ThemedText>
+                    <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                  {sendFechaInicio ? (
+                    <TouchableOpacity
+                      style={styles.clearDateButton}
+                      onPress={() => setSendFechaInicio(null)}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                </ThemedView>
+                {showSendFechaInicioPicker ? (
+                  <DateTimePicker
+                    value={sendFechaInicio || new Date()}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, date) => {
+                      setShowSendFechaInicioPicker(Platform.OS === 'ios');
+                      if (date) setSendFechaInicio(date);
+                    }}
+                  />
+                ) : null}
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
+                <ThemedText style={styles.inputLabel}>Fecha fin:</ThemedText>
+                <ThemedView style={styles.dateFilterRow}>
+                  <TouchableOpacity
+                    style={styles.dateButton}
+                    onPress={() => setShowSendFechaFinPicker(true)}
+                    activeOpacity={0.85}
+                  >
+                    <ThemedText style={styles.dateButtonText}>
+                      {sendFechaFin ? formatDateForDisplay(sendFechaFin) : 'Seleccionar fecha'}
+                    </ThemedText>
+                    <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                  {sendFechaFin ? (
+                    <TouchableOpacity
+                      style={styles.clearDateButton}
+                      onPress={() => setSendFechaFin(null)}
+                    >
+                      <Ionicons name="close-circle" size={20} color="#FF3B30" />
+                    </TouchableOpacity>
+                  ) : null}
+                </ThemedView>
+                {showSendFechaFinPicker ? (
+                  <DateTimePicker
+                    value={sendFechaFin || new Date()}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={(_, date) => {
+                      setShowSendFechaFinPicker(Platform.OS === 'ios');
+                      if (date) setSendFechaFin(date);
+                    }}
+                  />
+                ) : null}
+              </ThemedView>
+
+              <ThemedView style={styles.inputGroup}>
                 <ThemedText style={styles.inputLabel}>Correo electrónico:</ThemedText>
                 <TextInput
                   style={styles.input}
@@ -3299,7 +3413,11 @@ export default function NotesScreen() {
                 </ThemedView>
               ) : (
                 <ThemedText style={styles.noteDate}>
-                  Selecciona un puesto para cargar sus notas e imágenes.
+                  {!sendPuestoId
+                    ? 'Selecciona un puesto para cargar sus notas e imágenes.'
+                    : isSendDateRangeInvalid()
+                      ? 'La fecha inicio no puede ser posterior a la fecha fin.'
+                      : 'No hay notas en el rango de fechas seleccionado.'}
                 </ThemedText>
               )}
             </ScrollView>

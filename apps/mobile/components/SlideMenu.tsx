@@ -393,6 +393,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Jerarquia');
   };
 
+  const handleNomencladoresPress = () => {
+    onClose();
+    navigation.navigate('Nomencladores');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -459,11 +464,66 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'checklist-supervision': return <Ionicons name="checkmark-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'nomencladores': return <Ionicons name="albums" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'reportes': return <Ionicons name="bar-chart" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
     }
   };
+
+  const releaseAction = (module: string) => {
+
+    if (false) {
+      return true;
+    }
+
+    const modules = [
+      { name: 'acta-entrega-productos', release: false },
+      { name: 'activities', release: false },
+      { name: 'apreciacion-vulnerabilidad', release: false },
+      { name: 'attendance-control', release: false },
+      { name: 'bitacora-vehiculos-detenidos', release: false },
+      { name: 'checklist-supervision', release: false },
+      { name: 'complaints-master', release: false },
+      { name: 'corporate-vehicles', release: false },
+      { name: 'digital-signature', release: true },
+      { name: 'documentos-entregados', release: false },
+      { name: 'entrega-puestos', release: false },
+      { name: 'general-induction-register', release: false },
+      { name: 'home', release: true },
+      { name: 'incidents', release: false },
+      { name: 'induction-tour-record', release: false },
+      { name: 'jerarquia', release: true },
+      { name: 'job-manuals', release: true },
+      { name: 'llaves', release: false },
+      { name: 'lunch-time', release: true },
+      { name: 'mantenimiento-equipo', release: false },
+      { name: 'marcar-ingreso-salida', release: true },
+      { name: 'mutuos-acuerdos', release: false },
+      { name: 'nomencladores', release: false },
+      { name: 'non-conforming-product', release: false },
+      { name: 'notes', release: false },
+      { name: 'opening-closing-position', release: false },
+      { name: 'permit-request', release: false },
+      { name: 'physical-minute-agenda', release: false },
+      { name: 'profile', release: true },
+      { name: 'puesto-ubicacion', release: true },
+      { name: 'reportes', release: false },
+      { name: 'staffEvaluations', release: false },
+      { name: 'surveys', release: false },
+      { name: 'trainings', release: false },
+      { name: 'traslado-plazas', release: false },
+      { name: 'vehicles', release: false },
+      { name: 'visitors', release: false },
+      { name: 'voice-notes', release: false },
+    ];
+
+    const moduleFind = modules.find((m) => m.name === module);
+    if (moduleFind) {
+      return moduleFind.release;
+    }
+    return false;
+  }
 
   return (
     <>
@@ -625,7 +685,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
             <ThemedView style={styles.menuSeparator} />
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Aseo y Limpieza', 'Administrativos']) && (
+            {releaseAction('acta-entrega-productos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Aseo y Limpieza', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -652,7 +712,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('activities') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -679,7 +739,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {releaseAction('physical-minute-agenda') && hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -706,7 +766,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {releaseAction('opening-closing-position') && hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -733,7 +793,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+            {releaseAction('apreciacion-vulnerabilidad') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -760,7 +820,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (
+            {releaseAction('traslado-plazas') && hasCurrentMarca && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -787,7 +847,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('notes') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -814,7 +874,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('checklist-supervision') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -841,7 +901,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
+            {releaseAction('attendance-control') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -868,7 +928,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+            {releaseAction('documentos-entregados') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -895,7 +955,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('surveys') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -922,7 +982,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('entrega-puestos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -951,7 +1011,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
 
             {/* Estamos aquí */}
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('mantenimiento-equipo') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -978,7 +1038,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {releaseAction('staffEvaluations') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1005,7 +1065,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('incidents') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1032,7 +1092,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('llaves') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1059,7 +1119,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+            {releaseAction('complaints-master') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1086,7 +1146,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('job-manuals') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1113,6 +1173,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
+            {releaseAction('mutuos-acuerdos') && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1137,8 +1198,36 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   Mutuos acuerdos
                 </ThemedText>
               </TouchableOpacity>
+            )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('nomencladores') && hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Nomencladores') && styles.activeMenuItem
+                ]}
+                onPress={handleNomencladoresPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Nomencladores') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('nomencladores', isActiveRoute('Nomencladores'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Nomencladores') && styles.activeMenuItemText
+                  ]}
+                >
+                  Nomencladores
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('voice-notes') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1165,7 +1254,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+            {releaseAction('non-conforming-product') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1192,7 +1281,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {releaseAction('trainings') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1219,7 +1308,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {releaseAction('induction-tour-record') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1246,7 +1335,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+            {releaseAction('visitors') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1268,12 +1357,12 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('Visitors') && styles.activeMenuItemText
                   ]}
                 >
-                  Registro de Visitantes
+                  Registro de personas
                 </ThemedText>
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && (hasPermissionRole(['ADMINISTRATIVO'])) && (
+            {releaseAction('reportes') && hasCurrentMarca && (hasPermissionRole(['ADMINISTRATIVO'])) && (
               <TouchableOpacity
                 style={[styles.menuItem, isActiveRoute('Reportes') && styles.activeMenuItem]}
                 onPress={handleReportesPress}
@@ -1291,7 +1380,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+            {releaseAction('corporate-vehicles') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1318,7 +1407,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {releaseAction('general-induction-register') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1345,7 +1434,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+            {releaseAction('bitacora-vehiculos-detenidos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1372,32 +1461,34 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                isActiveRoute('PermitRequest') && styles.activeMenuItem
-              ]}
-              onPress={handlePermitRequestPress}
-            >
-              <ThemedText
+            {releaseAction('permit-request') && (
+              <TouchableOpacity
                 style={[
-                  styles.menuItemText,
-                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                  styles.menuItem,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItem
                 ]}
+                onPress={handlePermitRequestPress}
               >
-                {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
-              </ThemedText>
-              <ThemedText
-                style={[
-                  styles.menuItemText,
-                  isActiveRoute('PermitRequest') && styles.activeMenuItemText
-                ]}
-              >
-                Solicitud de permiso
-              </ThemedText>
-            </TouchableOpacity>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                  ]}
+                >
+                  Solicitud de permiso
+                </ThemedText>
+              </TouchableOpacity>
+            )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('lunch-time') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1424,7 +1515,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+            {releaseAction('puesto-ubicacion') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1451,7 +1542,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+            {releaseAction('vehicles') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,
@@ -1478,7 +1569,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {!hasCurrentMarca && (
+            {!releaseAction('home') && !hasCurrentMarca && (
               <ThemedView style={styles.warningContainer}>
                 <ThemedText
                   style={[

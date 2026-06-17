@@ -3,6 +3,10 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { fetchDynamicFile } from "../../../../../utils/callDynamicFilesApi";
 import { transporter } from "../../../../../transporter";
+import {
+    mergeNotesWhereWithDateRange,
+    validateNotesDateRange,
+} from "../../../../../utils/notesUpdatedAtDateFilter";
 
 function decodeFirmaHash(hash?: string | null) {
   if (!hash) return null;
@@ -32,13 +36,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
     }
 
-    const { puesto_id, email } = await req.json();
+    const { puesto_id, email, fecha_inicio, fecha_fin } = await req.json();
     const puestoId = parseInt(String(puesto_id), 10);
     if (!puestoId || Number.isNaN(puestoId)) {
       return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
     }
     if (!email || String(email).trim().length === 0) {
       return NextResponse.json({ status: false, message: "Email requerido" }, { status: 400 });
+    }
+
+    const rangeValidation = validateNotesDateRange(fecha_inicio, fecha_fin);
+    if (!rangeValidation.valid) {
+      return NextResponse.json({ status: false, message: rangeValidation.message }, { status: 400 });
     }
 
     const puesto = await callDynamicPrisma({
@@ -55,7 +64,11 @@ export async function POST(req: NextRequest) {
         action: "GET",
         table: "c_puesto_notas",
         operation: "findMany",
-        where: { puesto_id: puestoId, isActive: true },
+        where: mergeNotesWhereWithDateRange(
+          { puesto_id: puestoId, isActive: true },
+          fecha_inicio,
+          fecha_fin
+        ),
         orderBy: { updated_at: "desc" },
       },
     });

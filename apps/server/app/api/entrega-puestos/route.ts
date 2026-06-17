@@ -49,6 +49,11 @@ function parseDateValue(dateValue: any): Date | null {
     return isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function parseOptionalId(value: unknown): number | null {
+    const id = parseInt(String(value ?? ""), 10);
+    return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 export async function GET(req: NextRequest) {
     try {
         const { valid, expired, message } = await verifyAccessTokenByApi(req);
@@ -114,12 +119,14 @@ export async function GET(req: NextRequest) {
                     hora_entrada_entrega: reg.hora_entrada_entrega,
                     hora_salida_entrega: reg.hora_salida_entrega,
                     turno_entrega: reg.turno_entrega,
+                    marca_entrega_id: reg.marca_entrega_id ?? null,
                     oficial_recibe: reg.oficial_recibe,
                     fecha_entrada_recibe: reg.fecha_entrada_recibe,
                     fecha_salida_recibe: reg.fecha_salida_recibe,
                     hora_entrada_recibe: reg.hora_entrada_recibe,
                     hora_salida_recibe: reg.hora_salida_recibe,
                     turno_recibe: reg.turno_recibe,
+                    marca_recibe_id: reg.marca_recibe_id ?? null,
                     articulos_puesto: articulosParsed,
                     observaciones: reg.observaciones,
                     firma_recibe: reg.firma_recibe,
@@ -158,27 +165,18 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "La marca no tiene los datos necesarios para buscar el registro anterior" }, { status: 200 });
         }
 
-        if (marca.hora_entrada_digitada) {
-            //const marcaFechaHoraInicio = new Date(`${marca.fecha}T${marca.hora_entrada_digitada}`);
-            const marcaFechaHoraInicio = marca.hora_entrada_digitada;
-            let marcaFechaHoraFin = toZonedTime(new Date(), 'America/Costa_Rica');
-            /*if (marcaFechaHoraInicio < marcaFechaHoraFin){ // Si hora_inicio es menor a hora_fin, entonces la fecha de fin es el día siguiente
-                marcaFechaHoraFin = new Date(`${marca.fecha.getDate() + 1}T${marca.hora_fin}`);
-            }*/
-
-            const entregaPuestos = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_registro_entrega_puesto",
-                    operation: "findMany",
-                    where: { created_at: { lte: marcaFechaHoraFin instanceof Date ? marcaFechaHoraFin.toISOString() : marcaFechaHoraFin, gte: marcaFechaHoraInicio instanceof Date ? marcaFechaHoraInicio.toISOString() : marcaFechaHoraInicio }, created_by: marca.empleadoFijo_id },
-                },
-            });
-            const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
-            if (entregaPuestosArray.length > 0) {
-                return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
-            }
+        const entregaPuestos = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_registro_entrega_puesto",
+                operation: "findMany",
+                where: { marca_recibe_id: parseInt(marcaId) },
+            },
+        });
+        const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
+        if (entregaPuestosArray.length > 0) {
+            return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
         }
 
         // Construir la fecha de la marca actual para comparación
@@ -230,6 +228,13 @@ export async function GET(req: NextRequest) {
                             },
                         },
                     ],
+                    AND: [
+                        {
+                            tipo_turno: {
+                                not: "L",
+                            },
+                        },
+                    ]
                 },
                 orderBy: [
                     { fecha: "desc" },
@@ -626,9 +631,17 @@ export async function GET(req: NextRequest) {
             for (const a of articulos_return as any[]) a.ultimo_mantenimiento = null;
         }
 
+        const isSelfDelivery =
+            marca.empleadoFijo_id != null &&
+            marcaAnterior.empleadoFijo_id != null &&
+            Number(marca.empleadoFijo_id) === Number(marcaAnterior.empleadoFijo_id);
+
         const info_return = {
             previous_marca: marcaAnterior,
             previous_employee: previous_employee,
+            is_self_delivery: isSelfDelivery,
+            marca_recibe_id: marca.id,
+            marca_entrega_id: isSelfDelivery ? null : marcaAnterior.id,
             incidentes: incidentes_return,
             notas: notas_return,
             articulos: articulos_return,
@@ -676,6 +689,8 @@ export async function POST(req: NextRequest) {
             firma_entrega,
             firma_responsable,
             marca_id,
+            marca_entrega_id,
+            marca_recibe_id,
         } = body;
 
         const firmaRecibeFinal = typeof firma_recibe === "string" && firma_recibe.trim().length > 0
@@ -688,7 +703,15 @@ export async function POST(req: NextRequest) {
             ? firma_responsable.trim()
             : firmaRecibeFinal;
 
-        if (!cliente_id || !corpo_id || !puesto_id || !oficial_entrega || !oficial_recibe || !firmaRecibeFinal) {
+        const isSelfDelivery =
+            oficial_entrega == null ||
+            String(oficial_entrega ?? "").trim() === "";
+
+        if (!cliente_id || !corpo_id || !puesto_id || !oficial_recibe || !firmaRecibeFinal) {
+            return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
+        }
+
+        if (!isSelfDelivery && !oficial_entrega) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
@@ -698,8 +721,25 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "No se pudo obtener el ID del empleado" }, { status: 401 });
         }
 
+        const marcaRecibeId = parseOptionalId(marca_recibe_id ?? marca_id);
+        const marcaEntregaId = isSelfDelivery ? null : parseOptionalId(marca_entrega_id);
+
         // Validar que no exista ya un registro para este turno
-        if (marca_id) {
+        if (marcaRecibeId) {
+            const entregaPuestos = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_registro_entrega_puesto",
+                    operation: "findMany",
+                    where: { marca_recibe_id: marcaRecibeId },
+                },
+            });
+            const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
+            if (entregaPuestosArray.length > 0) {
+                return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
+            }
+        } else if (marca_id) {
             const marca = await callDynamicPrisma({
                 req,
                 data: {
@@ -759,48 +799,50 @@ export async function POST(req: NextRequest) {
 
         const now = toZonedTime(new Date(), 'America/Costa_Rica');
 
-        // Parsear fechas y horas del body
-        const fechaEntradaEntregaParsed = parseDateValue(fecha_entrada_entrega);
-        const fechaSalidaEntregaParsed = parseDateValue(fecha_salida_entrega);
-        const horaEntradaEntregaParsed = `${hora_entrada_entrega}:00.000Z`;
-        const horaSalidaEntregaParsed = `${hora_salida_entrega}:00.000Z`;
         const fechaEntradaRecibeParsed = parseDateValue(fecha_entrada_recibe);
         const fechaSalidaRecibeParsed = parseDateValue(fecha_salida_recibe);
-        const horaEntradaRecibeParsed = `${hora_entrada_recibe}:00.000Z`;
-        const horaSalidaRecibeParsed = `${hora_salida_recibe}:00.000Z`;
+        const horaEntradaRecibeParsed = hora_entrada_recibe ? `${hora_entrada_recibe}:00.000Z` : null;
+        const horaSalidaRecibeParsed = hora_salida_recibe ? `${hora_salida_recibe}:00.000Z` : null;
 
-        console.log('horaEntradaEntregaParsed', horaEntradaEntregaParsed);
-        console.log('horaSalidaEntregaParsed', horaSalidaEntregaParsed);
-        console.log('horaEntradaRecibeParsed', horaEntradaRecibeParsed);
-        console.log('horaSalidaRecibeParsed', horaSalidaRecibeParsed);
+        let fechaEntradaEntregaISO: string | null = null;
+        let fechaSalidaEntregaISO: string | null = null;
+        let horaEntradaEntregaISO: string | null = null;
+        let horaSalidaEntregaISO: string | null = null;
+        let oficialEntregaFinal: string | null = null;
+        let turnoEntregaFinal: string | null = null;
 
-        // Validar que todas las fechas y horas sean válidas
-        if (!fechaEntradaEntregaParsed || !fechaSalidaEntregaParsed || !horaEntradaEntregaParsed || !horaSalidaEntregaParsed ||
-            !fechaEntradaRecibeParsed || !fechaSalidaRecibeParsed || !horaEntradaRecibeParsed || !horaSalidaRecibeParsed) {
+        if (!isSelfDelivery) {
+            const fechaEntradaEntregaParsed = parseDateValue(fecha_entrada_entrega);
+            const fechaSalidaEntregaParsed = parseDateValue(fecha_salida_entrega);
+            const horaEntradaEntregaParsed = hora_entrada_entrega ? `${hora_entrada_entrega}:00.000Z` : null;
+            const horaSalidaEntregaParsed = hora_salida_entrega ? `${hora_salida_entrega}:00.000Z` : null;
+
+            if (!fechaEntradaEntregaParsed || !fechaSalidaEntregaParsed || !horaEntradaEntregaParsed || !horaSalidaEntregaParsed) {
+                return NextResponse.json({
+                    status: false,
+                    message: "Una o más fechas u horas de entrega son inválidas. Verifique el formato de los datos enviados."
+                }, { status: 400 });
+            }
+
+            fechaEntradaEntregaISO = fechaEntradaEntregaParsed.toISOString();
+            fechaSalidaEntregaISO = fechaSalidaEntregaParsed.toISOString();
+            horaEntradaEntregaISO = new Date(horaEntradaEntregaParsed).toISOString();
+            horaSalidaEntregaISO = new Date(horaSalidaEntregaParsed).toISOString();
+            oficialEntregaFinal = String(oficial_entrega).trim();
+            turnoEntregaFinal = turno_entrega ? String(turno_entrega).trim() : null;
+        }
+
+        if (!fechaEntradaRecibeParsed || !fechaSalidaRecibeParsed || !horaEntradaRecibeParsed || !horaSalidaRecibeParsed) {
             return NextResponse.json({
                 status: false,
-                message: "Una o más fechas u horas son inválidas. Verifique el formato de los datos enviados."
+                message: "Una o más fechas u horas de recepción son inválidas. Verifique el formato de los datos enviados."
             }, { status: 400 });
         }
 
-        // Convertir a ISO strings
-        const fechaEntradaEntregaISO = fechaEntradaEntregaParsed.toISOString();
-        const fechaSalidaEntregaISO = fechaSalidaEntregaParsed.toISOString();
-        const horaEntradaEntregaISO = new Date(horaEntradaEntregaParsed).toISOString();
-        const horaSalidaEntregaISO = new Date(horaSalidaEntregaParsed).toISOString();
         const fechaEntradaRecibeISO = fechaEntradaRecibeParsed.toISOString();
         const fechaSalidaRecibeISO = fechaSalidaRecibeParsed.toISOString();
         const horaEntradaRecibeISO = new Date(horaEntradaRecibeParsed).toISOString();
         const horaSalidaRecibeISO = new Date(horaSalidaRecibeParsed).toISOString();
-
-        // Validar que todas las fechas y horas sean válidas
-        if (!fechaEntradaEntregaISO || !fechaSalidaEntregaISO || !horaEntradaEntregaISO || !horaSalidaEntregaISO ||
-            !fechaEntradaRecibeISO || !fechaSalidaRecibeISO || !horaEntradaRecibeISO || !horaSalidaRecibeISO) {
-            return NextResponse.json({
-                status: false,
-                message: "Una o más fechas u horas son inválidas. Verifique el formato de los datos enviados."
-            }, { status: 400 });
-        }
 
         // Crear el registro
         const nuevoRegistro = await callDynamicPrisma({
@@ -812,22 +854,24 @@ export async function POST(req: NextRequest) {
                     cliente_id: parseInt(cliente_id),
                     corpo_id: parseInt(corpo_id),
                     puesto_id: parseInt(puesto_id),
-                    oficial_entrega,
+                    oficial_entrega: oficialEntregaFinal,
                     fecha_entrada_entrega: fechaEntradaEntregaISO,
                     fecha_salida_entrega: fechaSalidaEntregaISO,
                     hora_entrada_entrega: horaEntradaEntregaISO,
                     hora_salida_entrega: horaSalidaEntregaISO,
-                    turno_entrega,
+                    turno_entrega: turnoEntregaFinal,
+                    marca_entrega_id: marcaEntregaId,
                     oficial_recibe,
                     fecha_entrada_recibe: fechaEntradaRecibeISO,
                     fecha_salida_recibe: fechaSalidaRecibeISO,
                     hora_entrada_recibe: horaEntradaRecibeISO,
                     hora_salida_recibe: horaSalidaRecibeISO,
                     turno_recibe,
+                    marca_recibe_id: marcaRecibeId,
                     articulos_puesto: sanitizeArticulosPuestoForPersistence(articulos_puesto),
                     observaciones: observaciones || '',
                     firma_recibe: firmaRecibeFinal,
-                    firma_entrega: firmaEntregaFinal,
+                    firma_entrega: isSelfDelivery ? null : firmaEntregaFinal,
                     firma_responsable: firmaResponsableFinal,
                     created_at: now.toISOString(),
                     created_by: empleadoId,
@@ -836,14 +880,15 @@ export async function POST(req: NextRequest) {
         });
 
         if (nuevoRegistro) {
-            if (marca_id) {
+            const marcaIdForActivities = marcaRecibeId ?? parseOptionalId(marca_id);
+            if (marcaIdForActivities) {
                 const marca = await callDynamicPrisma({
                     req,
                     data: {
                         action: "GET",
                         table: "c_marca_dia",
                         operation: "findUnique",
-                        where: { id: Number(marca_id) },
+                        where: { id: marcaIdForActivities },
                     },
                 });
                 if (marca?.plaza_id && marca?.puesto_id) {
@@ -965,9 +1010,15 @@ export async function POST(req: NextRequest) {
             }
 
             if (send_notification) {
-                const fechaEntradaFormatted = fecha_entrada_entrega.includes("T") ? fecha_entrada_entrega.split("T")[0] : fecha_entrada_entrega;
-                const horaEntradaFormatted = hora_entrada_entrega.includes("T") ? hora_entrada_entrega.split("T")[1].split(".")[0] : hora_entrada_entrega;
-                const description = `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fechaEntradaFormatted} a las ${horaEntradaFormatted}${articulos_desc}`;
+                const fechaEntradaRecibeFormatted = fecha_entrada_recibe.includes("T")
+                    ? fecha_entrada_recibe.split("T")[0]
+                    : fecha_entrada_recibe;
+                const horaEntradaRecibeFormatted = hora_entrada_recibe.includes("T")
+                    ? hora_entrada_recibe.split("T")[1].split(".")[0]
+                    : hora_entrada_recibe;
+                const description = isSelfDelivery
+                    ? `El usuario ${employee} ha registrado una recepción de puesto${location} el día ${fechaEntradaRecibeFormatted} a las ${horaEntradaRecibeFormatted}${articulos_desc}`
+                    : `El usuario ${employee} ha registrado una entrega de puesto${location} (Ocupado anteriormente por ${oficial_entrega}) el día ${fechaEntradaRecibeFormatted} a las ${horaEntradaRecibeFormatted}${articulos_desc}`;
                 await sendNotificationByRole(req, nuevoRegistro.corpo_id, [], "Registro de entrega de puesto creado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }

@@ -15,14 +15,26 @@ import SignatureScreen from "react-native-signature-canvas";
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import saveManualSignature from '@/hooks/saveManualSignature';
-import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import getCurrentUserDigitalSignature, {
+  SIGNATURE_POLL_SILENT_SCREEN,
+  SIGNATURE_USER_ACTION_SCREEN,
+  type DigitalSignatureOptions,
+} from '@/hooks/getCurrentUserDigitalSignature';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 type DigitalSignatureScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'DigitalSignature'>;
 
 const LOCATION_QR_ERROR_MESSAGE =
-  'No se pudo obtener la ubicación. Activa el GPS, concede permisos de ubicación y pulsa Reintentar para mostrar el código QR.';
+  'No se pudo obtener la ubicación. Mantén el GPS encendido unos segundos y vuelve a intentar.';
+
+/** Firma con ubicación + fallback `last_location`. */
+async function obtainFirmaWithDeviceLocation(
+  employee: unknown,
+  opts?: DigitalSignatureOptions,
+): Promise<string | null> {
+  return getCurrentUserDigitalSignature(employee, opts);
+}
 
 export default function DigitalSignatureScreen() {
   const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
@@ -66,9 +78,14 @@ export default function DigitalSignatureScreen() {
     setSignatureError(null);
 
     try {
-      const hash = await getCurrentUserDigitalSignature(employee);
+      const hash = await obtainFirmaWithDeviceLocation(
+        employee,
+        options?.silent ? SIGNATURE_POLL_SILENT_SCREEN : SIGNATURE_USER_ACTION_SCREEN,
+      );
       if (!hash) {
-        showQrLocationFailure(LOCATION_QR_ERROR_MESSAGE);
+        if (!options?.silent) {
+          showQrLocationFailure(LOCATION_QR_ERROR_MESSAGE);
+        }
         return;
       }
 
@@ -77,9 +94,11 @@ export default function DigitalSignatureScreen() {
       setRefreshTimer(20);
     } catch (error) {
       console.error('Error generating QR signature:', error);
-      showQrLocationFailure(
-        'Error al generar la firma digital. Verifica la ubicación e intenta nuevamente.'
-      );
+      if (!options?.silent) {
+        showQrLocationFailure(
+          'Error al generar la firma digital. Verifica la ubicación e intenta nuevamente.'
+        );
+      }
     } finally {
       if (!options?.silent) {
         setIsGeneratingSignature(false);
@@ -100,7 +119,7 @@ export default function DigitalSignatureScreen() {
     }
   }, [isAuthenticated, isLoading, navigation]);
 
-  // QR refresh timer: cada 20 s regenera hash (ubicación + hora) vía getCurrentUserDigitalSignature
+  // QR refresh timer: cada 20 s regenera hash (ubicación GPS + hora) sin depender de internet
   useEffect(() => {
     if (!isTimerActive || !signatureHash || !employee) return;
 
@@ -277,8 +296,8 @@ export default function DigitalSignatureScreen() {
               <ActivityIndicator size="large" color="#007AFF" />
               <ThemedText style={styles.loadingLocationText}>
                 {isInitialQrLoad
-                  ? 'Obteniendo ubicación y generando código QR...'
-                  : 'Generando firma digital...'}
+                  ? 'Obteniendo ubicación GPS y generando código QR...'
+                  : 'Actualizando firma digital...'}
               </ThemedText>
             </ThemedView>
           ) : signatureError ? (

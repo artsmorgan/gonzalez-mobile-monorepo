@@ -1,13 +1,15 @@
 import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { getMonitoringPreviousMinutes } from "./getMonitoringPreviousMinutes";
 
 export async function getUserMarca(req: NextRequest, id: number) {
     try {
         const now = toZonedTime(new Date(), "America/Costa_Rica");
-        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        const monitoringPreviousMinutes = await getMonitoringPreviousMinutes(req);
+        const nowPlusMonitoringWindow = new Date(now.getTime() + monitoringPreviousMinutes * 60 * 1000);
 
-        // Paso 1: Buscar si existe un registro dentro de los próximos 15 minutos
+        // Paso 1: Buscar si existe un registro dentro de la ventana previa al inicio
         const proximo = await callDynamicPrisma({
             req,
             data: {
@@ -42,17 +44,17 @@ export async function getUserMarca(req: NextRequest, id: number) {
 
         console.log("Primer paso");
 
-        // Si existe uno futuro, validar si está dentro del rango de 15 minutos
+        // Si existe uno futuro, validar si está dentro del rango configurado
         if (proximo) {
             // Convertimos la fecha + hora_inicio en un solo Date
             const proximoDateTime = new Date(`${proximo.fecha}T${proximo.hora_inicio}`);
 
-            if (proximoDateTime <= nowPlus15) {
+            if (proximoDateTime <= nowPlusMonitoringWindow) {
                 return proximo;
             }
         }
 
-        // Paso 2: Si no hay ninguno dentro de 15 minutos, tomar el último anterior
+        // Paso 2: Si no hay ninguno dentro de la ventana, tomar el último anterior
         const ultimo = await callDynamicPrisma({
             req,
             data: {

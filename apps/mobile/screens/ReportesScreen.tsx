@@ -238,7 +238,7 @@ const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_REGISTRO_INDUCCION_GENERAL, label: 'Registro de inducción general' },
   { value: MODULO_REGISTRO_VEHICULOS_CORPORATIVOS, label: 'Registro de vehículos' },
   { value: MODULO_REVISION_VEHICULOS, label: 'Revisión de vehículos' },
-  { value: MODULO_REGISTRO_VISITAS, label: 'Registro de visitas' },
+  { value: MODULO_REGISTRO_VISITAS, label: 'Personas' },
   { value: MODULO_VISITAS_VEHICULOS, label: 'Visitas de vehículos' },
   { value: MODULO_REGISTRO_CAPACITACIONES, label: 'Registro de capacitaciones' },
   { value: MODULO_SOLICITUDES_PERMISO, label: 'Solicitudes de permiso' },
@@ -270,14 +270,43 @@ function generateReportNomenclaturaUuid(): string {
   });
 }
 
-function buildDefaultReportMetaFields(modulo: string, at: Date = new Date()) {
-  const ts = formatReportMetaTimestamp(at);
+function buildReportMetaFields(
+  modulo: string,
+  tipo: ReporteTipoSalida,
+  ts: string = formatReportMetaTimestamp()
+) {
   const label = MODULO_LABEL_BY_VALUE.get(modulo) ?? modulo;
   return {
-    nombre: `${label} ${ts}`,
+    nombre: `${label} ${tipo} ${ts}`,
     numero: ts,
-    nomenclatura:  `${label} ${ts}`,
+    nomenclatura: `${label} ${tipo} ${ts}`,
   };
+}
+
+function buildDefaultReportMetaFields(
+  modulo: string,
+  tipo: ReporteTipoSalida = 'Consolidado',
+  at: Date = new Date()
+) {
+  return buildReportMetaFields(modulo, tipo, formatReportMetaTimestamp(at));
+}
+
+/** Asegura que nombre/nomenclatura incluyan Individual o Consolidado (nombre del archivo en servidor). */
+function applyTipoToReportLabel(label: string, tipo: ReporteTipoSalida): string {
+  const trimmed = label.trim().replace(/\s+/g, ' ');
+  const withoutTipo = trimmed
+    .replace(/\s+Individual\s*/gi, ' ')
+    .replace(/\s+Consolidado\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const tsMatch = withoutTipo.match(/(\d{12})$/);
+  if (tsMatch) {
+    const ts = tsMatch[1];
+    const labelPart = withoutTipo.slice(0, -ts.length).trim();
+    return `${labelPart} ${tipo} ${ts}`.replace(/\s+/g, ' ').trim();
+  }
+  if (!withoutTipo) return tipo;
+  return `${withoutTipo} ${tipo}`.trim();
 }
 
 const ORDER_OPTIONS: { value: string; label: string }[] = [
@@ -405,7 +434,7 @@ const ORDER_OPTIONS_REGISTRO_VISITAS: { value: string; label: string }[] = [
   { value: 'corpo_id', label: 'Sucursal' },
   { value: 'puesto_id', label: 'Puesto' },
   { value: 'created_at', label: 'Fecha' },
-  { value: 'nombre', label: 'Visitante' },
+  { value: 'nombre', label: 'Persona' },
 ];
 
 const ORDER_OPTIONS_VISITAS_VEHICULOS: { value: string; label: string }[] = [
@@ -664,6 +693,60 @@ function formatStoredYmdString(ymdStr: string, fallback = 'Elegir fecha'): strin
   } catch {
     return fallback;
   }
+}
+
+const ENTREGA_PUESTO_NA = 'N/A';
+
+function isEmptyEntregaPuestoValue(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v === 'string' && v.trim() === '') return true;
+  return false;
+}
+
+function displayEntregaPuestoText(v: unknown): string {
+  return isEmptyEntregaPuestoValue(v) ? ENTREGA_PUESTO_NA : String(v).trim();
+}
+
+function formatEntregaPuestoPreviewDate(raw: unknown): string {
+  if (isEmptyEntregaPuestoValue(raw)) return ENTREGA_PUESTO_NA;
+  const s = String(raw);
+  const ymdPart = s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
+  if (ymdOkStr(ymdPart)) return formatStoredYmdString(ymdPart, ENTREGA_PUESTO_NA);
+  return ymdPart || ENTREGA_PUESTO_NA;
+}
+
+function formatEntregaPuestoPreviewTime(raw: unknown): string {
+  if (isEmptyEntregaPuestoValue(raw)) return ENTREGA_PUESTO_NA;
+  const s = String(raw).trim();
+  if (hmOkStr(s)) return s;
+  if (s.includes('T')) {
+    const part = s.split('T')[1]?.split('.')[0]?.slice(0, 5);
+    if (part && hmOkStr(part)) return part;
+  }
+  try {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return ENTREGA_PUESTO_NA;
+}
+
+function displayEntregaPuestoTurno(v: unknown): string {
+  if (isEmptyEntregaPuestoValue(v)) return ENTREGA_PUESTO_NA;
+  const t = String(v).trim().toUpperCase();
+  if (t === 'D') return 'Diurno';
+  if (t === 'M') return 'Mixto';
+  if (t === 'N') return 'Nocturno';
+  return String(v).trim();
+}
+
+function displayEntregaPuestoMarcaId(v: unknown): string {
+  if (v == null || v === '') return ENTREGA_PUESTO_NA;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? String(Math.floor(n)) : ENTREGA_PUESTO_NA;
 }
 
 function parseHmToLocalDate(hmStr: string): Date {
@@ -1520,7 +1603,7 @@ export default function ReportesScreen() {
   const { scanQR, QRScannerComponent } = useQRScanner();
 
   const resetNewReportForm = useCallback(() => {
-    const meta = buildDefaultReportMetaFields(MODULO_INGRESOS);
+    const meta = buildDefaultReportMetaFields(MODULO_INGRESOS, 'Consolidado');
     setFormNombre(meta.nombre);
     setFormNumero(meta.numero);
     setFormNomenclatura(meta.nomenclatura);
@@ -1691,11 +1774,19 @@ export default function ReportesScreen() {
       setIncidentModalPicker(null);
       return;
     }
-    const meta = buildDefaultReportMetaFields(formModulo);
+    const tipo = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
+    const meta = buildDefaultReportMetaFields(formModulo, tipo);
     setFormNombre(meta.nombre);
     setFormNumero(meta.numero);
     setFormNomenclatura(meta.nomenclatura);
   }, [formModulo, modalVisible]);
+
+  useEffect(() => {
+    if (!modalVisible) return;
+    const tipo = resolveTipoReporteForCreate(formModulo, formTipoReporte);
+    setFormNombre((prev) => applyTipoToReportLabel(prev, tipo));
+    setFormNomenclatura((prev) => applyTipoToReportLabel(prev, tipo));
+  }, [formTipoReporte, modalVisible]);
 
   useEffect(() => {
     if (formModulo === MODULO_BITACORA_NOVEDADES) {
@@ -3890,12 +3981,14 @@ export default function ReportesScreen() {
       }
 
       const tipoReporte = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
+      const nombreReporte = applyTipoToReportLabel(formNombre.trim(), tipoReporte);
+      const nomenclaturaReporte = applyTipoToReportLabel(formNomenclatura.trim(), tipoReporte);
 
       const res = await createReportJob({
         body: {
-          nombre: formNombre.trim(),
+          nombre: nombreReporte,
           numero: formNumero.trim(),
-          nomenclatura: formNomenclatura.trim(),
+          nomenclatura: nomenclaturaReporte,
           descripcion: formDescripcion.trim(),
           modulo: formModulo,
           tipo_reporte: tipoReporte,
@@ -4700,7 +4793,7 @@ export default function ReportesScreen() {
                                   : modulo === MODULO_ENCUESTA_SATISFACCION
                                     ? 'Filtros — Encuestas de satisfacción'
                                     : modulo === MODULO_REGISTRO_VISITAS
-                                      ? 'Filtros — Registro de visitas'
+                                      ? 'Filtros — Personas'
                                     : modulo === MODULO_VISITAS_VEHICULOS
                                       ? 'Filtros — Visitas de vehículos'
                                     : modulo === MODULO_MUTUOS_ACUERDOS
@@ -5600,7 +5693,7 @@ export default function ReportesScreen() {
                     ) : null}
                     {modulo === MODULO_REGISTRO_VISITAS ? (
                       <>
-                        <ThemedText style={styles.label}>Cédula del visitante</ThemedText>
+                        <ThemedText style={styles.label}>Cédula de la persona</ThemedText>
                         <TextInput
                           style={styles.input}
                           value={listRvCedulaVisitante}
@@ -5608,7 +5701,7 @@ export default function ReportesScreen() {
                           placeholder="Opcional"
                           placeholderTextColor="#999"
                         />
-                        <ThemedText style={styles.label}>Tipo de visitante</ThemedText>
+                        <ThemedText style={styles.label}>Tipo de persona</ThemedText>
                         <View style={styles.pickerWrapper}>
                           <Picker
                             selectedValue={listRvTipoVisitante}
@@ -5616,7 +5709,7 @@ export default function ReportesScreen() {
                             style={styles.picker}
                           >
                             <Picker.Item label="Todos" value="todos" color="#000000" />
-                            <Picker.Item label="Normal" value="normal" color="#000000" />
+                            <Picker.Item label="Visitante" value="normal" color="#000000" />
                             <Picker.Item label="Funcionario" value="funcionario" color="#000000" />
                           </Picker>
                         </View>
@@ -7767,7 +7860,7 @@ export default function ReportesScreen() {
                                 : formModulo === MODULO_ENCUESTA_SATISFACCION
                                   ? 'Filtros — Encuestas de satisfacción'
                                   : formModulo === MODULO_REGISTRO_VISITAS
-                                    ? 'Filtros — Registro de visitas'
+                                    ? 'Filtros — Personas'
                                   : formModulo === MODULO_VISITAS_VEHICULOS
                                     ? 'Filtros — Visitas de vehículos'
                                   : formModulo === MODULO_MUTUOS_ACUERDOS
@@ -8600,7 +8693,7 @@ export default function ReportesScreen() {
                   ) : null}
                   {formModulo === MODULO_REGISTRO_VISITAS ? (
                     <>
-                      <ThemedText style={styles.label}>Cédula del visitante</ThemedText>
+                      <ThemedText style={styles.label}>Cédula de la persona</ThemedText>
                       <TextInput
                         style={styles.input}
                         value={modalRvCedulaVisitante}
@@ -8608,7 +8701,7 @@ export default function ReportesScreen() {
                         placeholder="Opcional"
                         placeholderTextColor="#999"
                       />
-                      <ThemedText style={styles.label}>Tipo de visitante</ThemedText>
+                      <ThemedText style={styles.label}>Tipo de persona</ThemedText>
                       <View style={styles.pickerWrapper}>
                         <Picker
                           selectedValue={modalRvTipoVisitante}
@@ -8616,7 +8709,7 @@ export default function ReportesScreen() {
                           style={styles.picker}
                         >
                           <Picker.Item label="Todos" value="todos" color="#000000" />
-                          <Picker.Item label="Normal" value="normal" color="#000000" />
+                          <Picker.Item label="Visitante" value="normal" color="#000000" />
                           <Picker.Item label="Funcionario" value="funcionario" color="#000000" />
                         </Picker>
                       </View>
@@ -10716,40 +10809,101 @@ export default function ReportesScreen() {
                                   </ThemedView>
                                 ))
                             : formModulo === MODULO_ENTREGA_PUESTO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-ep-${idx}`} style={{ marginBottom: 10 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre} | {row.cliente_nombre} | {row.corpo_nombre} | {row.puesto_nombre}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Entrega: {row.oficial_entrega ?? '—'} · Recibe: {row.oficial_recibe ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Turnos: {row.turno_entrega ?? '—'} / {row.turno_recibe ?? '—'}
-                                    </ThemedText>
-                                    {row.articulos_puesto_preview ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={5}>
-                                        Artículos: {String(row.articulos_puesto_preview)}
+                              ? previewRows.map((row, idx) => {
+                                  const isConsolidado =
+                                    resolveTipoReporteForCreate(formModulo, formTipoReporte) === 'Consolidado';
+                                  const oficialEntrega =
+                                    row.oficial_entrega_display ?? displayEntregaPuestoText(row.oficial_entrega);
+                                  const fechaEntradaEntrega =
+                                    row.fecha_entrada_entrega_display ??
+                                    formatEntregaPuestoPreviewDate(row.fecha_entrada_entrega);
+                                  const fechaSalidaEntrega =
+                                    row.fecha_salida_entrega_display ??
+                                    formatEntregaPuestoPreviewDate(row.fecha_salida_entrega);
+                                  const horaEntradaEntrega =
+                                    row.hora_entrada_entrega_display ??
+                                    formatEntregaPuestoPreviewTime(row.hora_entrada_entrega);
+                                  const horaSalidaEntrega =
+                                    row.hora_salida_entrega_display ??
+                                    formatEntregaPuestoPreviewTime(row.hora_salida_entrega);
+                                  const turnoEntrega =
+                                    row.turno_entrega_display ?? displayEntregaPuestoTurno(row.turno_entrega);
+                                  return (
+                                    <ThemedView key={`prev-ep-${idx}`} style={{ marginBottom: 12 }}>
+                                      <ThemedText style={styles.detailText}>
+                                        {row.empresa_nombre} | {row.cliente_nombre} | {row.corpo_nombre} |{' '}
+                                        {row.puesto_nombre}
                                       </ThemedText>
-                                    ) : null}
-                                    <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
+                                      <ThemedText style={styles.helperText}>
+                                        Oficial entrega: {oficialEntrega}
+                                      </ThemedText>
+                                      <ThemedText style={styles.helperText}>
+                                        Fecha de entrada (entrega): {fechaEntradaEntrega} · Hora de entrada (entrega):{' '}
+                                        {horaEntradaEntrega}
+                                      </ThemedText>
+                                      <ThemedText style={styles.helperText}>
+                                        Fecha de salida (entrega): {fechaSalidaEntrega} · Hora de salida (entrega):{' '}
+                                        {horaSalidaEntrega}
+                                      </ThemedText>
+                                      <ThemedText style={styles.helperText}>Turno entrega: {turnoEntrega}</ThemedText>
+                                      {isConsolidado ? (
+                                        <ThemedText style={styles.helperText}>
+                                          Marca entrega ID:{' '}
+                                          {row.marca_entrega_id_display ??
+                                            displayEntregaPuestoMarcaId(row.marca_entrega_id)}
+                                        </ThemedText>
+                                      ) : null}
+                                      <ThemedText style={styles.helperText}>
+                                        Oficial recibe: {row.oficial_recibe ?? '—'}
+                                      </ThemedText>
+                                      {isConsolidado ? (
+                                        <ThemedText style={styles.helperText}>
+                                          Marca recibe ID:{' '}
+                                          {row.marca_recibe_id_display ??
+                                            displayEntregaPuestoMarcaId(row.marca_recibe_id)}
+                                        </ThemedText>
+                                      ) : null}
+                                      <ThemedText style={styles.helperText}>
+                                        Turno recibe: {row.turno_recibe ?? '—'}
+                                      </ThemedText>
+                                      {row.articulos_puesto_preview ? (
+                                        <ThemedText selectable style={styles.helperText} numberOfLines={5}>
+                                          Artículos: {String(row.articulos_puesto_preview)}
+                                        </ThemedText>
+                                      ) : null}
+                                      <ThemedText style={[styles.helperText, { marginTop: 6 }]}>
+                                        Firma entrega — {oficialEntrega}
+                                      </ThemedText>
                                       {signatureUri(row.firma_entrega_data_uri || row.firma_entrega) ? (
                                         <Image
-                                          source={{ uri: signatureUri(row.firma_entrega_data_uri || row.firma_entrega) as string }}
-                                          style={{ width: 120, height: 60, borderWidth: 1, borderColor: '#DDD' }}
+                                          source={{
+                                            uri: signatureUri(row.firma_entrega_data_uri || row.firma_entrega) as string,
+                                          }}
+                                          style={{
+                                            width: 120,
+                                            height: 60,
+                                            borderWidth: 1,
+                                            borderColor: '#DDD',
+                                            marginBottom: 6,
+                                          }}
                                           resizeMode="contain"
                                         />
                                       ) : null}
+                                      <ThemedText style={styles.helperText}>
+                                        Firma recibe — {row.oficial_recibe ?? '—'}
+                                      </ThemedText>
                                       {signatureUri(row.firma_recibe_data_uri || row.firma_recibe) ? (
                                         <Image
-                                          source={{ uri: signatureUri(row.firma_recibe_data_uri || row.firma_recibe) as string }}
+                                          source={{
+                                            uri: signatureUri(row.firma_recibe_data_uri || row.firma_recibe) as string,
+                                          }}
                                           style={{ width: 120, height: 60, borderWidth: 1, borderColor: '#DDD' }}
                                           resizeMode="contain"
                                         />
                                       ) : null}
-                                    </View>
-                                  </ThemedView>
-                                ))
+                                    </ThemedView>
+                                  );
+                                })
                           : formModulo === MODULO_BITACORA_NOVEDADES
                             ? previewRows.map((row, idx) => (
                                 <ThemedView key={`prev-bnv-${idx}`} style={{ marginBottom: 10 }}>
