@@ -47,6 +47,11 @@ import {
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import type { StoredFileType } from '@/hooks/fileStorage';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import {
+    submitMantenimientoEquipoBulkArticulos,
+    type BulkPlantillaArticulo,
+} from '@/hooks/mantenimientoEquipoBulkArticulos';
+import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEquipoPlantillaLocal';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -721,6 +726,25 @@ export default function MantenimientoEquipoScreen() {
     const [marcaContratoId, setMarcaContratoId] = useState<number | null>(null);
     const [marcaCorpoId, setMarcaCorpoId] = useState<number | null>(null);
     const [roleName, setRoleName] = useState<RoleName>(null);
+    const [marcaDivisionNombre, setMarcaDivisionNombre] = useState<string | null>(null);
+
+    // Carga masiva de artículos (solo división Administrativos, requiere internet)
+    const [isBulkArticulosModalVisible, setIsBulkArticulosModalVisible] = useState(false);
+    const [bulkEmpresaId, setBulkEmpresaId] = useState<number | null>(null);
+    const [bulkClienteId, setBulkClienteId] = useState<number | null>(null);
+    const [bulkDivisionId, setBulkDivisionId] = useState<number | null>(null);
+    const [bulkContratoId, setBulkContratoId] = useState<number | null>(null);
+    const [bulkSucursalId, setBulkSucursalId] = useState<number | null>(null);
+    const [bulkPuestoId, setBulkPuestoId] = useState<number | null>(null);
+    const [bulkSelectedPuestos, setBulkSelectedPuestos] = useState<number[]>([]);
+    const [bulkIsPuestosExpanded, setBulkIsPuestosExpanded] = useState(true);
+    const [bulkPlantillaArticulos, setBulkPlantillaArticulos] = useState<BulkPlantillaArticulo[]>([]);
+    const [bulkIsPlantillaExpanded, setBulkIsPlantillaExpanded] = useState(true);
+    const [isBulkDownloadingPlantilla, setIsBulkDownloadingPlantilla] = useState(false);
+    const [isBulkValidatingPlantilla, setIsBulkValidatingPlantilla] = useState(false);
+    const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
+
+    const canBulkArticulosPuesto = marcaDivisionNombre === 'Administrativos';
 
     // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
     const [structure, setStructure] = useState<any[]>([]);
@@ -1243,6 +1267,7 @@ export default function MantenimientoEquipoScreen() {
             setMarcaContratoId(null);
             setMarcaCorpoId(null);
             setRoleName(null);
+            setMarcaDivisionNombre(null);
             return null;
         }
         const current = JSON.parse(currentMarcaStr);
@@ -1255,6 +1280,7 @@ export default function MantenimientoEquipoScreen() {
             setMarcaContratoId(null);
             setMarcaCorpoId(null);
             setRoleName(null);
+            setMarcaDivisionNombre(null);
             return null;
         }
         setHasCurrentMarca(true);
@@ -1265,6 +1291,12 @@ export default function MantenimientoEquipoScreen() {
             current?.role_division?.role?.nombre ??
             null;
         setRoleName(typeof roleRaw === 'string' ? (roleRaw as RoleName) : null);
+
+        const divisionNombreRaw =
+            current?.roleDivision?.division?.nombre ??
+            current?.role_division?.division?.nombre ??
+            null;
+        setMarcaDivisionNombre(typeof divisionNombreRaw === 'string' ? divisionNombreRaw : null);
 
         const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
         const clienteIdRaw = current?.cliente?.id ?? current?.cliente_id;
@@ -1360,6 +1392,262 @@ export default function MantenimientoEquipoScreen() {
         setFilterPuestoId(v.puestoId ?? null);
         isFetchingReportesRef.current = false;
     }, []);
+
+    const puestoNameById = useMemo(() => {
+        const map = new Map<number, string>();
+        for (const empresa of structure) {
+            for (const cliente of empresa?.clientes ?? []) {
+                for (const division of cliente?.division ?? []) {
+                    for (const contrato of division?.contratos ?? []) {
+                        for (const sucursal of contrato?.sucursales ?? []) {
+                            for (const puesto of sucursal?.puestos ?? []) {
+                                if (puesto?.id != null) map.set(Number(puesto.id), String(puesto.nombre ?? ''));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return map;
+    }, [structure]);
+
+    const bulkFilteredPuestosFromTree = useMemo(() => {
+        const hasAnySelection =
+            bulkEmpresaId !== null ||
+            bulkClienteId !== null ||
+            bulkDivisionId !== null ||
+            bulkContratoId !== null ||
+            bulkSucursalId !== null ||
+            bulkPuestoId !== null;
+        if (!hasAnySelection) return [];
+        const seen = new Set<number>();
+        const out: { id: number; nombre: string }[] = [];
+        for (const empresa of structure) {
+            if (bulkEmpresaId !== null && empresa.id !== bulkEmpresaId) continue;
+            for (const cliente of empresa?.clientes ?? []) {
+                if (bulkClienteId !== null && cliente.id !== bulkClienteId) continue;
+                for (const division of cliente?.division ?? []) {
+                    if (bulkDivisionId !== null && division.id !== bulkDivisionId) continue;
+                    for (const contrato of division?.contratos ?? []) {
+                        if (bulkContratoId !== null && contrato.id !== bulkContratoId) continue;
+                        for (const sucursal of contrato?.sucursales ?? []) {
+                            if (bulkSucursalId !== null && sucursal.id !== bulkSucursalId) continue;
+                            for (const puesto of sucursal?.puestos ?? []) {
+                                if (bulkPuestoId !== null && puesto.id !== bulkPuestoId) continue;
+                                const pid = Number(puesto.id);
+                                if (!seen.has(pid)) {
+                                    seen.add(pid);
+                                    out.push({ id: pid, nombre: String(puesto.nombre ?? `Puesto #${pid}`) });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return out;
+    }, [
+        structure,
+        bulkEmpresaId,
+        bulkClienteId,
+        bulkDivisionId,
+        bulkContratoId,
+        bulkSucursalId,
+        bulkPuestoId,
+    ]);
+
+    const bulkSelectedPuestosUi = useMemo(
+        () =>
+            bulkSelectedPuestos
+                .map((id) => ({ id, nombre: puestoNameById.get(id) || `Puesto #${id}` }))
+                .sort((a, b) => a.nombre.localeCompare(b.nombre)),
+        [bulkSelectedPuestos, puestoNameById],
+    );
+
+    const resetBulkArticulosForm = useCallback(() => {
+        setBulkEmpresaId(null);
+        setBulkClienteId(null);
+        setBulkDivisionId(null);
+        setBulkContratoId(null);
+        setBulkSucursalId(null);
+        setBulkPuestoId(null);
+        setBulkSelectedPuestos([]);
+        setBulkIsPuestosExpanded(true);
+        setBulkPlantillaArticulos([]);
+        setBulkIsPlantillaExpanded(true);
+    }, []);
+
+    const closeBulkArticulosModal = useCallback(() => {
+        setIsBulkArticulosModalVisible(false);
+        resetBulkArticulosForm();
+    }, [resetBulkArticulosForm]);
+
+    const handleBulkHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+        setBulkEmpresaId(v.empresaId);
+        setBulkClienteId(v.clienteId);
+        setBulkDivisionId(v.divisionId);
+        setBulkContratoId(v.contratoId);
+        setBulkSucursalId(v.sucursalId);
+        setBulkPuestoId(v.puestoId ?? null);
+    }, []);
+
+    const buscarPuestosBulk = useCallback(() => {
+        if (bulkFilteredPuestosFromTree.length === 0) {
+            Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
+            return;
+        }
+        setBulkSelectedPuestos((prev) => {
+            const merged = new Set(prev);
+            for (const p of bulkFilteredPuestosFromTree) merged.add(p.id);
+            return Array.from(merged);
+        });
+        setBulkIsPuestosExpanded(true);
+    }, [bulkFilteredPuestosFromTree]);
+
+    const removeBulkPuesto = useCallback((puestoId: number) => {
+        setBulkSelectedPuestos((prev) => prev.filter((id) => id !== puestoId));
+    }, []);
+
+    const removeBulkPlantillaArticulo = useCallback((index: number) => {
+        setBulkPlantillaArticulos((prev) => prev.filter((_, i) => i !== index));
+    }, []);
+
+    const openBulkArticulosModal = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
+            return;
+        }
+        resetBulkArticulosForm();
+        setIsBulkArticulosModalVisible(true);
+    }, [getConnectionStatus, resetBulkArticulosForm]);
+
+    const handleDownloadBulkPlantilla = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
+            return;
+        }
+        try {
+            setIsBulkDownloadingPlantilla(true);
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (!apiUrl) {
+                throw new Error('Server URL not configured');
+            }
+            const resourceUrl = `${apiUrl.replace(/\/+$/, '')}/api/mantenimiento-equipo/plantilla/get-file`;
+            const url = appendTokenToUrl(`${resourceUrl}?t=${Date.now()}`);
+            const can = await Linking.canOpenURL(url);
+            if (can) await Linking.openURL(url);
+            else Alert.alert('Descarga', url);
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'No se pudo descargar la plantilla.';
+            Alert.alert('Error', msg);
+        } finally {
+            setIsBulkDownloadingPlantilla(false);
+        }
+    }, [appendTokenToUrl, getConnectionStatus]);
+
+    const handleUploadBulkPlantilla = useCallback(async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: [
+                    'application/vnd.ms-excel',
+                    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                ],
+                multiple: false,
+                copyToCacheDirectory: true,
+            });
+            if (result.canceled || !result.assets?.[0]) return;
+            const asset = result.assets[0];
+            setIsBulkValidatingPlantilla(true);
+            const validation = await parseMantenimientoEquipoPlantillaLocal(asset.uri);
+            if (!validation.status) {
+                const errText =
+                    validation.errors?.length
+                        ? validation.errors.slice(0, 8).join('\n')
+                        : validation.message || 'La plantilla no es válida.';
+                Alert.alert('Plantilla inválida', errText);
+                return;
+            }
+            const rows = Array.isArray(validation.data) ? validation.data : [];
+            if (rows.length === 0) {
+                Alert.alert('Plantilla vacía', 'No se encontraron registros válidos en la plantilla.');
+                return;
+            }
+            setBulkPlantillaArticulos(rows);
+            setBulkIsPlantillaExpanded(true);
+            Alert.alert('Listo', validation.message || `${rows.length} registro(s) cargado(s).`);
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'No se pudo validar la plantilla.';
+            Alert.alert('Error', msg);
+        } finally {
+            setIsBulkValidatingPlantilla(false);
+        }
+    }, []);
+
+    const handleSubmitBulkArticulos = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
+            return;
+        }
+        const puestoIds = Array.from(
+            new Set(bulkSelectedPuestos.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)),
+        );
+        if (puestoIds.length === 0) {
+            Alert.alert('Validación', 'Selecciona al menos un puesto.');
+            return;
+        }
+        if (bulkPlantillaArticulos.length === 0) {
+            Alert.alert('Validación', 'Sube una plantilla con al menos un artículo.');
+            return;
+        }
+        Alert.alert(
+            'Confirmar',
+            `¿Vincular ${bulkPlantillaArticulos.length} artículo(s) a ${puestoIds.length} puesto(s)?`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Actualizar',
+                    onPress: async () => {
+                        try {
+                            setIsBulkSubmitting(true);
+                            const result = await submitMantenimientoEquipoBulkArticulos({
+                                puestoIds,
+                                articulos: bulkPlantillaArticulos,
+                                refreshAccessToken,
+                                logout,
+                            });
+                            if (!result.status) {
+                                const errText =
+                                    result.errors?.length
+                                        ? result.errors.slice(0, 8).join('\n')
+                                        : result.message || 'No se pudo completar la operación.';
+                                Alert.alert('Error', errText);
+                                return;
+                            }
+                            let msg = result.message || 'Operación completada.';
+                            if (result.skipped?.length) {
+                                msg += `\n\nOmitidos (${result.skipped.length}):\n${result.skipped.slice(0, 5).join('\n')}`;
+                            }
+                            Alert.alert('Listo', msg);
+                            closeBulkArticulosModal();
+                            await fetchReportes({ force: true });
+                        } catch (e: unknown) {
+                            const errMsg = e instanceof Error ? e.message : 'Error al actualizar.';
+                            Alert.alert('Error', errMsg);
+                        } finally {
+                            setIsBulkSubmitting(false);
+                        }
+                    },
+                },
+            ],
+        );
+    }, [
+        bulkPlantillaArticulos,
+        bulkSelectedPuestos,
+        closeBulkArticulosModal,
+        getConnectionStatus,
+        refreshAccessToken,
+        logout,
+    ]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
         if (roleName === 'OPERATIVO') {
@@ -2502,7 +2790,7 @@ export default function MantenimientoEquipoScreen() {
                 }
 
                 if (updated) {
-                    await writeMainStructureCacheString(JSON.stringify(tree));
+                    //await writeMainStructureCacheString(JSON.stringify(tree));
                 }
             } catch (e) {
                 console.error('Error updating main_structure_cache (ultimo_mantenimiento):', e);
@@ -2586,7 +2874,7 @@ export default function MantenimientoEquipoScreen() {
 
                 if (updated) {
                     console.log('Actualizamos main_structure_cache');
-                    await writeMainStructureCacheString(JSON.stringify(tree));
+                    //await writeMainStructureCacheString(JSON.stringify(tree));
                 }
                 await syncPuestoArticulosFragmentFromReportesList(puestoId, items);
             } catch (e) {
@@ -4764,6 +5052,19 @@ export default function MantenimientoEquipoScreen() {
                         </ThemedView>
                     )}
 
+                    {canBulkArticulosPuesto && !isUpdating && !showActivos && (
+                        <TouchableOpacity
+                            style={styles.bulkArticulosOpenButton}
+                            onPress={openBulkArticulosModal}
+                            activeOpacity={0.85}
+                        >
+                            <Ionicons name="cloud-upload-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.bulkArticulosOpenButtonText}>
+                                Carga masiva de artículos
+                            </ThemedText>
+                        </TouchableOpacity>
+                    )}
+
                     {/* Aviso jerarquía: debajo del filtro principal de la lista de artículos del puesto */}
                     {!isUpdating &&
                         !showActivos &&
@@ -5539,6 +5840,216 @@ export default function MantenimientoEquipoScreen() {
                                     <Ionicons name="checkmark" size={20} color="#000000" />
                                 )}
                                 <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+                            </TouchableOpacity>
+                        </ThemedView>
+                    </ThemedView>
+                </View>
+            </Modal>
+
+            <Modal
+                visible={isBulkArticulosModalVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={closeBulkArticulosModal}
+            >
+                <View style={styles.bulkModalOverlay}>
+                    <ThemedView style={styles.bulkModalContainer}>
+                        <ThemedText style={styles.modalTitle}>Carga masiva de artículos</ThemedText>
+                        <ThemedText style={styles.bulkModalDisclaimer}>
+                            Seleccione los puestos destino, descargue la plantilla Excel, complétela y súbala para
+                            vincular artículos. La validación de la plantilla es local; descargar plantilla y
+                            actualizar requieren conexión a internet.
+                        </ThemedText>
+                        <ScrollView
+                            style={styles.bulkModalScroll}
+                            contentContainerStyle={styles.bulkModalScrollContent}
+                            keyboardShouldPersistTaps="handled"
+                        >
+                            {structure.length === 0 ? (
+                                <ThemedText style={styles.emptyText}>
+                                    No hay estructura en caché. Conéctese a internet y sincronice la jerarquía.
+                                </ThemedText>
+                            ) : (
+                                <>
+                                    <ThemedText style={styles.signatureHintMuted}>
+                                        Filtra el árbol hasta el nivel deseado y pulsa «Buscar puestos» para añadirlos
+                                        a la lista.
+                                    </ThemedText>
+                                    <HierarchyPickerFields
+                                        structure={structure}
+                                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                                        emptyPickerValue={0}
+                                        values={{
+                                            empresaId: bulkEmpresaId,
+                                            clienteId: bulkClienteId,
+                                            divisionId: bulkDivisionId,
+                                            contratoId: bulkContratoId,
+                                            sucursalId: bulkSucursalId,
+                                            puestoId: bulkPuestoId,
+                                        }}
+                                        onChange={handleBulkHierarchyChange}
+                                        labels={{ sucursal: 'Sucursal', puesto: 'Puesto' }}
+                                        renderLabel={(text) => (
+                                            <ThemedText style={styles.filterLabel}>{text}:</ThemedText>
+                                        )}
+                                        pickerStyle={styles.picker}
+                                        fieldGroupStyle={styles.filterGroup}
+                                    />
+
+                                    <ThemedView style={styles.treeActionsRow}>
+                                        <TouchableOpacity
+                                            style={styles.treeActionPrimary}
+                                            onPress={buscarPuestosBulk}
+                                        >
+                                            <Ionicons name="search-outline" size={18} color="#FFFFFF" />
+                                            <ThemedText style={styles.treeActionPrimaryText}>Buscar puestos</ThemedText>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={styles.treeActionSecondary}
+                                            onPress={() => setBulkSelectedPuestos([])}
+                                        >
+                                            <Ionicons name="trash-outline" size={18} color="#007AFF" />
+                                            <ThemedText style={styles.treeActionSecondaryText}>Limpiar</ThemedText>
+                                        </TouchableOpacity>
+                                    </ThemedView>
+
+                                    <ThemedText style={styles.signatureHintMuted}>
+                                        Puestos seleccionados: {bulkSelectedPuestos.length} | En el filtro:{' '}
+                                        {bulkFilteredPuestosFromTree.length}
+                                    </ThemedText>
+
+                                    {bulkSelectedPuestosUi.length > 0 && (
+                                        <ThemedView style={styles.selectedPuestosBox}>
+                                            <TouchableOpacity
+                                                style={styles.selectedPuestosHeader}
+                                                onPress={() => setBulkIsPuestosExpanded((p) => !p)}
+                                            >
+                                                <ThemedText style={styles.selectedPuestosHeaderText}>
+                                                    Puestos ({bulkSelectedPuestosUi.length})
+                                                </ThemedText>
+                                                <Ionicons
+                                                    name={bulkIsPuestosExpanded ? 'chevron-up' : 'chevron-down'}
+                                                    size={18}
+                                                    color="#007AFF"
+                                                />
+                                            </TouchableOpacity>
+                                            {bulkIsPuestosExpanded && (
+                                                <ThemedView style={styles.bulkRemovableList}>
+                                                    {bulkSelectedPuestosUi.map((puesto) => (
+                                                        <ThemedView key={puesto.id} style={styles.bulkRemovableItem}>
+                                                            <ThemedText style={styles.bulkRemovableItemText} numberOfLines={2}>
+                                                                {puesto.nombre}
+                                                            </ThemedText>
+                                                            <TouchableOpacity
+                                                                onPress={() => removeBulkPuesto(puesto.id)}
+                                                                accessibilityLabel={`Quitar ${puesto.nombre}`}
+                                                            >
+                                                                <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                                                            </TouchableOpacity>
+                                                        </ThemedView>
+                                                    ))}
+                                                </ThemedView>
+                                            )}
+                                        </ThemedView>
+                                    )}
+
+                                    <ThemedView style={styles.bulkPlantillaActions}>
+                                        <TouchableOpacity
+                                            style={[styles.bulkPlantillaButton, isBulkDownloadingPlantilla && { opacity: 0.7 }]}
+                                            onPress={handleDownloadBulkPlantilla}
+                                            disabled={isBulkDownloadingPlantilla}
+                                        >
+                                            {isBulkDownloadingPlantilla ? (
+                                                <ActivityIndicator size="small" color="#FFFFFF" />
+                                            ) : (
+                                                <Ionicons name="download-outline" size={18} color="#FFFFFF" />
+                                            )}
+                                            <ThemedText style={styles.bulkPlantillaButtonText}>Descargar plantilla</ThemedText>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity
+                                            style={[styles.bulkPlantillaButtonSecondary, isBulkValidatingPlantilla && { opacity: 0.7 }]}
+                                            onPress={handleUploadBulkPlantilla}
+                                            disabled={isBulkValidatingPlantilla}
+                                        >
+                                            {isBulkValidatingPlantilla ? (
+                                                <ActivityIndicator size="small" color="#007AFF" />
+                                            ) : (
+                                                <Ionicons name="document-attach-outline" size={18} color="#007AFF" />
+                                            )}
+                                            <ThemedText style={styles.bulkPlantillaButtonSecondaryText}>
+                                                Subir plantilla
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    </ThemedView>
+
+                                    {bulkPlantillaArticulos.length > 0 && (
+                                        <ThemedView style={styles.selectedPuestosBox}>
+                                            <TouchableOpacity
+                                                style={styles.selectedPuestosHeader}
+                                                onPress={() => setBulkIsPlantillaExpanded((p) => !p)}
+                                            >
+                                                <ThemedText style={styles.selectedPuestosHeaderText}>
+                                                    Artículos de la plantilla ({bulkPlantillaArticulos.length})
+                                                </ThemedText>
+                                                <Ionicons
+                                                    name={bulkIsPlantillaExpanded ? 'chevron-up' : 'chevron-down'}
+                                                    size={18}
+                                                    color="#007AFF"
+                                                />
+                                            </TouchableOpacity>
+                                            {bulkIsPlantillaExpanded && (
+                                                <ThemedView style={styles.bulkRemovableList}>
+                                                    {bulkPlantillaArticulos.map((art, index) => (
+                                                        <ThemedView
+                                                            key={`${art.numero_articulo}-${index}`}
+                                                            style={styles.bulkRemovableItem}
+                                                        >
+                                                            <ThemedView style={{ flex: 1 }}>
+                                                                <ThemedText style={styles.bulkRemovableItemTitle}>
+                                                                    #{art.numero_articulo} — {art.articulo_nombre}
+                                                                </ThemedText>
+                                                                <ThemedText style={styles.bulkRemovableItemMeta}>
+                                                                    Cant: {art.cantidad} | {art.marca} | {art.serie} |{' '}
+                                                                    {art.fecha_entrega}
+                                                                </ThemedText>
+                                                            </ThemedView>
+                                                            <TouchableOpacity
+                                                                onPress={() => removeBulkPlantillaArticulo(index)}
+                                                                accessibilityLabel="Quitar artículo"
+                                                            >
+                                                                <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                                                            </TouchableOpacity>
+                                                        </ThemedView>
+                                                    ))}
+                                                </ThemedView>
+                                            )}
+                                        </ThemedView>
+                                    )}
+                                </>
+                            )}
+                        </ScrollView>
+
+                        <ThemedView style={styles.bulkModalActions}>
+                            <TouchableOpacity
+                                style={[styles.modalButton, styles.modalCancelButton]}
+                                onPress={closeBulkArticulosModal}
+                            >
+                                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.modalButton,
+                                    styles.modalConfirmButton,
+                                    isBulkSubmitting && { opacity: 0.7 },
+                                ]}
+                                onPress={handleSubmitBulkArticulos}
+                                disabled={isBulkSubmitting}
+                            >
+                                {isBulkSubmitting ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.modalConfirmButtonText}>Actualizar</ThemedText>
+                                )}
                             </TouchableOpacity>
                         </ThemedView>
                     </ThemedView>
@@ -6383,6 +6894,209 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
         borderBottomWidth: 1,
         borderColor: '#E0E0E0',
+    },
+
+    bulkArticulosOpenButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        marginBottom: 6,
+        paddingVertical: 12,
+        borderRadius: 8,
+        backgroundColor: '#5856D6',
+    },
+    bulkArticulosOpenButtonText: {
+        color: '#FFFFFF',
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    bulkModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 16,
+    },
+    bulkModalContainer: {
+        width: '100%',
+        maxWidth: 560,
+        maxHeight: '90%',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 16,
+        overflow: 'hidden',
+    },
+    bulkModalDisclaimer: {
+        fontSize: 13,
+        color: '#555555',
+        marginBottom: 10,
+        lineHeight: 20,
+    },
+    bulkModalScroll: {
+        flexGrow: 0,
+        maxHeight: 460,
+        marginBottom: 8,
+    },
+    bulkModalScrollContent: {
+        paddingBottom: 12,
+    },
+    bulkModalActions: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 8,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: '#E0E0E0',
+    },
+    modalButton: {
+        flex: 1,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    modalCancelButton: {
+        backgroundColor: '#E0E0E0',
+    },
+    modalConfirmButton: {
+        backgroundColor: '#007AFF',
+    },
+    modalCancelButtonText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#333333',
+    },
+    modalConfirmButtonText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#FFFFFF',
+    },
+    treeActionsRow: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 10,
+        marginBottom: 6,
+    },
+    treeActionPrimary: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 10,
+        borderRadius: 8,
+        backgroundColor: '#007AFF',
+    },
+    treeActionPrimaryText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    treeActionSecondary: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        backgroundColor: '#FFFFFF',
+    },
+    treeActionSecondaryText: {
+        color: '#007AFF',
+        fontSize: 13,
+        fontWeight: '800',
+    },
+    selectedPuestosBox: {
+        marginTop: 10,
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        borderRadius: 10,
+        padding: 10,
+        backgroundColor: '#FFFFFF',
+    },
+    selectedPuestosHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 6,
+    },
+    selectedPuestosHeaderText: {
+        fontSize: 13,
+        fontWeight: '800',
+        color: '#007AFF',
+    },
+    bulkRemovableList: {
+        gap: 8,
+        marginTop: 6,
+    },
+    bulkRemovableItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E8E8E8',
+        backgroundColor: '#FAFAFA',
+    },
+    bulkRemovableItemText: {
+        flex: 1,
+        fontSize: 13,
+        color: '#333',
+    },
+    bulkRemovableItemTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#111',
+    },
+    bulkRemovableItemMeta: {
+        fontSize: 11,
+        color: '#666',
+        marginTop: 2,
+    },
+    bulkPlantillaActions: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 14,
+        marginBottom: 6,
+    },
+    bulkPlantillaButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 11,
+        borderRadius: 8,
+        backgroundColor: '#34C759',
+    },
+    bulkPlantillaButtonText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '700',
+    },
+    bulkPlantillaButtonSecondary: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 11,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        backgroundColor: '#FFFFFF',
+    },
+    bulkPlantillaButtonSecondaryText: {
+        color: '#007AFF',
+        fontSize: 13,
+        fontWeight: '700',
     },
 });
 

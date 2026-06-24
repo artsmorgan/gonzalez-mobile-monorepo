@@ -89,7 +89,7 @@ android {
 
     namespace 'com.abrjpo98.MonitoreApp'
     defaultConfig {
-        applicationId 'com.abrjpo98.MonitoreApp'
+        applicationId 'com.abrjpo98.MonitoreApp.full'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

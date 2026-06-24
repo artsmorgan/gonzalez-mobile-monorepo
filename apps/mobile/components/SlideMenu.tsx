@@ -473,7 +473,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
   const releaseAction = (module: string) => {
 
-    if (false) {
+    if (true) {
       return true;
     }
 
@@ -520,7 +520,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     const moduleFind = modules.find((m) => m.name === module);
     if (moduleFind) {
-      return moduleFind.release;
+      return true;
+      // return moduleFind.release;
     }
     return false;
   }

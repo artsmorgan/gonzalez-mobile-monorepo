@@ -155,6 +155,57 @@ function activeStructureWhere(nowCostaRica: Date) {
     };
 }
 
+/** Filas del mismo puesto o del mismo corpo (sucursal) que el contexto actual. */
+function belongsToPuestoOrCorpo(
+    row: { puesto_id?: number | null; corpo_id?: number | null },
+    puestoId: number,
+    sucursalId: number,
+): boolean {
+    return row.puesto_id === puestoId || row.corpo_id === sucursalId;
+}
+
+/** Prefiere coincidencia a nivel puesto; si no hay, usa la del corpo. */
+function preferPuestoMatch<T extends { puesto_id?: number | null }>(candidates: T[], puestoId: number): T | null {
+    if (candidates.length === 0) return null;
+    return candidates.find((r) => r.puesto_id === puestoId) ?? candidates[0];
+}
+
+/** Plan → entrega: nomencladorArticuloCP_id (entrega) === articuloCP_id (plan). */
+function findEntregaMarcaSerieForPlan(
+    articuloCP_id: number | null | undefined,
+    puestoId: number,
+    sucursalId: number,
+    allEntregaRows: any[],
+): { marca: string; serie: string } | null {
+    if (articuloCP_id == null) return null;
+    const candidates = allEntregaRows.filter(
+        (e) =>
+            e.nomencladorArticuloCP_id === articuloCP_id &&
+            belongsToPuestoOrCorpo(e, puestoId, sucursalId),
+    );
+    const match = preferPuestoMatch(candidates, puestoId);
+    if (!match) return null;
+    return { marca: match.marca ?? "", serie: match.serie ?? "" };
+}
+
+/** Asignado → plan: articuloCP_id (plan) === nomencladorArticuloCP_id (entrega). */
+function findPlanCantidadForAsignado(
+    nomencladorArticuloCP_id: number | null | undefined,
+    puestoId: number,
+    sucursalId: number,
+    allPlanRows: any[],
+): number | null {
+    if (nomencladorArticuloCP_id == null) return null;
+    const candidates = allPlanRows.filter(
+        (p) =>
+            p.articuloCP_id === nomencladorArticuloCP_id &&
+            belongsToPuestoOrCorpo(p, puestoId, sucursalId),
+    );
+    const match = preferPuestoMatch(candidates, puestoId);
+    if (!match || match.cantidad == null) return null;
+    return match.cantidad;
+}
+
 function attachTiposMantenimientoToArticulos(
     articulos_return: any[],
     tiposByArticuloId: Map<number, TipoMantenimientoArticuloDTO[]>,
@@ -281,12 +332,18 @@ function buildArticulosBaseForPuesto(
         const articulos_combo_articulo_cp = planByComboId.get(puesto.comboArticulosCP_id) ?? [];
         for (const articulo of articulos_combo_articulo_cp) {
             const art_bd = articulo.articuloCP_id ? nomencladorById.get(articulo.articuloCP_id) ?? null : null;
+            const entregaMatch = findEntregaMarcaSerieForPlan(
+                articulo.articuloCP_id,
+                puesto.id,
+                sucursalId,
+                allEntregaRows,
+            );
             articulos_return.push({
                 id: articulo.id,
                 nombre: art_bd ? art_bd.nombre : "Desconocido",
                 tipo: "Plan",
-                marca: "",
-                serie: "",
+                marca: entregaMatch?.marca ?? "",
+                serie: entregaMatch?.serie ?? "",
                 cantidad: articulo.cantidad,
                 articulo_nomenclador_id: articulo.articuloCP_id ?? null,
                 tipos_mantenimiento: [],
@@ -303,12 +360,18 @@ function buildArticulosBaseForPuesto(
 
     for (const articulo of articulos_puesto_plan) {
         const art_bd = articulo.articuloCP_id ? nomencladorById.get(articulo.articuloCP_id) ?? null : null;
+        const entregaMatch = findEntregaMarcaSerieForPlan(
+            articulo.articuloCP_id,
+            puesto.id,
+            sucursalId,
+            allEntregaRows,
+        );
         articulos_return.push({
             id: articulo.id,
             nombre: art_bd ? art_bd.nombre : "Desconocido",
             tipo: "Plan",
-            marca: "",
-            serie: "",
+            marca: entregaMatch?.marca ?? "",
+            serie: entregaMatch?.serie ?? "",
             cantidad: articulo.cantidad,
             articulo_nomenclador_id: articulo.articuloCP_id ?? null,
             tipos_mantenimiento: [],
@@ -322,13 +385,19 @@ function buildArticulosBaseForPuesto(
         const art_bd = articulo.nomencladorArticuloCP_id
             ? nomencladorById.get(articulo.nomencladorArticuloCP_id) ?? null
             : null;
+        const planCantidad = findPlanCantidadForAsignado(
+            articulo.nomencladorArticuloCP_id,
+            puesto.id,
+            sucursalId,
+            allPlanRows,
+        );
         articulos_return.push({
             id: articulo.id,
             nombre: art_bd ? art_bd.nombre : `Artículo inidentificable`,
             tipo: "Asignado",
             marca: articulo.marca,
             serie: articulo.serie,
-            cantidad: 1,
+            cantidad: planCantidad ?? 1,
             articulo_nomenclador_id: articulo.nomencladorArticuloCP_id ?? null,
             tipos_mantenimiento: [],
         });
@@ -632,6 +701,8 @@ export async function POST(req: NextRequest) {
         const fragments: Record<string, any> = {};
         fragments.divisiones = divisionRows.map((d) => ({ id: d.id, nombre: d.nombre }));
         fragments.empresas = main.map((e) => ({ id: e.id, nombre: `${e.codigo} - ${e.nombre}` }));
+
+        console.log("Procedemos a recorrer la jerarquía de la estructura");
 
         for (const empresa of main) {
             const clientes = clientesByEmpresaId.get(empresa.id) ?? [];

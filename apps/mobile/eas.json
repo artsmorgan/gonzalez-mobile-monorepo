@@ -3,20 +3,20 @@
     "version": ">= 3.20.0"
   },
   "build": {
-    "production": {
-      "android": {
-        "buildType": "app-bundle"
-      },
-      "ios": {
-        "simulator": false
-      }
-    },
-    "preview": {
+    "preview-full": {
       "android": {
         "buildType": "apk"
       },
-      "ios": {
-        "simulator": true
+      "env": {
+        "APP_VARIANT": "full"
+      }
+    },
+    "preview-lite": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
       }
     }
   }

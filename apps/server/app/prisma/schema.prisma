@@ -1378,8 +1378,13 @@ model c_incapacidad_ccss {
   salario_base_diario      Decimal                   @db.Decimal(10, 2)
   dias_subsidio            Int
   monto_subsidio_pagar     Decimal                   @db.Decimal(10, 2)
+  centro_medico_id         Int?
+  nombre_doctor            String?                   @db.VarChar(255)
   c_accion_personal        c_accion_personal?
+  n_centro_medico          n_centro_medico?          @relation(fields: [centro_medico_id], references: [id], onUpdate: NoAction, map: "FK_incapacidad_ccss_centro_medico")
   pg_pe_incapacidad_pagado pg_pe_incapacidad_pagado?
+
+  @@index([centro_medico_id], map: "IDX_incapacidad_ccss_centro_medico")
 }
 
 model c_incapacidad_ins {
@@ -2434,6 +2439,7 @@ model e_estructura_plazas {
   empleadoPlaza_id                                                            Int?
   maestra                                                                     Boolean?
   peso                                                                        Decimal?                               @db.Decimal(10, 2)
+  es_real                                                                     Boolean                                @default(true)
   c_accion_personal                                                           c_accion_personal[]
   c_cambio_guardia_c_cambio_guardia_plazaAusente_idToe_estructura_plazas      c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaAusente_idToe_estructura_plazas")
   c_cambio_guardia_c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas    c_cambio_guardia[]                     @relation("c_cambio_guardia_plazaReemplaza_idToe_estructura_plazas")
@@ -6436,4 +6442,20 @@ model n_mobile_variables {
   updated_at     DateTime @db.DateTime(0)
   variable_value String   @db.LongText
   variable_type  String   @db.VarChar(50)
+}
+
+model n_centro_medico {
+  id                 Int                  @id @default(autoincrement())
+  codigo             String?              @db.VarChar(30)
+  nombre             String               @db.VarChar(150)
+  activo             Boolean
+  c_incapacidad_ccss c_incapacidad_ccss[]
+}
+
+model a_mobile_token_for_planillas {
+  id          Int      @id @default(autoincrement())
+  empleado_id Int
+  token       String   @db.LongText
+  created_at  DateTime @db.DateTime(0)
+  expires_at  DateTime @db.DateTime(0)
 }
