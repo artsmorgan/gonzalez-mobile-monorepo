@@ -25,11 +25,12 @@ export async function callDynamicPrisma({
     }
 
     const authHeader = req.headers.get("authorization");
+    const tokenFromQuery = req.nextUrl.searchParams.get("token")?.trim() || "";
     const accessToken = token && token.trim().length > 0
         ? token
         : authHeader && authHeader.startsWith("Bearer ")
             ? authHeader.split(" ")[1]
-            : "";
+            : tokenFromQuery;
     const mobileToken = (mobileAccessToken || process.env.MOBILE_ACCESS_TOKEN || "").trim();
     if (!mobileToken) throw new Error("MOBILE_ACCESS_TOKEN no configurado");
 
@@ -73,7 +74,7 @@ export async function callDynamicPrisma({
             },
             {
                 headers: {
-                    Authorization: authHeader || "",
+                    Authorization: authHeader || (accessToken ? `Bearer ${accessToken}` : ""),
                     "Content-Type": "application/json",
                 },
             }
