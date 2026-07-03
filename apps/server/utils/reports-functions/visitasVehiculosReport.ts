@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import archiver from "archiver";
 import fs from "fs/promises";
@@ -208,7 +209,7 @@ function orderByClause(key: VisitasVehiculosOrderKey): Prisma.e_registro_vehicul
     }
 }
 
-async function enrichRows(prisma: PrismaClient, raw: any[]): Promise<any[]> {
+async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> {
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
     const conIds = [...new Set(raw.map((r) => Number(r.contrato_id)).filter((n) => n > 0))];
@@ -243,7 +244,7 @@ async function enrichRows(prisma: PrismaClient, raw: any[]): Promise<any[]> {
 }
 
 export async function queryVisitasVehiculosRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: VisitasVehiculosModuleFilters,
     orderKey: VisitasVehiculosOrderKey,
     opts?: { take?: number },

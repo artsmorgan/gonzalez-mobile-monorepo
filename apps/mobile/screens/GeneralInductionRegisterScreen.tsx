@@ -12,6 +12,7 @@ import {
   View,
   Dimensions,
 } from 'react-native';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -791,8 +792,7 @@ export default function GeneralInductionRegisterScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // Filtros jerárquicos
   const [isHierarchyFiltersExpanded, setIsHierarchyFiltersExpanded] = useState(false);
@@ -1048,7 +1048,7 @@ export default function GeneralInductionRegisterScreen() {
   }, []);
 
   type MarcaSnapshot = {
-    current: Record<string, any>;
+    current: Record<string, any> | null;
     roleName: RoleName;
     isOperativo: boolean;
     marcaDivisionId: number | null;
@@ -1215,75 +1215,6 @@ export default function GeneralInductionRegisterScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      if (prop === 'temas_a_tratar') {
-        // Determinar qué temas data usar basado en la división del registro
-        // Por ahora, usar AYL como default, pero esto podría mejorarse
-        return formatTemasATratarForDisplay(JSON.stringify(value), TEMAS_DATA_AYL);
-      }
-      if (prop === 'colaboradores') {
-        return formatPersonasForDisplay(JSON.stringify(value), 'colaboradores');
-      }
-      if (prop === 'capacitadores') {
-        return formatPersonasForDisplay(JSON.stringify(value), 'capacitadores');
-      }
-      return JSON.stringify(value, null, 2);
-    }
-    if (typeof value === 'string') {
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (prop === 'temas_a_tratar') {
-            return formatTemasATratarForDisplay(value, TEMAS_DATA_AYL);
-          }
-          if (prop === 'colaboradores') {
-            return formatPersonasForDisplay(value, 'colaboradores');
-          }
-          if (prop === 'capacitadores') {
-            return formatPersonasForDisplay(value, 'capacitadores');
-          }
-          if (Array.isArray(parsed)) {
-            return parsed.map((item, idx) => {
-              if (typeof item === 'object' && item !== null) {
-                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
-              }
-              return String(item);
-            }).join('\n');
-          }
-          if (typeof parsed === 'object') {
-            return JSON.stringify(parsed, null, 2);
-          }
-        } catch {
-          // Not valid JSON, return as string
-        }
-      }
-      return value;
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -3875,219 +3806,12 @@ export default function GeneralInductionRegisterScreen() {
         </View>
       </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(String(row?.created_at || ''));
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-                                const isFirmaResponsable = prop === 'firma_responsable';
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_responsable') {
-                                          const info = decodeFirmaHash(typeof v === 'string' ? v : String(v ?? ''));
-                                          return (
-                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                              <ThemedText style={styles.changeDescription}>
-                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                                {info
-                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                                  : 'Firma (formato no decodificable)'}
-                                              </ThemedText>
-                                            </ThemedView>
-                                          );
-                                        }
-                                        if (k === 'colaboradores' || k === 'capacitadores') {
-                                          const arr = (() => {
-                                            if (Array.isArray(v)) return v as any[];
-                                            if (typeof v === 'string') {
-                                              try {
-                                                return JSON.parse(v) as any[];
-                                              } catch {
-                                                return [];
-                                              }
-                                            }
-                                            return [];
-                                          })();
-                                          const label = k === 'colaboradores' ? 'Colaboradores' : 'Capacitadores';
-                                          return (
-                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                              <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{label}:</ThemedText>
-                                              {arr.length === 0 ? (
-                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
-                                              ) : (
-                                                arr.map((p: any, i: number) => (
-                                                  <ThemedView key={`p-${k}-${i}`} style={styles.changeDescriptionContainer}>
-                                                    <ThemedText style={styles.changeDescription}>
-                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'} - Puesto: {String(p?.puesto_text ?? '').trim() || '—'})
-                                                    </ThemedText>
-                                                    {p?.firma ? (
-                                                      <Image
-                                                        source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }}
-                                                        style={styles.cambioSignatureImage}
-                                                        resizeMode="contain"
-                                                      />
-                                                    ) : (
-                                                      <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
-                                                    )}
-                                                  </ThemedView>
-                                                ))
-                                              )}
-                                            </ThemedView>
-                                          );
-                                        }
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatChangeValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                if (prop === 'colaboradores' || prop === 'capacitadores') {
-                                  const arr = (() => {
-                                    if (Array.isArray(value)) return value as any[];
-                                    if (typeof value === 'string') {
-                                      try {
-                                        return JSON.parse(value) as any[];
-                                      } catch {
-                                        return [];
-                                      }
-                                    }
-                                    return [];
-                                  })();
-                                  const label = prop === 'colaboradores' ? 'Colaboradores' : 'Capacitadores';
-                                  return (
-                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                      <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{label}:</ThemedText>
-                                      {arr.length === 0 ? (
-                                        <ThemedText style={styles.changeDescription}>—</ThemedText>
-                                      ) : (
-                                        arr.map((p: any, i: number) => (
-                                          <ThemedView key={`p-${prop}-${i}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Cédula: {String(p?.cedula ?? '').trim() || '—'} - Puesto: {String(p?.puesto_text ?? '').trim() || '—'})
-                                            </ThemedText>
-                                            {p?.firma ? (
-                                              <Image
-                                                source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }}
-                                                style={styles.cambioSignatureImage}
-                                                resizeMode="contain"
-                                              />
-                                            ) : (
-                                              <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
-                                            )}
-                                          </ThemedView>
-                                        ))
-                                      )}
-                                    </ThemedView>
-                                  );
-                                }
-
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {isFirmaResponsable && typeof value === 'string' && value.trim()
-                                        ? (() => {
-                                            const info = decodeFirmaHash(value);
-                                            return info
-                                              ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                              : 'Firma (formato no decodificable)';
-                                          })()
-                                        : !isFirmaResponsable
-                                          ? formatChangeValue(prop, value)
-                                          : 'N/A'}
-                                    </ThemedText>
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       {/* Modal: vista previa de imagen */}
       <Modal

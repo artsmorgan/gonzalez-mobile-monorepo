@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
@@ -70,7 +70,7 @@ export function filtersMatchNotasVozListQuery(parsedRowFilters: any, listModuleF
 }
 
 export async function queryNotasVozRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: NotasVozModuleFilters,
     orderKey: NotasVozOrderKey,
 ) {

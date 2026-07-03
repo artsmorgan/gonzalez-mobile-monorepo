@@ -23,6 +23,7 @@ import { formatDateDMY } from '@/utils/formatDate';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -371,8 +372,7 @@ export default function OpeningClosingPositionScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
   // UI: collapsables por item en lista
   const [expandedActivitiesById, setExpandedActivitiesById] = useState<Record<string, boolean>>({});
   const [expandedInventoryById, setExpandedInventoryById] = useState<Record<string, boolean>>({});
@@ -523,103 +523,6 @@ export default function OpeningClosingPositionScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatActividadesForDisplay = (actividadesJson: string): string => {
-    try {
-      const actividades: ActividadItem[] = JSON.parse(actividadesJson || '[]');
-      if (!Array.isArray(actividades) || actividades.length === 0) return 'No hay actividades.';
-      return actividades.map((a, idx) => {
-        const pregunta = a.pregunta || 'N/A';
-        const respuesta = a.respuesta || 'N/A';
-        const observaciones = a.observaciones || 'Sin observaciones';
-        return `${idx + 1}. ${pregunta}\n   Respuesta: ${respuesta}\n   Observaciones: ${observaciones}`;
-      }).join('\n\n');
-    } catch (e) {
-      console.error('Error formatting actividades for display:', e);
-      return 'Error al formatear actividades.';
-    }
-  };
-
-  const formatInventarioForDisplay = (inventarioJson: string): string => {
-    try {
-      const inventario: InventarioItem[] = JSON.parse(inventarioJson || '[]');
-      if (!Array.isArray(inventario) || inventario.length === 0) return 'No hay inventario.';
-      return inventario.map((i, idx) => {
-        const activosEquipos = i.activos_equipos || 'N/A';
-        const tipoNombre = i.tipo_nombre || 'N/A';
-        const numeroActivo = i.numero_activo || 'N/A';
-        const numeroSerie = i.numero_serie || 'N/A';
-        const marca = i.marca || 'N/A';
-        const modelo = i.modelo || 'N/A';
-        const descripcion = i.descripcion || 'N/A';
-        return `${idx + 1}. ${activosEquipos} (Tipo: ${tipoNombre})\n   Número Activo: ${numeroActivo}, Serie: ${numeroSerie}\n   Marca: ${marca}, Modelo: ${modelo}\n   Descripción: ${descripcion}`;
-      }).join('\n\n');
-    } catch (e) {
-      console.error('Error formatting inventario for display:', e);
-      return 'Error al formatear inventario.';
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      if (prop === 'actividades') {
-        return formatActividadesForDisplay(JSON.stringify(value));
-      }
-      if (prop === 'inventario') {
-        return formatInventarioForDisplay(JSON.stringify(value));
-      }
-      return JSON.stringify(value, null, 2);
-    }
-    if (typeof value === 'string') {
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (prop === 'actividades') {
-            return formatActividadesForDisplay(value);
-          }
-          if (prop === 'inventario') {
-            return formatInventarioForDisplay(value);
-          }
-          if (Array.isArray(parsed)) {
-            return parsed.map((item, idx) => {
-              if (typeof item === 'object' && item !== null) {
-                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
-              }
-              return String(item);
-            }).join('\n');
-          }
-          if (typeof parsed === 'object') {
-            return JSON.stringify(parsed, null, 2);
-          }
-        } catch {
-          // Not valid JSON, return as string
-        }
-      }
-      return value;
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -3341,150 +3244,12 @@ export default function OpeningClosingPositionScreen() {
       </Modal>
 
       {/* QR Scanner */}
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-                                const manualSignatureProps = ['firma_representante_cliente', 'firma_representante_empresa_entrante', 'firma_representante_empresa_saliente'];
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (manualSignatureProps.includes(k) || k === 'firma_responsable') return null;
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatChangeValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
-                                            {(() => {
-                                              const info = decodeFirmaHash(created.firma_responsable);
-                                              return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                                : 'Firma responsable (formato no decodificable)';
-                                            })()}
-                                          </ThemedText>
-                                        </ThemedView>
-                                      )}
-                                      {manualSignatureProps.map((firmaProp) => created[firmaProp] && (
-                                        <ThemedView key={`c-${row.id}-${idx}-${firmaProp}`} style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>{firmaProp}: </ThemedText>
-                                          </ThemedText>
-                                          <Image source={{ uri: formatSignatureForDisplay(created[firmaProp]) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                        </ThemedView>
-                                      ))}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const isResponsable = prop === 'firma_responsable';
-                                const isManualSignature = manualSignatureProps.includes(prop);
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {!isManualSignature && !isResponsable && formatChangeValue(prop, value)}
-                                      {isResponsable && (() => {
-                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
-                                        if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
-                                      })()}
-                                    </ThemedText>
-                                    {isManualSignature && value && (
-                                      <Image source={{ uri: formatSignatureForDisplay(value) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                    )}
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       {QRScannerComponent}
 

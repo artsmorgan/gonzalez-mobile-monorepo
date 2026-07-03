@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -188,7 +188,7 @@ export function filtersMatchProductoNoConformeListQuery(parsedRowFilters: any, l
 }
 
 export async function queryProductoNoConformeRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: ProductoNoConformeModuleFilters,
     orderKey: ProductoNoConformeOrderKey,
 ) {

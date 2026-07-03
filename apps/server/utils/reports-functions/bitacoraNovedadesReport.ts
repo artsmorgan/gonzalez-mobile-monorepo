@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 
@@ -112,7 +112,7 @@ export function filtersMatchBitacoraNovedadesListQuery(parsedRowFilters: any, li
     return true;
 }
 
-export async function queryBitacoraNovedadesRows(prisma: PrismaClient, filters: BitacoraNovedadesModuleFilters, orderKey: BitacoraNovedadesOrderKey) {
+export async function queryBitacoraNovedadesRows(prisma: ReportDataAccess, filters: BitacoraNovedadesModuleFilters, orderKey: BitacoraNovedadesOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);

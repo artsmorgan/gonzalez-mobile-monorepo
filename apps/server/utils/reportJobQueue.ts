@@ -1,7 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 
 export const DEFAULT_REPORT_MAX_ATTEMPTS = Number(process.env.REPORT_JOB_MAX_ATTEMPTS) || 3;
-export const REPORT_STUCK_MINUTES = Number(process.env.REPORT_JOB_STUCK_MINUTES) || 15;
+/** Sin actualización de `locked_at` (heartbeat) durante este tiempo → job huérfano. */
+export const REPORT_STUCK_MINUTES = Number(process.env.REPORT_JOB_STUCK_MINUTES) || 3;
 
 export type ReportJobRow = {
     id: number;
@@ -10,6 +11,18 @@ export type ReportJobRow = {
     estado: string;
     error_message: string | null;
 };
+
+/** Renueva el lock mientras el worker sigue procesando (evita reclaim de jobs activos largos). */
+export async function touchReportJobLock(
+    prisma: PrismaClient,
+    reportId: number,
+    workerId: string,
+): Promise<void> {
+    await prisma.e_reportes_mobile.updateMany({
+        where: { id: reportId, estado: "procesando", locked_by: workerId },
+        data: { locked_at: new Date() },
+    });
+}
 
 /** Reclama el job más antiguo en `pendiente` (update optimista si hay carrera entre workers). */
 export async function claimNextReportJob(
@@ -39,6 +52,24 @@ export async function claimNextReportJob(
         if (updated.count === 1) return candidate.id;
     }
 
+    return null;
+}
+
+/**
+ * Reclama el siguiente job pendiente; si la cola está vacía, intenta recuperar huérfanos en
+ * `procesando` (worker caído / estado no finalizado) y vuelve a intentar una vez.
+ */
+export async function claimNextReportJobWithReclaim(
+    prisma: PrismaClient,
+    workerId: string,
+): Promise<number | null> {
+    const claimed = await claimNextReportJob(prisma, workerId);
+    if (claimed != null) return claimed;
+
+    const reclaimed = await reclaimStuckReportJobs(prisma);
+    if (reclaimed > 0) {
+        return claimNextReportJob(prisma, workerId);
+    }
     return null;
 }
 
@@ -144,6 +175,16 @@ export async function handleReportJobResult(prisma: PrismaClient, reportId: numb
             prisma,
             reportId,
             row.error_message || "Error al generar el reporte",
+            row,
+        );
+        return;
+    }
+
+    if (estado === "procesando") {
+        await requeueOrFailJob(
+            prisma,
+            reportId,
+            "El proceso del reporte terminó sin registrar el estado final",
             row,
         );
     }

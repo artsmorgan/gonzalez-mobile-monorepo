@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -159,7 +159,7 @@ export function filtersMatchIncidenteListQuery(parsedRowFilters: any, listModule
     return true;
 }
 
-export async function queryIncidenteRows(prisma: PrismaClient, filters: IncidenteModuleFilters, orderKey: IncidenteOrderKey) {
+export async function queryIncidenteRows(prisma: ReportDataAccess, filters: IncidenteModuleFilters, orderKey: IncidenteOrderKey) {
     const where: any = { isActive: true };
     const frDesde = parseBoundaryDate(filters.fechaReporteDesde ?? undefined);
     const frHasta = parseBoundaryDate(filters.fechaReporteHasta ?? undefined);

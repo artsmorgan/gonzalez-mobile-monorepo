@@ -38,6 +38,7 @@ type ReportListItem = {
   ultimo_mantenimiento?: any | null;
   ultimo_registro_mantenimiento?: any | null;
   marca?: string | null;
+  modelo?: string | null;
   serie?: string | null;
 };
 
@@ -58,6 +59,7 @@ export function reportItemToArticuloTreeNode(item: ReportListItem): any {
     nombre: item.articulo_nombre,
     articulo_nomenclador_id: item.articulo_nomenclador_id,
     marca: item.marca ?? null,
+    modelo: item.modelo ?? null,
     serie: item.serie ?? null,
     tipos_mantenimiento: item.tipos_mantenimiento ?? [],
     mantenimientos: item.mantenimientos ?? [],

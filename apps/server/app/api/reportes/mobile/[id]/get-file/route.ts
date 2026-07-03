@@ -1,16 +1,13 @@
-import axios from "axios";
 import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
-import {
-    getAuthForDynamicReportesApi,
-    resolveDynamicReportesApiUrl,
-} from "../../../../../../utils/callDynamicReportesApi";
+import { getAuthForDynamicReportesApi } from "../../../../../../utils/callDynamicReportesApi";
+import { executeReportesOperation } from "../../../create";
 
 export const runtime = "nodejs";
 
 /**
- * GET `/api/reportes/mobile/[id]/get-file` — patrón como incidentes + `fetchDynamicFile`:
- * 1) axios POST `/api/dynamic-prisma/reportes` (`mobileReportUploadsPath`)
+ * GET `/api/reportes/mobile/[id]/get-file`:
+ * 1) `executeReportesOperation` (`mobileReportUploadsPath`)
  * 2) GET `/api/dynamic-prisma/files` con la ruta relativa devuelta
  */
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -21,48 +18,30 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
-        const { authHeader, accessToken } = getAuthForDynamicReportesApi(req);
+        const { accessToken } = getAuthForDynamicReportesApi(req);
         const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
         if (!mobileAccessToken) {
             return NextResponse.json({ status: false, message: "MOBILE_ACCESS_TOKEN no configurado" }, { status: 500 });
         }
 
-        const ultimateUrl = resolveDynamicReportesApiUrl(req);
-        const prismaRes = await axios.post(
-            ultimateUrl,
-            {
-                mobileAccessToken,
-                shouldVerifyAccessToken: true,
-                token: accessToken || undefined,
-                operation: "mobileReportUploadsPath",
-                reportId,
-            },
-            {
-                headers: {
-                    Authorization: authHeader,
-                    "Content-Type": "application/json",
-                },
-                validateStatus: () => true,
-            },
-        );
+        const prismaBody = await executeReportesOperation(req, {
+            mobileAccessToken,
+            shouldVerifyAccessToken: true,
+            token: accessToken || undefined,
+            operation: "mobileReportUploadsPath",
+            reportId,
+        });
 
-        const prismaBody = prismaRes?.data;
-        if (!prismaBody?.status || !prismaBody?.data?.url) {
-            const msg =
-                (prismaBody && typeof prismaBody === "object" && String((prismaBody as any).message || "")) ||
-                `Error en dynamic-prisma/reportes (${prismaRes.status})`;
-            const st =
-                prismaRes.status === 404
-                    ? 404
-                    : prismaRes.status === 409
-                      ? 409
-                      : prismaRes.status >= 400 && prismaRes.status < 500
-                        ? prismaRes.status
-                        : 502;
-            return NextResponse.json({ status: false, message: msg }, { status: st });
+        if (!prismaBody?.status || !prismaBody?.data || typeof prismaBody.data !== "object") {
+            const msg = prismaBody?.message || "Error al resolver ruta del reporte";
+            return NextResponse.json({ status: false, message: msg }, { status: 502 });
         }
 
-        const fileUrl = String((prismaBody.data as { url: string }).url || "").trim();
+        const fileUrl = String((prismaBody.data as { url?: string }).url || "").trim();
+        if (!fileUrl) {
+            return NextResponse.json({ status: false, message: "Ruta de archivo no disponible" }, { status: 404 });
+        }
+
         const fetched = await fetchDynamicFile({
             req,
             type: "file",

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -138,7 +138,7 @@ function safeImageBaseName(name: string): string | null {
 }
 
 export async function queryEvaluacionEmpleadoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: EvaluacionPersonalModuleFilters,
     orderKey: EvaluacionPersonalOrderKey,
 ) {

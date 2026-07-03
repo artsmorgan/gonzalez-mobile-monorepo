@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -118,7 +119,7 @@ const activeOrNoInactiveDate = (): Prisma.e_estructura_contratoWhereInput[] => {
     return [{ fecha_inactivacion: null }, { fecha_inactivacion: { gte: now } }];
 };
 
-async function plazaIdsForContratoIds(prisma: PrismaClient, contratoIds: number[]): Promise<number[]> {
+async function plazaIdsForContratoIds(prisma: ReportDataAccess, contratoIds: number[]): Promise<number[]> {
     if (!contratoIds.length) return [];
     const rows = await prisma.e_estructura_plazas.findMany({
         where: {
@@ -137,7 +138,7 @@ async function plazaIdsForContratoIds(prisma: PrismaClient, contratoIds: number[
     return rows.map((r) => r.id);
 }
 
-async function plazaIdsFromEmpresaIds(prisma: PrismaClient, empresaIds: number[]): Promise<number[]> {
+async function plazaIdsFromEmpresaIds(prisma: ReportDataAccess, empresaIds: number[]): Promise<number[]> {
     if (!empresaIds.length) return [];
     const contratos = await prisma.e_estructura_contrato.findMany({
         where: {
@@ -153,7 +154,7 @@ async function plazaIdsFromEmpresaIds(prisma: PrismaClient, empresaIds: number[]
     );
 }
 
-async function plazaIdsFromClienteIds(prisma: PrismaClient, clienteIds: number[]): Promise<number[]> {
+async function plazaIdsFromClienteIds(prisma: ReportDataAccess, clienteIds: number[]): Promise<number[]> {
     if (!clienteIds.length) return [];
     const contratos = await prisma.e_estructura_contrato.findMany({
         where: { deleted: null, AND: [{ OR: activeOrNoInactiveDate() }], cliente_id: { in: clienteIds } },
@@ -165,7 +166,7 @@ async function plazaIdsFromClienteIds(prisma: PrismaClient, clienteIds: number[]
     );
 }
 
-async function plazaIdsFromDivisionIds(prisma: PrismaClient, divisionIds: number[]): Promise<number[]> {
+async function plazaIdsFromDivisionIds(prisma: ReportDataAccess, divisionIds: number[]): Promise<number[]> {
     if (!divisionIds.length) return [];
     const contratos = await prisma.e_estructura_contrato.findMany({
         where: { deleted: null, AND: [{ OR: activeOrNoInactiveDate() }], division_id: { in: divisionIds } },
@@ -177,7 +178,7 @@ async function plazaIdsFromDivisionIds(prisma: PrismaClient, divisionIds: number
     );
 }
 
-async function plazaIdsFromCorpoIds(prisma: PrismaClient, corpoIds: number[]): Promise<number[]> {
+async function plazaIdsFromCorpoIds(prisma: ReportDataAccess, corpoIds: number[]): Promise<number[]> {
     if (!corpoIds.length) return [];
     const puestos = await prisma.e_estructura_puesto.findMany({
         where: { deleted: null, sucursal_id: { in: corpoIds } },
@@ -192,7 +193,7 @@ async function plazaIdsFromCorpoIds(prisma: PrismaClient, corpoIds: number[]): P
     return plazas.map((p) => p.id);
 }
 
-async function plazaIdsFromPuestoIds(prisma: PrismaClient, puestoIds: number[]): Promise<number[]> {
+async function plazaIdsFromPuestoIds(prisma: ReportDataAccess, puestoIds: number[]): Promise<number[]> {
     if (!puestoIds.length) return [];
     const plazas = await prisma.e_estructura_plazas.findMany({
         where: { deleted: null, puesto_id: { in: puestoIds } },
@@ -213,7 +214,7 @@ function intersectPlazaSets(sets: number[][]): number[] {
 }
 
 /** Si hay filtros de estructura, restringe por plazas obtenidas de la jerarquía (intersección). */
-async function resolvePlazaIdsFromStructureFilters(prisma: PrismaClient, f: MutuosAcuerdosModuleFilters): Promise<number[] | null> {
+async function resolvePlazaIdsFromStructureFilters(prisma: ReportDataAccess, f: MutuosAcuerdosModuleFilters): Promise<number[] | null> {
     const sets: number[][] = [];
     if (f.empresaIds?.length) sets.push(await plazaIdsFromEmpresaIds(prisma, f.empresaIds));
     if (f.clienteIds?.length) sets.push(await plazaIdsFromClienteIds(prisma, f.clienteIds));
@@ -332,7 +333,7 @@ function fmtSiNo(b: boolean | null | undefined): string {
     return "";
 }
 
-export async function queryMutuosAcuerdosRows(prisma: PrismaClient, filters: MutuosAcuerdosModuleFilters, orderKey: MutuosAcuerdosOrderKey) {
+export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters: MutuosAcuerdosModuleFilters, orderKey: MutuosAcuerdosOrderKey) {
     const plazaIds = await resolvePlazaIdsFromStructureFilters(prisma, filters);
 
     const and: Prisma.e_mutuos_acuerdosWhereInput[] = [{ isActive: true }];

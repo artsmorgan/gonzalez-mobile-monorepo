@@ -40,13 +40,13 @@ async function createTokenPlanillas(req: NextRequest, empleado_id: number, mobil
     }
     const response = await axios.post(`${planillasUrl}/login`, {
         username: empleado.cedula,
-        password: "Pruebas25"
+        password: ""
     });
     if (!response.data.success) {
         throw new Error("Error al iniciar sesión en Planillas");
     }
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
     let expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
 
     // Crear o actualizar el token en la base de datos

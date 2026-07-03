@@ -13,6 +13,7 @@ import {
   View,
   Dimensions,
 } from 'react-native';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RouteProp } from '@react-navigation/native';
@@ -666,8 +667,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // Filtros (lista)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
@@ -1713,121 +1713,6 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '';
-    try {
-      const d = new Date(String(value));
-      if (isNaN(d.getTime())) return String(value);
-      const day = d.getDate().toString().padStart(2, '0');
-      const month = (d.getMonth() + 1).toString().padStart(2, '0');
-      const year = d.getFullYear();
-      const hours = d.getHours().toString().padStart(2, '0');
-      const minutes = d.getMinutes().toString().padStart(2, '0');
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatInformacionGeneralForDisplay = (infoGeneral: any): string => {
-    if (!infoGeneral) return '';
-    try {
-      const info = typeof infoGeneral === 'string' ? JSON.parse(infoGeneral) : infoGeneral;
-      if (!Array.isArray(info)) return String(infoGeneral);
-
-      const partes: string[] = [];
-      for (const item of info) {
-        if (item && typeof item === 'object' && item.key && item.label) {
-          // Excluir firmas (kind === 'signature')
-          if (item.kind !== 'signature' && item.value) {
-            partes.push(`${item.label}: ${item.value}`);
-          }
-        }
-      }
-      return partes.length > 0 ? partes.join(' | ') : 'Sin información';
-    } catch {
-      return String(infoGeneral);
-    }
-  };
-
-  const formatInformacionRevisionForDisplay = (infoRevision: any): string => {
-    if (!infoRevision) return '';
-    try {
-      const info = typeof infoRevision === 'string' ? JSON.parse(infoRevision) : infoRevision;
-      if (!Array.isArray(info)) return String(infoRevision);
-
-      const partes: string[] = [];
-      for (const item of info) {
-        if (item && typeof item === 'object') {
-          if (item.kind === 'heading') {
-            partes.push(`[${item.label}]`);
-          } else if (item.key && item.label) {
-            const value = item.value || '';
-            const obs = item.observation ? ` (Obs: ${item.observation})` : '';
-            partes.push(`${item.label}: ${value}${obs}`);
-          }
-        }
-      }
-      return partes.length > 0 ? partes.join(' | ') : 'Sin información';
-    } catch {
-      return String(infoRevision);
-    }
-  };
-
-  const formatMovimientosForDisplay = (movimientos: any): string => {
-    if (!movimientos) return '';
-    try {
-      const movs = typeof movimientos === 'string' ? JSON.parse(movimientos) : movimientos;
-      if (!Array.isArray(movs)) return String(movimientos);
-
-      const partes: string[] = [];
-      for (const mov of movs) {
-        if (mov && typeof mov === 'object') {
-          const movParts: string[] = [];
-          if (mov.movimiento) movParts.push(`Mov: ${mov.movimiento}`);
-          if (mov.fecha) movParts.push(`Fecha: ${mov.fecha}`);
-          if (mov.hora) movParts.push(`Hora: ${mov.hora}`);
-          if (mov.realizado_por) movParts.push(`Por: ${mov.realizado_por}`);
-          if (mov.autorizado_por) movParts.push(`Autorizado: ${mov.autorizado_por}`);
-          if (movParts.length > 0) {
-            partes.push(`{${movParts.join(', ')}}`);
-          }
-        }
-      }
-      return partes.length > 0 ? partes.join(' | ') : 'Sin movimientos';
-    } catch {
-      return String(movimientos);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (prop === 'informacion_general') {
-      return formatInformacionGeneralForDisplay(value);
-    }
-    if (prop === 'informacion_revision') {
-      return formatInformacionRevisionForDisplay(value);
-    }
-    if (prop === 'movimientos_vehiculos') {
-      return formatMovimientosForDisplay(value);
-    }
-    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-      try {
-        if (Array.isArray(value)) {
-          return JSON.stringify(value, null, 2);
-        }
-        const keys = Object.keys(value);
-        if (keys.length > 0 && keys.length <= 5) {
-          return keys.map(k => `${k}: ${value[k]}`).join(', ');
-        }
-        return JSON.stringify(value, null, 2);
-      } catch {
-        return String(value);
-      }
-    }
-    return String(value ?? '');
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -4696,92 +4581,12 @@ export default function BitacoraVehiculosDetenidosScreen() {
         />
       )}
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const propName = String(c?.prop ?? '-');
-                                const value = formatChangeValue(propName, c?.after);
-
-                                return (
-                                  <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                    <ThemedText style={{ fontWeight: '800' }}>{propName}: </ThemedText>
-                                    {value}
-                                  </ThemedText>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <Modal
         visible={cameraVisible}

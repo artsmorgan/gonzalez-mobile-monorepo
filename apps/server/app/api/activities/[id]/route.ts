@@ -3,7 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
-import { createReport, updateReport } from "../../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { uploadArticuloMantenimientoFiles } from "../../../../utils/uploadArticuloMantenimientoFiles";
 import {
@@ -82,6 +82,7 @@ function buildArticlesFromClientState(articles_state: any[]): any[] {
                 nombre: String(a?.nombre || "Artículo"),
                 tipo,
                 marca: a?.marca ?? "",
+                modelo: a?.modelo ?? "",
                 serie: a?.serie ?? "",
                 cantidad_requerida: cantidadNecesariaFromArticulo(a),
                 cantidad_real: Number(a?.cantidad_real ?? 0),
@@ -247,6 +248,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                             actividad_marcada.plaza_id,
                             actividad.nombre_actividad || "actividad",
                             accionAtMs,
+                            {
+                                puestoId: actividadPuesto.puesto_id,
+                            },
                         );
                     }
                 } catch (err) {
@@ -282,7 +286,8 @@ async function evaluateAndNotifyArticles(
     articles: any[],
     corpoId: number,
     actividadNombre: string,
-    accionAtMs: number
+    accionAtMs: number,
+    estructuraContext?: { puestoId?: number | null; sucursalId?: number | null },
 ) {
     if (!Array.isArray(articles) || articles.length === 0) return;
 
@@ -322,15 +327,22 @@ async function evaluateAndNotifyArticles(
         const serverNow = toZonedTime(new Date(), "America/Costa_Rica");
         const observaciones = String(art?.observaciones || "");
         const marca = art?.marca || "";
+        const modelo = art?.modelo || "";
         const serie = art?.serie || "";
         const mantenimientoFiles = Array.isArray(art?.mantenimiento_files) ? art.mantenimiento_files : [];
 
-        const pushCreate = () => {
+        const pushCreate = async () => {
+            const { marca, modelo, serie } = await resolveMarcaModeloSerieFromArticuloEstructura(
+                req,
+                art,
+                estructuraContext,
+            );
             articulosReporte.push({
                 id,
                 nombre: art?.nombre || "Artículo",
                 tipo,
                 marca,
+                modelo,
                 serie,
                 cantidad_requerida,
                 cantidad_real,
@@ -343,7 +355,7 @@ async function evaluateAndNotifyArticles(
         };
 
         if (!last_mantenimiento?.id) {
-            pushCreate();
+            await pushCreate();
             if (estado_actual !== "Bueno") sendNotification = true;
             continue;
         }
@@ -359,6 +371,7 @@ async function evaluateAndNotifyArticles(
                 fecha_solucion: serverNow,
                 observaciones,
                 marca,
+                modelo,
                 serie_placa: serie,
                 updated_at: serverNow,
                 mantenimiento_files: mantenimientoFiles,
@@ -371,6 +384,7 @@ async function evaluateAndNotifyArticles(
                 cantidad_necesaria: cantidad_requerida,
                 observaciones,
                 marca,
+                modelo,
                 serie_placa: serie,
                 updated_at: serverNow,
                 mantenimiento_files: mantenimientoFiles,
@@ -381,7 +395,7 @@ async function evaluateAndNotifyArticles(
             articulosReporteUpdate.push(upd);
         } else if (last_estado === "Bueno" && estado_actual !== "Bueno") {
             sendNotification = true;
-            pushCreate();
+            await pushCreate();
         } else {
             articulosReporteUpdate.push({
                 id: last_mantenimiento.id,
@@ -390,6 +404,7 @@ async function evaluateAndNotifyArticles(
                 cantidad_necesaria: cantidad_requerida,
                 observaciones,
                 marca,
+                modelo,
                 serie_placa: serie,
                 updated_at: serverNow,
                 mantenimiento_files: mantenimientoFiles,

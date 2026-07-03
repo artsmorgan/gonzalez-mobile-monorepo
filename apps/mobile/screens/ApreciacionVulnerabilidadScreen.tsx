@@ -23,6 +23,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Picker } from '@react-native-picker/picker';
 
 import AppHeader from '../components/AppHeader';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '../components/CambiosAppsModulesModal';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
@@ -573,8 +574,7 @@ export default function ApreciacionVulnerabilidadScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   const PICKER_NONE = 0;
 
@@ -1787,92 +1787,6 @@ export default function ApreciacionVulnerabilidadScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatBoletaForDisplay = (boletaJson: string): string => {
-    try {
-      const sections: BoletaSection[] = normalizeBoletaSections(JSON.parse(boletaJson || '[]'));
-      if (!Array.isArray(sections) || sections.length === 0) return 'No hay datos de boleta.';
-
-      let formatted = '';
-      sections.forEach((section) => {
-        formatted += `\n--- ${section.title} ---\n`;
-        if (section.key === PORCENTAJE_SECTION_KEY) {
-          formatted += `  - Nivel seleccionado: ${getVulnerabilityLevelLabel(section.vulnerabilityLevel)}\n`;
-          return;
-        }
-        (section.items || []).forEach((item) => {
-          const answer = item.answer === 'si' ? 'Sí' : item.answer === 'no' ? 'No' : 'Sin responder';
-          formatted += `  - ${item.label}: ${answer}\n`;
-        });
-      });
-      return formatted.trim();
-    } catch (e) {
-      console.error('Error formatting boleta for display:', e);
-      return 'Error al formatear boleta.';
-    }
-  };
-
-  const formatMetricasForDisplay = (metricasJson: string): string => {
-    try {
-      const metricas: string[] = JSON.parse(metricasJson || '[]');
-      if (!Array.isArray(metricas) || metricas.length === 0) return 'No hay métricas.';
-      return metricas.map((m, idx) => `${idx + 1}. ${m}`).join('\n');
-    } catch (e) {
-      console.error('Error formatting metricas for display:', e);
-      return 'Error al formatear métricas.';
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      if (prop === 'boleta') {
-        return formatBoletaForDisplay(JSON.stringify(value));
-      }
-      if (prop === 'metricas_vulnerablidad') {
-        return formatMetricasForDisplay(JSON.stringify(value));
-      }
-      return JSON.stringify(value, null, 2);
-    }
-    if (typeof value === 'string') {
-      // Si parece ser JSON, intentar parsearlo
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (prop === 'boleta') {
-            return formatBoletaForDisplay(value);
-          }
-          if (prop === 'metricas_vulnerablidad') {
-            return formatMetricasForDisplay(value);
-          }
-          return JSON.stringify(parsed, null, 2);
-        } catch {
-          // No es JSON válido, retornar como string
-        }
-      }
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -2648,166 +2562,12 @@ export default function ApreciacionVulnerabilidadScreen() {
         </View>
       </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-
-                                // Caso especial: registro creado (__created__)
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-
-                                      {/* Campos no relacionados con firmas */}
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_solicitante' || k === 'firma_responsable') return null;
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatChangeValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-
-                                      {/* Firma responsable (hash decodificado) */}
-                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
-                                            {(() => {
-                                              const info = decodeFirmaHash(created.firma_responsable);
-                                              return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                                : 'Firma responsable (formato no decodificable)';
-                                            })()}
-                                          </ThemedText>
-                                        </ThemedView>
-                                      )}
-
-                                      {/* Firma solicitante (imagen) */}
-                                      {typeof created.firma_solicitante === 'string' && created.firma_solicitante.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_solicitante</ThemedText>
-                                          </ThemedText>
-                                          <Image
-                                            source={{ uri: formatSignatureForDisplay(created.firma_solicitante) }}
-                                            style={styles.cambioSignatureImage}
-                                            resizeMode="contain"
-                                          />
-                                        </ThemedView>
-                                      )}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const isManualSignatureField = prop === 'firma_solicitante';
-                                const isResponsableSignatureField = prop === 'firma_responsable';
-
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {!isManualSignatureField && !isResponsableSignatureField && formatChangeValue(prop, value)}
-                                      {isResponsableSignatureField && (() => {
-                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
-                                        if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}`;
-                                      })()}
-                                    </ThemedText>
-
-                                    {isManualSignatureField && typeof value === 'string' && value && (
-                                      <Image
-                                        source={{ uri: formatSignatureForDisplay(value) }}
-                                        style={styles.cambioSignatureImage}
-                                        resizeMode="contain"
-                                      />
-                                    )}
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="ApreciacionVulnerabilidad" />

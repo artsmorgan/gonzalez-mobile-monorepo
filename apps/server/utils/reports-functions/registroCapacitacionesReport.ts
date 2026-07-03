@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
@@ -166,7 +166,7 @@ function buildWhere(filters: RegistroCapacitacionesModuleFilters): any {
 }
 
 export async function queryRegistroCapacitacionesRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: RegistroCapacitacionesModuleFilters,
     orderKey: RegistroCapacitacionesOrderKey,
 ) {
@@ -238,7 +238,7 @@ export async function queryRegistroCapacitacionesRows(
         const puesto = puestoById.get(r.puesto_id);
         const resp = responsableById.get(r.responsable_id);
         const fecha = r.fecha instanceof Date ? r.fecha : new Date(String(r.fecha));
-        const empleadosCap = (r.e_capacitacion_empleado || []).map((link) => {
+        const empleadosCap = (r.e_capacitacion_empleado || []).map((link: any) => {
             const e = link.c_empleado;
             return e
                 ? {
@@ -248,7 +248,7 @@ export async function queryRegistroCapacitacionesRows(
                   }
                 : { id: link.empleado_id, label: String(link.empleado_id), cedula: "" };
         });
-        const puestosCap = (r.e_capacitacion_puesto || []).map((link) => {
+        const puestosCap = (r.e_capacitacion_puesto || []).map((link: any) => {
             const p = link.e_estructura_puesto;
             return p
                 ? { id: p.id, label: puestoDisplayName(p) }
@@ -264,8 +264,8 @@ export async function queryRegistroCapacitacionesRows(
             puesto_nombre: puesto ? puestoDisplayName(puesto) : r.puesto_id > 0 ? String(r.puesto_id) : "—",
             responsable_nombre: resp ? empleadoDisplayName(resp) : excelCellString(r.nombre_responsable),
             fecha_txt: fmtDate(fecha),
-            empleados_cap_txt: empleadosCap.map((x) => x.label).join("; "),
-            puestos_cap_txt: puestosCap.map((x) => x.label).join("; "),
+            empleados_cap_txt: empleadosCap.map((x: { label: string }) => x.label).join("; "),
+            puestos_cap_txt: puestosCap.map((x: { label: string }) => x.label).join("; "),
             empleados_cap: empleadosCap,
             puestos_cap: puestosCap,
         };

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import archiver from "archiver";
 import fs from "fs/promises";
@@ -326,7 +326,7 @@ export function filtersMatchRegistroInduccionGeneralListQuery(
 }
 
 export async function queryRegistroInduccionGeneralRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: RegistroInduccionGeneralModuleFilters,
     orderKey: RegistroInduccionGeneralOrderKey,
 ) {

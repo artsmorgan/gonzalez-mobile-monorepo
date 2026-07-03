@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import archiver from "archiver";
 import { PassThrough } from "stream";
@@ -173,7 +173,7 @@ export function filtersMatchLlaverosListQuery(parsedRowFilters: any, listModuleF
     return true;
 }
 
-export async function queryLlaverosRows(prisma: PrismaClient, filters: LlaverosModuleFilters, orderKey: LlaverosOrderKey) {
+export async function queryLlaverosRows(prisma: ReportDataAccess, filters: LlaverosModuleFilters, orderKey: LlaverosOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);

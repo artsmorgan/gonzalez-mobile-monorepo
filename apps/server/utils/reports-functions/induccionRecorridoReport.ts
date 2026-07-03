@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -225,7 +225,7 @@ export function filtersMatchInduccionRecorridoListQuery(parsedRowFilters: any, l
 }
 
 export async function queryInduccionRecorridoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: InduccionRecorridoModuleFilters,
     orderKey: InduccionRecorridoOrderKey,
 ) {

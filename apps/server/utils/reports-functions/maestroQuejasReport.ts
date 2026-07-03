@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -136,7 +136,7 @@ async function getImageDimensions(filePath: string): Promise<{ width: number; he
     return null;
 }
 
-export async function queryMaestroQuejasRows(prisma: PrismaClient, filters: MaestroQuejasModuleFilters, orderKey: MaestroQuejasOrderKey) {
+export async function queryMaestroQuejasRows(prisma: ReportDataAccess, filters: MaestroQuejasModuleFilters, orderKey: MaestroQuejasOrderKey) {
     const where: any = { isActive: true };
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);

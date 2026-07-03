@@ -24,6 +24,7 @@ import {
   readVisitorsCacheRaw,
   syncVisitorsCacheFromNetwork,
 } from '@/hooks/visitorsCacheHelpers';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -460,8 +461,7 @@ export default function VisitorsScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   const getConnectionStatus = async () => {
     //return false;
@@ -487,23 +487,6 @@ export default function VisitorsScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '';
-    try {
-      const d = new Date(String(value));
-      if (isNaN(d.getTime())) return String(value);
-      const day = d.getDate().toString().padStart(2, '0');
-      const month = (d.getMonth() + 1).toString().padStart(2, '0');
-      const year = d.getFullYear();
-      const hours = d.getHours().toString().padStart(2, '0');
-      const minutes = d.getMinutes().toString().padStart(2, '0');
-      return `${day}/${month}/${year} ${hours}:${minutes}`;
-    } catch {
-      return String(value);
-    }
   };
 
   const formatActivosForDisplay = (activos: any): string => {
@@ -545,25 +528,6 @@ export default function VisitorsScreen() {
     } catch {
       return String(activos);
     }
-  };
-
-  const formatCambioLabel = (prop: string): string => {
-    if (prop === 'dep_pers_visita') return 'Persona/Departamento que visita';
-    return prop;
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (prop === 'activos') {
-      return formatActivosForDisplay(value);
-    }
-    if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-      try {
-        return JSON.stringify(value, null, 2);
-      } catch {
-        return String(value);
-      }
-    }
-    return String(value ?? '');
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -3698,108 +3662,12 @@ export default function VisitorsScreen() {
         </View>
       </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = formatCambioCreatedAt(row?.created_at);
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const propName = String(c?.prop ?? '-');
-                                const propLabel = formatCambioLabel(propName);
-                                const value = formatChangeValue(propName, c?.after);
-
-                                // Si el valor tiene múltiples líneas (como activos), dividirlo
-                                const valueLines = value.split('\n');
-
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={{ marginBottom: 8 }}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{propLabel}: </ThemedText>
-                                      {valueLines.length > 1 ? (
-                                        <ThemedView style={{ marginLeft: 8 }}>
-                                          {valueLines.map((line: string, lineIdx: number) => (
-                                            <ThemedText key={`line-${idx}-${lineIdx}`} style={styles.changeDescription}>
-                                              {line}
-                                            </ThemedText>
-                                          ))}
-                                        </ThemedView>
-                                      ) : (
-                                        valueLines[0]
-                                      )}
-                                    </ThemedText>
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <AppFooter />
       <SlideMenu

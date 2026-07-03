@@ -899,8 +899,8 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
 }
 
 /**
- * GET: listado de `e_reportes_mobile` vía `dynamic-prisma/reportes` (operation listReports).
- * POST: delega en el mismo handler interno (preview, búsqueda empleados, creación en segundo plano).
+ * GET: listado de `e_reportes_mobile` (operation listReports).
+ * POST: preview, búsqueda de empleados, creación en segundo plano vía `executeReportesOperation`.
  */
 export async function GET(req: NextRequest) {
     try {

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
-import { createReport, updateReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../utils/createReporteArticuloMantenimiento";
 import { uploadArticuloMantenimientoFiles } from "../../../utils/uploadArticuloMantenimientoFiles";
 import {
   sanitizeArticulosPuestoForPersistence,
@@ -44,6 +44,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
   req: NextRequest,
   articulos_puesto: any,
   accionAt: Date,
+  context?: { puesto_id?: number; corpo_id?: number },
 ): Promise<ProcessEntregaArticulosResult> {
   const empty: ProcessEntregaArticulosResult = {
     articulos_puesto_stored: sanitizeArticulosPuestoForPersistence(articulos_puesto),
@@ -65,6 +66,10 @@ export async function processEntregaPuestosArticulosMantenimiento(
     }
 
     let init_desc = false;
+    const estructuraContext = {
+      puestoId: context?.puesto_id ?? null,
+      sucursalId: context?.corpo_id ?? null,
+    };
     for (const articulo of articulos_puesto_array) {
       const articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
       const newEst = String(articulo.estado ?? "").trim();
@@ -96,14 +101,20 @@ export async function processEntregaPuestosArticulosMantenimiento(
         ? articulo.mantenimiento_files
         : [];
 
-      const pushCreate = () => {
+      const pushCreate = async () => {
         const ts = articuloIncomingTimestamp(articulo, accionAt);
+        const { marca, modelo, serie } = await resolveMarcaModeloSerieFromArticuloEstructura(
+          req,
+          articulo,
+          estructuraContext,
+        );
         articulos_reporte.push({
           id: articulo.id,
           nombre: articulo.nombre,
           tipo: articulo.tipo,
-          marca: articulo.marca,
-          serie: articulo.serie,
+          marca,
+          modelo,
+          serie,
           cantidad_requerida: cantidadNec,
           cantidad_real: Number(articulo.cantidad_real ?? 0),
           estado: newEst,
@@ -115,7 +126,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
       };
 
       if (!last_mantenimiento?.id) {
-        pushCreate();
+        await pushCreate();
         if (newEst !== "Bueno") {
           send_notification = true;
           if (!init_desc) {
@@ -138,6 +149,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
           fecha_solucion: serverNow,
           observaciones: articulo.observaciones ?? "",
           marca: articulo.marca,
+          modelo: articulo.modelo ?? null,
           serie_placa: articulo.serie,
           updated_at: serverNow,
           mantenimiento_files: mantenimientoFiles,
@@ -150,6 +162,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
           cantidad_necesaria: cantidadNec,
           observaciones: articulo.observaciones ?? "",
           marca: articulo.marca,
+          modelo: articulo.modelo ?? null,
           serie_placa: articulo.serie,
           updated_at: serverNow,
           mantenimiento_files: mantenimientoFiles,
@@ -163,7 +176,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
           init_desc = true;
         }
         articulos_desc += articulo_desc;
-        pushCreate();
+        await pushCreate();
       } else {
         articulos_reporte_update.push({
           id: last_mantenimiento.id,
@@ -172,6 +185,7 @@ export async function processEntregaPuestosArticulosMantenimiento(
           cantidad_necesaria: cantidadNec,
           observaciones: articulo.observaciones ?? "",
           marca: articulo.marca,
+          modelo: articulo.modelo ?? null,
           serie_placa: articulo.serie,
           updated_at: serverNow,
           mantenimiento_files: mantenimientoFiles,

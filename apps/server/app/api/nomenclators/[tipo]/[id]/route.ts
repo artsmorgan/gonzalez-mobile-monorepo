@@ -25,6 +25,11 @@ import {
     parseMobileVariablePayload,
     updateMobileVariable,
 } from "../../../../../utils/nomenclatorsMobileVariables";
+import {
+    articuloCorpoPuestoExists,
+    mapTipoMantenimientoArticuloRow,
+    parseTipoMantenimientoArticuloPayload,
+} from "../../../../../utils/nomenclatorsTipoMantenimientoArticulo";
 
 export async function GET(
     req: NextRequest,
@@ -81,6 +86,14 @@ export async function GET(
 
         if (resolveNomenclatorKind(tipo) === "mobile-variable") {
             const mapped = mapMobileVariableRow(row);
+            if (!mapped) {
+                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+            }
+            return NextResponse.json({ status: true, data: mapped }, { status: 200 });
+        }
+
+        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+            const mapped = await mapTipoMantenimientoArticuloRow(req, row);
             if (!mapped) {
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
@@ -232,6 +245,51 @@ export async function PUT(
                 const errorMessage = error instanceof Error ? error.message : "No se pudo actualizar la variable";
                 return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
             }
+        }
+
+        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+            const payload = parseTipoMantenimientoArticuloPayload(body);
+            if (!payload) {
+                return NextResponse.json(
+                    { status: false, message: "Debe seleccionar un artículo e indicar un nombre válido" },
+                    { status: 400 }
+                );
+            }
+
+            const exists = await articuloCorpoPuestoExists(req, payload.articulo_id);
+            if (!exists) {
+                return NextResponse.json(
+                    { status: false, message: "El artículo seleccionado no existe" },
+                    { status: 400 }
+                );
+            }
+
+            const updated = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "UPDATE",
+                    table,
+                    operation: "update",
+                    where: { id: idNum },
+                    data: {
+                        articulo_id: payload.articulo_id,
+                        nombre: payload.nombre,
+                    },
+                },
+            });
+
+            const mapped = await mapTipoMantenimientoArticuloRow(req, updated);
+            if (!mapped) {
+                return NextResponse.json(
+                    { status: false, message: "No se pudo actualizar el registro" },
+                    { status: 500 }
+                );
+            }
+
+            return NextResponse.json(
+                { status: true, message: "Registro actualizado correctamente", data: mapped },
+                { status: 200 }
+            );
         }
 
         const nombre = String(body?.nombre ?? "").trim();

@@ -63,6 +63,8 @@ export type HierarchyPickerFieldsProps = {
   pickerWrapperStyle?: ViewStyle;
   pickerStyle?: TextStyle;
   fieldGroupStyle?: ViewStyle;
+  /** Contenido opcional debajo del select de plaza (p. ej. mensaje de ayuda). */
+  renderAfterPlaza?: React.ReactNode;
 };
 
 /** Altura del select y del botón de búsqueda (sin incluir la etiqueta). */
@@ -114,6 +116,7 @@ export default function HierarchyPickerFields({
   pickerWrapperStyle,
   pickerStyle,
   fieldGroupStyle,
+  renderAfterPlaza,
 }: HierarchyPickerFieldsProps) {
   const labels = { ...DEFAULT_LABELS, ...labelsProp };
   const Label = renderLabel ?? ((text: string) => <DefaultLabel text={text} />);
@@ -357,16 +360,20 @@ export default function HierarchyPickerFields({
           'puesto',
         )}
 
-      {levels.includes('plaza') &&
-        renderPickerRow(
-          labels.plaza,
-          labels.selectPlaza,
-          values.plazaId ?? null,
-          values.puestoId != null,
-          plazas,
-          (id) => emit({ plazaId: id }),
-          'plaza',
-        )}
+      {levels.includes('plaza') ? (
+        <>
+          {renderPickerRow(
+            labels.plaza,
+            labels.selectPlaza,
+            values.plazaId ?? null,
+            values.puestoId != null,
+            plazas,
+            (id) => emit({ plazaId: id }),
+            'plaza',
+          )}
+          {renderAfterPlaza}
+        </>
+      ) : null}
 
       <HierarchySearchModal
         visible={searchLevel != null}

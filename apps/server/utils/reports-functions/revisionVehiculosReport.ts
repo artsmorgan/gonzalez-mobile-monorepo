@@ -2,7 +2,7 @@
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
@@ -466,7 +466,7 @@ export type RevisionVehiculoReportRow = {
 };
 
 async function loadHierarchyMaps(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     empresaIds: number[],
     clienteIds: number[],
     divisionIds: number[],
@@ -537,7 +537,7 @@ function sortRevisionRows(rows: RevisionVehiculoReportRow[], orderKey: RevisionV
 }
 
 export async function queryRevisionVehiculosRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: RevisionVehiculosModuleFilters,
     orderKey: RevisionVehiculosOrderKey,
 ): Promise<RevisionVehiculoReportRow[]> {
@@ -622,7 +622,7 @@ export async function queryRevisionVehiculosRows(
     return sortRevisionRows(out, orderKey);
 }
 
-export async function searchCorporateVehiclesForReport(prisma: PrismaClient, q: string) {
+export async function searchCorporateVehiclesForReport(prisma: ReportDataAccess, q: string) {
     const term = String(q || "").trim();
     if (!term) return [];
     const rows = await prisma.c_vehiculos_corporativos.findMany({

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import archiver from "archiver";
 import fs from "fs/promises";
@@ -93,15 +94,56 @@ export function parseNaiveDateTime(s: string | undefined | null): Date | null {
     return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function formatDt(d: Date | null | undefined): string {
-    if (!d || Number.isNaN(d.getTime())) return "";
+/** Normaliza fechas desde Prisma directo, JSON (`callDynamicPrisma`) u otros formatos. */
+function toDateValue(v: unknown): Date | null {
+    if (v == null || v === "") return null;
+    if (typeof v === "number" && Number.isFinite(v)) {
+        const d = new Date(v);
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof v === "string") {
+        const naive = parseNaiveDateTime(v);
+        if (naive) return naive;
+        const t = v.trim();
+        if (!t) return null;
+        const d = new Date(t.includes("T") ? t : t.replace(" ", "T"));
+        return Number.isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof v === "object") {
+        const obj = v as { getTime?: () => unknown; toISOString?: () => string };
+        if (typeof obj.getTime === "function") {
+            try {
+                const t = obj.getTime();
+                if (typeof t === "number" && !Number.isNaN(t)) {
+                    const d = v instanceof Date ? v : new Date(t);
+                    return Number.isNaN(d.getTime()) ? null : d;
+                }
+            } catch {
+                return null;
+            }
+        }
+        if (typeof obj.toISOString === "function") {
+            try {
+                const d = new Date(obj.toISOString());
+                return Number.isNaN(d.getTime()) ? null : d;
+            } catch {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
+function formatDt(v: unknown): string {
+    const d = toDateValue(v);
+    if (!d) return "";
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 /** Parte horaria `HH:mm:ss` desde el mismo origen que `formatDt`. */
-function formatTimePartFromDt(d: Date | null | undefined): string {
-    const s = formatDt(d);
+function formatTimePartFromDt(v: unknown): string {
+    const s = formatDt(v);
     if (!s) return "";
     const parts = s.split(" ");
     return parts.length >= 2 ? parts[1] : "";
@@ -208,7 +250,7 @@ function orderByClause(key: RegistroVisitasOrderKey): Prisma.e_registro_personas
     }
 }
 
-async function enrichRows(prisma: PrismaClient, raw: any[]): Promise<any[]> {
+async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> {
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
     const conIds = [...new Set(raw.map((r) => Number(r.contrato_id)).filter((n) => n > 0))];
@@ -237,7 +279,7 @@ async function enrichRows(prisma: PrismaClient, raw: any[]): Promise<any[]> {
 }
 
 export async function queryRegistroVisitasRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: RegistroVisitasModuleFilters,
     orderKey: RegistroVisitasOrderKey,
     opts?: { take?: number },

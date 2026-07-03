@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -121,7 +121,7 @@ type ActaRow = {
 };
 
 export async function queryActaEntregaProductos(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: ActaEntregaModuleFilters,
     orderKey: ActaEntregaOrderKey,
 ): Promise<any[]> {

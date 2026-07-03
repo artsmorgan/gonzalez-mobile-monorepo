@@ -2080,6 +2080,7 @@ model e_estructura_articulo_corpo_puesto_entrega {
   puesto_id                            Int?
   marca                                String                                 @db.VarChar(255)
   serie                                String                                 @db.VarChar(255)
+  modelo                               String?                                @db.VarChar(255)
   fechaEntrega                         DateTime                               @db.DateTime(0)
   nomencladorArticuloCP_id             Int?
   c_articulo_mantenimiento             c_articulo_mantenimiento[]

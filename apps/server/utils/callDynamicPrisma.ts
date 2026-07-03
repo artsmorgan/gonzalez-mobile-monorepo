@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest } from "next/server";
 import axios from "axios";
+import { resolveUserAccessToken } from "./resolveUserAccessToken";
 
 type CallDynamicPrismaParams = {
     req: NextRequest;
@@ -24,13 +25,7 @@ export async function callDynamicPrisma({
         throw new Error("req.headers no está disponible");
     }
 
-    const authHeader = req.headers.get("authorization");
-    const tokenFromQuery = req.nextUrl.searchParams.get("token")?.trim() || "";
-    const accessToken = token && token.trim().length > 0
-        ? token
-        : authHeader && authHeader.startsWith("Bearer ")
-            ? authHeader.split(" ")[1]
-            : tokenFromQuery;
+    const accessToken = resolveUserAccessToken(req, token);
     const mobileToken = (mobileAccessToken || process.env.MOBILE_ACCESS_TOKEN || "").trim();
     if (!mobileToken) throw new Error("MOBILE_ACCESS_TOKEN no configurado");
 
@@ -64,6 +59,15 @@ export async function callDynamicPrisma({
     }
 
     try {
+        const axiosHeaders: Record<string, string> = {
+            "Content-Type": "application/json",
+            "ngrok-skip-browser-warning": "69420",
+        };
+        /** JWT de usuario en Authorization/body.token; MOBILE_ACCESS_TOKEN solo en mobileAccessToken. */
+        if (accessToken) {
+            axiosHeaders.Authorization = `Bearer ${accessToken}`;
+        }
+
         const response = await axios.post(
             ultimateUrl,
             {
@@ -73,10 +77,7 @@ export async function callDynamicPrisma({
                 ...data,
             },
             {
-                headers: {
-                    Authorization: authHeader || (accessToken ? `Bearer ${accessToken}` : ""),
-                    "Content-Type": "application/json",
-                },
+                headers: axiosHeaders,
             }
         );
 

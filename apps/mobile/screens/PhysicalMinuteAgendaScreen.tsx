@@ -23,6 +23,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { formatDateDMY } from '@/utils/formatDate';
 import AppHeader from '@/components/AppHeader';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
@@ -166,51 +167,6 @@ const getConnectionStatus = async (): Promise<boolean> => {
     );
 };
 
-const formatParticipantesForDisplay = (participantesJson: string): string => {
-  try {
-    const participantes: any[] = JSON.parse(participantesJson || '[]');
-    if (!Array.isArray(participantes) || participantes.length === 0) return 'No hay participantes.';
-    return participantes.map((p, idx) => {
-      const nombre = p?.nombre || '-';
-      const puesto = p?.puesto || p?.cedula || '-';
-      const tieneFirma = p?.firma ? 'Sí' : 'No';
-      return `${idx + 1}. ${nombre} (Puesto: ${puesto}, Firma: ${tieneFirma})`;
-    }).join('\n');
-  } catch (e) {
-    console.error('Error formatting participantes for display:', e);
-    return 'Error al formatear participantes.';
-  }
-};
-
-const formatAcuerdosForDisplay = (acuerdosJson: string): string => {
-  try {
-    const acuerdos: any[] = JSON.parse(acuerdosJson || '[]');
-    if (!Array.isArray(acuerdos) || acuerdos.length === 0) return 'No hay acuerdos.';
-    return acuerdos.map((a, idx) => {
-      const texto = a?.texto || '-';
-      const responsable = String(a?.responsable || '').trim() || '-';
-      const fechaLimite = String(a?.fecha_limite || '').trim() || '-';
-      return `${idx + 1}. ${texto} (Responsable: ${responsable}, Fecha límite: ${fechaLimite})`;
-    }).join('\n');
-  } catch (e) {
-    console.error('Error formatting acuerdos for display:', e);
-    return 'Error al formatear acuerdos.';
-  }
-};
-
-const formatTemasForDisplay = (temasJson: string): string => {
-  try {
-    const temas: string[] = JSON.parse(temasJson || '[]');
-    if (!Array.isArray(temas) || temas.length === 0) return 'No hay temas.';
-    return temas.map((t, idx) => {
-      const tema = String(t || '').trim() || '-';
-      return `${idx + 1}. ${tema}`;
-    }).join('\n');
-  } catch (e) {
-    console.error('Error formatting temas for display:', e);
-    return 'Error al formatear temas.';
-  }
-};
 
 const formatDateISO = (date: Date): string => {
   const year = date.getFullYear();
@@ -485,8 +441,7 @@ export default function PhysicalMinuteAgendaScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   const signatureWebStyle = `
     body, html {
@@ -969,63 +924,6 @@ export default function PhysicalMinuteAgendaScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      if (prop === 'participantes') {
-        return formatParticipantesForDisplay(JSON.stringify(value));
-      }
-      if (prop === 'acuerdos') {
-        return formatAcuerdosForDisplay(JSON.stringify(value));
-      }
-      if (prop === 'temas_a_tratar') {
-        return formatTemasForDisplay(JSON.stringify(value));
-      }
-      return JSON.stringify(value, null, 2);
-    }
-    if (typeof value === 'string') {
-      // Si parece ser JSON, intentar parsearlo
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (prop === 'participantes') {
-            return formatParticipantesForDisplay(value);
-          }
-          if (prop === 'acuerdos') {
-            return formatAcuerdosForDisplay(value);
-          }
-          if (prop === 'temas_a_tratar') {
-            return formatTemasForDisplay(value);
-          }
-          return JSON.stringify(parsed, null, 2);
-        } catch {
-          // No es JSON válido, retornar como string
-        }
-      }
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -2537,193 +2435,12 @@ export default function PhysicalMinuteAgendaScreen() {
       <AppHeader title="Agenda minuta" onMenuPress={() => setIsMenuVisible(true)} />
       <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} currentRoute="PhysicalMinuteAgenda" onHomePress={() => navigation.navigate('Home')} />
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(row?.created_at);
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-                                const isFirmaResponsable = prop === 'firma_responsable';
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_responsable') {
-                                          const info = decodeFirmaHash(typeof v === 'string' ? v : v != null ? String(v) : null);
-                                          return (
-                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                              <ThemedText style={styles.changeDescription}>
-                                                <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                                {info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)'}
-                                              </ThemedText>
-                                            </ThemedView>
-                                          );
-                                        }
-                                        if (k === 'participantes') {
-                                          const arr = (() => {
-                                            if (Array.isArray(v)) return v;
-                                            if (typeof v === 'string') {
-                                              try { return JSON.parse(v) as any[]; } catch { return []; }
-                                            }
-                                            return [];
-                                          })();
-                                          return (
-                                            <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                              <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{k}:</ThemedText>
-                                              {arr.length === 0 ? (
-                                                <ThemedText style={styles.changeDescription}>—</ThemedText>
-                                              ) : (
-                                                arr.map((p: any, i: number) => (
-                                                  <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
-                                                    <ThemedText style={styles.changeDescription}>
-                                                      {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Puesto: {String(p?.puesto ?? p?.cedula ?? '').trim() || '—'})
-                                                    </ThemedText>
-                                                    {p?.firma ? (
-                                                      <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                                    ) : (
-                                                      <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
-                                                    )}
-                                                  </ThemedView>
-                                                ))
-                                              )}
-                                            </ThemedView>
-                                          );
-                                        }
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatChangeValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                    </React.Fragment>
-                                  );
-                                }
-                                if (prop === 'participantes') {
-                                  const arr = (() => {
-                                    if (Array.isArray(value)) return value;
-                                    if (typeof value === 'string') {
-                                      try { return JSON.parse(value) as any[]; } catch { return []; }
-                                    }
-                                    return [];
-                                  })();
-                                  return (
-                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                      <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{prop}:</ThemedText>
-                                      {arr.length === 0 ? (
-                                        <ThemedText style={styles.changeDescription}>—</ThemedText>
-                                      ) : (
-                                        arr.map((p: any, i: number) => (
-                                          <ThemedView key={`p-${i}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              {i + 1}. {String(p?.nombre ?? '').trim() || '—'} (Puesto: {String(p?.puesto ?? p?.cedula ?? '').trim() || '—'})
-                                            </ThemedText>
-                                            {p?.firma ? (
-                                              <Image source={{ uri: formatSignatureForDisplay(p.firma) ?? '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                            ) : (
-                                              <ThemedText style={styles.changeDescription}>Sin firma</ThemedText>
-                                            )}
-                                          </ThemedView>
-                                        ))
-                                      )}
-                                    </ThemedView>
-                                  );
-                                }
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {isFirmaResponsable && typeof value === 'string' && value.trim()
-                                        ? (() => {
-                                            const info = decodeFirmaHash(value);
-                                            return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}` : 'Firma (formato no decodificable)';
-                                          })()
-                                        : !isFirmaResponsable ? formatChangeValue(prop, value) : 'N/A'}
-                                    </ThemedText>
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       {isCreating ? (
         renderForm()

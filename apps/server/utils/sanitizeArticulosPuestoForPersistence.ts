@@ -29,6 +29,7 @@ export function sanitizeArticulosPuestoForPersistence(raw: unknown): string {
     };
     if (a.marca != null) base.marca = a.marca;
     if (a.serie != null) base.serie = a.serie;
+    if (a.modelo != null) base.modelo = a.modelo;
 
     const files = Array.isArray(a.mantenimiento_files) ? a.mantenimiento_files : [];
     const refs = files

@@ -19,6 +19,7 @@ import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
+import { renderReportesPreviewRow, reportesPreviewRowKey } from '../utils/reportesPreviewRender';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 
 import { useNavigation } from '@react-navigation/native';
@@ -157,6 +158,9 @@ const MODULO_SOLICITUDES_PERMISO = 'solicitudes_permiso';
 /** Tabla `e_registro_vehiculos` (Excel consolidado / ZIP individual). */
 const MODULO_VISITAS_VEHICULOS = 'visitas_vehiculos';
 
+/** Valor del selector «Módulo» en filtros de búsqueda para listar todos los tipos de reporte. */
+const MODULO_TODOS = 'todos';
+
 type ReporteTipoSalida = 'Consolidado' | 'Individual';
 
 const MODULOS_TIPO_FORZADO_CONSOLIDADO = new Set<string>([
@@ -244,6 +248,12 @@ const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_SOLICITUDES_PERMISO, label: 'Solicitudes de permiso' },
   { value: MODULO_TIEMPO_ALMUERZO, label: 'Tiempo de almuerzo' },
 ].sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
+
+/** Opciones del selector «Módulo» solo en filtros de búsqueda (incluye «Todos»). */
+const MODULO_LIST_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: MODULO_TODOS, label: 'Todos' },
+  ...MODULO_PICKER_OPTIONS,
+];
 
 const MODULO_LABEL_BY_VALUE = new Map(MODULO_PICKER_OPTIONS.map((o) => [o.value, o.label]));
 
@@ -695,60 +705,6 @@ function formatStoredYmdString(ymdStr: string, fallback = 'Elegir fecha'): strin
   }
 }
 
-const ENTREGA_PUESTO_NA = 'N/A';
-
-function isEmptyEntregaPuestoValue(v: unknown): boolean {
-  if (v == null) return true;
-  if (typeof v === 'string' && v.trim() === '') return true;
-  return false;
-}
-
-function displayEntregaPuestoText(v: unknown): string {
-  return isEmptyEntregaPuestoValue(v) ? ENTREGA_PUESTO_NA : String(v).trim();
-}
-
-function formatEntregaPuestoPreviewDate(raw: unknown): string {
-  if (isEmptyEntregaPuestoValue(raw)) return ENTREGA_PUESTO_NA;
-  const s = String(raw);
-  const ymdPart = s.includes('T') ? s.split('T')[0] : s.slice(0, 10);
-  if (ymdOkStr(ymdPart)) return formatStoredYmdString(ymdPart, ENTREGA_PUESTO_NA);
-  return ymdPart || ENTREGA_PUESTO_NA;
-}
-
-function formatEntregaPuestoPreviewTime(raw: unknown): string {
-  if (isEmptyEntregaPuestoValue(raw)) return ENTREGA_PUESTO_NA;
-  const s = String(raw).trim();
-  if (hmOkStr(s)) return s;
-  if (s.includes('T')) {
-    const part = s.split('T')[1]?.split('.')[0]?.slice(0, 5);
-    if (part && hmOkStr(part)) return part;
-  }
-  try {
-    const d = new Date(s);
-    if (!Number.isNaN(d.getTime())) {
-      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
-    }
-  } catch {
-    /* ignore */
-  }
-  return ENTREGA_PUESTO_NA;
-}
-
-function displayEntregaPuestoTurno(v: unknown): string {
-  if (isEmptyEntregaPuestoValue(v)) return ENTREGA_PUESTO_NA;
-  const t = String(v).trim().toUpperCase();
-  if (t === 'D') return 'Diurno';
-  if (t === 'M') return 'Mixto';
-  if (t === 'N') return 'Nocturno';
-  return String(v).trim();
-}
-
-function displayEntregaPuestoMarcaId(v: unknown): string {
-  if (v == null || v === '') return ENTREGA_PUESTO_NA;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? String(Math.floor(n)) : ENTREGA_PUESTO_NA;
-}
-
 function parseHmToLocalDate(hmStr: string): Date {
   const t = String(hmStr || '').trim();
   const [h, m] = t.split(':').map((x) => parseInt(x, 10));
@@ -791,6 +747,93 @@ function combineDateAndTime(dateStr: string, timeStr: string): string {
   return `${dateStr.trim()}T${ts}`;
 }
 
+/** Módulos de creación con rango de fechas/horas opcional (abierto o parcial). */
+const MODULOS_CREACION_FECHA_OPCIONAL = new Set<string>([
+  MODULO_INGRESOS,
+  MODULO_ACTA_ENTREGA,
+  MODULO_AGENDA_MINUTA,
+  MODULO_ENTREGA_PUESTO,
+  MODULO_APERTURA_CIERRE,
+  MODULO_VULNERABILIDAD,
+  MODULO_ACTIVIDADES,
+  MODULO_CONTROL_ASISTENCIA,
+  MODULO_DOCUMENTOS_ENTREGADOS,
+  MODULO_ENCUESTA_SATISFACCION,
+  MODULO_ACCIONES_PERSONALES,
+  MODULO_INCIDENTES,
+  MODULO_LLAVES,
+  MODULO_LLAVEROS,
+  MODULO_BITACORA_NOVEDADES,
+  MODULO_MAESTRO_QUEJAS,
+  MODULO_CHECKLIST_SUPERVISION,
+  MODULO_MUTUOS_ACUERDOS,
+  MODULO_EVALUACION_PERSONAL,
+  MODULO_PRODUCTO_NO_CONFORME,
+  MODULO_REGISTRO_INDUCCION_RECORRIDO,
+  MODULO_MANUALES_PUESTO,
+  MODULO_ARTICULOS_PUESTO,
+  MODULO_MANTENIMIENTO_ARTICULOS,
+  MODULO_REGISTRO_VEHICULOS_CORPORATIVOS,
+  MODULO_REVISION_VEHICULOS,
+  MODULO_REGISTRO_VISITAS,
+  MODULO_NOTAS_VOZ,
+  MODULO_CAMBIOS_UBICACION_PUESTO,
+  MODULO_REGISTRO_CAPACITACIONES,
+  MODULO_REGISTRO_INDUCCION_GENERAL,
+  MODULO_TIEMPO_ALMUERZO,
+  MODULO_LOGIN_MARCA,
+  MODULO_SOLICITUDES_PERMISO,
+  MODULO_VISITAS_VEHICULOS,
+]);
+
+function isModuloCreacionFechaOpcional(modulo: string): boolean {
+  return MODULOS_CREACION_FECHA_OPCIONAL.has(modulo);
+}
+
+function resolveOptionalDesdeDateTime(date: Date | null, time: Date | null): string | undefined {
+  if (!date) return undefined;
+  const timeStr = time ? hm(time) : '00:00:00';
+  return combineDateAndTime(ymd(date), timeStr);
+}
+
+function resolveOptionalHastaDateTime(date: Date | null, time: Date | null): string | undefined {
+  if (!date) return undefined;
+  const timeStr = time ? hm(time) : '23:59:59';
+  return combineDateAndTime(ymd(date), timeStr);
+}
+
+function applyOptionalCreatedRange(
+  target: Record<string, unknown>,
+  desdeD: Date | null,
+  desdeT: Date | null,
+  hastaD: Date | null,
+  hastaT: Date | null,
+  keys: { desde?: string; hasta?: string } = {},
+): void {
+  const desdeKey = keys.desde ?? 'creadoDesde';
+  const hastaKey = keys.hasta ?? 'creadoHasta';
+  const desde = resolveOptionalDesdeDateTime(desdeD, desdeT);
+  const hasta = resolveOptionalHastaDateTime(hastaD, hastaT);
+  if (desde) target[desdeKey] = desde;
+  if (hasta) target[hastaKey] = hasta;
+}
+
+function moveCreadoRangeToFechaReporte(target: Record<string, unknown>): void {
+  if (target.creadoDesde != null) target.fechaReporteDesde = target.creadoDesde;
+  if (target.creadoHasta != null) target.fechaReporteHasta = target.creadoHasta;
+  delete target.creadoDesde;
+  delete target.creadoHasta;
+}
+
+function actaDateTimeRangeIsComplete(
+  desdeD: Date | null,
+  desdeT: Date | null,
+  hastaD: Date | null,
+  hastaT: Date | null,
+): boolean {
+  return !!(desdeD && desdeT && hastaD && hastaT);
+}
+
 function decodeFirmaHash(hash?: string | null) {
   try {
     if (!hash || String(hash).trim().length === 0) return null;
@@ -820,6 +863,7 @@ function formatFirmaTimestamp(ts: string) {
 
 /** Etiqueta legible para `created_at` del listado (ISO o epoch). */
 function formatModuloLabel(modulo: string): string {
+  if (modulo === MODULO_TODOS) return 'Todos';
   const opt = MODULO_PICKER_OPTIONS.find((o) => o.value === modulo);
   return opt?.label ?? modulo;
 }
@@ -832,8 +876,12 @@ function formatTipoReporteDisplay(raw: string | null | undefined): string {
 }
 
 function formatEstadoDisplay(raw: string | null | undefined): string {
-  const s = String(raw ?? '').trim();
+  const s = String(raw ?? '').trim().toLowerCase();
   if (!s) return '—';
+  if (s === 'procesando') return 'En proceso';
+  if (s === 'error') return 'Error';
+  if (s === 'completado') return 'Completado';
+  if (s === 'pendiente') return 'Pendiente';
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
@@ -862,14 +910,6 @@ function formatReportCreatedAt(raw: string | null | undefined): string {
 function formatStructureLite(item: StructureLite): string {
   const left = item.codigo || item.numero;
   return left ? `${left} — ${item.nombre}` : item.nombre;
-}
-
-function signatureUri(v: unknown): string | null {
-  if (v == null) return null;
-  const s = String(v).trim();
-  if (!s) return null;
-  if (s.startsWith('data:image/')) return s;
-  return `data:image/png;base64,${s}`;
 }
 
 type ReportRow = {
@@ -1004,7 +1044,7 @@ export default function ReportesScreen() {
   const [listMqNivelQueja, setListMqNivelQueja] = useState<string>('todos');
 
   const resetListFilters = useCallback(() => {
-    setModulo(MODULO_INGRESOS);
+    setModulo(MODULO_TODOS);
     setNombreBusqueda('');
     setNumeroBusqueda('');
     setNomenclaturaBusqueda('');
@@ -1120,7 +1160,7 @@ export default function ReportesScreen() {
     setShowListFrHt(false);
   }, []);
 
-  const [modulo, setModulo] = useState(MODULO_INGRESOS);
+  const [modulo, setModulo] = useState(MODULO_TODOS);
   const [nombreBusqueda, setNombreBusqueda] = useState('');
   const [numeroBusqueda, setNumeroBusqueda] = useState('');
   const [nomenclaturaBusqueda, setNomenclaturaBusqueda] = useState('');
@@ -1349,6 +1389,7 @@ export default function ReportesScreen() {
   const [modalLmEmpleadoSelected, setModalLmEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [isModalIngresoExpanded, setIsModalIngresoExpanded] = useState(true);
   const [isModalLmExpanded, setIsModalLmExpanded] = useState(true);
+  const [isModalReportMetaOpen, setIsModalReportMetaOpen] = useState(true);
   const [modalMultiDevice, setModalMultiDevice] = useState(false);
   const [modalActaDesdeD, setModalActaDesdeD] = useState<Date | null>(null);
   const [modalActaDesdeT, setModalActaDesdeT] = useState<Date | null>(null);
@@ -1623,6 +1664,7 @@ export default function ReportesScreen() {
     setModalLmEmpleadoSelected([]);
     setIsModalIngresoExpanded(true);
     setIsModalLmExpanded(true);
+    setIsModalReportMetaOpen(false);
     setModalMultiDevice(false);
     setModalActaDesdeD(null);
     setModalActaDesdeT(null);
@@ -2635,7 +2677,7 @@ export default function ReportesScreen() {
     setLoadingList(true);
     try {
       const q: Record<string, string | undefined> = {
-        modulo,
+        modulo: modulo !== MODULO_TODOS ? modulo : undefined,
         nombreContains: nombreBusqueda.trim() || undefined,
         numeroContains: numeroBusqueda.trim() || undefined,
         nomenclaturaContains: nomenclaturaBusqueda.trim() || undefined,
@@ -3153,15 +3195,10 @@ export default function ReportesScreen() {
     try {
       let res: { status: boolean; message?: string; data?: any[] } = { status: false };
       if (formModulo === MODULO_INGRESOS) {
-        if (!modalDesdeD || !modalDesdeT || !modalHastaD || !modalHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
         const mf: Record<string, unknown> = {
-          creadoDesde: combineDateAndTime(ymd(modalDesdeD), hm(modalDesdeT)),
-          creadoHasta: combineDateAndTime(ymd(modalHastaD), hm(modalHastaT)),
           soloMultiDispositivo: modalMultiDevice,
         };
+        applyOptionalCreatedRange(mf, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
         if (modalUsuariosSelected.length > 0) {
           mf.empleadoIngresoIds = modalUsuariosSelected.map((u) => Number(u.id));
         }
@@ -3172,14 +3209,8 @@ export default function ReportesScreen() {
           logout,
         });
       } else if (formModulo === MODULO_LOGIN_MARCA) {
-        if (!modalDesdeD || !modalDesdeT || !modalHastaD || !modalHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        const mfLm: Record<string, unknown> = {
-          creadoDesde: combineDateAndTime(ymd(modalDesdeD), hm(modalDesdeT)),
-          creadoHasta: combineDateAndTime(ymd(modalHastaD), hm(modalHastaT)),
-        };
+        const mfLm: Record<string, unknown> = {};
+        applyOptionalCreatedRange(mfLm, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
         if (modalLmEmpleadoSelected.length > 0) {
           mfLm.empleadoIds = modalLmEmpleadoSelected.map((u) => Number(u.id));
         }
@@ -3222,13 +3253,7 @@ export default function ReportesScreen() {
           logout,
         });
       } else if (formModulo === MODULO_MANTENIMIENTO_ARTICULOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
         const mf: Record<string, unknown> = {
-          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
           empresaIds: modalEmpresaSelected.map((x) => x.id),
           clienteIds: modalClienteSelected.map((x) => x.id),
           divisionIds: modalDivisionSelected.map((x) => x.id),
@@ -3236,14 +3261,17 @@ export default function ReportesScreen() {
           corpoIds: modalCorpoSelected.map((x) => x.id),
           puestoIds: modalPuestoSelected.map((x) => x.id),
         };
+        applyOptionalCreatedRange(mf, modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT);
         if (modalMaEstadosSelected.length) mf.estados = [...modalMaEstadosSelected];
         if (modalMaAccionesSelected.length) mf.tiposAccion = [...modalMaAccionesSelected];
-        if (modalMaSolDesdeD && modalMaSolDesdeT) {
-          mf.solucionadoDesde = combineDateAndTime(ymd(modalMaSolDesdeD), hm(modalMaSolDesdeT));
-        }
-        if (modalMaSolHastaD && modalMaSolHastaT) {
-          mf.solucionadoHasta = combineDateAndTime(ymd(modalMaSolHastaD), hm(modalMaSolHastaT));
-        }
+        applyOptionalCreatedRange(
+          mf,
+          modalMaSolDesdeD,
+          modalMaSolDesdeT,
+          modalMaSolHastaD,
+          modalMaSolHastaT,
+          { desde: 'solucionadoDesde', hasta: 'solucionadoHasta' },
+        );
         res = await previewMantenimientoArticulos({
           moduleFilters: mf,
           order_by: formOrder,
@@ -3251,13 +3279,7 @@ export default function ReportesScreen() {
           logout,
         });
       } else if (formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
         const mf: Record<string, unknown> = {
-          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
           empresaIds: modalEmpresaSelected.map((x) => x.id),
           clienteIds: modalClienteSelected.map((x) => x.id),
           divisionIds: modalDivisionSelected.map((x) => x.id),
@@ -3265,6 +3287,7 @@ export default function ReportesScreen() {
           corpoIds: modalCorpoSelected.map((x) => x.id),
           puestoIds: modalPuestoSelected.map((x) => x.id),
         };
+        applyOptionalCreatedRange(mf, modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT);
         if (modalRvcTiposVehiculoSelected.length) mf.tiposVehiculo = [...modalRvcTiposVehiculoSelected];
         if (modalRvcTiposAutoriaSelected.length) mf.tiposAutoria = [...modalRvcTiposAutoriaSelected];
         if (modalRvcPlaca.trim()) mf.placaContains = modalRvcPlaca.trim();
@@ -3277,13 +3300,7 @@ export default function ReportesScreen() {
           logout,
         });
       } else if (formModulo === MODULO_REVISION_VEHICULOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
         const mfRev: Record<string, unknown> = {
-          creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-          creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
           empresaIds: modalEmpresaSelected.map((x) => x.id),
           clienteIds: modalClienteSelected.map((x) => x.id),
           divisionIds: modalDivisionSelected.map((x) => x.id),
@@ -3291,6 +3308,7 @@ export default function ReportesScreen() {
           corpoIds: modalCorpoSelected.map((x) => x.id),
           puestoIds: modalPuestoSelected.map((x) => x.id),
         };
+        applyOptionalCreatedRange(mfRev, modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT);
         if (modalRvdVehiculoSelected.length) mfRev.vehiculoIds = modalRvdVehiculoSelected.map((x) => x.id);
         res = await previewRevisionVehiculos({
           moduleFilters: mfRev,
@@ -3328,49 +3346,83 @@ export default function ReportesScreen() {
         formModulo === MODULO_MAESTRO_QUEJAS ||
         formModulo === MODULO_CHECKLIST_SUPERVISION
       ) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+        if (
+          !isModuloCreacionFechaOpcional(formModulo) &&
+          !actaDateTimeRangeIsComplete(modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT)
+        ) {
           Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
           return;
         }
         const mf: Record<string, unknown> =
           formModulo === MODULO_MUTUOS_ACUERDOS
-            ? {
-                fechaReporteDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-                fechaReporteHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
-                empresaIds: modalEmpresaSelected.map((x) => x.id),
-                clienteIds: modalClienteSelected.map((x) => x.id),
-                divisionIds: modalDivisionSelected.map((x) => x.id),
-                contratoIds: modalContratoSelected.map((x) => x.id),
-                corpoIds: modalCorpoSelected.map((x) => x.id),
-                puestoIds: modalPuestoSelected.map((x) => x.id),
-                empleadoAusenteIds: modalMutAusenteSelected.map((x) => x.id),
-                empleadoReemplazaIds: modalMutReemplazaSelected.map((x) => x.id),
-                ejecutivoCuentaIds: modalMutEjecutivoSelected.map((x) => x.id),
-                ...(modalMutEstado !== 'todos' ? { estado: modalMutEstado } : {}),
-              }
-            : formModulo === MODULO_TIEMPO_ALMUERZO
-              ? {
-                  inicioDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-                  finHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
+            ? (() => {
+                const base: Record<string, unknown> = {
                   empresaIds: modalEmpresaSelected.map((x) => x.id),
                   clienteIds: modalClienteSelected.map((x) => x.id),
                   divisionIds: modalDivisionSelected.map((x) => x.id),
                   contratoIds: modalContratoSelected.map((x) => x.id),
                   corpoIds: modalCorpoSelected.map((x) => x.id),
                   puestoIds: modalPuestoSelected.map((x) => x.id),
-                  empleadoIds: modalTaEmpleadoSelected.map((x) => x.id),
-                  cedulas: [...modalTaCedulasSelected],
-                }
-              : {
-                  creadoDesde: combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT)),
-                  creadoHasta: combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT)),
-                  empresaIds: modalEmpresaSelected.map((x) => x.id),
-                  clienteIds: modalClienteSelected.map((x) => x.id),
-                  divisionIds: modalDivisionSelected.map((x) => x.id),
-                  contratoIds: modalContratoSelected.map((x) => x.id),
-                  corpoIds: modalCorpoSelected.map((x) => x.id),
-                  puestoIds: modalPuestoSelected.map((x) => x.id),
+                  empleadoAusenteIds: modalMutAusenteSelected.map((x) => x.id),
+                  empleadoReemplazaIds: modalMutReemplazaSelected.map((x) => x.id),
+                  ejecutivoCuentaIds: modalMutEjecutivoSelected.map((x) => x.id),
+                  ...(modalMutEstado !== 'todos' ? { estado: modalMutEstado } : {}),
                 };
+                applyOptionalCreatedRange(
+                  base,
+                  modalActaDesdeD,
+                  modalActaDesdeT,
+                  modalActaHastaD,
+                  modalActaHastaT,
+                  { desde: 'fechaReporteDesde', hasta: 'fechaReporteHasta' },
+                );
+                return base;
+              })()
+            : formModulo === MODULO_TIEMPO_ALMUERZO
+              ? (() => {
+                  const base: Record<string, unknown> = {
+                    empresaIds: modalEmpresaSelected.map((x) => x.id),
+                    clienteIds: modalClienteSelected.map((x) => x.id),
+                    divisionIds: modalDivisionSelected.map((x) => x.id),
+                    contratoIds: modalContratoSelected.map((x) => x.id),
+                    corpoIds: modalCorpoSelected.map((x) => x.id),
+                    puestoIds: modalPuestoSelected.map((x) => x.id),
+                    empleadoIds: modalTaEmpleadoSelected.map((x) => x.id),
+                    cedulas: [...modalTaCedulasSelected],
+                  };
+                  applyOptionalCreatedRange(
+                    base,
+                    modalActaDesdeD,
+                    modalActaDesdeT,
+                    modalActaHastaD,
+                    modalActaHastaT,
+                    { desde: 'inicioDesde', hasta: 'finHasta' },
+                  );
+                  return base;
+                })()
+              : (() => {
+                  const base: Record<string, unknown> = {
+                    empresaIds: modalEmpresaSelected.map((x) => x.id),
+                    clienteIds: modalClienteSelected.map((x) => x.id),
+                    divisionIds: modalDivisionSelected.map((x) => x.id),
+                    contratoIds: modalContratoSelected.map((x) => x.id),
+                    corpoIds: modalCorpoSelected.map((x) => x.id),
+                    puestoIds: modalPuestoSelected.map((x) => x.id),
+                  };
+                  if (isModuloCreacionFechaOpcional(formModulo)) {
+                    applyOptionalCreatedRange(
+                      base,
+                      modalActaDesdeD,
+                      modalActaDesdeT,
+                      modalActaHastaD,
+                      modalActaHastaT,
+                    );
+                  } else {
+                    base.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD!), hm(modalActaDesdeT!));
+                    base.creadoHasta = combineDateAndTime(ymd(modalActaHastaD!), hm(modalActaHastaT!));
+                  }
+                  return base;
+                })();
         if (formModulo === MODULO_AGENDA_MINUTA) {
           mf.estadoMinuta = modalAgendaEstado;
         }
@@ -3438,12 +3490,22 @@ export default function ReportesScreen() {
           if (modalRcResponsableSelected.length > 0) mf.responsableIds = modalRcResponsableSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_INCIDENTES) {
-          if (modalIncSolDesdeD && modalIncSolDesdeT) mf.solucionadoDesde = combineDateAndTime(ymd(modalIncSolDesdeD), hm(modalIncSolDesdeT));
-          if (modalIncSolHastaD && modalIncSolHastaT) mf.solucionadoHasta = combineDateAndTime(ymd(modalIncSolHastaD), hm(modalIncSolHastaT));
-          if (modalIncRealDesdeD && modalIncRealDesdeT)
-            mf.solucionadoRealDesde = combineDateAndTime(ymd(modalIncRealDesdeD), hm(modalIncRealDesdeT));
-          if (modalIncRealHastaD && modalIncRealHastaT)
-            mf.solucionadoRealHasta = combineDateAndTime(ymd(modalIncRealHastaD), hm(modalIncRealHastaT));
+          applyOptionalCreatedRange(
+            mf,
+            modalIncSolDesdeD,
+            modalIncSolDesdeT,
+            modalIncSolHastaD,
+            modalIncSolHastaT,
+            { desde: 'solucionadoDesde', hasta: 'solucionadoHasta' },
+          );
+          applyOptionalCreatedRange(
+            mf,
+            modalIncRealDesdeD,
+            modalIncRealDesdeT,
+            modalIncRealHastaD,
+            modalIncRealHastaT,
+            { desde: 'solucionadoRealDesde', hasta: 'solucionadoRealHasta' },
+          );
           if (modalIncClasificacion !== 'todos') mf.clasificacionId = Number(modalIncClasificacion);
           if (modalIncEstado === 'solucionado') mf.estado = true;
           if (modalIncEstado === 'no_solucionado') mf.estado = false;
@@ -3467,10 +3529,7 @@ export default function ReportesScreen() {
           if (modalMqNivelQueja !== 'todos') mf.nivelQueja = modalMqNivelQueja;
         }
         if (formModulo === MODULO_INCIDENTES || formModulo === MODULO_CHECKLIST_SUPERVISION) {
-          mf.fechaReporteDesde = mf.creadoDesde;
-          mf.fechaReporteHasta = mf.creadoHasta;
-          delete mf.creadoDesde;
-          delete mf.creadoHasta;
+          moveCreadoRangeToFechaReporte(mf);
           mf.ejecutivoCuentaIds = modalEjecutivoSelected.map((x) => x.id);
         }
         const epTrim = (s: string) => s.trim();
@@ -3708,23 +3767,13 @@ export default function ReportesScreen() {
       }
       const moduleFilters: Record<string, unknown> = {};
       if (formModulo === MODULO_INGRESOS) {
-        if (!modalDesdeD || !modalDesdeT || !modalHastaD || !modalHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalDesdeD), hm(modalDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalHastaD), hm(modalHastaT));
+        applyOptionalCreatedRange(moduleFilters, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
         moduleFilters.soloMultiDispositivo = modalMultiDevice;
         if (modalUsuariosSelected.length > 0) {
           moduleFilters.empleadoIngresoIds = modalUsuariosSelected.map((u) => Number(u.id));
         }
       } else if (formModulo === MODULO_LOGIN_MARCA) {
-        if (!modalDesdeD || !modalDesdeT || !modalHastaD || !modalHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalDesdeD), hm(modalDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalHastaD), hm(modalHastaT));
+        applyOptionalCreatedRange(moduleFilters, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
         if (modalLmEmpleadoSelected.length > 0) {
           moduleFilters.empleadoIds = modalLmEmpleadoSelected.map((u) => Number(u.id));
         }
@@ -3745,12 +3794,13 @@ export default function ReportesScreen() {
         moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
         moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
       } else if (formModulo === MODULO_MANTENIMIENTO_ARTICULOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        applyOptionalCreatedRange(
+          moduleFilters,
+          modalActaDesdeD,
+          modalActaDesdeT,
+          modalActaHastaD,
+          modalActaHastaT,
+        );
         moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
         moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
         moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
@@ -3759,19 +3809,22 @@ export default function ReportesScreen() {
         moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
         if (modalMaEstadosSelected.length) moduleFilters.estados = [...modalMaEstadosSelected];
         if (modalMaAccionesSelected.length) moduleFilters.tiposAccion = [...modalMaAccionesSelected];
-        if (modalMaSolDesdeD && modalMaSolDesdeT) {
-          moduleFilters.solucionadoDesde = combineDateAndTime(ymd(modalMaSolDesdeD), hm(modalMaSolDesdeT));
-        }
-        if (modalMaSolHastaD && modalMaSolHastaT) {
-          moduleFilters.solucionadoHasta = combineDateAndTime(ymd(modalMaSolHastaD), hm(modalMaSolHastaT));
-        }
+        applyOptionalCreatedRange(
+          moduleFilters,
+          modalMaSolDesdeD,
+          modalMaSolDesdeT,
+          modalMaSolHastaD,
+          modalMaSolHastaT,
+          { desde: 'solucionadoDesde', hasta: 'solucionadoHasta' },
+        );
       } else if (formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        applyOptionalCreatedRange(
+          moduleFilters,
+          modalActaDesdeD,
+          modalActaDesdeT,
+          modalActaHastaD,
+          modalActaHastaT,
+        );
         moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
         moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
         moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
@@ -3784,12 +3837,13 @@ export default function ReportesScreen() {
         if (modalRvcAnno.trim()) moduleFilters.anno = Number(modalRvcAnno.trim());
         if (modalRvcModelo.trim()) moduleFilters.modeloContains = modalRvcModelo.trim();
       } else if (formModulo === MODULO_REVISION_VEHICULOS) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
-          Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-          return;
-        }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        applyOptionalCreatedRange(
+          moduleFilters,
+          modalActaDesdeD,
+          modalActaDesdeT,
+          modalActaHastaD,
+          modalActaHastaT,
+        );
         moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
         moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
         moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
@@ -3827,12 +3881,25 @@ export default function ReportesScreen() {
         formModulo === MODULO_MAESTRO_QUEJAS ||
         formModulo === MODULO_CHECKLIST_SUPERVISION
       ) {
-        if (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT) {
+        if (
+          !isModuloCreacionFechaOpcional(formModulo) &&
+          !actaDateTimeRangeIsComplete(modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT)
+        ) {
           Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
           return;
         }
-        moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD), hm(modalActaDesdeT));
-        moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD), hm(modalActaHastaT));
+        if (isModuloCreacionFechaOpcional(formModulo)) {
+          applyOptionalCreatedRange(
+            moduleFilters,
+            modalActaDesdeD,
+            modalActaDesdeT,
+            modalActaHastaD,
+            modalActaHastaT,
+          );
+        } else {
+          moduleFilters.creadoDesde = combineDateAndTime(ymd(modalActaDesdeD!), hm(modalActaDesdeT!));
+          moduleFilters.creadoHasta = combineDateAndTime(ymd(modalActaHastaD!), hm(modalActaHastaT!));
+        }
         moduleFilters.empresaIds = modalEmpresaSelected.map((x) => x.id);
         moduleFilters.clienteIds = modalClienteSelected.map((x) => x.id);
         moduleFilters.divisionIds = modalDivisionSelected.map((x) => x.id);
@@ -3840,20 +3907,32 @@ export default function ReportesScreen() {
         moduleFilters.corpoIds = modalCorpoSelected.map((x) => x.id);
         moduleFilters.puestoIds = modalPuestoSelected.map((x) => x.id);
         if (formModulo === MODULO_MUTUOS_ACUERDOS) {
-          moduleFilters.fechaReporteDesde = moduleFilters.creadoDesde;
-          moduleFilters.fechaReporteHasta = moduleFilters.creadoHasta;
           delete moduleFilters.creadoDesde;
           delete moduleFilters.creadoHasta;
+          applyOptionalCreatedRange(
+            moduleFilters,
+            modalActaDesdeD,
+            modalActaDesdeT,
+            modalActaHastaD,
+            modalActaHastaT,
+            { desde: 'fechaReporteDesde', hasta: 'fechaReporteHasta' },
+          );
           moduleFilters.empleadoAusenteIds = modalMutAusenteSelected.map((x) => x.id);
           moduleFilters.empleadoReemplazaIds = modalMutReemplazaSelected.map((x) => x.id);
           moduleFilters.ejecutivoCuentaIds = modalMutEjecutivoSelected.map((x) => x.id);
           if (modalMutEstado !== 'todos') moduleFilters.estado = modalMutEstado;
         }
         if (formModulo === MODULO_TIEMPO_ALMUERZO) {
-          moduleFilters.inicioDesde = moduleFilters.creadoDesde;
-          moduleFilters.finHasta = moduleFilters.creadoHasta;
           delete moduleFilters.creadoDesde;
           delete moduleFilters.creadoHasta;
+          applyOptionalCreatedRange(
+            moduleFilters,
+            modalActaDesdeD,
+            modalActaDesdeT,
+            modalActaHastaD,
+            modalActaHastaT,
+            { desde: 'inicioDesde', hasta: 'finHasta' },
+          );
           if (modalTaEmpleadoSelected.length > 0) moduleFilters.empleadoIds = modalTaEmpleadoSelected.map((e) => Number(e.id));
           if (modalTaCedulasSelected.length > 0) moduleFilters.cedulas = [...modalTaCedulasSelected];
         }
@@ -3922,14 +4001,22 @@ export default function ReportesScreen() {
           if (modalRcResponsableSelected.length > 0) moduleFilters.responsableIds = modalRcResponsableSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_INCIDENTES) {
-          if (modalIncSolDesdeD && modalIncSolDesdeT)
-            moduleFilters.solucionadoDesde = combineDateAndTime(ymd(modalIncSolDesdeD), hm(modalIncSolDesdeT));
-          if (modalIncSolHastaD && modalIncSolHastaT)
-            moduleFilters.solucionadoHasta = combineDateAndTime(ymd(modalIncSolHastaD), hm(modalIncSolHastaT));
-          if (modalIncRealDesdeD && modalIncRealDesdeT)
-            moduleFilters.solucionadoRealDesde = combineDateAndTime(ymd(modalIncRealDesdeD), hm(modalIncRealDesdeT));
-          if (modalIncRealHastaD && modalIncRealHastaT)
-            moduleFilters.solucionadoRealHasta = combineDateAndTime(ymd(modalIncRealHastaD), hm(modalIncRealHastaT));
+          applyOptionalCreatedRange(
+            moduleFilters,
+            modalIncSolDesdeD,
+            modalIncSolDesdeT,
+            modalIncSolHastaD,
+            modalIncSolHastaT,
+            { desde: 'solucionadoDesde', hasta: 'solucionadoHasta' },
+          );
+          applyOptionalCreatedRange(
+            moduleFilters,
+            modalIncRealDesdeD,
+            modalIncRealDesdeT,
+            modalIncRealHastaD,
+            modalIncRealHastaT,
+            { desde: 'solucionadoRealDesde', hasta: 'solucionadoRealHasta' },
+          );
           if (modalIncClasificacion !== 'todos') moduleFilters.clasificacionId = Number(modalIncClasificacion);
           if (modalIncEstado === 'solucionado') moduleFilters.estado = true;
           if (modalIncEstado === 'no_solucionado') moduleFilters.estado = false;
@@ -3953,10 +4040,7 @@ export default function ReportesScreen() {
           if (modalMqNivelQueja !== 'todos') moduleFilters.nivelQueja = modalMqNivelQueja;
         }
         if (formModulo === MODULO_INCIDENTES || formModulo === MODULO_CHECKLIST_SUPERVISION) {
-          moduleFilters.fechaReporteDesde = moduleFilters.creadoDesde as string;
-          moduleFilters.fechaReporteHasta = moduleFilters.creadoHasta as string;
-          delete moduleFilters.creadoDesde;
-          delete moduleFilters.creadoHasta;
+          moveCreadoRangeToFechaReporte(moduleFilters);
           moduleFilters.ejecutivoCuentaIds = modalEjecutivoSelected.map((x) => x.id);
         }
         if (formModulo === MODULO_ENTREGA_PUESTO) {
@@ -4022,13 +4106,6 @@ export default function ReportesScreen() {
       return;
     }
     if (
-      (formModulo === MODULO_INGRESOS || formModulo === MODULO_LOGIN_MARCA) &&
-      (!modalDesdeD || !modalDesdeT || !modalHastaD || !modalHastaT)
-    ) {
-      Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
-      return;
-    }
-    if (
       (formModulo === MODULO_ACTA_ENTREGA ||
         formModulo === MODULO_ENTREGA_PUESTO ||
         formModulo === MODULO_AGENDA_MINUTA ||
@@ -4057,7 +4134,8 @@ export default function ReportesScreen() {
         formModulo === MODULO_BITACORA_NOVEDADES ||
         formModulo === MODULO_MAESTRO_QUEJAS ||
         formModulo === MODULO_CHECKLIST_SUPERVISION) &&
-      (!modalActaDesdeD || !modalActaDesdeT || !modalActaHastaD || !modalActaHastaT)
+      !isModuloCreacionFechaOpcional(formModulo) &&
+      !actaDateTimeRangeIsComplete(modalActaDesdeD, modalActaDesdeT, modalActaHastaD, modalActaHastaT)
     ) {
       Alert.alert('Filtros', 'Complete fechas y horas desde/hasta.');
       return;
@@ -4163,7 +4241,21 @@ export default function ReportesScreen() {
             <Ionicons name="download-outline" size={20} color="#fff" />
             <ThemedText style={styles.downloadBtnText}>Descargar archivo</ThemedText>
           </TouchableOpacity>
-        ) : null}
+        ) : item.estado === 'procesando' ? (
+          <ThemedView style={[styles.reportStatusBadge, styles.reportStatusProcesando]}>
+            <ActivityIndicator size="small" color="#B45309" />
+            <ThemedText style={styles.reportStatusProcesandoText}>En proceso</ThemedText>
+          </ThemedView>
+        ) : item.estado === 'error' ? (
+          <ThemedView style={[styles.reportStatusBadge, styles.reportStatusError]}>
+            <Ionicons name="alert-circle-outline" size={20} color="#C62828" />
+            <ThemedText style={styles.reportStatusErrorText}>Error</ThemedText>
+          </ThemedView>
+        ) : (
+          <ThemedView style={[styles.reportStatusBadge, styles.reportStatusPendiente]}>
+            <ThemedText style={styles.reportStatusPendienteText}>{formatEstadoDisplay(item.estado)}</ThemedText>
+          </ThemedView>
+        )}
       </ThemedView>
     );
   };
@@ -4213,7 +4305,7 @@ export default function ReportesScreen() {
                   <ThemedText style={styles.filterLabel}>Módulo</ThemedText>
                   <View style={styles.pickerWrapper}>
                     <Picker selectedValue={modulo} onValueChange={(v) => setModulo(String(v))} style={styles.picker}>
-                      {MODULO_PICKER_OPTIONS.map((opt) => (
+                      {MODULO_LIST_FILTER_OPTIONS.map((opt) => (
                         <Picker.Item key={opt.value} label={opt.label} value={opt.value} color="#000000" />
                       ))}
                     </Picker>
@@ -4282,6 +4374,8 @@ export default function ReportesScreen() {
                       <Picker.Item label="Todos" value="" color="#000000" />
                       <Picker.Item label="Completado" value="completado" color="#000000" />
                       <Picker.Item label="Pendiente" value="pendiente" color="#000000" />
+                      <Picker.Item label="Procesando" value="procesando" color="#000000" />
+                      <Picker.Item label="Error" value="error" color="#000000" />
                     </Picker>
                   </View>
                 </ThemedView>
@@ -4361,11 +4455,16 @@ export default function ReportesScreen() {
                 </ThemedView>
 
                 <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Fecha inicio</ThemedText>
+                  <ThemedText style={styles.filterLabel}>Fecha inicio (opcional)</ThemedText>
                   <TouchableOpacity style={styles.dateButton} onPress={() => setShowFi(true)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{fechaInicio ? formatDateOnlyLabel(fechaInicio) : 'Seleccionar fecha'}</ThemedText>
+                    <ThemedText style={styles.dateButtonText}>{fechaInicio ? formatDateOnlyLabel(fechaInicio) : 'Sin límite inferior'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
+                  {fechaInicio ? (
+                    <TouchableOpacity style={styles.clearDateLink} onPress={() => setFechaInicio(null)} activeOpacity={0.85}>
+                      <ThemedText style={styles.clearDateLinkText}>Quitar fecha inicio</ThemedText>
+                    </TouchableOpacity>
+                  ) : null}
                   {showFi ? (
                     <DateTimePicker
                       value={fechaInicio || horaAccionPickerBase}
@@ -4380,11 +4479,16 @@ export default function ReportesScreen() {
                 </ThemedView>
 
                 <ThemedView style={styles.filterGroup}>
-                  <ThemedText style={styles.filterLabel}>Fecha fin</ThemedText>
+                  <ThemedText style={styles.filterLabel}>Fecha fin (opcional)</ThemedText>
                   <TouchableOpacity style={styles.dateButton} onPress={() => setShowFf(true)} activeOpacity={0.85}>
-                    <ThemedText style={styles.dateButtonText}>{fechaFin ? formatDateOnlyLabel(fechaFin) : 'Seleccionar fecha'}</ThemedText>
+                    <ThemedText style={styles.dateButtonText}>{fechaFin ? formatDateOnlyLabel(fechaFin) : 'Sin límite superior'}</ThemedText>
                     <Ionicons name="calendar-outline" size={18} color="#007AFF" />
                   </TouchableOpacity>
+                  {fechaFin ? (
+                    <TouchableOpacity style={styles.clearDateLink} onPress={() => setFechaFin(null)} activeOpacity={0.85}>
+                      <ThemedText style={styles.clearDateLinkText}>Quitar fecha fin</ThemedText>
+                    </TouchableOpacity>
+                  ) : null}
                   {showFf ? (
                     <DateTimePicker
                       value={fechaFin || horaAccionPickerBase}
@@ -7310,21 +7414,6 @@ export default function ReportesScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalBody} contentContainerStyle={styles.modalBodyContent} keyboardShouldPersistTaps="handled">
-              <ThemedText style={styles.label}>Nombre del reporte</ThemedText>
-              <TextInput style={styles.input} value={formNombre} onChangeText={setFormNombre} placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Número del reporte</ThemedText>
-              <TextInput style={styles.input} value={formNumero} onChangeText={setFormNumero} placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Nomenclatura del reporte</ThemedText>
-              <TextInput style={styles.input} value={formNomenclatura} onChangeText={setFormNomenclatura} placeholderTextColor="#999" />
-              <ThemedText style={styles.label}>Descripción del reporte</ThemedText>
-              <TextInput
-                style={[styles.input, styles.textArea]}
-                multiline
-                value={formDescripcion}
-                onChangeText={setFormDescripcion}
-                placeholderTextColor="#999"
-              />
-
               <ThemedText style={styles.label}>Módulo</ThemedText>
               <View style={styles.pickerWrapper}>
                 <Picker selectedValue={formModulo} onValueChange={(v) => setFormModulo(String(v))} style={styles.picker}>
@@ -7334,10 +7423,41 @@ export default function ReportesScreen() {
                 </Picker>
               </View>
 
+              <ThemedView style={[styles.filtersContainer, { marginTop: 12, marginBottom: 14 }]}>
+                <ThemedView style={styles.filtersHeader}>
+                  <TouchableOpacity
+                    style={styles.filterToggleButton}
+                    onPress={() => setIsModalReportMetaOpen((p) => !p)}
+                    activeOpacity={0.85}
+                  >
+                    <ThemedText style={styles.filtersTitle}>Datos del reporte</ThemedText>
+                    <Ionicons name={isModalReportMetaOpen ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
+                  </TouchableOpacity>
+                </ThemedView>
+                {isModalReportMetaOpen ? (
+                  <ThemedView style={styles.filtersContent}>
+                    <ThemedText style={styles.label}>Nombre del reporte</ThemedText>
+                    <TextInput style={styles.input} value={formNombre} onChangeText={setFormNombre} placeholderTextColor="#999" />
+                    <ThemedText style={styles.label}>Número del reporte</ThemedText>
+                    <TextInput style={styles.input} value={formNumero} onChangeText={setFormNumero} placeholderTextColor="#999" />
+                    <ThemedText style={styles.label}>Nomenclatura del reporte</ThemedText>
+                    <TextInput style={styles.input} value={formNomenclatura} onChangeText={setFormNomenclatura} placeholderTextColor="#999" />
+                    <ThemedText style={styles.label}>Descripción del reporte</ThemedText>
+                    <TextInput
+                      style={[styles.input, styles.textArea]}
+                      multiline
+                      value={formDescripcion}
+                      onChangeText={setFormDescripcion}
+                      placeholderTextColor="#999"
+                    />
+                  </ThemedView>
+                ) : null}
+              </ThemedView>
+
               {formModulo === MODULO_INGRESOS ? (
                 <ThemedView style={styles.modalFormCard}>
                   <ThemedText style={styles.modalSectionTitle}>Filtros del módulo</ThemedText>
-                  <ThemedText style={styles.label}>Creado desde</ThemedText>
+                  <ThemedText style={styles.label}>Creado desde (opcional)</ThemedText>
                   <View style={styles.dateRow}>
                     <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalDd(true)} activeOpacity={0.85}>
                       <ThemedText style={styles.dateButtonText}>{modalDesdeD ? formatDateOnlyLabel(modalDesdeD) : 'Fecha'}</ThemedText>
@@ -7348,7 +7468,7 @@ export default function ReportesScreen() {
                       <Ionicons name="time-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
                   </View>
-                  <ThemedText style={styles.label}>Creado hasta</ThemedText>
+                  <ThemedText style={styles.label}>Creado hasta (opcional)</ThemedText>
                   <View style={styles.dateRow}>
                     <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalHd(true)} activeOpacity={0.85}>
                       <ThemedText style={styles.dateButtonText}>{modalHastaD ? formatDateOnlyLabel(modalHastaD) : 'Fecha'}</ThemedText>
@@ -7454,7 +7574,7 @@ export default function ReportesScreen() {
                     </Picker>
                   </View>
 
-                  <TouchableOpacity style={[styles.attachButton, {marginTop: 16}]} onPress={() => void runPreview()} activeOpacity={0.85}>
+                  <TouchableOpacity style={[styles.attachButton, styles.buttonPreview]} onPress={() => void runPreview()} activeOpacity={0.85}>
                     {previewLoading ? (
                       <ActivityIndicator color="#007AFF" />
                     ) : (
@@ -7473,9 +7593,13 @@ export default function ReportesScreen() {
                   </TouchableOpacity>
                   {previewOpen && previewRows != null ? (
                     <ThemedView style={styles.collapseContent}>
-                      <ThemedText selectable style={styles.previewJson}>
-                        {JSON.stringify(previewRows, null, 2)}
-                      </ThemedText>
+                      {previewRows.map((row, idx) => (
+                        <React.Fragment key={reportesPreviewRowKey(formModulo, row, idx)}>
+                          {renderReportesPreviewRow(formModulo, row, idx, {
+                            tipoReporte: resolveTipoReporteForCreate(formModulo, formTipoReporte),
+                          })}
+                        </React.Fragment>
+                      ))}
                     </ThemedView>
                   ) : null}
                 </ThemedView>
@@ -7484,7 +7608,7 @@ export default function ReportesScreen() {
               {formModulo === MODULO_LOGIN_MARCA ? (
                 <ThemedView style={styles.modalFormCard}>
                   <ThemedText style={styles.modalSectionTitle}>Filtros del módulo</ThemedText>
-                  <ThemedText style={styles.label}>Creado desde</ThemedText>
+                  <ThemedText style={styles.label}>Creado desde (opcional)</ThemedText>
                   <View style={styles.dateRow}>
                     <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalDd(true)} activeOpacity={0.85}>
                       <ThemedText style={styles.dateButtonText}>{modalDesdeD ? formatDateOnlyLabel(modalDesdeD) : 'Fecha'}</ThemedText>
@@ -7495,7 +7619,7 @@ export default function ReportesScreen() {
                       <Ionicons name="time-outline" size={18} color="#007AFF" />
                     </TouchableOpacity>
                   </View>
-                  <ThemedText style={styles.label}>Creado hasta</ThemedText>
+                  <ThemedText style={styles.label}>Creado hasta (opcional)</ThemedText>
                   <View style={styles.dateRow}>
                     <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalHd(true)} activeOpacity={0.85}>
                       <ThemedText style={styles.dateButtonText}>{modalHastaD ? formatDateOnlyLabel(modalHastaD) : 'Fecha'}</ThemedText>
@@ -7596,7 +7720,7 @@ export default function ReportesScreen() {
                     </Picker>
                   </View>
 
-                  <TouchableOpacity style={[styles.attachButton, { marginTop: 16 }]} onPress={() => void runPreview()} activeOpacity={0.85}>
+                  <TouchableOpacity style={[styles.attachButton, styles.buttonPreview]} onPress={() => void runPreview()} activeOpacity={0.85}>
                     {previewLoading ? (
                       <ActivityIndicator color="#007AFF" />
                     ) : (
@@ -7615,9 +7739,13 @@ export default function ReportesScreen() {
                   </TouchableOpacity>
                   {previewOpen && previewRows != null ? (
                     <ThemedView style={styles.collapseContent}>
-                      <ThemedText selectable style={styles.previewJson}>
-                        {JSON.stringify(previewRows, null, 2)}
-                      </ThemedText>
+                      {previewRows.map((row, idx) => (
+                        <React.Fragment key={reportesPreviewRowKey(formModulo, row, idx)}>
+                          {renderReportesPreviewRow(formModulo, row, idx, {
+                            tipoReporte: resolveTipoReporteForCreate(formModulo, formTipoReporte),
+                          })}
+                        </React.Fragment>
+                      ))}
                     </ThemedView>
                   ) : null}
                 </ThemedView>
@@ -7771,7 +7899,7 @@ export default function ReportesScreen() {
                     </Picker>
                   </View>
 
-                  <TouchableOpacity style={[styles.attachButton, { marginTop: 16 }]} onPress={() => void runPreview()} activeOpacity={0.85}>
+                  <TouchableOpacity style={[styles.attachButton, styles.buttonPreview]} onPress={() => void runPreview()} activeOpacity={0.85}>
                     {previewLoading ? (
                       <ActivityIndicator color="#007AFF" />
                     ) : (
@@ -7791,20 +7919,11 @@ export default function ReportesScreen() {
                   {previewOpen && previewRows != null ? (
                     <ThemedView style={styles.collapseContent}>
                       {previewRows.map((row, idx) => (
-                        <ThemedView key={`prev-acc-${idx}`} style={{ marginBottom: 12 }}>
-                          <ThemedText style={styles.detailText}>
-                            {row.empleado_txt ?? '—'} | {row.tipo_accion_txt ?? '—'}
-                          </ThemedText>
-                          <ThemedText style={styles.helperText}>
-                            {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                          </ThemedText>
-                          <ThemedText style={styles.helperText}>
-                            {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · {row.puesto_txt ?? '—'} · {row.plaza_txt ?? '—'}
-                          </ThemedText>
-                          <ThemedText style={styles.helperText}>
-                            Inicio {row.fecha_inicio_txt ?? '—'} · Fin {row.fecha_fin_txt ?? '—'}
-                          </ThemedText>
-                        </ThemedView>
+                        <React.Fragment key={reportesPreviewRowKey(formModulo, row, idx)}>
+                          {renderReportesPreviewRow(formModulo, row, idx, {
+                            tipoReporte: resolveTipoReporteForCreate(formModulo, formTipoReporte),
+                          })}
+                        </React.Fragment>
                       ))}
                     </ThemedView>
                   ) : null}
@@ -7912,7 +8031,11 @@ export default function ReportesScreen() {
                   {formModulo !== MODULO_ARTICULOS_PUESTO ? (
                     <>
                       <ThemedText style={styles.label}>
-                        {formModulo === MODULO_TIEMPO_ALMUERZO ? 'Inicio desde' : 'Creado desde'}
+                        {formModulo === MODULO_TIEMPO_ALMUERZO
+                          ? 'Inicio desde (opcional)'
+                          : isModuloCreacionFechaOpcional(formModulo)
+                            ? 'Creado desde (opcional)'
+                            : 'Creado desde'}
                       </ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDd(true)} activeOpacity={0.85}>
@@ -7925,7 +8048,11 @@ export default function ReportesScreen() {
                         </TouchableOpacity>
                       </View>
                       <ThemedText style={styles.label}>
-                        {formModulo === MODULO_TIEMPO_ALMUERZO ? 'Fin hasta' : 'Creado hasta'}
+                        {formModulo === MODULO_TIEMPO_ALMUERZO
+                          ? 'Fin hasta (opcional)'
+                          : isModuloCreacionFechaOpcional(formModulo)
+                            ? 'Creado hasta (opcional)'
+                            : 'Creado hasta'}
                       </ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHd(true)} activeOpacity={0.85}>
@@ -8085,7 +8212,7 @@ export default function ReportesScreen() {
                           ))
                         )}
                       </ThemedView>
-                      <ThemedText style={styles.label}>Solucionado desde (fecha y hora)</ThemedText>
+                      <ThemedText style={styles.label}>Solucionado desde (opcional)</ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolDd(true)} activeOpacity={0.85}>
                           <ThemedText style={styles.dateButtonText}>{modalMaSolDesdeD ? formatDateOnlyLabel(modalMaSolDesdeD) : 'Fecha'}</ThemedText>
@@ -8096,7 +8223,7 @@ export default function ReportesScreen() {
                           <Ionicons name="time-outline" size={18} color="#007AFF" />
                         </TouchableOpacity>
                       </View>
-                      <ThemedText style={styles.label}>Solucionado hasta (fecha y hora)</ThemedText>
+                      <ThemedText style={styles.label}>Solucionado hasta (opcional)</ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalMaSolHd(true)} activeOpacity={0.85}>
                           <ThemedText style={styles.dateButtonText}>{modalMaSolHastaD ? formatDateOnlyLabel(modalMaSolHastaD) : 'Fecha'}</ThemedText>
@@ -10198,7 +10325,7 @@ export default function ReportesScreen() {
                     </Picker>
                   </View>
 
-                  <TouchableOpacity style={[styles.attachButton, { marginBottom: 16 }]} onPress={() => void runPreview()} activeOpacity={0.85}>
+                  <TouchableOpacity style={[styles.attachButton, styles.buttonPreview]} onPress={() => void runPreview()} activeOpacity={0.85}>
                     {previewLoading ? (
                       <ActivityIndicator color="#007AFF" />
                     ) : (
@@ -10217,780 +10344,13 @@ export default function ReportesScreen() {
                   </TouchableOpacity>
                   {previewOpen && previewRows != null ? (
                     <ThemedView style={styles.collapseContent}>
-                      {formModulo === MODULO_AGENDA_MINUTA
-                        ? previewRows.map((row, idx) => (
-                            <ThemedView key={`prev-agenda-${idx}`} style={{ marginBottom: 12 }}>
-                              <ThemedText style={styles.detailText}>
-                                {row.empresa_nombre} | {row.cliente_nombre} | {row.fecha_txt ?? row.fecha}
-                              </ThemedText>
-                              <ThemedText style={styles.helperText}>Firma responsable</ThemedText>
-                              {signatureUri(row.firma_responsable_data_uri || row.firma_responsable) ? (
-                                <Image
-                                  source={{
-                                    uri: signatureUri(row.firma_responsable_data_uri || row.firma_responsable) as string,
-                                  }}
-                                  style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                  resizeMode="contain"
-                                />
-                              ) : null}
-                              {(row.participantes_preview || []).map((p: any, j: number) => (
-                                <ThemedView key={`prev-agenda-p-${idx}-${j}`} style={{ marginTop: 8 }}>
-                                  <ThemedText style={styles.detailText}>
-                                    {p.nombre ?? ''} — {p.puesto ?? ''}
-                                  </ThemedText>
-                                  {signatureUri(p.firma_data_uri || p.firma) ? (
-                                    <Image
-                                      source={{ uri: signatureUri(p.firma_data_uri || p.firma) as string }}
-                                      style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                      resizeMode="contain"
-                                    />
-                                  ) : null}
-                                </ThemedView>
-                              ))}
-                            </ThemedView>
-                          ))
-                        : formModulo === MODULO_ACTIVIDADES
-                          ? previewRows.map((row, idx) => (
-                              <ThemedView key={`prev-activ-${idx}`} style={{ marginBottom: 12 }}>
-                                <ThemedText style={styles.detailText}>
-                                  {row.nombre_actividad ?? ''} | {row.fecha_txt ?? ''}
-                                </ThemedText>
-                                {row.frecuencia_titulo ? (
-                                  <ThemedText style={styles.helperText}>Frecuencia: {String(row.frecuencia_titulo)}</ThemedText>
-                                ) : null}
-                                {row.frecuencia_horario ? (
-                                  <ThemedText style={styles.helperText}>Horario (informativo): {String(row.frecuencia_horario)}</ThemedText>
-                                ) : null}
-                                <ThemedText style={styles.helperText}>Descripción</ThemedText>
-                                <ThemedText selectable style={styles.detailText}>
-                                  {row.descripcion_actividad != null && String(row.descripcion_actividad).trim() !== ''
-                                    ? String(row.descripcion_actividad)
-                                    : '—'}
-                                </ThemedText>
-                              </ThemedView>
-                            ))
-                          : formModulo === MODULO_CONTROL_ASISTENCIA
-                            ? previewRows.map((row, idx) => (
-                                <ThemedView key={`prev-asis-${idx}`} style={{ marginBottom: 12 }}>
-                                  <ThemedText style={styles.detailText}>
-                                    {row.empresa_nombre} | {row.cliente_nombre} | {row.fecha_txt ?? row.fecha}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>Turno: {row.turno_label ?? row.turno ?? '—'}</ThemedText>
-                                  <ThemedText style={styles.helperText}>Supervisor: {row.nombre_supervisor ?? '—'}</ThemedText>
-                                  {signatureUri(row.firma_manual_supervisor_data_uri || row.firma_manual_supervisor) ? (
-                                    <Image
-                                      source={{
-                                        uri: signatureUri(row.firma_manual_supervisor_data_uri || row.firma_manual_supervisor) as string,
-                                      }}
-                                      style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                      resizeMode="contain"
-                                    />
-                                  ) : null}
-                                </ThemedView>
-                              ))
-                            : formModulo === MODULO_DOCUMENTOS_ENTREGADOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-doc-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre} | {row.cliente_nombre} | {row.fecha_txt ?? row.fecha}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Tipo: {row.tipo_documento ?? '—'}</ThemedText>
-                                    <ThemedText style={styles.helperText}>Entrega: {row.nombre_oficial_entrega ?? '—'}</ThemedText>
-                                    <ThemedText style={styles.helperText}>Recibe: {row.nombre_oficial_recibe ?? '—'}</ThemedText>
-                                    {signatureUri(row.firma_representante_cliente_data_uri || row.firma_representante_cliente) ? (
-                                      <Image
-                                        source={{ uri: signatureUri(row.firma_representante_cliente_data_uri || row.firma_representante_cliente) as string }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_ENCUESTA_SATISFACCION
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-enc-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? row.fecha ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Responsable: {row.responsable_nombre ?? '—'}</ThemedText>
-                                    {row.evaluaciones_resumen != null && String(row.evaluaciones_resumen).trim() !== '' ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={6}>
-                                        {String(row.evaluaciones_resumen)}
-                                      </ThemedText>
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Firma evaluado</ThemedText>
-                                    {signatureUri(row.firma_evaluado_data_uri || row.firma_evaluado) ? (
-                                      <Image
-                                        source={{ uri: signatureUri(row.firma_evaluado_data_uri || row.firma_evaluado) as string }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_REGISTRO_VISITAS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-rv-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.nombre ?? '—'} · {row.cedula ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_nombre ?? '—'} · {row.e_estructura_cliente?.nombre ?? '—'} · {row.division_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_nombre ?? '—'} · {row.e_estructura_sucursal?.nombre ?? '—'} · {row.e_estructura_puesto?.nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Responsable: {row.responsable_label ?? '—'} · Activos:{' '}
-                                      {Array.isArray(row.e_activo_visitante) ? row.e_activo_visitante.length : 0}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_VISITAS_VEHICULOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-vv-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.placa ?? '—'} · {row.tipo ?? '—'} · {row.nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_nombre ?? '—'} · {row.e_estructura_cliente?.nombre ?? '—'} · {row.division_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_nombre ?? '—'} · {row.e_estructura_sucursal?.nombre ?? '—'} ·{' '}
-                                      {row.e_estructura_puesto?.nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Entrada: {row.hora_entrada ?? '—'} · Salida: {row.hora_salida ?? '—'} · Responsable:{' '}
-                                      {row.responsable_label ?? '—'}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_EVALUACION_PERSONAL
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-evp-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Tipo: {row.tipo ?? '—'} · Evaluado: {row.empleado_evaluado_txt ?? '—'} · Evaluador:{' '}
-                                      {row.evaluador_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Firma evaluador</ThemedText>
-                                    {signatureUri(row.firma_evaluador_data_uri || row.firma_evaluador) ? (
-                                      <Image
-                                        source={{ uri: signatureUri(row.firma_evaluador_data_uri || row.firma_evaluador) as string }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Firma empleado</ThemedText>
-                                    {signatureUri(row.firma_empleado_data_uri || row.firma_empleado) ? (
-                                      <Image
-                                        source={{ uri: signatureUri(row.firma_empleado_data_uri || row.firma_empleado) as string }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_ARTICULOS_PUESTO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-ap-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>{row.puesto_txt ?? '—'}</ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · Artículos: {row.articulos_count ?? 0}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_MANTENIMIENTO_ARTICULOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-ma-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      #{row.id ?? '—'} · {row.articulo_nombre ?? '—'} · {row.estado ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.puesto_txt ?? '—'} · {row.origen ?? '—'} · Acción: {row.accion ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Creado: {row.created_at_txt ?? '—'} · Solucionado: {row.fecha_solucion_txt ?? '—'}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-rvc-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.placa || 'Sin placa'} · {row.tipo ?? '—'} · {row.tipo_autoria ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.marca ?? '—'} · {row.modelo ?? '—'} · Año: {row.anno ?? '—'} · {row.estado ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · {row.puesto_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Creado: {row.created_at_txt ?? '—'} · Usos: {row.usos_count ?? 0} · Mantenimientos:{' '}
-                                      {row.mantenimientos_count ?? 0}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_REVISION_VEHICULOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-rev-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      #{row.id ?? '—'} · {row.tipo ?? '—'} · {row.vehiculo_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · {row.puesto_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Creado: {row.created_at_txt ?? '—'} · Info. general: {row.info_general_count ?? 0} · Revisión:{' '}
-                                      {row.info_revision_count ?? 0} · Movimientos: {row.movimientos_count ?? 0}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_MANUALES_PUESTO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-mp-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {String(row.title ?? '—')} · {row.created_at_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empresa_txt ?? '—'} · {row.cliente_txt ?? '—'} · {row.division_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.contrato_txt ?? '—'} · {row.corpo_txt ?? '—'} · Puesto: {row.puesto_principal_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText selectable style={styles.helperText} numberOfLines={4}>
-                                      {String(row.description ?? '').slice(0, 400)}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_PRODUCTO_NO_CONFORME
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-pnc-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Tipo: {row.tipo_servicio_no_conforme ?? '—'} · Identificación: {row.fecha_identificacion_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Identificó: {row.persona_identifico_pnc ?? '—'} · Originó: {row.persona_origino_pnc ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText selectable style={styles.helperText} numberOfLines={4}>
-                                      {String(row.descripcion ?? '').slice(0, 400)}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Firma persona que identificó PNC</ThemedText>
-                                    {signatureUri(row.firma_persona_identifico_pnc_data_uri || row.firma_persona_identifico_pnc) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(row.firma_persona_identifico_pnc_data_uri || row.firma_persona_identifico_pnc) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Firma persona que originó PNC</ThemedText>
-                                    {signatureUri(row.firma_persona_origino_pnc_data_uri || row.firma_persona_origino_pnc) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(row.firma_persona_origino_pnc_data_uri || row.firma_persona_origino_pnc) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_NOTAS_VOZ
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-nv-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Título: {row.titulo ?? '—'}</ThemedText>
-                                    {row.descripcion != null && String(row.descripcion).trim() !== '' ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
-                                        {String(row.descripcion)}
-                                      </ThemedText>
-                                    ) : null}
-                                    {row.transcripcion != null && String(row.transcripcion).trim() !== '' ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={4}>
-                                        Transcripción: {String(row.transcripcion)}
-                                      </ThemedText>
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Creado por: {row.creador_nombre ?? '—'}</ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_CAMBIOS_UBICACION_PUESTO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-cup-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Lat: {row.latitud_anterior_txt || '—'} / {row.longitud_anterior_txt || '—'} →{' '}
-                                      {row.latitud_nueva_txt || '—'} / {row.longitud_nueva_txt || '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Responsable: {row.responsable_nombre ?? '—'}</ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_REGISTRO_CAPACITACIONES
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-rc-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Tipo: {row.tipo ?? '—'} · Título: {row.titulo ?? '—'}
-                                    </ThemedText>
-                                    {row.empleados_cap_txt ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
-                                        Empleados: {String(row.empleados_cap_txt)}
-                                      </ThemedText>
-                                    ) : null}
-                                    {row.puestos_cap_txt ? (
-                                      <ThemedText selectable style={styles.helperText} numberOfLines={3}>
-                                        Puestos: {String(row.puestos_cap_txt)}
-                                      </ThemedText>
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Responsable: {row.responsable_nombre ?? '—'}</ThemedText>
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_TIEMPO_ALMUERZO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-ta-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.empleado_nombre ?? '—'} · Cédula: {row.cedula_empleado ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Inicio: {row.inicio_txt ?? '—'} · Fin: {row.fin_txt ?? '—'} · Minutos:{' '}
-                                      {row.minutos_almuerzo ?? '—'} · Manual: {row.es_manual ? 'Sí' : 'No'}
-                                    </ThemedText>
-                                    {(row.pausas_list || []).length > 0 ? (
-                                      <ThemedText style={styles.helperText}>
-                                        Pausas: {(row.pausas_list as any[]).length}
-                                      </ThemedText>
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_SOLICITUDES_PERMISO
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-sp-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Empleado: {row.empleado_nombre ?? '—'} ({row.empleado_codigo ?? '—'}) · Ejecutivo:{' '}
-                                      {row.ejecutivo_cuenta_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.fecha_inicio_txt ?? '—'} — {row.fecha_fin_txt ?? '—'} · Días: {row.dias_permiso ?? '—'} ·
-                                      Salario: {row.tipo ?? '—'} · Estado: {row.estado ?? '—'}
-                                    </ThemedText>
-                                    {row.motivo_txt || row.motivo ? (
-                                      <ThemedText style={styles.helperText}>Motivo: {row.motivo_txt ?? row.motivo}</ThemedText>
-                                    ) : null}
-                                    {row.observaciones_txt || row.observaciones ? (
-                                      <ThemedText style={styles.helperText}>
-                                        Observaciones: {row.observaciones_txt ?? row.observaciones}
-                                      </ThemedText>
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Firma empleado (manual)</ThemedText>
-                                    {signatureUri(row.firma_empleado_manual_data_uri || row.firma_empleado_manual) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(
-                                            row.firma_empleado_manual_data_uri || row.firma_empleado_manual,
-                                          ) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                    <ThemedText style={styles.helperText}>Firma ejecutivo (manual)</ThemedText>
-                                    {signatureUri(row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(
-                                            row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual,
-                                          ) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD', marginTop: 4 }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_REGISTRO_INDUCCION_RECORRIDO
-                              ? previewRows.map((row, idx) => {
-                                  let participantes: any[] = [];
-                                  try {
-                                    const p = JSON.parse(String(row.participantes ?? '[]'));
-                                    if (Array.isArray(p)) participantes = p;
-                                  } catch {
-                                    participantes = [];
-                                  }
-                                  return (
-                                    <ThemedView key={`prev-ir-${idx}`} style={{ marginBottom: 12 }}>
-                                      <ThemedText style={styles.detailText}>
-                                        {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                        {row.puesto_nombre ?? '—'}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        Responsable: {row.created_by_nombre ?? '—'} · Empleado: {row.empleado_txt ?? '—'}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>Firma supervisor</ThemedText>
-                                      {signatureUri(row.firma_supervisor_data_uri || row.firma_supervisor) ? (
-                                        <Image
-                                          source={{
-                                            uri: signatureUri(row.firma_supervisor_data_uri || row.firma_supervisor) as string,
-                                          }}
-                                          style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                          resizeMode="contain"
-                                        />
-                                      ) : null}
-                                      <ThemedText style={styles.helperText}>Firma empleado</ThemedText>
-                                      {signatureUri(row.firma_empleado_data_uri || row.firma_empleado) ? (
-                                        <Image
-                                          source={{ uri: signatureUri(row.firma_empleado_data_uri || row.firma_empleado) as string }}
-                                          style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                          resizeMode="contain"
-                                        />
-                                      ) : null}
-                                      {participantes.map((p, j) => (
-                                        <ThemedView key={`prev-ir-p-${idx}-${j}`} style={{ marginTop: 8 }}>
-                                          <ThemedText style={styles.detailText}>
-                                            Participante: {String(p?.nombre_completo ?? '—')} — {String(p?.cedula ?? '')}
-                                          </ThemedText>
-                                          {signatureUri(p?.firma) ? (
-                                            <Image
-                                              source={{ uri: signatureUri(p.firma) as string }}
-                                              style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                              resizeMode="contain"
-                                            />
-                                          ) : null}
-                                        </ThemedView>
-                                      ))}
-                                    </ThemedView>
-                                  );
-                                })
-                            : formModulo === MODULO_REGISTRO_INDUCCION_GENERAL
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-rig-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Creador: {row.empleado_creador_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Firma responsable</ThemedText>
-                                    {signatureUri(row.firma_responsable_data_uri || row.firma_responsable) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(row.firma_responsable_data_uri || row.firma_responsable) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                    {(row.colaboradores_preview || []).map((p: any, j: number) => (
-                                      <ThemedView key={`prev-rig-col-${idx}-${j}`} style={{ marginTop: 8 }}>
-                                        <ThemedText style={styles.detailText}>
-                                          Colaborador: {String(p?.nombre ?? '—')} — {String(p?.cedula ?? '')}
-                                        </ThemedText>
-                                        {signatureUri(p?.firma_data_uri || p?.firma) ? (
-                                          <Image
-                                            source={{ uri: signatureUri(p.firma_data_uri || p.firma) as string }}
-                                            style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                            resizeMode="contain"
-                                          />
-                                        ) : null}
-                                      </ThemedView>
-                                    ))}
-                                    {(row.capacitadores_preview || []).map((p: any, j: number) => (
-                                      <ThemedView key={`prev-rig-cap-${idx}-${j}`} style={{ marginTop: 8 }}>
-                                        <ThemedText style={styles.detailText}>
-                                          Capacitador: {String(p?.nombre ?? '—')} — {String(p?.cedula ?? '')}
-                                        </ThemedText>
-                                        {signatureUri(p?.firma_data_uri || p?.firma) ? (
-                                          <Image
-                                            source={{ uri: signatureUri(p.firma_data_uri || p.firma) as string }}
-                                            style={{ width: 140, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                            resizeMode="contain"
-                                          />
-                                        ) : null}
-                                      </ThemedView>
-                                    ))}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_MUTUOS_ACUERDOS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-mut-${idx}`} style={{ marginBottom: 12 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.created_at_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                      {row.puesto_nombre ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Ejecutivo: {row.ejecutivo_nombre ?? '—'} · Ausente: {row.empleado_ausente_txt ?? '—'} · Reemplaza:{' '}
-                                      {row.empleado_reemplaza_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      Marca ausente: {row.marca_ausente_txt ?? '—'} · Marca reemplaza: {row.marca_reemplaza_txt ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>Firma ejecutivo (manual)</ThemedText>
-                                    {signatureUri(row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual) ? (
-                                      <Image
-                                        source={{
-                                          uri: signatureUri(row.firma_ejecutivo_manual_data_uri || row.firma_ejecutivo_cuenta_manual) as string,
-                                        }}
-                                        style={{ width: 160, height: 72, borderWidth: 1, borderColor: '#DDD' }}
-                                        resizeMode="contain"
-                                      />
-                                    ) : null}
-                                  </ThemedView>
-                                ))
-                            : formModulo === MODULO_ENTREGA_PUESTO
-                              ? previewRows.map((row, idx) => {
-                                  const isConsolidado =
-                                    resolveTipoReporteForCreate(formModulo, formTipoReporte) === 'Consolidado';
-                                  const oficialEntrega =
-                                    row.oficial_entrega_display ?? displayEntregaPuestoText(row.oficial_entrega);
-                                  const fechaEntradaEntrega =
-                                    row.fecha_entrada_entrega_display ??
-                                    formatEntregaPuestoPreviewDate(row.fecha_entrada_entrega);
-                                  const fechaSalidaEntrega =
-                                    row.fecha_salida_entrega_display ??
-                                    formatEntregaPuestoPreviewDate(row.fecha_salida_entrega);
-                                  const horaEntradaEntrega =
-                                    row.hora_entrada_entrega_display ??
-                                    formatEntregaPuestoPreviewTime(row.hora_entrada_entrega);
-                                  const horaSalidaEntrega =
-                                    row.hora_salida_entrega_display ??
-                                    formatEntregaPuestoPreviewTime(row.hora_salida_entrega);
-                                  const turnoEntrega =
-                                    row.turno_entrega_display ?? displayEntregaPuestoTurno(row.turno_entrega);
-                                  return (
-                                    <ThemedView key={`prev-ep-${idx}`} style={{ marginBottom: 12 }}>
-                                      <ThemedText style={styles.detailText}>
-                                        {row.empresa_nombre} | {row.cliente_nombre} | {row.corpo_nombre} |{' '}
-                                        {row.puesto_nombre}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        Oficial entrega: {oficialEntrega}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        Fecha de entrada (entrega): {fechaEntradaEntrega} · Hora de entrada (entrega):{' '}
-                                        {horaEntradaEntrega}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        Fecha de salida (entrega): {fechaSalidaEntrega} · Hora de salida (entrega):{' '}
-                                        {horaSalidaEntrega}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>Turno entrega: {turnoEntrega}</ThemedText>
-                                      {isConsolidado ? (
-                                        <ThemedText style={styles.helperText}>
-                                          Marca entrega ID:{' '}
-                                          {row.marca_entrega_id_display ??
-                                            displayEntregaPuestoMarcaId(row.marca_entrega_id)}
-                                        </ThemedText>
-                                      ) : null}
-                                      <ThemedText style={styles.helperText}>
-                                        Oficial recibe: {row.oficial_recibe ?? '—'}
-                                      </ThemedText>
-                                      {isConsolidado ? (
-                                        <ThemedText style={styles.helperText}>
-                                          Marca recibe ID:{' '}
-                                          {row.marca_recibe_id_display ??
-                                            displayEntregaPuestoMarcaId(row.marca_recibe_id)}
-                                        </ThemedText>
-                                      ) : null}
-                                      <ThemedText style={styles.helperText}>
-                                        Turno recibe: {row.turno_recibe ?? '—'}
-                                      </ThemedText>
-                                      {row.articulos_puesto_preview ? (
-                                        <ThemedText selectable style={styles.helperText} numberOfLines={5}>
-                                          Artículos: {String(row.articulos_puesto_preview)}
-                                        </ThemedText>
-                                      ) : null}
-                                      <ThemedText style={[styles.helperText, { marginTop: 6 }]}>
-                                        Firma entrega — {oficialEntrega}
-                                      </ThemedText>
-                                      {signatureUri(row.firma_entrega_data_uri || row.firma_entrega) ? (
-                                        <Image
-                                          source={{
-                                            uri: signatureUri(row.firma_entrega_data_uri || row.firma_entrega) as string,
-                                          }}
-                                          style={{
-                                            width: 120,
-                                            height: 60,
-                                            borderWidth: 1,
-                                            borderColor: '#DDD',
-                                            marginBottom: 6,
-                                          }}
-                                          resizeMode="contain"
-                                        />
-                                      ) : null}
-                                      <ThemedText style={styles.helperText}>
-                                        Firma recibe — {row.oficial_recibe ?? '—'}
-                                      </ThemedText>
-                                      {signatureUri(row.firma_recibe_data_uri || row.firma_recibe) ? (
-                                        <Image
-                                          source={{
-                                            uri: signatureUri(row.firma_recibe_data_uri || row.firma_recibe) as string,
-                                          }}
-                                          style={{ width: 120, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                          resizeMode="contain"
-                                        />
-                                      ) : null}
-                                    </ThemedView>
-                                  );
-                                })
-                          : formModulo === MODULO_BITACORA_NOVEDADES
-                            ? previewRows.map((row, idx) => (
-                                <ThemedView key={`prev-bnv-${idx}`} style={{ marginBottom: 10 }}>
-                                  <ThemedText style={styles.detailText}>
-                                    {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.puesto_nombre ?? '—'}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>
-                                    {row.titulo != null && String(row.titulo).trim() !== '' ? String(row.titulo) : '—'} ·{' '}
-                                    {row.categoria_nombre ?? '—'} · {row.relevancia ?? '—'}
-                                  </ThemedText>
-                                </ThemedView>
-                              ))
-                            : formModulo === MODULO_MAESTRO_QUEJAS
-                              ? previewRows.map((row, idx) => (
-                                  <ThemedView key={`prev-mqj-${idx}`} style={{ marginBottom: 10 }}>
-                                    <ThemedText style={styles.detailText}>
-                                      {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} | {row.fecha_queja ?? '—'}
-                                    </ThemedText>
-                                    <ThemedText style={styles.helperText}>
-                                      {String(row.motivo_queja ?? '—')} · {row.medio_recepcion_queja ?? '—'} · {row.tipo_queja ?? '—'} ·{' '}
-                                      {row.nivel_queja ?? '—'}
-                                    </ThemedText>
-                                  </ThemedView>
-                                ))
-                              : formModulo === MODULO_CHECKLIST_SUPERVISION
-                                ? previewRows.map((row, idx) => (
-                                    <ThemedView key={`prev-cks-${idx}`} style={{ marginBottom: 10 }}>
-                                      <ThemedText style={styles.detailText}>
-                                        {row.empresa_nombre ?? '—'} | {row.cliente_nombre ?? '—'} |{' '}
-                                        {row.fecha != null ? String(row.fecha) : '—'}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>
-                                        {row.division_nombre ?? '—'} · {row.contrato_nombre ?? '—'} · {row.corpo_nombre ?? '—'} ·{' '}
-                                        {row.puesto_nombre ?? '—'}
-                                      </ThemedText>
-                                      <ThemedText style={styles.helperText}>Ejecutivo: {row.ejecutivo_cuenta_nombre ?? '—'}</ThemedText>
-                                    </ThemedView>
-                                  ))
-                          : formModulo === MODULO_LLAVES
-                            ? previewRows.map((row, idx) => (
-                                <ThemedView key={`prev-llv-${idx}`} style={{ marginBottom: 10 }}>
-                                  <ThemedText style={styles.detailText}>
-                                    N° {String(row.numero_llave ?? '—')} · {String(row.lugar_abre ?? '—')}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>
-                                    {row.empresa_nombre ?? '—'} · {row.corpo_nombre ?? '—'} · {row.puesto_nombre ?? '—'}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>Movimientos: {row.movimientos_count ?? 0}</ThemedText>
-                                </ThemedView>
-                              ))
-                          : formModulo === MODULO_LLAVEROS
-                            ? previewRows.map((row, idx) => (
-                                <ThemedView key={`prev-llr-${idx}`} style={{ marginBottom: 10 }}>
-                                  <ThemedText style={styles.detailText}>
-                                    N° {String(row.numero_llavero ?? '—')} · {String(row.nombre_llavero ?? '—')}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>
-                                    {row.empresa_nombre ?? '—'} · {row.corpo_nombre ?? '—'} · {row.puesto_nombre ?? '—'}
-                                  </ThemedText>
-                                  <ThemedText style={styles.helperText}>
-                                    Movimientos: {row.movimientos_count ?? 0} · Llaves vinculadas: {row.llaves_vinculadas_count ?? 0}
-                                  </ThemedText>
-                                </ThemedView>
-                              ))
-                          : previewRows.map((row, idx) => (
-                            <ThemedView key={`prev-acta-${idx}`} style={{ marginBottom: 10 }}>
-                              <ThemedText style={styles.detailText}>
-                                {row.empresa_nombre} | {row.cliente_nombre} | {row.fecha}
-                              </ThemedText>
-                              <View style={{ flexDirection: 'row', gap: 8 }}>
-                                {signatureUri(row.firma_entrega_data_uri || row.firma_entrega) ? (
-                                  <Image
-                                    source={{ uri: signatureUri(row.firma_entrega_data_uri || row.firma_entrega) as string }}
-                                    style={{ width: 120, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                    resizeMode="contain"
-                                  />
-                                ) : null}
-                                {signatureUri(row.firma_recibe_data_uri || row.firma_recibe) ? (
-                                  <Image
-                                    source={{ uri: signatureUri(row.firma_recibe_data_uri || row.firma_recibe) as string }}
-                                    style={{ width: 120, height: 60, borderWidth: 1, borderColor: '#DDD' }}
-                                    resizeMode="contain"
-                                  />
-                                ) : null}
-                              </View>
-                            </ThemedView>
-                          ))}
+                      {previewRows.map((row, idx) => (
+                        <React.Fragment key={reportesPreviewRowKey(formModulo, row, idx)}>
+                          {renderReportesPreviewRow(formModulo, row, idx, {
+                            tipoReporte: resolveTipoReporteForCreate(formModulo, formTipoReporte),
+                          })}
+                        </React.Fragment>
+                      ))}
                     </ThemedView>
                   ) : null}
                 </ThemedView>
@@ -11223,7 +10583,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   attachButtonText: { color: '#007AFF', fontWeight: '700', fontSize: 15 },
-  buttonPreview: { marginTop: 16 },
+  buttonPreview: { marginTop: 24 },
 
   emptyText: { fontSize: 14, opacity: 0.6, textAlign: 'center', color: '#000', marginVertical: 12 },
 
@@ -11316,6 +10676,35 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
   },
   downloadBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '600' },
+  reportStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 8,
+    alignSelf: 'stretch',
+    borderWidth: 1,
+  },
+  reportStatusProcesando: {
+    backgroundColor: '#FFF8E6',
+    borderColor: '#F5D78E',
+  },
+  reportStatusProcesandoText: { color: '#B45309', fontSize: 14, fontWeight: '600' },
+  reportStatusError: {
+    backgroundColor: '#FFEBEE',
+    borderColor: '#FFCDD2',
+  },
+  reportStatusErrorText: { color: '#C62828', fontSize: 14, fontWeight: '600' },
+  reportStatusPendiente: {
+    backgroundColor: '#F5F5F5',
+    borderColor: '#E0E0E0',
+  },
+  reportStatusPendienteText: { color: '#666666', fontSize: 14, fontWeight: '600' },
+  clearDateLink: { marginTop: 6, alignSelf: 'flex-start' },
+  clearDateLinkText: { color: '#FF3B30', fontSize: 13, fontWeight: '500' },
   actionBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
 
   resultList: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', marginTop: 4 },
@@ -11378,7 +10767,7 @@ const styles = StyleSheet.create({
   modalCloseBtn: { padding: 6, borderRadius: 18, backgroundColor: '#F2F2F2' },
   modalBody: { maxHeight: 520 },
   modalBodyContent: { padding: 14, paddingBottom: 24 },
-  modalFormCard: { backgroundColor: '#fff', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 14, marginTop: 8 },
+  modalFormCard: { backgroundColor: '#fff', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 14 },
   modalSectionTitle: { fontSize: 15, fontWeight: '900', color: '#007AFF', marginBottom: 8 },
   modalPrimaryBtn: {
     flexDirection: 'row',
@@ -11392,7 +10781,6 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   modalPrimaryBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
-  previewJson: { fontSize: 11, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', color: '#333' },
 
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 8 },
   checkRowText: { flex: 1, fontSize: 14, color: '#000' },

@@ -169,6 +169,8 @@ import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
 import revertAttendanceLeaving from './hooks/revertAttendanceLeaving';
 import {
+  attachPlanillasTokenToPlanillasAttendanceActions,
+  pendingAttendanceActionsRequirePlanillasToken,
   readAttendanceActions,
   removeAttendanceActionById,
   writeAttendanceActions,
@@ -178,6 +180,8 @@ import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
 import updateLastLocation from './hooks/updateLastLocation';
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
+import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from './hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from './components/PlanillasPasswordRevalidationModal';
 import JobManualsScreen from './screens/JobManualsScreen';
 import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult, appendJobManualPuestos } from './hooks/jobManualsFunctions';
 import { patchJobManualPuestosVinculadosInCache } from './hooks/jobManualsCacheHelpers';
@@ -461,6 +465,8 @@ function AppContent() {
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
   const [cacheSyncModalVisible, setCacheSyncModalVisible] = React.useState(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = React.useState(false);
+  const planillasRevalidationModalShownRef = useRef(false);
   const cacheSyncFadeAnim = useRef(new Animated.Value(0));
   const cacheSyncOverlayActiveRef = useRef(false);
 
@@ -595,6 +601,51 @@ function AppContent() {
     }
   }, [authedFetchCb]);
 
+  const requestPlanillasTokenForSyncIfNeeded = useCallback(async (): Promise<boolean> => {
+    const requiresPlanillas = await pendingAttendanceActionsRequirePlanillasToken();
+    if (!requiresPlanillas) {
+      return true;
+    }
+
+    let referenceMs: number;
+    try {
+      referenceMs = await getHoraAccion();
+    } catch {
+      referenceMs = Date.now();
+    }
+
+    const tokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      setShowPlanillasRevalidationModal(false);
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  }, []);
+
+  const handlePlanillasRevalidationSuccess = useCallback(async () => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+
+    const stored = await readStoredPlanillasToken();
+    if (stored?.token) {
+      await attachPlanillasTokenToPlanillasAttendanceActions(stored.token);
+    }
+
+    eventBus.emit('syncCachesRequested');
+  }, []);
+
+  const handlePlanillasRevalidationDismiss = useCallback(() => {
+    planillasRevalidationModalShownRef.current = false;
+    setShowPlanillasRevalidationModal(false);
+  }, []);
+
   /**
    * Sincronización de colas pendientes y tareas online agregadas (hora servidor, versión APK, firma manual).
    * Requiere `resolveAppConnectivity()` (incluye FORCE_OFFLINE). Las funciones `check*ActionsCache` asumen
@@ -634,6 +685,17 @@ function AppContent() {
       if (!validAccessToken) {
         console.log('Sincronización cancelada: token inválido o expirado');
         return;
+      }
+
+      const hasValidPlanillasToken = await requestPlanillasTokenForSyncIfNeeded();
+      if (!hasValidPlanillasToken) {
+        console.log('[syncCaches] Sincronización en espera: token de Planillas requerido');
+        return;
+      }
+
+      const storedPlanillas = await readStoredPlanillasToken();
+      if (storedPlanillas?.token) {
+        await attachPlanillasTokenToPlanillasAttendanceActions(storedPlanillas.token);
       }
 
         console.log(' -------------------------- sincronizando cachés');
@@ -710,7 +772,7 @@ function AppContent() {
         slot.inFlight = null;
       }
     })();
-  }, [checkMobileVersionAvailability, employee, hasPendingActionsInStorage, logout, refreshAccessToken]);
+  }, [requestPlanillasTokenForSyncIfNeeded, checkMobileVersionAvailability, employee, hasPendingActionsInStorage, logout, refreshAccessToken]);
 
   // eventBus + foco de app + reconexión → intentar sincronizar cachés (con comprobación de red dentro)
   useEffect(() => {
@@ -833,6 +895,7 @@ function AppContent() {
               horaAccion: action.horaAccion,
             },
             marcaId: action.marcaId,
+            planillasToken: action.planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -856,6 +919,7 @@ function AppContent() {
           const data = await revertAttendanceLeaving({
             marcaId: action.marcaId,
             horaAccion: action.horaAccion,
+            planillasToken: action.planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -7780,21 +7844,7 @@ function AppContent() {
   const getUpdatedHoraAccion = async () => {
     const connectivity = await resolveAppConnectivity();
     console.log('Intentando actualizar hora de acción...');
-    await updateServerTime();
-
-    // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
-    // Se evita redirigir cuando ya estamos en esa pantalla.
-    try {
-      const currentMarca = await AsyncStorage.getItem('current_marca');
-      if (!currentMarca && navigationRef.current && employee?.id != null) {
-        const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
-        if (currentRoute !== 'MarcarIngresoSalida') {
-          navigationRef.current?.navigate('MarcarIngresoSalida');
-        }
-      }
-    } catch (e) {
-      console.error('Error verificando current_marca tras actualización de hora:', e);
-    }
+    //await updateServerTime();
 
     const horaAccion = await getHoraAccion();
     return horaAccion;
@@ -7963,6 +8013,21 @@ function AppContent() {
     const connectivity = await resolveAppConnectivity();
     if (connectivity.ok) {
       await get_notifications();
+    }
+    
+    // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
+    // Se evita redirigir cuando ya estamos en esa pantalla.
+    try {
+      const currentMarca = await AsyncStorage.getItem('current_marca');
+      if (!currentMarca && navigationRef.current && employee?.id != null) {
+        const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
+        if (currentRoute !== 'MarcarIngresoSalida' && currentRoute !== 'Login') {
+          console.log("Redireccionamos");
+          navigationRef.current?.navigate('MarcarIngresoSalida');
+        }
+      }
+    } catch (e) {
+      console.error('Error verificando current_marca tras actualización de hora:', e);
     }
   }
 
@@ -8236,6 +8301,13 @@ function AppContent() {
         visible={cacheSyncModalVisible}
         fadeAnim={cacheSyncFadeAnim.current}
         onRequestClose={dismissCacheSyncOverlayOnly}
+      />
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={() => void handlePlanillasRevalidationSuccess()}
+        onDismiss={handlePlanillasRevalidationDismiss}
       />
     </GestureHandlerRootView>
   );

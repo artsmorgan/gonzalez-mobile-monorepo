@@ -5,15 +5,17 @@ dotenv.config();
 import { prisma } from "../utils/prismaClient";
 import { runMobileReportJob } from "../utils/runMobileReportJob";
 import {
-    claimNextReportJob,
+    claimNextReportJobWithReclaim,
     handleReportJobResult,
     reclaimStuckReportJobs,
+    touchReportJobLock,
 } from "../utils/reportJobQueue";
 
 const WORKER_ID =
     process.env.REPORT_WORKER_ID?.trim() || `report-worker-${process.pid}-${Date.now()}`;
-const POLL_MS = Number(process.env.REPORT_WORKER_POLL_MS) || 2000;
-const RECLAIM_EVERY_MS = Number(process.env.REPORT_WORKER_RECLAIM_MS) || 5 * 60 * 1000;
+const POLL_MS = Number(process.env.REPORT_WORKER_POLL_MS) || 1000;
+const RECLAIM_EVERY_MS = Number(process.env.REPORT_WORKER_RECLAIM_MS) || 60 * 1000;
+const HEARTBEAT_MS = Number(process.env.REPORT_WORKER_HEARTBEAT_MS) || 30 * 1000;
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,6 +23,13 @@ function sleep(ms: number): Promise<void> {
 
 async function processReportJob(reportId: number): Promise<void> {
     console.log(`[${WORKER_ID}] Processing report job #${reportId}`);
+
+    const heartbeatTimer = setInterval(() => {
+        void touchReportJobLock(prisma, reportId, WORKER_ID).catch((err) => {
+            console.warn(`[${WORKER_ID}] Heartbeat failed for #${reportId}:`, err);
+        });
+    }, HEARTBEAT_MS);
+
     try {
         await runMobileReportJob(prisma, reportId);
     } catch (error) {
@@ -33,7 +42,10 @@ async function processReportJob(reportId: number): Promise<void> {
                 error_message: message,
             },
         });
+    } finally {
+        clearInterval(heartbeatTimer);
     }
+
     await handleReportJobResult(prisma, reportId);
     const row = await prisma.e_reportes_mobile.findUnique({
         where: { id: reportId },
@@ -46,9 +58,16 @@ async function processReportJob(reportId: number): Promise<void> {
 
 async function workerLoop(): Promise<void> {
     await prisma.$connect();
-    console.log(`[${WORKER_ID}] Report worker started (poll=${POLL_MS}ms)`);
+    const reclaimedOnStart = await reclaimStuckReportJobs(prisma);
+    if (reclaimedOnStart > 0) {
+        console.log(`[${WORKER_ID}] Reclaimed ${reclaimedOnStart} stuck job(s) on startup`);
+    }
 
-    let lastReclaim = 0;
+    console.log(
+        `[${WORKER_ID}] Report worker started (poll=${POLL_MS}ms, heartbeat=${HEARTBEAT_MS}ms, reclaimEvery=${RECLAIM_EVERY_MS}ms)`,
+    );
+
+    let lastReclaim = Date.now();
 
     while (true) {
         const now = Date.now();
@@ -60,7 +79,7 @@ async function workerLoop(): Promise<void> {
             lastReclaim = now;
         }
 
-        const reportId = await claimNextReportJob(prisma, WORKER_ID);
+        const reportId = await claimNextReportJobWithReclaim(prisma, WORKER_ID);
         if (reportId != null) {
             await processReportJob(reportId);
             continue;

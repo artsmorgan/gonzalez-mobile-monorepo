@@ -1,10 +1,12 @@
 import ExcelJS from "exceljs";
 
 export const PLANTILLA_TABLE1_HEADERS = [
+  "Código del puesto",
   "Número artículo",
   "Cantidad",
   "Serie",
   "Marca",
+  "Modelo",
   "Fecha de entrega",
 ] as const;
 
@@ -16,7 +18,7 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Plantilla");
 
-  const REF_COL_START = 7; // columna G (F queda como separador)
+  const REF_COL_START = 9; // columna I (H queda como separador)
   const TITLE_ROW = 7;
   const HEADER_ROW = 8;
   const FIRST_DATA_ROW = 9;
@@ -29,7 +31,7 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
     "INSTRUCCIONES:\n" +
     "1. Complete la tabla «Datos a cargar» (izquierda) con la información de cada artículo que desea vincular.\n" +
     "2. Formatos obligatorios: «Número artículo» y «Cantidad» (numéricos); «Fecha de entrega» (DD-MM-YYYY HH:MM:SS).\n" +
-    "3. Los registros se vincularán a los puestos que seleccione en la aplicación móvil.\n" +
+    "3. Indique en «Código del puesto» el código de cada puesto destino (debe existir en el sistema).\n" +
     "4. No modifique los encabezados ni la estructura de columnas; de lo contrario la información no se cargará.\n" +
     "5. Consulte la tabla de referencia (derecha) para verificar números y nombres de artículo válidos.";
   instr.alignment = { wrapText: true, vertical: "top" };
@@ -56,9 +58,9 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
 
   for (let i = 0; i < USER_DATA_ROWS; i++) {
     const r = ws.getRow(FIRST_DATA_ROW + i);
-    r.getCell(1).numFmt = "0";
     r.getCell(2).numFmt = "0";
-    r.getCell(5).numFmt = "dd-mm-yyyy hh:mm:ss";
+    r.getCell(3).numFmt = "0";
+    r.getCell(7).numFmt = "dd-mm-yyyy hh:mm:ss";
   }
 
   articulos.forEach((a, i) => {
@@ -68,12 +70,14 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
     r.getCell(REF_COL_START + 1).value = a.nombre;
   });
 
-  ws.getColumn(1).width = 18;
-  ws.getColumn(2).width = 14;
-  ws.getColumn(3).width = 22;
+  ws.getColumn(1).width = 20;
+  ws.getColumn(2).width = 18;
+  ws.getColumn(3).width = 14;
   ws.getColumn(4).width = 22;
-  ws.getColumn(5).width = 24;
-  ws.getColumn(6).width = 3;
+  ws.getColumn(5).width = 22;
+  ws.getColumn(6).width = 22;
+  ws.getColumn(7).width = 24;
+  ws.getColumn(8).width = 3;
   ws.getColumn(REF_COL_START).width = 18;
   ws.getColumn(REF_COL_START + 1).width = 42;
 
