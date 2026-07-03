@@ -154,6 +154,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     tipo: "Plan de puesto",
                     // e_estructura_articulo_corpo_puesto_plan no tiene marca/serie. Se exponen desde el último mantenimiento si existe.
                     marca: ultimo?.marca ?? null,
+                    modelo: ultimo?.modelo ?? null,
                     serie: ultimo?.serie_placa ?? null,
                     cantidad_plan: p.cantidad ?? null,
                     tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],
@@ -209,8 +210,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     articulo_nombre: articuloNombre,
                     tipo: "Asignado al puesto",
                     // Mantener la misma lógica que main-structure: para asignados se toman de la tabla base
-                    // (marca/serie provienen de `e_estructura_articulo_corpo_puesto_entrega`).
+                    // (marca/serie/modelo provienen de `e_estructura_articulo_corpo_puesto_entrega`).
                     marca: a.marca ?? null,
+                    modelo: a.modelo ?? null,
                     serie: a.serie ?? null,
                     cantidad_plan: null,
                     tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],

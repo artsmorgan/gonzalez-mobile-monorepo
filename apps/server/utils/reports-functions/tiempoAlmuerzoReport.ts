@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 
 export type TiempoAlmuerzoModuleFilters = {
@@ -156,7 +156,7 @@ function parsePausasJson(raw: string | null | undefined): PausaParsed[] {
 }
 
 export async function queryTiempoAlmuerzoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: TiempoAlmuerzoModuleFilters,
     orderKey: TiempoAlmuerzoOrderKey,
 ) {

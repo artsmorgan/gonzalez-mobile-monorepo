@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { enrichCambiosAppsModulesRows } from "../../../utils/enrichCambiosAppsModules";
 
 export async function GET(req: NextRequest) {
     try {
@@ -93,7 +94,9 @@ export async function GET(req: NextRequest) {
             };
         });
 
-        return NextResponse.json({ status: true, data: dataWithEmpleado }, { status: 200 });
+        const enrichedData = await enrichCambiosAppsModulesRows(req, tabla.trim(), dataWithEmpleado);
+
+        return NextResponse.json({ status: true, data: enrichedData }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/cambios-apps-modules:", errorMessage);

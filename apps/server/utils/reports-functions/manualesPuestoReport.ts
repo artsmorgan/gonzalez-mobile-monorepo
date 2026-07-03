@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 
@@ -158,7 +158,7 @@ function approvedLabel(v: boolean | null | undefined): string {
     return "Pendiente";
 }
 
-async function puestoIdsFromSucursalIds(prisma: PrismaClient, sucursalIds: number[]): Promise<number[]> {
+async function puestoIdsFromSucursalIds(prisma: ReportDataAccess, sucursalIds: number[]): Promise<number[]> {
     if (!sucursalIds.length) return [];
     const rows = await prisma.e_estructura_puesto.findMany({
         where: {
@@ -171,7 +171,7 @@ async function puestoIdsFromSucursalIds(prisma: PrismaClient, sucursalIds: numbe
     return rows.map((r) => r.id);
 }
 
-async function sucursalIdsFromContratoIds(prisma: PrismaClient, contratoIds: number[]): Promise<number[]> {
+async function sucursalIdsFromContratoIds(prisma: ReportDataAccess, contratoIds: number[]): Promise<number[]> {
     if (!contratoIds.length) return [];
     const rows = await prisma.e_estructura_sucursal.findMany({
         where: {
@@ -184,7 +184,7 @@ async function sucursalIdsFromContratoIds(prisma: PrismaClient, contratoIds: num
     return rows.map((r) => r.id);
 }
 
-async function traceEmpresaToPuestoIds(prisma: PrismaClient, empresaIds: number[]): Promise<Set<number>> {
+async function traceEmpresaToPuestoIds(prisma: ReportDataAccess, empresaIds: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     const clientes = await prisma.e_estructura_cliente.findMany({
         where: { empresa_id: { in: empresaIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
@@ -203,7 +203,7 @@ async function traceEmpresaToPuestoIds(prisma: PrismaClient, empresaIds: number[
     return out;
 }
 
-async function traceClienteToPuestoIds(prisma: PrismaClient, clienteIds: number[]): Promise<Set<number>> {
+async function traceClienteToPuestoIds(prisma: ReportDataAccess, clienteIds: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     const contratos = await prisma.e_estructura_contrato.findMany({
         where: { cliente_id: { in: clienteIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
@@ -216,7 +216,7 @@ async function traceClienteToPuestoIds(prisma: PrismaClient, clienteIds: number[
     return out;
 }
 
-async function traceDivisionToPuestoIds(prisma: PrismaClient, divisionIds: number[]): Promise<Set<number>> {
+async function traceDivisionToPuestoIds(prisma: ReportDataAccess, divisionIds: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     const contratos = await prisma.e_estructura_contrato.findMany({
         where: { division_id: { in: divisionIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
@@ -229,7 +229,7 @@ async function traceDivisionToPuestoIds(prisma: PrismaClient, divisionIds: numbe
     return out;
 }
 
-async function traceContratoToPuestoIds(prisma: PrismaClient, contratoIds: number[]): Promise<Set<number>> {
+async function traceContratoToPuestoIds(prisma: ReportDataAccess, contratoIds: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     const sids = await sucursalIdsFromContratoIds(prisma, contratoIds);
     const pids = await puestoIdsFromSucursalIds(prisma, sids);
@@ -237,7 +237,7 @@ async function traceContratoToPuestoIds(prisma: PrismaClient, contratoIds: numbe
     return out;
 }
 
-async function traceCorpoToPuestoIds(prisma: PrismaClient, corpoIds: number[]): Promise<Set<number>> {
+async function traceCorpoToPuestoIds(prisma: ReportDataAccess, corpoIds: number[]): Promise<Set<number>> {
     const out = new Set<number>();
     const pids = await puestoIdsFromSucursalIds(prisma, corpoIds);
     pids.forEach((id) => out.add(id));
@@ -248,7 +248,7 @@ async function traceCorpoToPuestoIds(prisma: PrismaClient, corpoIds: number[]): 
  * Intersección de conjuntos de puestos derivados de cada filtro estructural aplicado.
  * Si no hay ningún filtro estructural, devuelve `undefined` (no restringir por puesto).
  */
-export async function resolveManualReportPuestoIds(prisma: PrismaClient, f: ManualesPuestoModuleFilters): Promise<Set<number> | undefined> {
+export async function resolveManualReportPuestoIds(prisma: ReportDataAccess, f: ManualesPuestoModuleFilters): Promise<Set<number> | undefined> {
     const sets: Set<number>[] = [];
     if (f.empresaIds?.length) sets.push(await traceEmpresaToPuestoIds(prisma, f.empresaIds));
     if (f.clienteIds?.length) sets.push(await traceClienteToPuestoIds(prisma, f.clienteIds));
@@ -268,7 +268,7 @@ export async function resolveManualReportPuestoIds(prisma: PrismaClient, f: Manu
     return acc;
 }
 
-export async function queryManualesPuestoRows(prisma: PrismaClient, filters: ManualesPuestoModuleFilters, orderKey: ManualesPuestoOrderKey) {
+export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters: ManualesPuestoModuleFilters, orderKey: ManualesPuestoOrderKey) {
     const puestoSet = await resolveManualReportPuestoIds(prisma, filters);
     if (puestoSet !== undefined && puestoSet.size === 0) return [];
 

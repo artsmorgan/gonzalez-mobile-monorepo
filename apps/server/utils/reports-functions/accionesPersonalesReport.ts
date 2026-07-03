@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 
 export type AccionesPersonalesModuleFilters = {
@@ -714,7 +714,7 @@ const accionesInclude = {
 } as const;
 
 export async function queryAccionesPersonalesRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: AccionesPersonalesModuleFilters,
     orderKey: AccionesPersonalesOrderKey,
 ) {

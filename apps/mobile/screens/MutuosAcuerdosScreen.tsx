@@ -29,6 +29,7 @@ import SlideMenu from '@/components/SlideMenu';
 import { Collapsible } from '@/components/Collapsible';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import authedFetch from '@/hooks/authedFetch';
@@ -230,6 +231,10 @@ export default function MutuosAcuerdosScreen() {
   const [showFilterFechaReemplazaPicker, setShowFilterFechaReemplazaPicker] = useState(false);
   const [filterMotivo, setFilterMotivo] = useState('');
 
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
 
@@ -238,6 +243,44 @@ export default function MutuosAcuerdosScreen() {
       networkState.isInternetReachable === true
     );
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+  };
+
+  const fetchCambios = useCallback(
+    async (tabla: string, registroId: number) => {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+        return;
+      }
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) throw new Error('Server URL not configured');
+        const resp = await authedFetch({
+          url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+          init: {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!resp) return;
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.status) {
+          throw new Error(data.message || 'No se pudieron cargar los cambios');
+        }
+        setCambiosItems(Array.isArray(data.data) ? data.data : []);
+        setIsCambiosModalVisible(true);
+      } catch (e: any) {
+        Alert.alert('Error', e?.message || 'No se pudieron cargar los cambios');
+      }
+    },
+    [refreshAccessToken, logout],
+  );
 
   const updateSection = (section: SectionKey, updater: (prev: EmployeeSectionState) => EmployeeSectionState) => {
     if (section === 'ausente') setAusente(updater);
@@ -1701,6 +1744,13 @@ export default function MutuosAcuerdosScreen() {
         </View>
       </Modal>
 
+      <CambiosAppsModulesModal
+        visible={isCambiosModalVisible}
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
+
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="MutuosAcuerdos" />
       {QRScannerComponent}
@@ -1885,6 +1935,7 @@ const styles = StyleSheet.create({
   acceptBtn: { backgroundColor: '#34C759' },
   signBtn: { backgroundColor: '#5856D6' },
   rejectBtn: { backgroundColor: '#FF3B30' },
+  changesBtn: { backgroundColor: '#007AFF' },
   actionBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
 
   overlay: {

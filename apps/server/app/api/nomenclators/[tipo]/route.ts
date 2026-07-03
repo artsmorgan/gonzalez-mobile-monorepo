@@ -16,6 +16,13 @@ import {
     parseEmpleadoEjecutivoPayload,
 } from "../../../../utils/nomenclatorsEmpleadoEjecutivo";
 import { fetchMobileVariablesList } from "../../../../utils/nomenclatorsMobileVariables";
+import {
+    articuloCorpoPuestoExists,
+    fetchTipoMantenimientoArticuloList,
+    mapTipoMantenimientoArticuloRow,
+    parseTipoMantenimientoArticuloPayload,
+    TIPO_MANTENIMIENTO_ARTICULO_TABLE,
+} from "../../../../utils/nomenclatorsTipoMantenimientoArticulo";
 
 export async function GET(
     req: NextRequest,
@@ -51,6 +58,19 @@ export async function GET(
 
         if (resolveNomenclatorKind(tipo) === "mobile-variable") {
             const data = await fetchMobileVariablesList(req);
+            return NextResponse.json({ status: true, data }, { status: 200 });
+        }
+
+        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+            const articuloIdParam = req.nextUrl.searchParams.get("articulo_id");
+            const articuloId =
+                articuloIdParam != null && articuloIdParam !== ""
+                    ? Number(articuloIdParam)
+                    : null;
+            const data = await fetchTipoMantenimientoArticuloList(
+                req,
+                articuloId != null && Number.isFinite(articuloId) && articuloId > 0 ? articuloId : null,
+            );
             return NextResponse.json({ status: true, data }, { status: 200 });
         }
 
@@ -172,6 +192,50 @@ export async function POST(
 
             return NextResponse.json(
                 { status: true, message: "Relación guardada correctamente", data: mapped },
+                { status: 201 }
+            );
+        }
+
+        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+            const payload = parseTipoMantenimientoArticuloPayload(body);
+            if (!payload) {
+                return NextResponse.json(
+                    { status: false, message: "Debe seleccionar un artículo e indicar un nombre válido" },
+                    { status: 400 }
+                );
+            }
+
+            const exists = await articuloCorpoPuestoExists(req, payload.articulo_id);
+            if (!exists) {
+                return NextResponse.json(
+                    { status: false, message: "El artículo seleccionado no existe" },
+                    { status: 400 }
+                );
+            }
+
+            const created = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: TIPO_MANTENIMIENTO_ARTICULO_TABLE,
+                    operation: "create",
+                    data: {
+                        articulo_id: payload.articulo_id,
+                        nombre: payload.nombre,
+                    },
+                },
+            });
+
+            const mapped = await mapTipoMantenimientoArticuloRow(req, created);
+            if (!mapped) {
+                return NextResponse.json(
+                    { status: false, message: "No se pudo crear el registro" },
+                    { status: 500 }
+                );
+            }
+
+            return NextResponse.json(
+                { status: true, message: "Registro creado correctamente", data: mapped },
                 { status: 201 }
             );
         }

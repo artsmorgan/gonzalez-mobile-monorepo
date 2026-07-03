@@ -6,10 +6,12 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 export const runtime = "nodejs";
 
 type BulkArticuloInput = {
+  codigo_puesto: string;
   numero_articulo: number;
   cantidad: number;
   serie: string;
   marca: string;
+  modelo?: string | null;
   fecha_entrega: string;
 };
 
@@ -74,23 +76,10 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const puestoIdsRaw = body?.puesto_ids;
     const articulosRaw = body?.articulos;
 
-    if (!Array.isArray(puestoIdsRaw) || puestoIdsRaw.length === 0) {
-      return NextResponse.json({ status: false, message: "Debe indicar al menos un puesto." }, { status: 200 });
-    }
     if (!Array.isArray(articulosRaw) || articulosRaw.length === 0) {
       return NextResponse.json({ status: false, message: "Debe indicar al menos un artículo." }, { status: 200 });
-    }
-
-    const puestoIds = Array.from(
-      new Set(
-        puestoIdsRaw.map((id: unknown) => Number(id)).filter((id: number) => Number.isFinite(id) && id > 0),
-      ),
-    );
-    if (puestoIds.length === 0) {
-      return NextResponse.json({ status: false, message: "IDs de puesto inválidos." }, { status: 200 });
     }
 
     const articulos: BulkArticuloInput[] = [];
@@ -98,12 +87,18 @@ export async function POST(req: NextRequest) {
 
     for (let i = 0; i < articulosRaw.length; i++) {
       const row = articulosRaw[i] as Record<string, unknown>;
+      const codigoPuesto = String(row?.codigo_puesto ?? "").trim();
       const numero = Number(row?.numero_articulo);
       const cantidad = Number(row?.cantidad);
       const serie = String(row?.serie ?? "").trim();
       const marca = String(row?.marca ?? "").trim();
+      const modelo = String(row?.modelo ?? "").trim() || null;
       const fechaEntrega = String(row?.fecha_entrega ?? "").trim();
 
+      if (!codigoPuesto) {
+        validationErrors.push(`Artículo ${i + 1}: código de puesto obligatorio.`);
+        continue;
+      }
       if (!Number.isFinite(numero) || numero <= 0) {
         validationErrors.push(`Artículo ${i + 1}: número inválido.`);
         continue;
@@ -126,10 +121,12 @@ export async function POST(req: NextRequest) {
       }
 
       articulos.push({
+        codigo_puesto: codigoPuesto,
         numero_articulo: Math.trunc(numero),
         cantidad: Math.trunc(cantidad),
         serie,
         marca,
+        modelo,
         fecha_entrega: fechaEntrega,
       });
     }
@@ -166,33 +163,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const codigosPuesto = Array.from(new Set(articulos.map((a) => a.codigo_puesto)));
     const puestos = await callDynamicPrisma({
       req,
       data: {
         action: "GET",
         table: "e_estructura_puesto",
         operation: "findMany",
-        where: { id: { in: puestoIds } },
+        where: { codigo: { in: codigosPuesto } },
       },
     });
-    const puestoById = new Map<number, { id: number; sucursal_id: number | null }>();
+    const puestoIdByCodigo = new Map<string, number>();
     for (const p of Array.isArray(puestos) ? puestos : []) {
-      puestoById.set(Number(p.id), {
-        id: Number(p.id),
-        sucursal_id: p.sucursal_id != null ? Number(p.sucursal_id) : null,
-      });
+      const codigo = String(p.codigo ?? "").trim();
+      if (!codigo) continue;
+      puestoIdByCodigo.set(codigo, Number(p.id));
     }
-    for (const pid of puestoIds) {
-      if (!puestoById.has(pid)) {
-        validationErrors.push(`El puesto #${pid} no existe.`);
+    for (const codigo of codigosPuesto) {
+      if (!puestoIdByCodigo.has(codigo)) {
+        validationErrors.push(`El código de puesto «${codigo}» no existe.`);
       }
     }
     if (validationErrors.length > 0) {
       return NextResponse.json(
-        { status: false, message: "Algunos puestos no existen.", errors: validationErrors },
+        { status: false, message: "Algunos códigos de puesto no existen.", errors: validationErrors },
         { status: 200 },
       );
     }
+
+    const puestoIds = Array.from(new Set(puestoIdByCodigo.values()));
 
     const existingPlans = await callDynamicPrisma({
       req,
@@ -229,7 +228,7 @@ export async function POST(req: NextRequest) {
     for (const e of Array.isArray(existingEntregas) ? existingEntregas : []) {
       if (e.puesto_id != null && e.nomencladorArticuloCP_id != null) {
         entregaKeys.add(
-          `${e.puesto_id}:${e.nomencladorArticuloCP_id}:${String(e.marca ?? "").trim()}:${String(e.serie ?? "").trim()}`,
+          `${e.puesto_id}:${e.nomencladorArticuloCP_id}:${String(e.marca ?? "").trim()}:${String(e.serie ?? "").trim()}:${String(e.modelo ?? "").trim()}`,
         );
       }
     }
@@ -238,63 +237,61 @@ export async function POST(req: NextRequest) {
     let createdPlans = 0;
     let createdEntregas = 0;
 
-    for (const puestoId of puestoIds) {
-      const puesto = puestoById.get(puestoId)!;
+    for (const art of articulos) {
+      const puestoId = puestoIdByCodigo.get(art.codigo_puesto)!;
+      const planKey = `${puestoId}:${art.numero_articulo}`;
+      const entregaKey = `${puestoId}:${art.numero_articulo}:${art.marca}:${art.serie}:${art.modelo ?? ""}`;
+      const fechaEntregaDb = fechaEntregaStringToDbDate(art.fecha_entrega);
+      if (!fechaEntregaDb) continue;
 
-      for (const art of articulos) {
-        const planKey = `${puestoId}:${art.numero_articulo}`;
-        const entregaKey = `${puestoId}:${art.numero_articulo}:${art.marca}:${art.serie}`;
-        const fechaEntregaDb = fechaEntregaStringToDbDate(art.fecha_entrega);
-        if (!fechaEntregaDb) continue;
-
-        if (!planKeys.has(planKey)) {
-          await callDynamicPrisma({
-            req,
+      if (!planKeys.has(planKey)) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "e_estructura_articulo_corpo_puesto_plan",
+            operation: "create",
             data: {
-              action: "POST",
-              table: "e_estructura_articulo_corpo_puesto_plan",
-              operation: "create",
-              data: {
-                puesto_id: puestoId,
-                corpo_id: null,
-                cantidad: art.cantidad,
-                articuloCP_id: art.numero_articulo,
-                combo_id: null,
-              },
+              puesto_id: puestoId,
+              corpo_id: null,
+              cantidad: art.cantidad,
+              articuloCP_id: art.numero_articulo,
+              combo_id: null,
             },
-          });
-          planKeys.add(planKey);
-          createdPlans++;
-        } else {
-          skipped.push(
-            `Plan ya existente: puesto #${puestoId}, artículo #${art.numero_articulo}.`,
-          );
-        }
+          },
+        });
+        planKeys.add(planKey);
+        createdPlans++;
+      } else {
+        skipped.push(
+          `Plan ya existente: puesto «${art.codigo_puesto}», artículo #${art.numero_articulo}.`,
+        );
+      }
 
-        if (!entregaKeys.has(entregaKey)) {
-          await callDynamicPrisma({
-            req,
+      if (!entregaKeys.has(entregaKey)) {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "POST",
+            table: "e_estructura_articulo_corpo_puesto_entrega",
+            operation: "create",
             data: {
-              action: "POST",
-              table: "e_estructura_articulo_corpo_puesto_entrega",
-              operation: "create",
-              data: {
-                puesto_id: puestoId,
-                corpo_id: null,
-                marca: art.marca,
-                serie: art.serie,
-                fechaEntrega: fechaEntregaDb,
-                nomencladorArticuloCP_id: art.numero_articulo,
-              },
+              puesto_id: puestoId,
+              corpo_id: null,
+              marca: art.marca,
+              serie: art.serie,
+              modelo: art.modelo,
+              fechaEntrega: fechaEntregaDb,
+              nomencladorArticuloCP_id: art.numero_articulo,
             },
-          });
-          entregaKeys.add(entregaKey);
-          createdEntregas++;
-        } else {
-          skipped.push(
-            `Entrega ya existente: puesto #${puestoId}, artículo #${art.numero_articulo}, marca «${art.marca}», serie «${art.serie}».`,
-          );
-        }
+          },
+        });
+        entregaKeys.add(entregaKey);
+        createdEntregas++;
+      } else {
+        skipped.push(
+          `Entrega ya existente: puesto «${art.codigo_puesto}», artículo #${art.numero_articulo}, marca «${art.marca}», serie «${art.serie}», modelo «${art.modelo ?? ""}».`,
+        );
       }
     }
 

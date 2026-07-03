@@ -1,9 +1,11 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { readStoredPlanillasToken } from './planillasTokenStorage';
 
 interface Params {
   marcaId: number;
   horaAccion: number;
+  planillasToken?: string | null;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<{ status: boolean; message: string }>;
 }
@@ -11,6 +13,7 @@ interface Params {
 export default async function revertAttendanceLeaving({
   marcaId,
   horaAccion,
+  planillasToken: planillasTokenOverride,
   refreshAccessToken,
   logout,
 }: Params) {
@@ -26,12 +29,16 @@ export default async function revertAttendanceLeaving({
       throw new Error('Marca ID not found');
     }
 
+    const storedPlanillas = await readStoredPlanillasToken();
+    const planillasToken =
+      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+
     const response = await authedFetch({
       url: `${apiUrl}/api/attendance/${marcaId}/revert-leaving`,
       init: {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ horaAccion }),
+        body: JSON.stringify({ horaAccion, planillasToken }),
       },
       refreshAccessToken,
       logout,

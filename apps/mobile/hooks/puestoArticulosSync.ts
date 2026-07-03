@@ -69,6 +69,27 @@ function incomingTimestampMs(form: PuestoArticuloFormInput, fallbackMs: number):
   return Number.isFinite(ms) ? ms : fallbackMs;
 }
 
+/** Hereda marca/modelo/serie del artículo vinculado en jerarquía (no del último mantenimiento). */
+function resolveMarcaModeloSerieFromArticuloNode(art: any): {
+  marca: string | null;
+  modelo: string | null;
+  serie_placa: string | null;
+} {
+  const pick = (...values: unknown[]): string | null => {
+    for (const v of values) {
+      if (v == null) continue;
+      const s = String(v).trim();
+      if (s !== '') return s;
+    }
+    return null;
+  };
+  return {
+    marca: pick(art?.marca),
+    modelo: pick(art?.modelo),
+    serie_placa: pick(art?.serie, art?.serie_placa),
+  };
+}
+
 function mergePendingArchivosIntoUltimo(
   nextUltimo: any,
   existingUltimo: any | null,
@@ -225,6 +246,7 @@ export function patchPuestoArticulosWithForms(
     const newEst = String(form.estado || '').trim();
     const lastEst = String(existingUltimo?.estado || 'Bueno').trim();
     const cantidadNec = normalizeCantidadNecesaria(form.cantidad_requerida);
+    const inheritedIdentity = resolveMarcaModeloSerieFromArticuloNode(art);
 
     const newBasic = {
       id: generateRandomMaintenanceId(),
@@ -239,9 +261,9 @@ export function patchPuestoArticulosWithForms(
       fecha_inicio: null,
       numero_boleta_proveeduria: null,
       tipo: null,
-      marca: null,
-      modelo: null,
-      serie_placa: null,
+      marca: inheritedIdentity.marca,
+      modelo: inheritedIdentity.modelo,
+      serie_placa: inheritedIdentity.serie_placa,
       marca_nuevo: null,
       modelo_nuevo: null,
       serie_placa_nuevo: null,
@@ -500,6 +522,7 @@ export async function refreshPuestoArticulosFromServer(params: {
       articulo_nombre: it.articulo_nombre ?? 'Desconocido',
       tipo: it.tipo,
       marca: it.marca ?? null,
+      modelo: it.modelo ?? null,
       serie: it.serie ?? null,
       tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
       mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos : [],

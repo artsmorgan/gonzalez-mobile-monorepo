@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import fs from "fs/promises";
 import path from "path";
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
@@ -68,7 +68,7 @@ function intersectIds(acc: number[] | null, next: number[]): number[] {
 }
 
 /** Resuelve puestos activos según filtros estructurales (AND entre niveles). Sin filtros estructurales → undefined (no restringir por puesto). */
-export async function resolvePuestoIdsForActividades(prisma: PrismaClient, f: ActividadesModuleFilters): Promise<number[] | undefined> {
+export async function resolvePuestoIdsForActividades(prisma: ReportDataAccess, f: ActividadesModuleFilters): Promise<number[] | undefined> {
     const has =
         (f.puestoIds?.length ?? 0) > 0 ||
         (f.corpoIds?.length ?? 0) > 0 ||
@@ -342,7 +342,7 @@ function parseArticles(raw: string | null | undefined): any[] {
     }
 }
 
-export async function queryActividadesReportRows(prisma: PrismaClient, filters: ActividadesModuleFilters, orderKey: ActividadesOrderKey) {
+export async function queryActividadesReportRows(prisma: ReportDataAccess, filters: ActividadesModuleFilters, orderKey: ActividadesOrderKey) {
     const desde = parseBoundaryDate(filters.creadoDesde ?? undefined);
     const hasta = parseBoundaryDate(filters.creadoHasta ?? undefined);
 
@@ -445,13 +445,13 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
                     if (!actividadPuestoPlazaIncluyeReporteConsolidado(pl)) continue;
                     const titleRow = wsA.rowCount + 1;
                     plazaToArticulosRow.set(pl.id, titleRow);
-                    wsA.mergeCells(titleRow, 1, titleRow, 8);
+                    wsA.mergeCells(titleRow, 1, titleRow, 9);
                     wsA.getCell(titleRow, 1).value = `Actividad: ${act.nombre_actividad} — Puesto: ${ap.e_estructura_puesto?.nombre ?? ap.puesto_id} — Plaza: ${pl.e_estructura_plazas?.nombre ?? pl.plaza_id} (registro #${pl.id})`;
                     wsA.getCell(titleRow, 1).font = { bold: true };
                     wsA.getCell(titleRow, 1).fill = hdrFill;
-                    for (let c = 1; c <= 8; c++) wsA.getCell(titleRow, c).border = borderThin;
+                    for (let c = 1; c <= 9; c++) wsA.getCell(titleRow, c).border = borderThin;
 
-                    const ah = wsA.addRow(["Nombre", "Tipo", "Marca", "Serie", "Cant. req.", "Cant. real", "Estado", "Observaciones"]);
+                    const ah = wsA.addRow(["Nombre", "Tipo", "Marca", "Modelo", "Serie", "Cant. req.", "Cant. real", "Estado", "Observaciones"]);
                     ah.font = { bold: true };
                     ah.eachCell((c) => {
                         c.fill = hdrFill;
@@ -463,6 +463,7 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
                             String(art?.nombre ?? ""),
                             String(art?.tipo ?? ""),
                             String(art?.marca ?? ""),
+                            String(art?.modelo ?? ""),
                             String(art?.serie ?? ""),
                             art?.cantidad_requerida != null ? String(art.cantidad_requerida) : "",
                             art?.cantidad_real != null ? String(art.cantidad_real) : "",

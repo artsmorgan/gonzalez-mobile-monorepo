@@ -725,7 +725,7 @@ export default function HomeScreen() {
             Versión:{' '}
             <ThemedText style={styles.appVersionStrong}>
               {currentAppVersion}
-              {versionReleaseDateLabel ? ` (17-Junio-2026)` : ''}
+              {versionReleaseDateLabel ? ` (03-Julio-2026)` : ''}
             </ThemedText>
           </ThemedText>
         </TouchableOpacity>

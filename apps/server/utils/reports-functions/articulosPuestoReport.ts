@@ -1,11 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
 import { resolveManualReportPuestoIds } from "./manualesPuestoReport";
+import {
+    loadArticulosDataByPuesto,
+    loadComboNamesById,
+    loadNomencladorById,
+    type ArticuloPuestoBatchSlice,
+} from "./articulosPuestoBatchData";
 
 export type ArticulosPuestoModuleFilters = ActaEntregaModuleFilters;
 export type ArticulosPuestoOrderKey =
@@ -128,6 +134,7 @@ type ArticuloDetalleRow = {
     articulo_nombre: string;
     cantidad: number | string;
     marca: string;
+    modelo: string;
     serie: string;
     fecha_entrega: string;
     combo_nombre: string;
@@ -153,67 +160,36 @@ type PuestoReportRow = {
     articulos: ArticuloDetalleRow[];
 };
 
-async function buildArticulosDetalleForPuesto(
-    prisma: PrismaClient,
-    puesto: { id: number; nombre: string; codigo: string | null; sucursal_id: number | null; comboArticulosCP_id: number | null },
+function buildArticulosDetalleFromSlice(
+    puestoId: number,
     puestoTxt: string,
-): Promise<ArticuloDetalleRow[]> {
+    slice: ArticuloPuestoBatchSlice,
+    nomencladorById: Map<number, string>,
+    comboById: Map<number, string>,
+): ArticuloDetalleRow[] {
     const out: ArticuloDetalleRow[] = [];
-    const puestoId = puesto.id;
-    const corpoId = puesto.sucursal_id != null ? Number(puesto.sucursal_id) : null;
-    const orCorpo = corpoId && corpoId > 0 ? [{ corpo_id: corpoId }] : [];
-    const planWhereBase = {
-        OR: [{ puesto_id: puestoId }, ...orCorpo],
-    };
+    const { combo, comboPlans, directPlans, entregas } = slice;
 
-    const nomencladorIds = new Set<number>();
-    const comboIds = new Set<number>();
-    const comboPlansAll: { id: number; articuloCP_id: number | null; combo_id: number | null; cantidad: number }[] = [];
-
-    if (puesto.comboArticulosCP_id) {
-        const combo = await prisma.e_estructura_combo_articulo_cp.findUnique({
-            where: { id: puesto.comboArticulosCP_id },
-            select: { id: true, nombre: true },
+    for (const art of comboPlans) {
+        out.push({
+            puesto_id: puestoId,
+            puesto_txt: puestoTxt,
+            origen: "Plan (combo)",
+            registro_id: art.id,
+            articulo_nombre: "",
+            cantidad: art.cantidad ?? 0,
+            marca: "",
+            modelo: "",
+            serie: "",
+            fecha_entrega: "",
+            combo_nombre: combo?.nombre ?? "",
+            nomenclador_nombre: "",
+            movimientos_count: 0,
+            movimientos: [],
         });
-        if (combo) {
-            comboIds.add(combo.id);
-            const comboPlans = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
-                where: { combo_id: combo.id },
-                orderBy: { id: "asc" },
-            });
-            comboPlansAll.push(...comboPlans);
-            for (const art of comboPlans) {
-                if (art.articuloCP_id) nomencladorIds.add(art.articuloCP_id);
-                out.push({
-                    puesto_id: puestoId,
-                    puesto_txt: puestoTxt,
-                    origen: "Plan (combo)",
-                    registro_id: art.id,
-                    articulo_nombre: "",
-                    cantidad: art.cantidad ?? 0,
-                    marca: "",
-                    serie: "",
-                    fecha_entrega: "",
-                    combo_nombre: combo.nombre,
-                    nomenclador_nombre: "",
-                    movimientos_count: 0,
-                    movimientos: [],
-                });
-            }
-        }
     }
 
-    const usedPlanIds = new Set(out.map((a) => a.registro_id));
-    const directPlans = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
-        where: {
-            ...planWhereBase,
-            ...(usedPlanIds.size ? { id: { notIn: [...usedPlanIds] } } : {}),
-        },
-        orderBy: { id: "asc" },
-    });
     for (const art of directPlans) {
-        if (art.articuloCP_id) nomencladorIds.add(art.articuloCP_id);
-        if (art.combo_id) comboIds.add(art.combo_id);
         out.push({
             puesto_id: puestoId,
             puesto_txt: puestoTxt,
@@ -222,6 +198,7 @@ async function buildArticulosDetalleForPuesto(
             articulo_nombre: "",
             cantidad: art.cantidad ?? 0,
             marca: "",
+            modelo: "",
             serie: "",
             fecha_entrega: "",
             combo_nombre: "",
@@ -231,12 +208,7 @@ async function buildArticulosDetalleForPuesto(
         });
     }
 
-    const entregas = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
-        where: planWhereBase,
-        orderBy: { id: "asc" },
-    });
     for (const art of entregas) {
-        if (art.nomencladorArticuloCP_id) nomencladorIds.add(art.nomencladorArticuloCP_id);
         out.push({
             puesto_id: puestoId,
             puesto_txt: puestoTxt,
@@ -245,6 +217,7 @@ async function buildArticulosDetalleForPuesto(
             articulo_nombre: "",
             cantidad: 1,
             marca: art.marca ?? "",
+            modelo: art.modelo ?? "",
             serie: art.serie ?? "",
             fecha_entrega: fmtDateTime(art.fechaEntrega),
             combo_nombre: "",
@@ -254,24 +227,7 @@ async function buildArticulosDetalleForPuesto(
         });
     }
 
-    const nomencladorById = new Map<number, string>();
-    if (nomencladorIds.size) {
-        const rows = await prisma.n_articulo_corpo_puesto.findMany({
-            where: { id: { in: [...nomencladorIds] } },
-            select: { id: true, nombre: true },
-        });
-        for (const r of rows) nomencladorById.set(r.id, r.nombre);
-    }
-    const comboById = new Map<number, string>();
-    if (comboIds.size) {
-        const rows = await prisma.e_estructura_combo_articulo_cp.findMany({
-            where: { id: { in: [...comboIds] } },
-            select: { id: true, nombre: true },
-        });
-        for (const r of rows) comboById.set(r.id, r.nombre);
-    }
-
-    const planById = new Map([...comboPlansAll, ...directPlans].map((p) => [p.id, p]));
+    const planById = new Map([...comboPlans, ...directPlans].map((p) => [p.id, p]));
     for (const row of out) {
         if (row.origen === "Plan" || row.origen === "Plan (combo)") {
             const planRow = planById.get(row.registro_id);
@@ -288,11 +244,19 @@ async function buildArticulosDetalleForPuesto(
         }
     }
 
-    await attachMovimientosCounts(prisma, out);
     return out;
 }
 
-async function attachMovimientosCounts(prisma: PrismaClient, articulos: ArticuloDetalleRow[]): Promise<void> {
+async function enrichArticulosDetalleWithMovCounts(
+    prisma: ReportDataAccess,
+    articulosByPuesto: ArticuloDetalleRow[][],
+): Promise<void> {
+    const all = articulosByPuesto.flat();
+    await attachMovimientosCounts(prisma, all);
+}
+
+
+async function attachMovimientosCounts(prisma: ReportDataAccess, articulos: ArticuloDetalleRow[]): Promise<void> {
     if (!articulos.length) return;
     const planIds = new Set<number>();
     const asignadoIds = new Set<number>();
@@ -328,7 +292,7 @@ async function attachMovimientosCounts(prisma: PrismaClient, articulos: Articulo
     }
 }
 
-async function attachMovimientosToArticulos(prisma: PrismaClient, articulos: ArticuloDetalleRow[]): Promise<void> {
+async function attachMovimientosToArticulos(prisma: ReportDataAccess, articulos: ArticuloDetalleRow[]): Promise<void> {
     if (!articulos.length) return;
     const planIds = new Set<number>();
     const asignadoIds = new Set<number>();
@@ -383,7 +347,7 @@ async function attachMovimientosToArticulos(prisma: PrismaClient, articulos: Art
     }
 }
 
-async function loadHierarchyForPuestos(prisma: PrismaClient, puestoIds: number[]) {
+async function loadHierarchyForPuestos(prisma: ReportDataAccess, puestoIds: number[]) {
     const puestos = await prisma.e_estructura_puesto.findMany({
         where: { id: { in: puestoIds }, deleted: null },
         select: { id: true, nombre: true, codigo: true, sucursal_id: true, comboArticulosCP_id: true },
@@ -443,7 +407,7 @@ function sortPuestoRows(rows: PuestoReportRow[], orderKey: ArticulosPuestoOrderK
 }
 
 export async function queryArticulosPuestoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: ArticulosPuestoModuleFilters,
     orderKey: ArticulosPuestoOrderKey,
 ): Promise<PuestoReportRow[]> {
@@ -466,7 +430,28 @@ export async function queryArticulosPuestoRows(
     const { puestos, sucursalById, contratoById, clienteById, divisionById, empresaById } =
         await loadHierarchyForPuestos(prisma, puestoIds);
 
+    const batch = await loadArticulosDataByPuesto(prisma, puestos);
+
+    const nomencladorIds = new Set<number>();
+    const comboIds = new Set<number>();
+    for (const slice of batch.values()) {
+        for (const plan of [...slice.comboPlans, ...slice.directPlans]) {
+            if (plan.articuloCP_id) nomencladorIds.add(plan.articuloCP_id);
+            if (plan.combo_id) comboIds.add(plan.combo_id);
+        }
+        for (const ent of slice.entregas) {
+            if (ent.nomencladorArticuloCP_id) nomencladorIds.add(ent.nomencladorArticuloCP_id);
+        }
+        if (slice.combo) comboIds.add(slice.combo.id);
+    }
+
+    const [nomencladorById, comboById] = await Promise.all([
+        loadNomencladorById(prisma, nomencladorIds),
+        loadComboNamesById(prisma, comboIds),
+    ]);
+
     const rows: PuestoReportRow[] = [];
+    const articulosByPuesto: ArticuloDetalleRow[][] = [];
     for (const puesto of puestos) {
         const puestoTxt = `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}`;
         const suc = puesto.sucursal_id ? sucursalById.get(puesto.sucursal_id) : undefined;
@@ -474,7 +459,11 @@ export async function queryArticulosPuestoRows(
         const cli = con?.cliente_id ? clienteById.get(con.cliente_id) : undefined;
         const div = con?.division_id ? divisionById.get(con.division_id) : undefined;
         const emp = con?.empresa_id ? empresaById.get(con.empresa_id) : undefined;
-        const articulos = await buildArticulosDetalleForPuesto(prisma, puesto, puestoTxt);
+        const slice = batch.get(puesto.id);
+        const articulos = slice
+            ? buildArticulosDetalleFromSlice(puesto.id, puestoTxt, slice, nomencladorById, comboById)
+            : [];
+        articulosByPuesto.push(articulos);
         rows.push({
             puesto_id: puesto.id,
             empresa_id: emp?.id ?? 0,
@@ -492,6 +481,8 @@ export async function queryArticulosPuestoRows(
             articulos,
         });
     }
+
+    await enrichArticulosDetalleWithMovCounts(prisma, articulosByPuesto);
 
     return sortPuestoRows(rows, orderKey);
 }
@@ -559,7 +550,7 @@ function addMovimientoDataRow(
 }
 
 export async function buildArticulosPuestoExcelConsolidado(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     rows: PuestoReportRow[],
 ): Promise<Buffer> {
     const allArticulos = rows.flatMap((r) => r.articulos);
@@ -632,6 +623,7 @@ export async function buildArticulosPuestoExcelConsolidado(
         "Artículo",
         "Cantidad",
         "Marca",
+        "Modelo",
         "Serie",
         "Fecha entrega",
         "Combo",
@@ -658,6 +650,7 @@ export async function buildArticulosPuestoExcelConsolidado(
                 a.articulo_nombre,
                 a.cantidad,
                 a.marca,
+                a.modelo,
                 a.serie,
                 a.fecha_entrega,
                 a.combo_nombre,

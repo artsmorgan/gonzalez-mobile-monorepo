@@ -1,11 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
 import { resolveManualReportPuestoIds } from "./manualesPuestoReport";
+import {
+    collectArticuloLinksFromBatch,
+    loadArticulosDataByPuesto,
+    type ArticuloLink,
+} from "./articulosPuestoBatchData";
 
 export type MantenimientoArticulosModuleFilters = ActaEntregaModuleFilters & {
     estados?: string[] | null;
@@ -261,83 +266,17 @@ const MANTENIMIENTO_EXCEL_COLUMNS: ExcelColumnDef[] = [
     { header: "Cantidad de archivos adjuntos", width: 14, value: (r) => r.archivos_adjuntos_count },
 ];
 
-type ArticuloLink = {
-    origen: "Plan" | "Asignado";
-    registro_id: number;
-    puesto_id: number;
-    corpo_id: number | null;
-    nomenclador_id: number | null;
-};
+type ArticuloLinkRef = ArticuloLink;
 
 async function collectArticuloLinksForPuestos(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     puestos: { id: number; sucursal_id: number | null; comboArticulosCP_id: number | null }[],
-): Promise<ArticuloLink[]> {
-    const links: ArticuloLink[] = [];
-    const seenPlan = new Set<number>();
-    const seenEntrega = new Set<number>();
-
-    for (const puesto of puestos) {
-        const puestoId = puesto.id;
-        const corpoId = puesto.sucursal_id != null && puesto.sucursal_id > 0 ? puesto.sucursal_id : null;
-        const orCorpo = corpoId ? [{ corpo_id: corpoId }] : [];
-        const planWhereBase = { OR: [{ puesto_id: puestoId }, ...orCorpo] };
-
-        if (puesto.comboArticulosCP_id) {
-            const comboPlans = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
-                where: { combo_id: puesto.comboArticulosCP_id },
-                select: { id: true, puesto_id: true, corpo_id: true, articuloCP_id: true },
-            });
-            for (const art of comboPlans) {
-                if (seenPlan.has(art.id)) continue;
-                seenPlan.add(art.id);
-                links.push({
-                    origen: "Plan",
-                    registro_id: art.id,
-                    puesto_id: art.puesto_id && art.puesto_id > 0 ? art.puesto_id : puestoId,
-                    corpo_id: art.corpo_id ?? corpoId,
-                    nomenclador_id: art.articuloCP_id,
-                });
-            }
-        }
-
-        const directPlans = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
-            where: planWhereBase,
-            select: { id: true, puesto_id: true, corpo_id: true, articuloCP_id: true },
-        });
-        for (const art of directPlans) {
-            if (seenPlan.has(art.id)) continue;
-            seenPlan.add(art.id);
-            links.push({
-                origen: "Plan",
-                registro_id: art.id,
-                puesto_id: art.puesto_id && art.puesto_id > 0 ? art.puesto_id : puestoId,
-                corpo_id: art.corpo_id ?? corpoId,
-                nomenclador_id: art.articuloCP_id,
-            });
-        }
-
-        const entregas = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
-            where: planWhereBase,
-            select: { id: true, puesto_id: true, corpo_id: true, nomencladorArticuloCP_id: true },
-        });
-        for (const art of entregas) {
-            if (seenEntrega.has(art.id)) continue;
-            seenEntrega.add(art.id);
-            links.push({
-                origen: "Asignado",
-                registro_id: art.id,
-                puesto_id: art.puesto_id && art.puesto_id > 0 ? art.puesto_id : puestoId,
-                corpo_id: art.corpo_id ?? corpoId,
-                nomenclador_id: art.nomencladorArticuloCP_id,
-            });
-        }
-    }
-
-    return links;
+): Promise<ArticuloLinkRef[]> {
+    const batch = await loadArticulosDataByPuesto(prisma, puestos);
+    return collectArticuloLinksFromBatch(puestos, batch);
 }
 
-async function loadHierarchyMaps(prisma: PrismaClient, puestoIds: number[]) {
+async function loadHierarchyMaps(prisma: ReportDataAccess, puestoIds: number[]) {
     const puestos = await prisma.e_estructura_puesto.findMany({
         where: { id: { in: puestoIds }, deleted: null },
         select: { id: true, nombre: true, codigo: true, sucursal_id: true },
@@ -439,7 +378,7 @@ function sortMantenimientoRows(rows: MantenimientoArticuloReportRow[], orderKey:
 }
 
 export async function queryMantenimientoArticulosRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: MantenimientoArticulosModuleFilters,
     orderKey: MantenimientoArticulosOrderKey,
 ): Promise<MantenimientoArticuloReportRow[]> {

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 
 export type LoginMarcaModuleFilters = {
@@ -77,7 +77,7 @@ export function filtersMatchLoginMarcaListQuery(parsedRowFilters: any, listModul
 }
 
 export async function queryLoginMarcaRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: LoginMarcaModuleFilters,
     orderKey: LoginMarcaOrderKey,
 ) {

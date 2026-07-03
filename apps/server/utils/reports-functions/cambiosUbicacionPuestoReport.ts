@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
@@ -109,7 +109,7 @@ type PuestoChain = {
     corpo_id: number;
 };
 
-async function loadPuestoChains(prisma: PrismaClient, puestoIds: number[]): Promise<Map<number, PuestoChain>> {
+async function loadPuestoChains(prisma: ReportDataAccess, puestoIds: number[]): Promise<Map<number, PuestoChain>> {
     const map = new Map<number, PuestoChain>();
     if (!puestoIds.length) return map;
 
@@ -152,7 +152,7 @@ async function loadPuestoChains(prisma: PrismaClient, puestoIds: number[]): Prom
 }
 
 export async function queryCambiosUbicacionPuestoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: CambiosUbicacionPuestoModuleFilters,
     orderKey: CambiosUbicacionPuestoOrderKey,
 ) {

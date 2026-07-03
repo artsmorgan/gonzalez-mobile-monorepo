@@ -1,8 +1,17 @@
 import { EJECUTIVO_COORDINADOR_SLUG, EJECUTIVO_COORDINADOR_TABLE } from "./nomenclatorsEjecutivoCoordinador";
 import { EMPLEADO_EJECUTIVO_SLUG, EMPLEADO_TABLE } from "./nomenclatorsEmpleadoEjecutivo";
 import { MOBILE_VARIABLES_SLUG, MOBILE_VARIABLES_TABLE } from "./nomenclatorsMobileVariables";
+import {
+    TIPO_MANTENIMIENTO_ARTICULO_SLUG,
+    TIPO_MANTENIMIENTO_ARTICULO_TABLE,
+} from "./nomenclatorsTipoMantenimientoArticulo";
 
-export type NomenclatorKind = "nombre" | "ejecutivo-coordinador" | "empleado-ejecutivo" | "mobile-variable";
+export type NomenclatorKind =
+    | "nombre"
+    | "ejecutivo-coordinador"
+    | "empleado-ejecutivo"
+    | "mobile-variable"
+    | "tipo-mantenimiento-articulo";
 
 export const NOMENCLATOR_SLUG_TO_TABLE: Record<string, string> = {
     "categorias-mantenimiento": "c_categoria_mantenimiento",
@@ -16,12 +25,14 @@ export const NOMENCLATOR_SLUG_TO_TABLE: Record<string, string> = {
     [EJECUTIVO_COORDINADOR_SLUG]: EJECUTIVO_COORDINADOR_TABLE,
     [EMPLEADO_EJECUTIVO_SLUG]: EMPLEADO_TABLE,
     [MOBILE_VARIABLES_SLUG]: MOBILE_VARIABLES_TABLE,
+    [TIPO_MANTENIMIENTO_ARTICULO_SLUG]: TIPO_MANTENIMIENTO_ARTICULO_TABLE,
 };
 
 const NOMENCLATOR_KINDS: Record<string, NomenclatorKind> = {
     [EJECUTIVO_COORDINADOR_SLUG]: "ejecutivo-coordinador",
     [EMPLEADO_EJECUTIVO_SLUG]: "empleado-ejecutivo",
     [MOBILE_VARIABLES_SLUG]: "mobile-variable",
+    [TIPO_MANTENIMIENTO_ARTICULO_SLUG]: "tipo-mantenimiento-articulo",
 };
 
 export function resolveNomenclatorTable(tipo: string): string | null {

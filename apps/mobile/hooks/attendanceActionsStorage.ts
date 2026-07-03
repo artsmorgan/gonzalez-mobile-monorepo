@@ -9,6 +9,7 @@ export type AttendancePendingAction =
       marcaId: number;
       reason: string;
       horaAccion: number;
+      planillasToken?: string;
     }
   | {
       id: string;
@@ -22,6 +23,7 @@ export type AttendancePendingAction =
       type: 'revert_leaving';
       marcaId: number;
       horaAccion: number;
+      planillasToken?: string;
     };
 
 export type AttendanceActionInput =
@@ -30,6 +32,7 @@ export type AttendanceActionInput =
       marcaId: number;
       reason: string;
       horaAccion: number;
+      planillasToken?: string;
       id?: string;
     }
   | {
@@ -43,6 +46,7 @@ export type AttendanceActionInput =
       type: 'revert_leaving';
       marcaId: number;
       horaAccion: number;
+      planillasToken?: string;
       id?: string;
     };
 
@@ -92,4 +96,49 @@ export async function removePendingSalidaActionsForMarca(marcaId: number): Promi
   const removed = list.length - next.length;
   await writeAttendanceActions(next);
   return removed;
+}
+
+export function attendanceActionRequiresPlanillasToken(
+  action: AttendancePendingAction
+): action is Extract<AttendancePendingAction, { type: 'salida' } | { type: 'revert_leaving' }> {
+  return action.type === 'salida' || action.type === 'revert_leaving';
+}
+
+/** Cola actual o migración legacy `marca_cache` → salida pendiente. */
+export async function pendingAttendanceActionsRequirePlanillasToken(): Promise<boolean> {
+  const actions = await readAttendanceActions();
+  if (actions.some(attendanceActionRequiresPlanillasToken)) {
+    return true;
+  }
+
+  const legacyMarca = await AsyncStorage.getItem('marca_cache');
+  return Boolean(legacyMarca && legacyMarca.trim() !== '');
+}
+
+export async function attachPlanillasTokenToPlanillasAttendanceActions(
+  planillasToken: string
+): Promise<void> {
+  const token = String(planillasToken ?? '').trim();
+  if (!token) return;
+
+  const actions = await readAttendanceActions();
+  let changed = false;
+
+  const next: AttendancePendingAction[] = [];
+  for (const action of actions) {
+    if (!attendanceActionRequiresPlanillasToken(action)) {
+      next.push(action);
+      continue;
+    }
+    if (action.planillasToken === token) {
+      next.push(action);
+      continue;
+    }
+    changed = true;
+    next.push({ ...action, planillasToken: token });
+  }
+
+  if (changed) {
+    await writeAttendanceActions(next);
+  }
 }

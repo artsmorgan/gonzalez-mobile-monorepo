@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
+
 import ExcelJS from "exceljs";
 
 export type UserLoginModuleFilters = {
@@ -74,7 +75,7 @@ export function collectEmpleadoIngresoIdsFromFilters(filters: UserLoginModuleFil
 }
 
 export async function queryRefreshTokensUserLogin(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: UserLoginModuleFilters,
     orderKey: UserLoginOrderKey,
 ): Promise<any[]> {

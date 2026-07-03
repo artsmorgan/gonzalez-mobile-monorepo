@@ -173,6 +173,7 @@ export function serializeArticulosPuestoForStorage(
     estado: string;
     observaciones?: string;
     marca?: string;
+    modelo?: string;
     serie?: string;
     mantenimiento_files?: ArticuloMantenimientoPendingFile[];
   }>,
@@ -190,6 +191,7 @@ export function serializeArticulosPuestoForStorage(
       created_at: createdAtIso,
     };
     if (a.marca != null) row.marca = a.marca;
+    if (a.modelo != null) row.modelo = a.modelo;
     if (a.serie != null) row.serie = a.serie;
 
     const files = (a.mantenimiento_files ?? [])

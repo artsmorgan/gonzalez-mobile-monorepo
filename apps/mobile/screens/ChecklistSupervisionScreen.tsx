@@ -14,6 +14,7 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
@@ -982,8 +983,7 @@ export default function ChecklistSupervisionScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // Estados para cámara (recreado desde cero)
   const [isCameraVisible, setIsCameraVisible] = useState(false);
@@ -1146,93 +1146,6 @@ export default function ChecklistSupervisionScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const d = new Date(value);
-      if (isNaN(d.getTime())) return String(value);
-      return d.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatEvaluacionForDisplay = (evaluacionStr: string): string => {
-    try {
-      const evalData = JSON.parse(evaluacionStr || '[]');
-      if (!Array.isArray(evalData)) return evaluacionStr;
-
-      const lines: string[] = [];
-      evalData.forEach((section: any) => {
-        if (section.title) {
-          lines.push(`\n${section.title}:`);
-        }
-        if (Array.isArray(section.subsections)) {
-          section.subsections.forEach((subsection: any) => {
-            if (subsection.title) {
-              lines.push(`  - ${subsection.title}`);
-            }
-            if (Array.isArray(subsection.inputs)) {
-              subsection.inputs.forEach((input: any) => {
-                let value = input.value || '';
-                if (input.type === 'checkbox') {
-                  value = value === 'true' ? 'Marcado' : 'No marcado';
-                } else if (input.type === 'photo') {
-                  value = input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-';
-                }
-                if (shouldShowInputTitle(input.title, subsection.title)) {
-                  lines.push(`    • ${String(input.title).trim()}: ${value}`);
-                } else {
-                  lines.push(`    • ${value}`);
-                }
-              });
-            }
-          });
-        }
-      });
-      return lines.join('\n') || evaluacionStr;
-    } catch {
-      return evaluacionStr;
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return '-';
-    if (typeof value === 'string') {
-      // Si parece ser JSON, intentar parsearlo
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (Array.isArray(parsed)) {
-            return parsed.map((item, idx) => {
-              if (typeof item === 'object' && item !== null) {
-                return `Item ${idx + 1}: ${JSON.stringify(item, null, 2)}`;
-              }
-              return String(item);
-            }).join('\n');
-          }
-          if (typeof parsed === 'object') {
-            return JSON.stringify(parsed, null, 2);
-          }
-        } catch {
-          // No es JSON válido, retornar como string
-        }
-      }
-      return value;
-    }
-    if (typeof value === 'object') {
-      return JSON.stringify(value, null, 2);
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -3715,181 +3628,13 @@ export default function ChecklistSupervisionScreen() {
         />
       )}
 
-      {/* Modal: ver cambios */}
-      <Modal
+            <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-
-                                // Caso especial: registro creado (__created__)
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-
-                                      {/* Campos no relacionados con firmas ni evaluación */}
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_supervisor' || k === 'firma_responsable' || k === 'evaluacion') return null;
-                                        const displayValue = formatChangeValue(k, v);
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {displayValue}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-
-                                      {/* Evaluación completa (formato especial) */}
-                                      {typeof created.evaluacion === 'string' && created.evaluacion.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>evaluacion: </ThemedText>
-                                            {formatEvaluacionForDisplay(String(created.evaluacion || ''))}
-                                          </ThemedText>
-                                        </ThemedView>
-                                      )}
-
-                                      {/* Firma supervisor (imagen) */}
-                                      {created.firma_supervisor && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_supervisor: </ThemedText>
-                                          </ThemedText>
-                                          <Image
-                                            source={{ uri: formatSignatureForDisplay(created.firma_supervisor) }}
-                                            style={styles.cambioSignatureImage}
-                                            resizeMode="contain"
-                                          />
-                                        </ThemedView>
-                                      )}
-
-                                      {/* Firma responsable (hash decodificado) */}
-                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
-                                            {(() => {
-                                              const info = decodeFirmaHash(created.firma_responsable);
-                                              return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                                : 'Firma responsable (formato no decodificable)';
-                                            })()}
-                                          </ThemedText>
-                                        </ThemedView>
-                                      )}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const isResponsableSignatureField = prop === 'firma_responsable';
-                                const isSupervisorSignatureField = prop === 'firma_supervisor';
-
-                                let displayValue = formatChangeValue(prop, value);
-                                if (prop === 'evaluacion') {
-                                  displayValue = formatEvaluacionForDisplay(String(value || ''));
-                                }
-
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {!isResponsableSignatureField && !isSupervisorSignatureField && displayValue}
-                                      {isResponsableSignatureField && (() => {
-                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
-                                        if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
-                                      })()}
-                                    </ThemedText>
-                                    {isSupervisorSignatureField && value && (
-                                      <Image
-                                        source={{ uri: formatSignatureForDisplay(value) }}
-                                        style={styles.cambioSignatureImage}
-                                        resizeMode="contain"
-                                      />
-                                    )}
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
 
       {/* Modal de firma dibujada (formulario o firma supervisor desde lista) */}
       <Modal

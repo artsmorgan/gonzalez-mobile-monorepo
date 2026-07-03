@@ -17,6 +17,7 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import { useQRScanner } from '../hooks/useQRScanner';
@@ -49,6 +50,7 @@ import type { StoredFileType } from '@/hooks/fileStorage';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import {
     submitMantenimientoEquipoBulkArticulos,
+    validateMantenimientoEquipoPuestosCodigos,
     type BulkPlantillaArticulo,
 } from '@/hooks/mantenimientoEquipoBulkArticulos';
 import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEquipoPlantillaLocal';
@@ -105,6 +107,7 @@ type ArticuloPuestoMantenimientoItem = {
     articulo_nombre: string;
     tipo: string; // "Plan de puesto" | "Asignado al puesto"
     marca?: string | null;
+    modelo?: string | null;
     serie?: string | null;
     tipos_mantenimiento: TipoMantenimientoArticulo[];
     mantenimientos: ArticuloMantenimiento[];
@@ -730,14 +733,6 @@ export default function MantenimientoEquipoScreen() {
 
     // Carga masiva de artículos (solo división Administrativos, requiere internet)
     const [isBulkArticulosModalVisible, setIsBulkArticulosModalVisible] = useState(false);
-    const [bulkEmpresaId, setBulkEmpresaId] = useState<number | null>(null);
-    const [bulkClienteId, setBulkClienteId] = useState<number | null>(null);
-    const [bulkDivisionId, setBulkDivisionId] = useState<number | null>(null);
-    const [bulkContratoId, setBulkContratoId] = useState<number | null>(null);
-    const [bulkSucursalId, setBulkSucursalId] = useState<number | null>(null);
-    const [bulkPuestoId, setBulkPuestoId] = useState<number | null>(null);
-    const [bulkSelectedPuestos, setBulkSelectedPuestos] = useState<number[]>([]);
-    const [bulkIsPuestosExpanded, setBulkIsPuestosExpanded] = useState(true);
     const [bulkPlantillaArticulos, setBulkPlantillaArticulos] = useState<BulkPlantillaArticulo[]>([]);
     const [bulkIsPlantillaExpanded, setBulkIsPlantillaExpanded] = useState(true);
     const [isBulkDownloadingPlantilla, setIsBulkDownloadingPlantilla] = useState(false);
@@ -898,8 +893,7 @@ export default function MantenimientoEquipoScreen() {
     // Modal: ver cambios (auditoría)
     const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
     const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-    const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-    const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+    const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
     // Modal firma dibujada (entrega/recibe)
     const [isDrawSignatureModalVisible, setIsDrawSignatureModalVisible] = useState(false);
@@ -1202,23 +1196,6 @@ export default function MantenimientoEquipoScreen() {
     const closeCambiosModal = () => {
         setIsCambiosModalVisible(false);
         setCambiosItems([]);
-        setExpandedCambioId(null);
-    };
-
-    const formatCambioCreatedAt = (value: any) => {
-        if (!value) return '';
-        try {
-            const d = new Date(String(value));
-            if (isNaN(d.getTime())) return String(value);
-            const day = d.getDate().toString().padStart(2, '0');
-            const month = (d.getMonth() + 1).toString().padStart(2, '0');
-            const year = d.getFullYear();
-            const hours = d.getHours().toString().padStart(2, '0');
-            const minutes = d.getMinutes().toString().padStart(2, '0');
-            return `${day}/${month}/${year} ${hours}:${minutes}`;
-        } catch {
-            return String(value);
-        }
     };
 
     const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -1411,68 +1388,7 @@ export default function MantenimientoEquipoScreen() {
         return map;
     }, [structure]);
 
-    const bulkFilteredPuestosFromTree = useMemo(() => {
-        const hasAnySelection =
-            bulkEmpresaId !== null ||
-            bulkClienteId !== null ||
-            bulkDivisionId !== null ||
-            bulkContratoId !== null ||
-            bulkSucursalId !== null ||
-            bulkPuestoId !== null;
-        if (!hasAnySelection) return [];
-        const seen = new Set<number>();
-        const out: { id: number; nombre: string }[] = [];
-        for (const empresa of structure) {
-            if (bulkEmpresaId !== null && empresa.id !== bulkEmpresaId) continue;
-            for (const cliente of empresa?.clientes ?? []) {
-                if (bulkClienteId !== null && cliente.id !== bulkClienteId) continue;
-                for (const division of cliente?.division ?? []) {
-                    if (bulkDivisionId !== null && division.id !== bulkDivisionId) continue;
-                    for (const contrato of division?.contratos ?? []) {
-                        if (bulkContratoId !== null && contrato.id !== bulkContratoId) continue;
-                        for (const sucursal of contrato?.sucursales ?? []) {
-                            if (bulkSucursalId !== null && sucursal.id !== bulkSucursalId) continue;
-                            for (const puesto of sucursal?.puestos ?? []) {
-                                if (bulkPuestoId !== null && puesto.id !== bulkPuestoId) continue;
-                                const pid = Number(puesto.id);
-                                if (!seen.has(pid)) {
-                                    seen.add(pid);
-                                    out.push({ id: pid, nombre: String(puesto.nombre ?? `Puesto #${pid}`) });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return out;
-    }, [
-        structure,
-        bulkEmpresaId,
-        bulkClienteId,
-        bulkDivisionId,
-        bulkContratoId,
-        bulkSucursalId,
-        bulkPuestoId,
-    ]);
-
-    const bulkSelectedPuestosUi = useMemo(
-        () =>
-            bulkSelectedPuestos
-                .map((id) => ({ id, nombre: puestoNameById.get(id) || `Puesto #${id}` }))
-                .sort((a, b) => a.nombre.localeCompare(b.nombre)),
-        [bulkSelectedPuestos, puestoNameById],
-    );
-
     const resetBulkArticulosForm = useCallback(() => {
-        setBulkEmpresaId(null);
-        setBulkClienteId(null);
-        setBulkDivisionId(null);
-        setBulkContratoId(null);
-        setBulkSucursalId(null);
-        setBulkPuestoId(null);
-        setBulkSelectedPuestos([]);
-        setBulkIsPuestosExpanded(true);
         setBulkPlantillaArticulos([]);
         setBulkIsPlantillaExpanded(true);
     }, []);
@@ -1481,32 +1397,6 @@ export default function MantenimientoEquipoScreen() {
         setIsBulkArticulosModalVisible(false);
         resetBulkArticulosForm();
     }, [resetBulkArticulosForm]);
-
-    const handleBulkHierarchyChange = useCallback((v: HierarchyPickerValues) => {
-        setBulkEmpresaId(v.empresaId);
-        setBulkClienteId(v.clienteId);
-        setBulkDivisionId(v.divisionId);
-        setBulkContratoId(v.contratoId);
-        setBulkSucursalId(v.sucursalId);
-        setBulkPuestoId(v.puestoId ?? null);
-    }, []);
-
-    const buscarPuestosBulk = useCallback(() => {
-        if (bulkFilteredPuestosFromTree.length === 0) {
-            Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
-            return;
-        }
-        setBulkSelectedPuestos((prev) => {
-            const merged = new Set(prev);
-            for (const p of bulkFilteredPuestosFromTree) merged.add(p.id);
-            return Array.from(merged);
-        });
-        setBulkIsPuestosExpanded(true);
-    }, [bulkFilteredPuestosFromTree]);
-
-    const removeBulkPuesto = useCallback((puestoId: number) => {
-        setBulkSelectedPuestos((prev) => prev.filter((id) => id !== puestoId));
-    }, []);
 
     const removeBulkPlantillaArticulo = useCallback((index: number) => {
         setBulkPlantillaArticulos((prev) => prev.filter((_, i) => i !== index));
@@ -1546,6 +1436,10 @@ export default function MantenimientoEquipoScreen() {
     }, [appendTokenToUrl, getConnectionStatus]);
 
     const handleUploadBulkPlantilla = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'La validación de códigos de puesto requiere conexión a internet.');
+            return;
+        }
         try {
             const result = await DocumentPicker.getDocumentAsync({
                 type: [
@@ -1572,36 +1466,51 @@ export default function MantenimientoEquipoScreen() {
                 Alert.alert('Plantilla vacía', 'No se encontraron registros válidos en la plantilla.');
                 return;
             }
-            setBulkPlantillaArticulos(rows);
+            const codigos = Array.from(new Set(rows.map((r) => r.codigo_puesto)));
+            const codigoValidation = await validateMantenimientoEquipoPuestosCodigos({
+                codigos,
+                refreshAccessToken,
+                logout,
+            });
+            if (!codigoValidation.status) {
+                const errText =
+                    codigoValidation.errors?.length
+                        ? codigoValidation.errors.slice(0, 8).join('\n')
+                        : codigoValidation.message || 'Algunos códigos de puesto no son válidos.';
+                Alert.alert('Códigos de puesto inválidos', errText);
+                return;
+            }
+            const puestoNombreByCodigo = new Map(
+                (codigoValidation.puestos ?? []).map((p) => [p.codigo, p.nombre]),
+            );
+            const enrichedRows = rows.map((row) => ({
+                ...row,
+                puesto_nombre: puestoNombreByCodigo.get(row.codigo_puesto) || row.codigo_puesto,
+            }));
+            setBulkPlantillaArticulos(enrichedRows);
             setBulkIsPlantillaExpanded(true);
-            Alert.alert('Listo', validation.message || `${rows.length} registro(s) cargado(s).`);
+            Alert.alert('Listo', validation.message || `${enrichedRows.length} registro(s) cargado(s).`);
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : 'No se pudo validar la plantilla.';
             Alert.alert('Error', msg);
         } finally {
             setIsBulkValidatingPlantilla(false);
         }
-    }, []);
+    }, [getConnectionStatus, refreshAccessToken, logout]);
 
     const handleSubmitBulkArticulos = useCallback(async () => {
         if (!(await getConnectionStatus())) {
             Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
             return;
         }
-        const puestoIds = Array.from(
-            new Set(bulkSelectedPuestos.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0)),
-        );
-        if (puestoIds.length === 0) {
-            Alert.alert('Validación', 'Selecciona al menos un puesto.');
-            return;
-        }
         if (bulkPlantillaArticulos.length === 0) {
             Alert.alert('Validación', 'Sube una plantilla con al menos un artículo.');
             return;
         }
+        const puestoCount = new Set(bulkPlantillaArticulos.map((a) => a.codigo_puesto)).size;
         Alert.alert(
             'Confirmar',
-            `¿Vincular ${bulkPlantillaArticulos.length} artículo(s) a ${puestoIds.length} puesto(s)?`,
+            `¿Vincular ${bulkPlantillaArticulos.length} artículo(s) a ${puestoCount} puesto(s)?`,
             [
                 { text: 'Cancelar', style: 'cancel' },
                 {
@@ -1610,7 +1519,6 @@ export default function MantenimientoEquipoScreen() {
                         try {
                             setIsBulkSubmitting(true);
                             const result = await submitMantenimientoEquipoBulkArticulos({
-                                puestoIds,
                                 articulos: bulkPlantillaArticulos,
                                 refreshAccessToken,
                                 logout,
@@ -1640,14 +1548,7 @@ export default function MantenimientoEquipoScreen() {
                 },
             ],
         );
-    }, [
-        bulkPlantillaArticulos,
-        bulkSelectedPuestos,
-        closeBulkArticulosModal,
-        getConnectionStatus,
-        refreshAccessToken,
-        logout,
-    ]);
+    }, [bulkPlantillaArticulos, closeBulkArticulosModal, getConnectionStatus, refreshAccessToken, logout]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
         if (roleName === 'OPERATIVO') {
@@ -1877,6 +1778,7 @@ export default function MantenimientoEquipoScreen() {
                         articulo_nombre: a.nombre ?? 'Desconocido',
                         tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
                         marca: a.marca ?? null,
+                        modelo: a.modelo ?? null,
                         serie: a.serie ?? null,
                         tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
                         mantenimientos: mantenimientosOffline,
@@ -2064,6 +1966,7 @@ export default function MantenimientoEquipoScreen() {
                             articulo_nombre: a.nombre ?? 'Desconocido',
                             tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
                             marca: a.marca ?? null,
+                            modelo: a.modelo ?? null,
                             serie: a.serie ?? null,
                             tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
                             mantenimientos: mantenimientosOffline,
@@ -2860,6 +2763,11 @@ export default function MantenimientoEquipoScreen() {
                                             if (item.articulo_nombre !== undefined) art.nombre = item.articulo_nombre;
                                             if (item.source === 'plan') {
                                                 if (item.marca !== undefined && item.marca !== null) art.marca = item.marca;
+                                                if (item.modelo !== undefined && item.modelo !== null) art.modelo = item.modelo;
+                                                if (item.serie !== undefined && item.serie !== null) art.serie = item.serie;
+                                            } else if (item.source === 'asignado') {
+                                                if (item.marca !== undefined && item.marca !== null) art.marca = item.marca;
+                                                if (item.modelo !== undefined && item.modelo !== null) art.modelo = item.modelo;
                                                 if (item.serie !== undefined && item.serie !== null) art.serie = item.serie;
                                             }
 
@@ -5631,158 +5539,13 @@ export default function MantenimientoEquipoScreen() {
                 </View>
             </Modal>
 
-            {/* Modal: ver cambios */}
-            <Modal
+                        <CambiosAppsModulesModal
                 visible={isCambiosModalVisible}
-                animationType="fade"
-                transparent
-                presentationStyle="overFullScreen"
-                onRequestClose={closeCambiosModal}
-            >
-                <View style={styles.overlay}>
-                    <ThemedView style={styles.floatModalCardMovimientos}>
-                        <ThemedView style={styles.floatModalHeader}>
-                            <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-                            <TouchableOpacity onPress={closeCambiosModal}>
-                                <Ionicons name="close" size={24} color="#333" />
-                            </TouchableOpacity>
-                        </ThemedView>
+                title={cambiosTitle}
+                items={cambiosItems}
+                onClose={closeCambiosModal}
+            />
 
-                        <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-                            {(!cambiosItems || cambiosItems.length === 0) ? (
-                                <ThemedView style={styles.emptyContainer}>
-                                    <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                                </ThemedView>
-                            ) : (
-                                cambiosItems.map((row: any) => {
-                                    let parsed: any[] = [];
-                                    try {
-                                        parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                                    } catch {
-                                        parsed = [];
-                                    }
-                                    const createdAtLabel = formatCambioCreatedAt(row?.created_at);
-                                    const isOpen = expandedCambioId === row.id;
-
-                                    return (
-                                        <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                                            <TouchableOpacity
-                                                style={styles.cambioCollapsableHeader}
-                                                onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                                                activeOpacity={0.8}
-                                            >
-                                                <ThemedText style={styles.cambioCollapsableTitle}>
-                                                    {createdAtLabel}
-                                                </ThemedText>
-                                                <Ionicons
-                                                    name={isOpen ? "chevron-up" : "chevron-down"}
-                                                    size={18}
-                                                    color="#007AFF"
-                                                />
-                                            </TouchableOpacity>
-
-                                            {isOpen && (
-                                                <ThemedView style={styles.cambioCollapsableContent}>
-                                                    <ThemedView style={styles.filterGroupSearch}>
-                                                        <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                                                        <ThemedText style={styles.changeDescription}>
-                                                            {row.empleado_nombre || 'Desconocido'}
-                                                            {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                                                        </ThemedText>
-                                                    </ThemedView>
-
-                                                    {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                                                        <ThemedView style={styles.filterGroupSearch}>
-                                                            <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                                                            {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                                                const prop = String(c?.prop ?? '-');
-                                                                const value = c?.after;
-                                                                const isFirmaManual = prop === 'firma_entrega' || prop === 'firma_recibe';
-                                                                const isFirmaResponsable = prop === 'firma_responsable';
-                                                                const isMantArmasForm = prop === 'mant_armas_form';
-                                                                const isMantArmasFormFirma = prop === 'mant_armas_form.firma' || (prop.endsWith('.firma') && prop.includes('mant_armas'));
-
-                                                                if (isMantArmasFormFirma && value != null && typeof value === 'string') {
-                                                                    return (
-                                                                        <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                                                            <ThemedText style={styles.changeDescription}>
-                                                                                <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                                                            </ThemedText>
-                                                                            <Image source={{ uri: formatSignatureForDisplay(value) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                                                        </ThemedView>
-                                                                    );
-                                                                }
-
-                                                                if (isMantArmasForm && value != null) {
-                                                                    let armasObj: any = null;
-                                                                    try {
-                                                                        armasObj = typeof value === 'string' ? JSON.parse(value) : value;
-                                                                    } catch {
-                                                                        armasObj = null;
-                                                                    }
-                                                                    if (armasObj && typeof armasObj === 'object') {
-                                                                        const firmaVal = armasObj.firma;
-                                                                        return (
-                                                                            <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                                                                <ThemedText style={[styles.changeDescription, { fontWeight: '800' }]}>{prop}:</ThemedText>
-                                                                                {Object.entries(armasObj).map(([k, v]) => {
-                                                                                    if (k === 'firma') {
-                                                                                        return (
-                                                                                            <ThemedView key={`${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                                                                                <ThemedText style={styles.changeDescription}>
-                                                                                                    <ThemedText style={{ fontWeight: '800' }}>firma (arma): </ThemedText>
-                                                                                                </ThemedText>
-                                                                                                {v ? (
-                                                                                                    <Image source={{ uri: formatSignatureForDisplay(typeof v === 'string' ? v : String(v)) || '' }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                                                                                ) : (
-                                                                                                    <ThemedText style={styles.changeDescription}>—</ThemedText>
-                                                                                                )}
-                                                                                            </ThemedView>
-                                                                                        );
-                                                                                    }
-                                                                                    const displayVal = v !== null && v !== undefined && typeof v === 'object' && !(v instanceof Date)
-                                                                                        ? JSON.stringify(v)
-                                                                                        : String(v ?? '');
-                                                                                    return (
-                                                                                        <ThemedText key={`${row.id}-${idx}-${k}`} style={styles.changeDescription}>
-                                                                                            <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                                                                            {displayVal}
-                                                                                        </ThemedText>
-                                                                                    );
-                                                                                })}
-                                                                            </ThemedView>
-                                                                        );
-                                                                    }
-                                                                }
-
-                                                                return (
-                                                                    <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                                                        <ThemedText style={styles.changeDescription}>
-                                                                            <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                                                            {!isFirmaManual && !isFirmaResponsable && !isMantArmasForm && !isMantArmasFormFirma && String(value ?? '')}
-                                                                            {isFirmaResponsable && typeof value === 'string' && value.trim() && (() => {
-                                                                                const info = decodeFirmaHash(value);
-                                                                                return info ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${info.timestamp || 'N/A'}` : 'Firma (formato no decodificable)';
-                                                                            })()}
-                                                                        </ThemedText>
-                                                                        {isFirmaManual && value && (
-                                                                            <Image source={{ uri: formatSignatureForDisplay(value) }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                                                        )}
-                                                                    </ThemedView>
-                                                                );
-                                                            })}
-                                                        </ThemedView>
-                                                    )}
-                                                </ThemedView>
-                                            )}
-                                        </ThemedView>
-                                    );
-                                })
-                            )}
-                        </ScrollView>
-                    </ThemedView>
-                </View>
-            </Modal>
 
             {/* Modal flotante para dibujar firma (arma) */}
             <Modal
@@ -5856,104 +5619,16 @@ export default function MantenimientoEquipoScreen() {
                     <ThemedView style={styles.bulkModalContainer}>
                         <ThemedText style={styles.modalTitle}>Carga masiva de artículos</ThemedText>
                         <ThemedText style={styles.bulkModalDisclaimer}>
-                            Seleccione los puestos destino, descargue la plantilla Excel, complétela y súbala para
-                            vincular artículos. La validación de la plantilla es local; descargar plantilla y
-                            actualizar requieren conexión a internet.
+                            Descargue la plantilla Excel, indique el código de cada puesto en la primera columna,
+                            complétela y súbala para vincular artículos. La validación de códigos de puesto requiere
+                            conexión a internet.
                         </ThemedText>
                         <ScrollView
                             style={styles.bulkModalScroll}
                             contentContainerStyle={styles.bulkModalScrollContent}
                             keyboardShouldPersistTaps="handled"
                         >
-                            {structure.length === 0 ? (
-                                <ThemedText style={styles.emptyText}>
-                                    No hay estructura en caché. Conéctese a internet y sincronice la jerarquía.
-                                </ThemedText>
-                            ) : (
-                                <>
-                                    <ThemedText style={styles.signatureHintMuted}>
-                                        Filtra el árbol hasta el nivel deseado y pulsa «Buscar puestos» para añadirlos
-                                        a la lista.
-                                    </ThemedText>
-                                    <HierarchyPickerFields
-                                        structure={structure}
-                                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
-                                        emptyPickerValue={0}
-                                        values={{
-                                            empresaId: bulkEmpresaId,
-                                            clienteId: bulkClienteId,
-                                            divisionId: bulkDivisionId,
-                                            contratoId: bulkContratoId,
-                                            sucursalId: bulkSucursalId,
-                                            puestoId: bulkPuestoId,
-                                        }}
-                                        onChange={handleBulkHierarchyChange}
-                                        labels={{ sucursal: 'Sucursal', puesto: 'Puesto' }}
-                                        renderLabel={(text) => (
-                                            <ThemedText style={styles.filterLabel}>{text}:</ThemedText>
-                                        )}
-                                        pickerStyle={styles.picker}
-                                        fieldGroupStyle={styles.filterGroup}
-                                    />
-
-                                    <ThemedView style={styles.treeActionsRow}>
-                                        <TouchableOpacity
-                                            style={styles.treeActionPrimary}
-                                            onPress={buscarPuestosBulk}
-                                        >
-                                            <Ionicons name="search-outline" size={18} color="#FFFFFF" />
-                                            <ThemedText style={styles.treeActionPrimaryText}>Buscar puestos</ThemedText>
-                                        </TouchableOpacity>
-                                        <TouchableOpacity
-                                            style={styles.treeActionSecondary}
-                                            onPress={() => setBulkSelectedPuestos([])}
-                                        >
-                                            <Ionicons name="trash-outline" size={18} color="#007AFF" />
-                                            <ThemedText style={styles.treeActionSecondaryText}>Limpiar</ThemedText>
-                                        </TouchableOpacity>
-                                    </ThemedView>
-
-                                    <ThemedText style={styles.signatureHintMuted}>
-                                        Puestos seleccionados: {bulkSelectedPuestos.length} | En el filtro:{' '}
-                                        {bulkFilteredPuestosFromTree.length}
-                                    </ThemedText>
-
-                                    {bulkSelectedPuestosUi.length > 0 && (
-                                        <ThemedView style={styles.selectedPuestosBox}>
-                                            <TouchableOpacity
-                                                style={styles.selectedPuestosHeader}
-                                                onPress={() => setBulkIsPuestosExpanded((p) => !p)}
-                                            >
-                                                <ThemedText style={styles.selectedPuestosHeaderText}>
-                                                    Puestos ({bulkSelectedPuestosUi.length})
-                                                </ThemedText>
-                                                <Ionicons
-                                                    name={bulkIsPuestosExpanded ? 'chevron-up' : 'chevron-down'}
-                                                    size={18}
-                                                    color="#007AFF"
-                                                />
-                                            </TouchableOpacity>
-                                            {bulkIsPuestosExpanded && (
-                                                <ThemedView style={styles.bulkRemovableList}>
-                                                    {bulkSelectedPuestosUi.map((puesto) => (
-                                                        <ThemedView key={puesto.id} style={styles.bulkRemovableItem}>
-                                                            <ThemedText style={styles.bulkRemovableItemText} numberOfLines={2}>
-                                                                {puesto.nombre}
-                                                            </ThemedText>
-                                                            <TouchableOpacity
-                                                                onPress={() => removeBulkPuesto(puesto.id)}
-                                                                accessibilityLabel={`Quitar ${puesto.nombre}`}
-                                                            >
-                                                                <Ionicons name="close-circle" size={22} color="#FF3B30" />
-                                                            </TouchableOpacity>
-                                                        </ThemedView>
-                                                    ))}
-                                                </ThemedView>
-                                            )}
-                                        </ThemedView>
-                                    )}
-
-                                    <ThemedView style={styles.bulkPlantillaActions}>
+                            <ThemedView style={styles.bulkPlantillaActions}>
                                         <TouchableOpacity
                                             style={[styles.bulkPlantillaButton, isBulkDownloadingPlantilla && { opacity: 0.7 }]}
                                             onPress={handleDownloadBulkPlantilla}
@@ -6006,10 +5681,16 @@ export default function MantenimientoEquipoScreen() {
                                                         >
                                                             <ThemedView style={{ flex: 1 }}>
                                                                 <ThemedText style={styles.bulkRemovableItemTitle}>
+                                                                    Puesto: {art.codigo_puesto}
+                                                                    {art.puesto_nombre && art.puesto_nombre !== art.codigo_puesto
+                                                                        ? ` — ${art.puesto_nombre}`
+                                                                        : ''}
+                                                                </ThemedText>
+                                                                <ThemedText style={styles.bulkRemovableItemTitle}>
                                                                     #{art.numero_articulo} — {art.articulo_nombre}
                                                                 </ThemedText>
                                                                 <ThemedText style={styles.bulkRemovableItemMeta}>
-                                                                    Cant: {art.cantidad} | {art.marca} | {art.serie} |{' '}
+                                                                    Cant: {art.cantidad} | {art.marca} | {art.modelo || '—'} | {art.serie} |{' '}
                                                                     {art.fecha_entrega}
                                                                 </ThemedText>
                                                             </ThemedView>
@@ -6025,8 +5706,6 @@ export default function MantenimientoEquipoScreen() {
                                             )}
                                         </ThemedView>
                                     )}
-                                </>
-                            )}
                         </ScrollView>
 
                         <ThemedView style={styles.bulkModalActions}>

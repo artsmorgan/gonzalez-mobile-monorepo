@@ -15,6 +15,7 @@ import {
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
@@ -502,29 +503,6 @@ function decodeFirmaHashSurvey(hash: string): Pick<
   }
 }
 
-function formatSurveyCambioValue(prop: string, value: any): string {
-  if (value == null) return '—';
-  if (prop === 'evaluaciones' && typeof value === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value.length > 500 ? `${value.slice(0, 500)}…` : value;
-    }
-  }
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-  const s = String(value);
-  if ((prop.includes('firma') || prop === 'firma_responsable') && s.length > 120) {
-    return `${s.slice(0, 120)}…`;
-  }
-  return s.length > 1200 ? `${s.slice(0, 1200)}…` : s;
-}
-
 type FormHierarchyIds = {
   empresaId: number;
   clienteId: number;
@@ -770,7 +748,7 @@ export default function SatisfactionSurveysScreen() {
   const [isCheckingMarca, setIsCheckingMarca] = useState<boolean>(true);
 
   // Estados para filtros jerárquicos
-  const [structure, setStructure] = useState<any[]>([]);
+  const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
@@ -925,8 +903,7 @@ export default function SatisfactionSurveysScreen() {
 
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // Input refs
   const empresaEvaluadaInputRef = useRef<TextInput>(null);
@@ -952,7 +929,6 @@ export default function SatisfactionSurveysScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
   };
 
   const fetchCambios = useCallback(
@@ -4322,213 +4298,13 @@ export default function SatisfactionSurveysScreen() {
         </View>
       </Modal>
 
-      {/* Modal: historial de cambios (c_cambios_apps_modules) */}
-      <Modal
+            <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.cambiosOverlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
-            <ScrollView
-              style={{ maxHeight: Dimensions.get('window').height * 0.75 }}
-              contentContainerStyle={{ padding: 16 }}
-            >
-              {!cambiosItems || cambiosItems.length === 0 ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtRaw = row?.created_at;
-                  const createdAtIso =
-                    createdAtRaw instanceof Date
-                      ? createdAtRaw.toISOString()
-                      : typeof createdAtRaw === 'string'
-                        ? createdAtRaw
-                        : '';
-                  const createdAtLabel = createdAtIso
-                    ? convertDateTimestampToLocalString(createdAtIso)
-                    : '—';
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() =>
-                          setExpandedCambioId((prev) => (prev === row.id ? null : row.id))
-                        }
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? 'chevron-up' : 'chevron-down'}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_responsable' || k === 'firma_evaluado')
-                                          return null;
-                                        return (
-                                          <ThemedView
-                                            key={`c-${row.id}-${idx}-${k}`}
-                                            style={styles.changeDescriptionContainer}
-                                          >
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatSurveyCambioValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                      {typeof created.firma_responsable === 'string' &&
-                                        created.firma_responsable.trim() && (
-                                          <ThemedView style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
-                                              {(() => {
-                                                const info = decodeFirmaHashSurvey(created.firma_responsable);
-                                                return info
-                                                  ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
-                                                      info.empleadoId || 'N/A'
-                                                    } - Hora: ${safeFirmaTimestampLabelSurvey(info.timestamp)}`
-                                                  : 'Firma responsable (formato no decodificable)';
-                                              })()}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        )}
-                                      {typeof created.firma_evaluado === 'string' &&
-                                        created.firma_evaluado.trim() && (
-                                          <ThemedView style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>firma_evaluado</ThemedText>
-                                            </ThemedText>
-                                            <Image
-                                              source={{
-                                                uri: formatSurveySignatureForDisplay(created.firma_evaluado),
-                                              }}
-                                              style={styles.cambioSignatureImage}
-                                              resizeMode="contain"
-                                            />
-                                          </ThemedView>
-                                        )}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                if (prop === '__deleted__' && c?.before && typeof c.before === 'object') {
-                                  const beforeDel: any = c.before;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-del`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro eliminado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(beforeDel).map(([k, v]) => (
-                                        <ThemedView
-                                          key={`c-${row.id}-${idx}-d-${k}`}
-                                          style={styles.changeDescriptionContainer}
-                                        >
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                            {formatSurveyCambioValue(k, v)}
-                                          </ThemedText>
-                                        </ThemedView>
-                                      ))}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const isFirmaEval = prop === 'firma_evaluado';
-                                const isFirmaResp = prop === 'firma_responsable';
-
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {!isFirmaEval &&
-                                        !isFirmaResp &&
-                                        formatSurveyCambioValue(prop, value)}
-                                      {isFirmaResp &&
-                                        (() => {
-                                          const info =
-                                            typeof value === 'string' ? decodeFirmaHashSurvey(value) : null;
-                                          if (!info)
-                                            return 'Firma responsable (formato no decodificable)';
-                                          return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${
-                                            info.empleadoId || 'N/A'
-                                          } - Hora: ${safeFirmaTimestampLabelSurvey(info.timestamp)}`;
-                                        })()}
-                                    </ThemedText>
-                                    {isFirmaEval && typeof value === 'string' && value.trim() !== '' && (
-                                      <Image
-                                        source={{ uri: formatSurveySignatureForDisplay(value) }}
-                                        style={styles.cambioSignatureImage}
-                                        resizeMode="contain"
-                                      />
-                                    )}
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
 
       {QRScannerComponent}
       <AppFooter />

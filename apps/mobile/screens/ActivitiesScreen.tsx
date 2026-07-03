@@ -6,6 +6,7 @@ import { ThemedView } from '@/components/ThemedView';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useAuth } from '@/contexts/AuthContext';
 import AppHeader from '@/components/AppHeader';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -727,6 +728,7 @@ interface PuestoArticuloOption {
   nombre: string;
   tipo?: string;
   marca?: string | null;
+  modelo?: string | null;
   serie?: string | null;
   cantidad?: number | null;
   cantidad_plan?: number | null;
@@ -739,6 +741,7 @@ interface ActivityInventoryArticleEntry {
   articuloNombre: string;
   tipo?: string;
   marca?: string | null;
+  modelo?: string | null;
   serie?: string | null;
   cantidad: number;
 }
@@ -1008,8 +1011,7 @@ export default function ActivitiesScreen() {
   // Modal: ver cambios de actividades creadas
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   /**
    * Misma fuente que PhysicalMinuteAgendaScreen: `loadMainStructureTreeMerged` (fragmentos + caché legada si hace falta).
@@ -2113,6 +2115,7 @@ export default function ActivitiesScreen() {
       nombre: String(articulo?.nombre || 'Artículo'),
       tipo: articulo?.tipo ? String(articulo.tipo) : undefined,
       marca: articulo?.marca != null ? String(articulo.marca) : null,
+      modelo: articulo?.modelo != null ? String(articulo.modelo) : null,
       serie: articulo?.serie != null ? String(articulo.serie) : null,
       cantidad: Number.isFinite(cantidad) ? cantidad : 0,
       cantidad_plan: articulo?.cantidad_plan != null && Number.isFinite(Number(articulo?.cantidad_plan))
@@ -2277,6 +2280,7 @@ export default function ActivitiesScreen() {
           articuloNombre: article.nombre,
           tipo: article.tipo,
           marca: article.marca ?? null,
+          modelo: article.modelo ?? null,
           serie: article.serie ?? null,
           cantidad: Number(article.cantidad_plan ?? article.cantidad ?? 0),
         });
@@ -2327,6 +2331,7 @@ export default function ActivitiesScreen() {
             puesto_nombre: article.puestoNombre,
             tipo: article.tipo || null,
             marca: article.marca || null,
+            modelo: article.modelo || null,
             serie: article.serie || null,
             cantidad: Number.isFinite(Number(article.cantidad)) ? Number(article.cantidad) : 0,
             reglas: [],
@@ -3565,113 +3570,6 @@ export default function ActivitiesScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatFrequencyForDisplay = (rawValue: any): string => {
-    let parsed: any = rawValue;
-    if (typeof rawValue === 'string') {
-      try {
-        parsed = JSON.parse(rawValue);
-      } catch {
-        return rawValue;
-      }
-    }
-    if (!parsed || typeof parsed !== 'object') return String(rawValue ?? '-');
-
-    const labels: Record<string, string> = {
-      title: 'Título',
-      type: 'Tipo',
-      interval: 'Intervalo',
-      unit: 'Unidad',
-      weekday: 'Día de semana',
-      weekdays: 'Días seleccionados',
-      weekOrdinal: 'Ordinal semanal',
-      monthOption: 'Opción mensual',
-      month: 'Mes',
-      day: 'Día',
-      endType: 'Finalización',
-      endDate: 'Fecha de finalización',
-      schedule: 'Horario',
-    };
-    const orderedKeys = [
-      'title', 'type', 'interval', 'unit', 'weekday', 'weekdays',
-      'weekOrdinal', 'monthOption', 'month', 'day', 'endType', 'endDate',
-      'schedule',
-    ];
-
-    const lines: string[] = [];
-    for (const key of orderedKeys) {
-      if (parsed[key] === undefined || parsed[key] === null || parsed[key] === '') continue;
-      const value = Array.isArray(parsed[key]) ? parsed[key].join(', ') : String(parsed[key]);
-      lines.push(`${labels[key] || key}: ${value}`);
-    }
-
-    for (const [key, value] of Object.entries(parsed)) {
-      if (orderedKeys.includes(key)) continue;
-      lines.push(`${labels[key] || key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
-    }
-
-    return lines.join('\n') || '-';
-  };
-
-  const formatDigitalSignatureForDisplay = (rawValue: any): string => {
-    if (!rawValue) return '-';
-    if (typeof rawValue !== 'string') return String(rawValue);
-    try {
-      const decoded = decodeSignatureHash(rawValue);
-      return [
-        `Sesión: ${decoded.sessionId || 'N/A'}`,
-        `Empleado: ${decoded.employeeId || 'N/A'}`,
-        `Latitud: ${decoded.latitude || 'N/A'}`,
-        `Longitud: ${decoded.longitude || 'N/A'}`,
-        `Hora: ${decoded.timestamp ? convertDateTimestampToLocalString(new Date(Number(decoded.timestamp)).toISOString()) : 'N/A'}`,
-      ].join('\n');
-    } catch {
-      return 'Firma digital (formato no decodificable)';
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return '-';
-    if (prop === 'frecuencia') return formatFrequencyForDisplay(value);
-    if (prop === 'firma_responsable') return formatDigitalSignatureForDisplay(value);
-
-    if (typeof value === 'string') {
-      if (value.trim().startsWith('{') || value.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(value);
-          if (prop === 'frecuencia') return formatFrequencyForDisplay(parsed);
-          if (typeof parsed === 'object') return JSON.stringify(parsed, null, 2);
-        } catch {
-          return value;
-        }
-      }
-      return value;
-    }
-
-    if (typeof value === 'object') {
-      return JSON.stringify(value, null, 2);
-    }
-    return String(value);
   };
 
   const handleViewCreatedActivityChanges = async (activityId: number) => {
@@ -4533,6 +4431,9 @@ export default function ActivitiesScreen() {
                                               • Marca: {articulo.marca || '-'}
                                             </ThemedText>
                                             <ThemedText style={styles.reglaValor}>
+                                              • Modelo: {articulo.modelo || '-'}
+                                            </ThemedText>
+                                            <ThemedText style={styles.reglaValor}>
                                               • Serie: {articulo.serie || '-'}
                                             </ThemedText>
                                             <ThemedText style={styles.reglaValor}>
@@ -5242,123 +5143,12 @@ export default function ActivitiesScreen() {
         </ThemedView>
       </Modal>
 
-      {/* Modal: ver cambios de actividades creadas */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <ThemedView style={styles.modalOverlay}>
-          <ThemedView style={styles.modalContainer}>
-            <ThemedView style={styles.modalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView
-              style={{ maxHeight: Dimensions.get('window').height * 0.75 }}
-              contentContainerStyle={{ padding: 16 }}
-            >
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                        </ThemedText>
-                                      </ThemedView>
-
-                                      {Object.entries(created).map(([k, v]) => {
-                                        const displayValue = formatChangeValue(k, v);
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {displayValue}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const displayValue = formatChangeValue(prop, value);
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {displayValue}
-                                    </ThemedText>
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </ThemedView>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <AppFooter />
       <SlideMenu

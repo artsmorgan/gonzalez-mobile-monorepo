@@ -2,7 +2,7 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
-import { createReport, updateReport } from "../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../utils/createReporteArticuloMantenimiento";
 import { uploadArticuloMantenimientoFiles } from "../../../utils/uploadArticuloMantenimientoFiles";
 
 export function articuloIncomingTimestamp(articulo: any, fallbackAccion: Date): Date {
@@ -104,6 +104,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
       typeof articulos_puesto === "string" ? JSON.parse(articulos_puesto) : articulos_puesto;
     if (Array.isArray(articulos_puesto_array) && articulos_puesto_array.length > 0) {
       let init_desc = false;
+      const estructuraContext = { puestoId: puesto_id, sucursalId: corpo_id };
       for (const articulo of articulos_puesto_array) {
         const articulo_desc = `- ${articulo.cantidad_real} de ${articulo.cantidad_requerida} unidades de "${articulo.nombre}" (Estado: ${articulo.estado})\n`;
 
@@ -141,14 +142,20 @@ export async function processChecklistSupervisionArticulosMantenimiento(
           ? articulo.mantenimiento_files
           : [];
 
-        const pushCreate = () => {
+        const pushCreate = async () => {
           const ts = articuloIncomingTimestamp(articulo, accionAt);
+          const { marca, modelo, serie } = await resolveMarcaModeloSerieFromArticuloEstructura(
+            req,
+            articulo,
+            estructuraContext,
+          );
           articulos_reporte.push({
             id: articulo.id,
             nombre: articulo.nombre,
             tipo: articulo.tipo,
-            marca: articulo.marca,
-            serie: articulo.serie,
+            marca,
+            modelo,
+            serie,
             cantidad_requerida: cantidadNec,
             cantidad_real: Number(articulo.cantidad_real ?? 0),
             estado: estado_actual,
@@ -160,7 +167,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
         };
 
         if (!last_mantenimiento?.id) {
-          pushCreate();
+          await pushCreate();
           if (estado_actual !== "Bueno") {
             send_notification = true;
             if (!init_desc) {
@@ -183,6 +190,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             fecha_solucion: serverNow,
             observaciones: articulo.observaciones ?? "",
             marca: articulo.marca,
+            modelo: articulo.modelo ?? null,
             serie_placa: articulo.serie,
             updated_at: serverNow,
             mantenimiento_files: mantenimientoFiles,
@@ -195,6 +203,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             cantidad_necesaria: cantidadNec,
             observaciones: articulo.observaciones ?? "",
             marca: articulo.marca,
+            modelo: articulo.modelo ?? null,
             serie_placa: articulo.serie,
             updated_at: serverNow,
             mantenimiento_files: mantenimientoFiles,
@@ -210,7 +219,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             init_desc = true;
           }
           articulos_desc += articulo_desc;
-          pushCreate();
+          await pushCreate();
         } else {
           articulos_reporte_update.push({
             id: last_mantenimiento.id,
@@ -219,6 +228,7 @@ export async function processChecklistSupervisionArticulosMantenimiento(
             cantidad_necesaria: cantidadNec,
             observaciones: articulo.observaciones ?? "",
             marca: articulo.marca,
+            modelo: articulo.modelo ?? null,
             serie_placa: articulo.serie,
             updated_at: serverNow,
             mantenimiento_files: mantenimientoFiles,

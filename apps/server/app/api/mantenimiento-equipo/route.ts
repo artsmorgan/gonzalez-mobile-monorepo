@@ -138,6 +138,7 @@ export async function GET(req: NextRequest) {
           tipo: ultimo?.articulo_plan_id ? "Plan de puesto" : "Plan de puesto",
           // Nota: e_estructura_articulo_corpo_puesto_plan no tiene marca/serie. Las exponemos desde el último mantenimiento si existe.
           marca: ultimo?.marca ?? null,
+          modelo: ultimo?.modelo ?? null,
           serie: ultimo?.serie_placa ?? null,
           cantidad_plan: p.cantidad ?? null,
           tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],
@@ -180,9 +181,10 @@ export async function GET(req: NextRequest) {
           articulo_nomenclador_id: articuloNomencladorId,
           articulo_nombre: articuloNombre,
           tipo: ultimo?.articulo_asignado_id ? "Asignado al puesto" : "Asignado al puesto",
-          // Según requerimiento: setear marca/serie como null para asignados
-          marca: null,
-          serie: null,
+          // Marca/serie/modelo provienen de `e_estructura_articulo_corpo_puesto_entrega`.
+          marca: a.marca ?? null,
+          modelo: a.modelo ?? null,
+          serie: a.serie ?? null,
           tipos_mantenimiento: articuloNomencladorId ? tiposByArticuloId.get(articuloNomencladorId) ?? [] : [],
           mantenimientos,
           movimientos,

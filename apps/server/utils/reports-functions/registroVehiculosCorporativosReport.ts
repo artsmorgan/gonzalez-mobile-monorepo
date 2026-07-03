@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import {
     normalizeActaEntregaFilters,
@@ -188,7 +188,7 @@ function applyDataRow(row: ExcelJS.Row, cols: number) {
 }
 
 async function vehicleIdsForField(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     field: "empresa_id" | "cliente_id" | "division_id" | "contrato_id" | "sucursal_id" | "puesto_id",
     ids: number[],
 ): Promise<Set<number>> {
@@ -200,7 +200,7 @@ async function vehicleIdsForField(
 }
 
 async function resolveVehicleIdsFromStructure(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     f: RegistroVehiculosCorporativosModuleFilters,
 ): Promise<Set<number> | undefined> {
     const sets: Set<number>[] = [];
@@ -285,7 +285,7 @@ export type RegistroVehiculoCorporativoReportRow = {
 };
 
 async function loadHierarchyMaps(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     empresaIds: number[],
     clienteIds: number[],
     divisionIds: number[],
@@ -390,7 +390,7 @@ function sortVehicleRows(
 }
 
 export async function queryRegistroVehiculosCorporativosRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: RegistroVehiculosCorporativosModuleFilters,
     orderKey: RegistroVehiculosCorporativosOrderKey,
 ): Promise<RegistroVehiculoCorporativoReportRow[]> {
@@ -447,7 +447,7 @@ export async function queryRegistroVehiculosCorporativosRows(
     const out: RegistroVehiculoCorporativoReportRow[] = [];
     for (const v of vehiculos) {
         const h = hierarchyTxt(v, maps);
-        const usos: UsoRow[] = v.c_usos_vehiculos_corporativos.map((u) => ({
+        const usos: UsoRow[] = v.c_usos_vehiculos_corporativos.map((u: any) => ({
             id: u.id,
             vehiculo_id: u.vehiculo_id,
             nombre_conductor: u.nombre_conductor,
@@ -461,7 +461,7 @@ export async function queryRegistroVehiculosCorporativosRows(
             combustible_inicio: u.combustible_inicio,
             combustible_fin: u.combustible_fin,
         }));
-        const mantenimientos: MantenimientoRow[] = v.c_mantenimiento_vehiculos_corporativos.map((m) => ({
+        const mantenimientos: MantenimientoRow[] = v.c_mantenimiento_vehiculos_corporativos.map((m: any) => ({
             id: m.id,
             vehiculo_id: m.vehiculo_id,
             fecha_txt: fmtDateTime(m.fecha),

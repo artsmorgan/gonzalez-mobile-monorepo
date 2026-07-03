@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -280,7 +280,7 @@ function approxLogoBoxPixels(colAWidth: number, colBWidth: number, rowHeightPt: 
 }
 
 export async function queryEncuestaSatisfaccionRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: EncuestaSatisfaccionModuleFilters,
     orderKey: EncuestaSatisfaccionOrderKey,
 ) {

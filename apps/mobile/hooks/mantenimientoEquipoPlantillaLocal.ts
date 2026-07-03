@@ -2,14 +2,16 @@ import * as XLSX from 'xlsx';
 import type { BulkPlantillaArticulo } from './mantenimientoEquipoBulkArticulos';
 
 export const PLANTILLA_TABLE1_HEADERS = [
+  'Código del puesto',
   'Número artículo',
   'Cantidad',
   'Serie',
   'Marca',
+  'Modelo',
   'Fecha de entrega',
 ] as const;
 
-const REF_COL_START = 7;
+const REF_COL_START = 9;
 const FECHA_ENTREGA_TEMPLATE_FMT = 'dd-mm-yyyy hh:mm:ss';
 
 function normalizeWhitespace(value: string): string {
@@ -137,6 +139,11 @@ function parseCantidad(value: unknown): number | null {
   return Math.trunc(n);
 }
 
+function parseCodigoPuesto(value: unknown): string {
+  if (value == null || value === '') return '';
+  return String(value).trim();
+}
+
 function findTable1HeaderRow(ws: XLSX.WorkSheet): number | null {
   const ref = ws['!ref'];
   if (!ref) return null;
@@ -149,6 +156,7 @@ function findTable1HeaderRow(ws: XLSX.WorkSheet): number | null {
       cellRaw(ws, r, 3),
       cellRaw(ws, r, 4),
       cellRaw(ws, r, 5),
+      cellRaw(ws, r, 6),
     ];
     if (headersMatch(values, PLANTILLA_TABLE1_HEADERS)) return r;
   }
@@ -209,25 +217,39 @@ export async function parseMantenimientoEquipoPlantillaLocal(
     const maxRow = ref ? XLSX.utils.decode_range(ref).e.r + 1 : headerRow + 500;
 
     for (let r = headerRow + 1; r <= maxRow; r++) {
-      const numeroRaw = cellRaw(ws, r, 1);
-      const cantidadRaw = cellRaw(ws, r, 2);
-      const serie = cellDisplay(ws, r, 3);
-      const marca = cellDisplay(ws, r, 4);
-      const fechaEntrega = readFechaEntregaCell(ws, r, 5);
+      const codigoPuesto = parseCodigoPuesto(cellRaw(ws, r, 1));
+      const numeroRaw = cellRaw(ws, r, 2);
+      const cantidadRaw = cellRaw(ws, r, 3);
+      const serie = cellDisplay(ws, r, 4);
+      const marca = cellDisplay(ws, r, 5);
+      const modelo = cellDisplay(ws, r, 6);
+      const fechaEntrega = readFechaEntregaCell(ws, r, 7);
 
       const numeroEmpty =
         numeroRaw == null ||
         numeroRaw === '' ||
         (typeof numeroRaw === 'string' && numeroRaw.trim() === '');
       const allEmpty =
+        !codigoPuesto &&
         numeroEmpty &&
         (cantidadRaw == null || cantidadRaw === '') &&
         !serie &&
         !marca &&
+        !modelo &&
         !fechaEntrega;
       if (allEmpty) continue;
 
-      if (headersMatch([numeroRaw, cantidadRaw, serie, marca, fechaEntrega], PLANTILLA_TABLE1_HEADERS)) {
+      if (
+        headersMatch(
+          [codigoPuesto, numeroRaw, cantidadRaw, serie, marca, modelo, fechaEntrega],
+          PLANTILLA_TABLE1_HEADERS,
+        )
+      ) {
+        continue;
+      }
+
+      if (!codigoPuesto) {
+        errors.push(`Fila ${r}: «Código del puesto» es obligatorio.`);
         continue;
       }
 
@@ -262,10 +284,12 @@ export async function parseMantenimientoEquipoPlantillaLocal(
       }
 
       rows.push({
+        codigo_puesto: codigoPuesto,
         numero_articulo: numero,
         cantidad,
         serie,
         marca,
+        modelo: modelo || null,
         fecha_entrega: fechaEntrega,
         articulo_nombre: articuloNombre,
       });

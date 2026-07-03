@@ -58,6 +58,10 @@ import {
   mergeTrainingsCacheForCorpo,
 } from '@/hooks/trainingsCacheHelpers';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import EmployeeSearchModal from '@/components/EmployeeSearchModal';
+import PuestoSearchModal from '@/components/PuestoSearchModal';
+import type { EmployeeSearchHit } from '@/hooks/employeeSearch';
+import type { PuestoSearchHit } from '@/hooks/puestoSearch';
 
 type TrainingsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Trainings'>;
 type TrainingsScreenRouteProp = RouteProp<RootStackParamList, 'Trainings'>;
@@ -342,61 +346,6 @@ const findContratoIdForSucursalIn = (tree: StructureTree, sucursalId: number | n
   return null;
 };
 
-/** Localiza la sucursal (corpo) en el árbol `main_structure_cache`, misma jerarquía que main-structure/route.ts */
-const findSucursalNodeByIdInTree = (
-  tree: StructureTree,
-  sucursalId: number
-): SucursalNode | null => {
-  for (const empresa of tree || []) {
-    for (const cliente of empresa.clientes || []) {
-      for (const division of cliente.division || []) {
-        for (const contrato of division.contratos || []) {
-          for (const sucursal of contrato.sucursales || []) {
-            if (Number(sucursal.id) === Number(sucursalId)) {
-              return sucursal as SucursalNode;
-            }
-          }
-        }
-      }
-    }
-  }
-  return null;
-};
-
-const extractPuestosUniqueFromSucursalNode = (sucursal: SucursalNode): Puesto[] => {
-  const byId = new Map<number, Puesto>();
-  for (const p of sucursal.puestos || []) {
-    const id = Number(p?.id);
-    if (!Number.isFinite(id) || byId.has(id)) continue;
-    byId.set(id, { id, nombre: String(p?.nombre ?? '') });
-  }
-  return [...byId.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-};
-
-const extractEmpleadosUniqueFromSucursalNode = (sucursal: SucursalNode): Empleado[] => {
-  const byId = new Map<number, Empleado>();
-  for (const puesto of sucursal.puestos || []) {
-    for (const plaza of puesto.plazas || []) {
-      for (const emp of plaza.empleados || []) {
-        const id = Number(emp?.id);
-        if (!Number.isFinite(id) || byId.has(id)) continue;
-        const nombre = [emp?.nombre, emp?.primer_apellido, emp?.segundo_apellido]
-          .filter((x) => x != null && String(x).trim() !== '')
-          .map((x) => String(x).trim())
-          .join(' ');
-        byId.set(id, {
-          id,
-          nombre: nombre || String(emp?.nombre ?? ''),
-          cedula: String(emp?.cedula ?? ''),
-          fecha_contratacion:
-            emp?.fecha_contratacion != null ? String(emp.fecha_contratacion) : '',
-        });
-      }
-    }
-  }
-  return [...byId.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-};
-
 /** Jerarquía desde `current_marca` almacenada como en MarcarIngresoSalidaScreen (empresa, cliente, contrato, corpo, roleDivision.division, puesto). */
 const buildHierarchyFromCurrentMarca = (current: any, tree: StructureTree): HierarchyPath => {
   const empresaId = current?.empresa?.id != null ? Number(current.empresa.id) : null;
@@ -502,12 +451,6 @@ export default function TrainingsScreen() {
   const [corpoId, setCorpoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<string | null>(null);
   const [structure, setStructure] = useState<EmpresaStructure[]>([]);
-  const structureRef = useRef(structure);
-  structureRef.current = structure;
-
-  // Dropdowns data (corpo del formulario de creación)
-  const [puestos, setPuestos] = useState<Puesto[]>([]);
-  const [empleados, setEmpleados] = useState<Empleado[]>([]);
 
   // Form states
   const [isCreating, setIsCreating] = useState(false);
@@ -519,8 +462,9 @@ export default function TrainingsScreen() {
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
   const [selectedTipo, setSelectedTipo] = useState<'Presencial' | 'Virtual'>('Presencial');
   const [selectedEmpleados, setSelectedEmpleados] = useState<Empleado[]>([]);
-  const [codigoEmpleadoBusqueda, setCodigoEmpleadoBusqueda] = useState<string>('');
   const [selectedPuestos, setSelectedPuestos] = useState<Puesto[]>([]);
+  const [employeeSearchModalVisible, setEmployeeSearchModalVisible] = useState(false);
+  const [puestoSearchModalVisible, setPuestoSearchModalVisible] = useState(false);
   /** Nuevos archivos: persistidos con `fileStorage` (mismo criterio que acta-entrega). */
   const [pendingTrainingFiles, setPendingTrainingFiles] = useState<TrainingFileQueueMeta[]>([]);
   const [editingTraining, setEditingTraining] = useState<Training | null>(null);
@@ -699,60 +643,6 @@ export default function TrainingsScreen() {
     );
   };
 
-  const getEmpleadoByCodigo = async (codigo: string) => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/empleados/codigo/${encodeURIComponent(String(codigo).trim())}`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-
-    if (!response) {
-      throw new Error('Sesión expirada');
-    }
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData?.message || 'No se pudo obtener el empleado por código');
-    }
-
-    const data = await response.json();
-    if (!data?.status || !data?.data) {
-      throw new Error(data?.message || 'Empleado no encontrado');
-    }
-
-    return data.data;
-  };
-
-  const hydratePuestosEmpleadosForCorpo = useCallback(async (corpoId: number) => {
-    let tree: StructureTree = Array.isArray(structureRef.current) ? structureRef.current : [];
-    if (tree.length === 0) {
-      try {
-        const merged = await loadMainStructureTreeMerged();
-        tree = Array.isArray(merged) ? (merged as StructureTree) : [];
-      } catch {
-        tree = [];
-      }
-    }
-    const sucursalNode = findSucursalNodeByIdInTree(tree, corpoId);
-    if (!sucursalNode) {
-      setPuestos([]);
-      setEmpleados([]);
-      return;
-    }
-    setPuestos(extractPuestosUniqueFromSucursalNode(sucursalNode));
-    setEmpleados(extractEmpleadosUniqueFromSucursalNode(sucursalNode));
-  }, []);
-
   const listFetchGenRef = useRef(0);
 
   const fetchTrainingsForCorpo = useCallback(async () => {
@@ -922,7 +812,6 @@ export default function TrainingsScreen() {
         }
 
         if (!isStale()) {
-          await hydratePuestosEmpleadosForCorpo(corpo_id);
           setCorpoId(corpo_id);
         }
       } else {
@@ -942,7 +831,6 @@ export default function TrainingsScreen() {
           setOfflineMessage('Sin conexión: no hay capacitaciones guardadas para mostrar.');
         }
 
-        await hydratePuestosEmpleadosForCorpo(corpo_id);
       }
     } catch (error) {
       if (isStale()) return;
@@ -966,11 +854,10 @@ export default function TrainingsScreen() {
         }
       }
 
-      await hydratePuestosEmpleadosForCorpo(corpo_id);
     } finally {
       if (!isStale()) setIsListLoading(false);
     }
-  }, [marcaId, filterCorpoId, refreshAccessToken, logout, matchCacheToFilterCorpo, hydratePuestosEmpleadosForCorpo]);
+  }, [marcaId, filterCorpoId, refreshAccessToken, logout, matchCacheToFilterCorpo]);
 
   const fetchTrainingsForCorpoRef = useRef<(() => Promise<void>) | null>(null);
   fetchTrainingsForCorpoRef.current = fetchTrainingsForCorpo;
@@ -1028,24 +915,28 @@ export default function TrainingsScreen() {
     const c = formContratosList.find((x) => x.id === formContratoId);
     return c?.sucursales || [];
   }, [formContratosList, formContratoId]);
-  const formPuestosFromStructure = useMemo((): Puesto[] => {
-    const s = formSucursalesList.find((x) => x.id === formCorpoId) as SucursalNode | undefined;
-    if (!s) return [];
-    return extractPuestosUniqueFromSucursalNode(s);
-  }, [formSucursalesList, formCorpoId]);
-  const puestosForFormPicker = useMemo(
-    () => (puestos.length > 0 ? puestos : formPuestosFromStructure),
-    [puestos, formPuestosFromStructure]
-  );
+  const handleTrainingEmployeeSearchSelect = useCallback((hit: EmployeeSearchHit) => {
+    const nombre = hit.title.replace(/\s*\([^)]*\)\s*$/, '').trim() || hit.title;
+    setSelectedEmpleados((prev) => {
+      if (prev.some((e) => e.id === hit.empleadoId)) return prev;
+      return [
+        ...prev,
+        {
+          id: hit.empleadoId,
+          nombre,
+          cedula: hit.cedula,
+          fecha_contratacion: hit.fechaContratacion,
+        },
+      ];
+    });
+  }, []);
 
-  useEffect(() => {
-    if (formCorpoId == null) {
-      setPuestos([]);
-      setEmpleados([]);
-      return;
-    }
-    void hydratePuestosEmpleadosForCorpo(formCorpoId);
-  }, [formCorpoId, hydratePuestosEmpleadosForCorpo]);
+  const handleTrainingPuestoSearchSelect = useCallback((hit: PuestoSearchHit) => {
+    setSelectedPuestos((prev) => {
+      if (prev.some((p) => p.id === hit.puestoId)) return prev;
+      return [...prev, { id: hit.puestoId, nombre: hit.title }];
+    });
+  }, []);
 
   const startCreating = async () => {
     const horaAccion = await getHoraAccion();
@@ -2469,85 +2360,15 @@ export default function TrainingsScreen() {
             {/* Empleados en la capacitación */}
             <ThemedView style={[styles.formGroup]}>
               <ThemedText style={styles.formLabel}>Empleados en la capacitación:</ThemedText>
-              <ThemedView style={[styles.inlineInputsRow, { marginBottom: 16 }]}>
-                <TextInput
-                  style={[styles.formInput, { flex: 1 }]}
-                  value={codigoEmpleadoBusqueda}
-                  onChangeText={setCodigoEmpleadoBusqueda}
-                  placeholder="Código de empleado"
-                  placeholderTextColor="#999"
-                  keyboardType="numeric"
-                />
-                <TouchableOpacity
-                  style={[styles.primaryButton, { marginLeft: 8 }]}
-                  onPress={async () => {
-                    const code = String(codigoEmpleadoBusqueda || '').trim();
-                    if (!code) {
-                      Alert.alert('Error', 'Debes ingresar un código');
-                      return;
-                    }
-                    try {
-                      const empleadoData = await getEmpleadoByCodigo(code);
-                      const empleadoId = Number(empleadoData?.id || 0);
-                      const nombreEmpleado = String(empleadoData?.nombre || '').trim();
-                      const cedulaEmpleado = String(empleadoData?.cedula || '').trim();
-                      if (!empleadoId || !nombreEmpleado) {
-                        throw new Error('Empleado inválido');
-                      }
-                      // Evitar duplicados
-                      if (!empleados.find(e => e.id === empleadoId)) {
-                        const nuevoEmpleado: Empleado = {
-                          id: empleadoId,
-                          nombre: nombreEmpleado,
-                          cedula: cedulaEmpleado,
-                          fecha_contratacion: String(empleadoData?.fecha_contratacion || ''),
-                        };
-                        setEmpleados(prev => [...prev, nuevoEmpleado]);
-                      }
-                      if (!selectedEmpleados.find(e => e.id === empleadoId)) {
-                        const empleadoSeleccionado: Empleado = {
-                          id: empleadoId,
-                          nombre: nombreEmpleado,
-                          cedula: cedulaEmpleado,
-                          fecha_contratacion: String(empleadoData?.fecha_contratacion || ''),
-                        };
-                        setSelectedEmpleados(prev => [...prev, empleadoSeleccionado]);
-                      }
-                      setCodigoEmpleadoBusqueda('');
-                    } catch (e: any) {
-                      Alert.alert('Error', e?.message || 'No se pudo buscar el empleado por código');
-                    }
-                  }}
-                >
-                  <ThemedText style={styles.primaryButtonText}>Buscar</ThemedText>
-                </TouchableOpacity>
-              </ThemedView>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={undefined}
-                  onValueChange={(value) => {
-                    if (value && !selectedEmpleados.find(e => e.id === value)) {
-                      const empleado = empleados.find(e => e.id === value);
-                      if (empleado) {
-                        setSelectedEmpleados([...selectedEmpleados, empleado]);
-                      }
-                    }
-                  }}
-                  style={styles.picker}
-                >
-                  <Picker.Item label="Seleccionar empleado..." value={undefined} color="#000000" />
-                  {empleados
-                    .filter(e => !selectedEmpleados.find(se => se.id === e.id))
-                    .map((empleado) => (
-                      <Picker.Item
-                        key={empleado.id}
-                        label={`${empleado.nombre} - ${empleado.cedula}`}
-                        value={empleado.id}
-                        color="#000000"
-                      />
-                    ))}
-                </Picker>
-              </ThemedView>
+              <TouchableOpacity
+                style={styles.addFileButton}
+                onPress={() => setEmployeeSearchModalVisible(true)}
+                activeOpacity={0.85}
+                accessibilityLabel="Buscar empleado"
+              >
+                <Ionicons name="search" size={18} color="#007AFF" />
+                <ThemedText style={styles.addFileButtonText}>Buscar empleado</ThemedText>
+              </TouchableOpacity>
               {selectedEmpleados.length > 0 && (
                 <ThemedView style={styles.selectedList}>
                   {selectedEmpleados.map((empleado) => (
@@ -2564,35 +2385,18 @@ export default function TrainingsScreen() {
               )}
             </ThemedView>
 
-            {/* Puestos de la capacitación (lista vinculada) */}
+            {/* Puestos de la capacitación */}
             <ThemedView style={styles.formGroup}>
               <ThemedText style={styles.formLabel}>Puestos de la capacitación:</ThemedText>
-              <ThemedView style={styles.pickerContainer}>
-                <Picker
-                  selectedValue={undefined}
-                  onValueChange={(value) => {
-                    if (value && !selectedPuestos.find((p) => p.id === value)) {
-                      const puesto = puestosForFormPicker.find((p) => p.id === value);
-                      if (puesto) {
-                        setSelectedPuestos([...selectedPuestos, puesto]);
-                      }
-                    }
-                  }}
-                  style={styles.picker}
-                >
-                  <Picker.Item label="Seleccionar puesto..." value={undefined} color="#000000" />
-                  {puestosForFormPicker
-                    .filter((p) => !selectedPuestos.find((sp) => sp.id === p.id))
-                    .map((puesto) => (
-                      <Picker.Item
-                        key={puesto.id}
-                        label={puesto.nombre}
-                        value={puesto.id}
-                        color="#000000"
-                      />
-                    ))}
-                </Picker>
-              </ThemedView>
+              <TouchableOpacity
+                style={styles.addFileButton}
+                onPress={() => setPuestoSearchModalVisible(true)}
+                activeOpacity={0.85}
+                accessibilityLabel="Buscar puesto"
+              >
+                <Ionicons name="search" size={18} color="#007AFF" />
+                <ThemedText style={styles.addFileButtonText}>Buscar puesto</ThemedText>
+              </TouchableOpacity>
               {selectedPuestos.length > 0 && (
                 <ThemedView style={styles.selectedList}>
                   {selectedPuestos.map((puesto) => (
@@ -3215,6 +3019,18 @@ export default function TrainingsScreen() {
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
       />
+      <EmployeeSearchModal
+        visible={employeeSearchModalVisible}
+        structure={structure}
+        onClose={() => setEmployeeSearchModalVisible(false)}
+        onSelect={handleTrainingEmployeeSearchSelect}
+      />
+      <PuestoSearchModal
+        visible={puestoSearchModalVisible}
+        structure={structure}
+        onClose={() => setPuestoSearchModalVisible(false)}
+        onSelect={handleTrainingPuestoSearchSelect}
+      />
       {QRScannerComponent}
 
       {/* Camera Modal */}
@@ -3568,23 +3384,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '600',
-  },
-  inlineInputsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  primaryButton: {
-    backgroundColor: '#007AFF',
-    borderRadius: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
   },
   formActions: {
     flexDirection: 'row',

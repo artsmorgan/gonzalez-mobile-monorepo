@@ -71,6 +71,8 @@ interface AuthProviderProps {
 
 const ACCESS_TOKEN_KEY = 'access_token';
 const REFRESH_TOKEN_KEY = 'refresh_token';
+const PLANILLAS_TOKEN_TOKEN_KEY = 'planillas_token';
+const PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY = 'planillas_token_expires_at';
 const EMPLOYEE_KEY = 'employee_data';
 const TOKEN_CREATED_AT_KEY = 'token_created_at';
 
@@ -90,6 +92,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [employee, setEmployee] = useState<Employee | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  const [planillasToken, setPlanillasToken] = useState<string | null>(null);
+  const [planillasTokenExpiresAt, setPlanillasTokenExpiresAt] = useState<string | null>(null);
   const [tokenCreatedAt, setTokenCreatedAt] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const isRefreshingRef = useRef(false);
@@ -104,11 +108,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   const loadStoredAuth = async () => {
     try {
-      const [storedAccessToken, storedRefreshToken, storedEmployee, storedTokenCreatedAt] = await Promise.all([
+      const [storedAccessToken, storedRefreshToken, storedEmployee, storedTokenCreatedAt, storedPlanillasToken, storedPlanillasTokenExpiresAt] = await Promise.all([
         AsyncStorage.getItem(ACCESS_TOKEN_KEY),
         AsyncStorage.getItem(REFRESH_TOKEN_KEY),
         AsyncStorage.getItem(EMPLOYEE_KEY),
         AsyncStorage.getItem(TOKEN_CREATED_AT_KEY),
+        AsyncStorage.getItem(PLANILLAS_TOKEN_TOKEN_KEY),
+        AsyncStorage.getItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY),
       ]);
 
       if (storedAccessToken && storedEmployee) {
@@ -118,6 +124,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         if (storedTokenCreatedAt) {
           const parsed = parseInt(storedTokenCreatedAt, 10);
           if (!Number.isNaN(parsed)) setTokenCreatedAt(parsed);
+        }
+        if (storedPlanillasToken && storedPlanillasTokenExpiresAt) {
+          setPlanillasToken(storedPlanillasToken);
+          setPlanillasTokenExpiresAt(storedPlanillasTokenExpiresAt);
         }
       }
     } catch (error) {
@@ -174,6 +184,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
       const tokenCreatedAt = responseData.createdAt;
+      const planillasToken = responseData.planillasToken;
+      const planillasTokenExpiresAt = responseData.planillasTokenExpiresAt;
 
       if (!accessToken || !refreshToken) {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
@@ -199,12 +211,16 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
         AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData)),
         AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, tokenCreatedAt.toString()),
+        AsyncStorage.setItem(PLANILLAS_TOKEN_TOKEN_KEY, planillasToken),
+        AsyncStorage.setItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY, JSON.stringify(planillasTokenExpiresAt)),
       ]);
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
       setTokenCreatedAt(tokenCreatedAt);
       setEmployee(employeeData);
+      setPlanillasToken(planillasToken);
+      setPlanillasTokenExpiresAt(planillasTokenExpiresAt);
 
       // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
       const connectivity = await resolveAppConnectivity();
@@ -300,6 +316,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
         AsyncStorage.removeItem(EMPLOYEE_KEY),
         AsyncStorage.removeItem(TOKEN_CREATED_AT_KEY),
+        AsyncStorage.removeItem(PLANILLAS_TOKEN_TOKEN_KEY),
+        AsyncStorage.removeItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY),
         AsyncStorage.removeItem('temp_state'),
       ]);
 
@@ -307,6 +325,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setRefreshToken(null);
       setEmployee(null);
       setTokenCreatedAt(null);
+      setPlanillasToken(null);
+      setPlanillasTokenExpiresAt(null);
 
       return serverResponse;
     } catch (error) {

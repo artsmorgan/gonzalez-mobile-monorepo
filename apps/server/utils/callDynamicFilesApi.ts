@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest } from "next/server";
 import axios from "axios";
+import { resolveUserAccessToken } from "./resolveUserAccessToken";
 
 type DynamicFileType = "image" | "video" | "audio" | "text" | "file" | "document";
 
@@ -21,22 +22,21 @@ const resolveBaseUrl = (req: NextRequest): string => {
     const host = req.headers.get("host");
     const forwardedProto = req.headers.get("x-forwarded-proto");
     const inferredProto =
-        host && (host.includes("localhost") || host.includes("127.0.0.1")) ? "http" : "https";
-    const proto = forwardedProto?.split(",")[0]?.trim() || inferredProto;
-    return host ? `${proto}://${host}` : req.nextUrl.origin;
+        forwardedProto?.split(",")[0]?.trim() ||
+        (host && (host.includes("localhost") || host.includes("127.0.0.1")) ? "http" : "https");
+    return host ? `${inferredProto}://${host}` : req.nextUrl.origin;
 };
 
-const getAuthHeader = (req: NextRequest): string => req.headers.get("authorization") || "";
-const getAccessToken = (req: NextRequest): string => {
-    const authHeader = getAuthHeader(req);
-    if (authHeader.startsWith("Bearer ")) {
-        return authHeader.split(" ")[1] || "";
-    }
-    const tokenFromQuery = req.nextUrl.searchParams.get("token");
-    if (tokenFromQuery && tokenFromQuery.trim().length > 0) {
-        return tokenFromQuery.trim();
-    }
-    return "";
+const NGROK_BYPASS_HEADER = { "ngrok-skip-browser-warning": "69420" };
+
+const buildAuthHeaders = (req: NextRequest): Record<string, string> => {
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...NGROK_BYPASS_HEADER,
+    };
+    const accessToken = resolveUserAccessToken(req);
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    return headers;
 };
 
 const ensureOk = (status: number, data: any, endpoint: string) => {
@@ -47,6 +47,7 @@ const ensureOk = (status: number, data: any, endpoint: string) => {
     throw new Error(String(message));
 };
 
+/** Mismo patrón que `articulo-mantenimiento/[id]`: JWT en Authorization + body.token, mobileAccessToken aparte. */
 export async function uploadDynamicFiles(params: {
     req: NextRequest;
     folderPath: string;
@@ -57,8 +58,7 @@ export async function uploadDynamicFiles(params: {
     const baseUrl = resolveBaseUrl(req);
     const endpoint = `${baseUrl}/api/dynamic-prisma/files`;
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
-    const accessToken = getAccessToken(req);
-    const authHeader = getAuthHeader(req) || (accessToken ? `Bearer ${accessToken}` : "");
+    const accessToken = resolveUserAccessToken(req);
 
     const response = await axios.post(
         endpoint,
@@ -70,10 +70,7 @@ export async function uploadDynamicFiles(params: {
             shouldVerifyAccessToken,
         },
         {
-            headers: {
-                Authorization: authHeader,
-                "Content-Type": "application/json",
-            },
+            headers: buildAuthHeaders(req),
             validateStatus: () => true,
         }
     );
@@ -89,13 +86,11 @@ export async function fetchDynamicFile(params: {
     shouldVerifyAccessToken?: boolean;
     download?: boolean;
 }) {
-    console.log(" --------------------------------- fetchDynamicFile", params);
     const { req, type, url, shouldVerifyAccessToken = true, download } = params;
     const baseUrl = resolveBaseUrl(req);
     const endpoint = `${baseUrl}/api/dynamic-prisma/files`;
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
-    const accessToken = getAccessToken(req);
-    const authHeader = getAuthHeader(req) || (accessToken ? `Bearer ${accessToken}` : "");
+    const accessToken = resolveUserAccessToken(req);
 
     const response = await axios.get(endpoint, {
         params: {
@@ -106,10 +101,7 @@ export async function fetchDynamicFile(params: {
             shouldVerifyAccessToken,
             ...(typeof download === "boolean" ? { download } : {}),
         },
-        headers: {
-            Authorization: authHeader,
-            "Content-Type": "application/json",
-        },
+        headers: buildAuthHeaders(req),
         responseType: "arraybuffer",
         validateStatus: () => true,
     });
@@ -145,8 +137,7 @@ export async function deleteDynamicFile(params: {
     const baseUrl = resolveBaseUrl(req);
     const endpoint = `${baseUrl}/api/dynamic-prisma/files`;
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
-    const accessToken = getAccessToken(req);
-    const authHeader = getAuthHeader(req) || (accessToken ? `Bearer ${accessToken}` : "");
+    const accessToken = resolveUserAccessToken(req);
 
     const response = await axios.delete(endpoint, {
         params: {
@@ -155,15 +146,10 @@ export async function deleteDynamicFile(params: {
             mobileAccessToken,
             shouldVerifyAccessToken,
         },
-        headers: {
-            Authorization: authHeader,
-            "Content-Type": "application/json",
-        },
+        headers: buildAuthHeaders(req),
         validateStatus: () => true,
     });
 
     ensureOk(response.status, response.data, endpoint);
     return response.data;
 }
-
-

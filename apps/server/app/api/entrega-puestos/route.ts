@@ -464,7 +464,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, cantidad: number }[] = [];
+        const articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, modelo: string, cantidad: number }[] = [];
 
         if (puesto.comboArticulosCP_id) {
             const combo_articulo_cp = await callDynamicPrisma({
@@ -506,6 +506,7 @@ export async function GET(req: NextRequest) {
                         tipo: "Plan",
                         marca: "",
                         serie: "",
+                        modelo: "",
                         cantidad: articulo.cantidad,
                     });
                 }
@@ -543,6 +544,7 @@ export async function GET(req: NextRequest) {
                 tipo: "Plan",
                 marca: "",
                 serie: "",
+                modelo: "",
                 cantidad: articulo.cantidad,
             });
         }
@@ -576,6 +578,7 @@ export async function GET(req: NextRequest) {
                 tipo: "Asignado",
                 marca: articulo.marca,
                 serie: articulo.serie,
+                modelo: articulo.modelo ?? "",
                 cantidad: 1,
             });
         }
@@ -994,6 +997,10 @@ export async function POST(req: NextRequest) {
                 req,
                 articulos_puesto,
                 now,
+                {
+                    puesto_id: parseInt(String(puesto_id)),
+                    corpo_id: parseInt(String(corpo_id)),
+                },
             );
             const { send_notification, articulos_desc } = mantResult;
 

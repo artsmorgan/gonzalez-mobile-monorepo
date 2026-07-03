@@ -15,6 +15,7 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -288,8 +289,7 @@ export default function LlavesScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // UI: filtros (collapsable)
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
@@ -395,34 +395,6 @@ export default function LlavesScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      return JSON.stringify(value, null, 2);
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -4629,157 +4601,12 @@ export default function LlavesScreen() {
         </View>
       </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => {
-                                const prop = String(c?.prop ?? '-');
-                                const value = c?.after;
-
-                                if (prop === '__created__' && value && typeof value === 'object') {
-                                  const created: any = value;
-                                  return (
-                                    <React.Fragment key={`c-${row.id}-${idx}-created`}>
-                                      <ThemedView style={styles.changeDescriptionContainer}>
-                                        <ThemedText style={styles.changeDescription}>
-                                          <ThemedText style={{ fontWeight: '800' }}>Registro creado</ThemedText>
-                                </ThemedText>
-                                      </ThemedView>
-                                      {Object.entries(created).map(([k, v]) => {
-                                        if (k === 'firma_entrega' || k === 'firma_recibe' || k === 'firma_responsable') return null;
-                                        return (
-                                          <ThemedView key={`c-${row.id}-${idx}-${k}`} style={styles.changeDescriptionContainer}>
-                                            <ThemedText style={styles.changeDescription}>
-                                              <ThemedText style={{ fontWeight: '800' }}>{k}: </ThemedText>
-                                              {formatChangeValue(k, v)}
-                                            </ThemedText>
-                                          </ThemedView>
-                                        );
-                                      })}
-                                      {typeof created.firma_responsable === 'string' && created.firma_responsable.trim() && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_responsable: </ThemedText>
-                                            {(() => {
-                                              const info = decodeFirmaHash(created.firma_responsable);
-                                              return info
-                                                ? `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`
-                                                : 'Firma responsable (formato no decodificable)';
-                                            })()}
-                                          </ThemedText>
-                            </ThemedView>
-                          )}
-                                      {created.firma_entrega && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_entrega: </ThemedText>
-                                          </ThemedText>
-                                          <Image source={{ uri: formatSignatureForDisplay(created.firma_entrega) }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                        </ThemedView>
-                      )}
-                                      {created.firma_recibe && (
-                                        <ThemedView style={styles.changeDescriptionContainer}>
-                                          <ThemedText style={styles.changeDescription}>
-                                            <ThemedText style={{ fontWeight: '800' }}>firma_recibe: </ThemedText>
-                                          </ThemedText>
-                                          <Image source={{ uri: formatSignatureForDisplay(created.firma_recibe) }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                        </ThemedView>
-                                      )}
-                                    </React.Fragment>
-                                  );
-                                }
-
-                                const isResponsable = prop === 'firma_responsable';
-                                const isManualSignature = prop === 'firma_entrega' || prop === 'firma_recibe';
-                                return (
-                                  <ThemedView key={`c-${row.id}-${idx}`} style={styles.changeDescriptionContainer}>
-                                    <ThemedText style={styles.changeDescription}>
-                                      <ThemedText style={{ fontWeight: '800' }}>{prop}: </ThemedText>
-                                      {!isManualSignature && !isResponsable && formatChangeValue(prop, value)}
-                                      {isResponsable && (() => {
-                                        const info = typeof value === 'string' ? decodeFirmaHash(value) : null;
-                                        if (!info) return 'Firma responsable (formato no decodificable)';
-                                        return `Sesión: ${info.sessionId || 'N/A'} - Empleado: ${info.empleadoId || 'N/A'} - Hora: ${ convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString()) || 'N/A'}`;
-                                      })()}
-                                    </ThemedText>
-                                    {isManualSignature && value && (
-                                      <Image source={{ uri: formatSignatureForDisplay(value) }} style={styles.cambioSignatureImage} resizeMode="contain" />
-                                    )}
-                                  </ThemedView>
-                                );
-                              })}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <AppFooter />
       <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="Llaves" />

@@ -1,5 +1,6 @@
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
+import { readStoredPlanillasToken } from "./planillasTokenStorage";
 
 interface saveMarcaParams {
     data_params: {
@@ -8,6 +9,7 @@ interface saveMarcaParams {
         horaAccion: number;
     };
     marcaId: number;
+    planillasToken?: string | null;
     refreshAccessToken?: () => Promise<boolean>;
     logout?: () => Promise<{ status: boolean; message: string }>;
 }
@@ -15,6 +17,7 @@ interface saveMarcaParams {
 export default async function saveMarca({
     data_params,
     marcaId,
+    planillasToken: planillasTokenOverride,
     refreshAccessToken,
     logout
 }: saveMarcaParams) {
@@ -32,6 +35,10 @@ export default async function saveMarca({
             throw new Error('Marca ID not found');
         }
 
+        const storedPlanillas = await readStoredPlanillasToken();
+        const planillasToken =
+          String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+
         const response = await authedFetch({
             url: `${apiUrl}/api/attendance/${marcaId}`,
             init: {
@@ -39,7 +46,12 @@ export default async function saveMarca({
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ type: data_params.type, reason: data_params.reason, horaAccion: data_params.horaAccion }),
+                body: JSON.stringify({
+                    type: data_params.type,
+                    reason: data_params.reason,
+                    horaAccion: data_params.horaAccion,
+                    planillasToken,
+                }),
             },
             refreshAccessToken,
             logout,

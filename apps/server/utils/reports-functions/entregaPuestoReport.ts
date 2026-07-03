@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
@@ -297,7 +297,7 @@ async function resolveLogoPathByEmpresaId(empresaId: number): Promise<string | n
 }
 
 export async function queryEntregaPuestoRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: EntregaPuestoModuleFilters,
     orderKey: EntregaPuestoOrderKey,
 ): Promise<any[]> {

@@ -42,6 +42,12 @@ import {
 } from '@/hooks/resolveDeviceCoordinates';
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
+import {
+  isStoredPlanillasTokenValid,
+  PLANILLAS_TOKEN_EXPIRES_AT_KEY,
+  PLANILLAS_TOKEN_KEY,
+} from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
 import { deleteAllFiles } from '@/hooks/fileStorage';
 import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
 import { getIncidentsCache, mergeIncidentsCacheForCorpo, setIncidentsCache } from '@/hooks/incidentsStorage';
@@ -195,6 +201,10 @@ export default function MarcarIngresoSalidaScreen() {
   const [futureMarks, setFutureMarks] = useState<any[]>([]);
   const [isLoadingFutureMarks, setIsLoadingFutureMarks] = useState(false);
   const hasRequestedInitialFetchRef = useRef(false);
+  const planillasRevalidationModalShownRef = useRef(false);
+  const resumeAfterPlanillasRevalidationRef = useRef(false);
+  const fetchAttendanceInFlightRef = useRef(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
   /** Aviso informativo entrada (cerrable), mismo patrón que ChecklistSupervisionScreen. */
   const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
   const [monitoringPreviousMinutes, setMonitoringPreviousMinutes] = useState<number>(15);
@@ -580,7 +590,41 @@ export default function MarcarIngresoSalidaScreen() {
     isLoadingData,
   ]);
 
+  const requestPlanillasRevalidationIfNeeded = async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  };
+
+  const handlePlanillasRevalidationSuccess = () => {
+    setShowPlanillasRevalidationModal(false);
+    resumeAfterPlanillasRevalidationRef.current = true;
+    void fetchAttendanceStatus();
+  };
+
+  const handlePlanillasRevalidationDismiss = () => {
+    planillasRevalidationModalShownRef.current = false;
+    resumeAfterPlanillasRevalidationRef.current = false;
+    setShowPlanillasRevalidationModal(false);
+    navigation.goBack();
+  };
+
   const fetchAttendanceStatus = async () => {
+    if (fetchAttendanceInFlightRef.current) {
+      return;
+    }
+
+    fetchAttendanceInFlightRef.current = true;
+
     try {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -631,6 +675,23 @@ export default function MarcarIngresoSalidaScreen() {
         return;
       }
 
+      const referenceMs = horaAccionValue || Date.now();
+      if (resumeAfterPlanillasRevalidationRef.current) {
+        resumeAfterPlanillasRevalidationRef.current = false;
+        planillasRevalidationModalShownRef.current = false;
+
+        const tokenAfterRefresh = await isStoredPlanillasTokenValid(referenceMs);
+        if (!tokenAfterRefresh.valid) {
+          await requestPlanillasRevalidationIfNeeded(referenceMs);
+          return;
+        }
+      } else {
+        const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+        if (!hasValidPlanillasToken) {
+          return;
+        }
+      }
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         throw new Error('Server URL not configured');
@@ -650,8 +711,14 @@ export default function MarcarIngresoSalidaScreen() {
 
       let shouldUpdateData = false;
 
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+      const attendanceUserUrl = planillasToken
+        ? `${apiUrl}/api/attendance/user/${employee.id}?pt=${encodeURIComponent(planillasToken)}`
+        : `${apiUrl}/api/attendance/user/${employee.id}`;
+
       const response = await authedFetch({
-        url: `${apiUrl}/api/attendance/user/${employee.id}`,
+        url: attendanceUserUrl,
         init: {
           method: 'GET',
           headers: {
@@ -759,6 +826,7 @@ export default function MarcarIngresoSalidaScreen() {
       setErrorMessage('Error al cargar los datos. Por favor, intenta nuevamente.');
     } finally {
       setIsLoadingData(false);
+      fetchAttendanceInFlightRef.current = false;
     }
   };
 
@@ -1030,6 +1098,14 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     if (await evaluateInternetConnection()) {
+      const referenceMs = (horaAccion as number) || (await getHoraAccion()) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        setIsProcessingMark(false);
+        setProcessingType(null);
+        return;
+      }
+
       data = await saveMarca({
         data_params: { type, reason, horaAccion: horaAccion },
         marcaId: attendanceData.marca.id,
@@ -1119,6 +1195,8 @@ export default function MarcarIngresoSalidaScreen() {
         'employee_data',
         'refresh_token',
         'token_created_at',
+        PLANILLAS_TOKEN_KEY,
+        PLANILLAS_TOKEN_EXPIRES_AT_KEY,
         'remembered_cedula',
         'server_time',
         'main_structure_created_at',
@@ -1339,6 +1417,11 @@ const getActivities = async (marcaId: number) => {
       const online = await evaluateInternetConnection();
 
       if (online) {
+        const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(horaRev);
+        if (!hasValidPlanillasToken) {
+          return;
+        }
+
         const data = await revertAttendanceLeaving({
           marcaId,
           horaAccion: horaRev,
@@ -2334,6 +2417,14 @@ const getActivities = async (marcaId: number) => {
         onClose={handleMenuClose}
         onHomePress={handleHomePress}
         currentRoute="marcar-ingreso-salida"
+      />
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
       />
 
       {/* Modal for early exit reason */}

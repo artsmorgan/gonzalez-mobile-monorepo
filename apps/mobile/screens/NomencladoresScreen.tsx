@@ -38,7 +38,12 @@ import { RootStackParamList } from '../App';
 
 type NomencladoresScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Nomencladores'>;
 
-type NomenclatorFormKind = 'nombre' | 'ejecutivo-coordinador' | 'empleado-ejecutivo' | 'mobile-variable';
+type NomenclatorFormKind =
+  | 'nombre'
+  | 'ejecutivo-coordinador'
+  | 'empleado-ejecutivo'
+  | 'mobile-variable'
+  | 'tipo-mantenimiento-articulo';
 
 type NomenclatorRow = {
   id: number;
@@ -53,6 +58,8 @@ type NomenclatorRow = {
   slug?: string;
   variable_value?: string;
   variable_type?: string;
+  articulo_id?: number;
+  articulo_nombre?: string;
 };
 
 type SelectOption = { id: number; nombre: string };
@@ -67,6 +74,7 @@ type NomenclatorType = {
 const EJECUTIVO_COORDINADOR_SLUG = 'coordinadores-ejecutivos';
 const EMPLEADO_EJECUTIVO_SLUG = 'empleados-ejecutivos';
 const MOBILE_VARIABLES_SLUG = 'variables-sistema';
+const TIPO_MANTENIMIENTO_ARTICULO_SLUG = 'tipos-mantenimiento-articulos';
 
 function normalizeBoolForPicker(value: string): string {
   const lower = value.trim().toLowerCase();
@@ -88,6 +96,13 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
     label: 'Categorías de mantenimiento',
     description: 'Utilizado en el módulo de Equipo del puesto.',
     formKind: 'nombre',
+  },
+  {
+    slug: TIPO_MANTENIMIENTO_ARTICULO_SLUG,
+    label: 'Tipo de mantenimiento de artículos',
+    description:
+      'Especifíca el tipo de mantenimiento que recibirá el artículo en cuestión en el módulo de equipo del puesto.',
+    formKind: 'tipo-mantenimiento-articulo',
   },
   {
     slug: 'tipos-producto-no-conforme',
@@ -168,6 +183,8 @@ function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
       slug: x?.slug != null ? String(x.slug) : undefined,
       variable_value: x?.variable_value != null ? String(x.variable_value) : undefined,
       variable_type: x?.variable_type != null ? String(x.variable_type) : undefined,
+      articulo_id: x?.articulo_id != null ? Number(x.articulo_id) : undefined,
+      articulo_nombre: x?.articulo_nombre != null ? String(x.articulo_nombre) : undefined,
     }))
     .filter((x) => Number.isFinite(x.id) && x.id > 0 && x.nombre !== '');
 }
@@ -201,6 +218,9 @@ export default function NomencladoresScreen() {
   const [formVariableSlug, setFormVariableSlug] = useState('');
   const [formVariableType, setFormVariableType] = useState('');
   const [formVariableValue, setFormVariableValue] = useState('');
+  const [articuloOptions, setArticuloOptions] = useState<SelectOption[]>([]);
+  const [filterArticuloId, setFilterArticuloId] = useState('0');
+  const [formArticuloId, setFormArticuloId] = useState('');
 
   const refreshOnlineStatus = useCallback(async () => {
     const networkState = await Network.getNetworkStateAsync();
@@ -292,8 +312,40 @@ export default function NomencladoresScreen() {
     }
   }, [refreshAccessToken, logout]);
 
+  const fetchTipoMantenimientoArticuloOptions = useCallback(async () => {
+    setLoadingOptions(true);
+    try {
+      const apiUrl = getApiUrl();
+      const response = await authedFetch({
+        url: `${apiUrl}/api/nomenclators/${TIPO_MANTENIMIENTO_ARTICULO_SLUG}/options`,
+        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+
+      const data = await response.json();
+      if (!response.ok || !data?.status) {
+        throw new Error(data?.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const articulos = Array.isArray(data.articulos) ? data.articulos : [];
+      setArticuloOptions(
+        articulos
+          .map((x: any) => ({ id: Number(x?.id), nombre: String(x?.nombre ?? '').trim() }))
+          .filter((x: SelectOption) => Number.isFinite(x.id) && x.id > 0 && x.nombre !== ''),
+      );
+    } catch (error) {
+      console.error('Error fetching tipo mantenimiento articulo options:', error);
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudieron cargar las opciones');
+      setArticuloOptions([]);
+    } finally {
+      setLoadingOptions(false);
+    }
+  }, [refreshAccessToken, logout]);
+
   const fetchRecords = useCallback(
-    async (type: NomenclatorType) => {
+    async (type: NomenclatorType, articuloFilterId?: string) => {
       const online = await refreshOnlineStatus();
       if (!online) {
         Alert.alert('Sin conexión', 'Esta pantalla requiere conexión a internet.');
@@ -303,8 +355,15 @@ export default function NomencladoresScreen() {
       setLoadingRecords(true);
       try {
         const apiUrl = getApiUrl();
+        let url = `${apiUrl}/api/nomenclators/${type.slug}`;
+        if (type.formKind === 'tipo-mantenimiento-articulo') {
+          const filterId = Number(articuloFilterId ?? filterArticuloId);
+          if (Number.isFinite(filterId) && filterId > 0) {
+            url += `?articulo_id=${filterId}`;
+          }
+        }
         const response = await authedFetch({
-          url: `${apiUrl}/api/nomenclators/${type.slug}`,
+          url,
           init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
           refreshAccessToken,
           logout,
@@ -326,7 +385,7 @@ export default function NomencladoresScreen() {
         setLoadingRecords(false);
       }
     },
-    [refreshAccessToken, logout, refreshOnlineStatus],
+    [refreshAccessToken, logout, refreshOnlineStatus, filterArticuloId],
   );
 
   const resetFormState = () => {
@@ -343,6 +402,7 @@ export default function NomencladoresScreen() {
     setFormVariableSlug('');
     setFormVariableType('');
     setFormVariableValue('');
+    setFormArticuloId('');
   };
 
   const openTypeModal = async (type: NomenclatorType) => {
@@ -354,6 +414,7 @@ export default function NomencladoresScreen() {
 
     setSelectedType(type);
     resetFormState();
+    setFilterArticuloId('0');
     setListModalVisible(true);
 
     if (type.formKind === 'ejecutivo-coordinador') {
@@ -362,8 +423,11 @@ export default function NomencladoresScreen() {
     if (type.formKind === 'empleado-ejecutivo') {
       await fetchEmpleadoEjecutivoOptions();
     }
+    if (type.formKind === 'tipo-mantenimiento-articulo') {
+      await fetchTipoMantenimientoArticuloOptions();
+    }
 
-    await fetchRecords(type);
+    await fetchRecords(type, '0');
   };
 
   const closeListModal = () => {
@@ -376,6 +440,8 @@ export default function NomencladoresScreen() {
     setFormEmpleadoSearch('');
     setFormEmpleadoResults([]);
     setSelectedEmpleado(null);
+    setArticuloOptions([]);
+    setFilterArticuloId('0');
   };
 
   const openCreateForm = () => {
@@ -386,6 +452,13 @@ export default function NomencladoresScreen() {
     setFormEmpleadoSearch('');
     setFormEmpleadoResults([]);
     setSelectedEmpleado(null);
+    const defaultArticuloId =
+      filterArticuloId !== '0'
+        ? filterArticuloId
+        : articuloOptions[0]
+          ? String(articuloOptions[0].id)
+          : '';
+    setFormArticuloId(defaultArticuloId);
     setShowForm(true);
   };
 
@@ -416,6 +489,9 @@ export default function NomencladoresScreen() {
           ? normalizeBoolForPicker(variableValue)
           : variableValue,
       );
+    } else if (selectedType?.formKind === 'tipo-mantenimiento-articulo') {
+      setFormArticuloId(row.articulo_id != null ? String(row.articulo_id) : '');
+      setFormNombre(row.nombre);
     } else {
       setFormNombre(row.nombre);
     }
@@ -508,6 +584,18 @@ export default function NomencladoresScreen() {
         return;
       }
       body = { variable_value: validation.normalizedValue };
+    } else if (selectedType.formKind === 'tipo-mantenimiento-articulo') {
+      const articulo_id = Number(formArticuloId);
+      const nombre = formNombre.trim();
+      if (!Number.isFinite(articulo_id) || articulo_id <= 0) {
+        Alert.alert('Validación', 'Debe seleccionar un artículo.');
+        return;
+      }
+      if (!nombre) {
+        Alert.alert('Validación', 'El nombre es obligatorio.');
+        return;
+      }
+      body = { articulo_id, nombre };
     } else {
       const nombre = formNombre.trim();
       if (!nombre) {
@@ -624,8 +712,16 @@ export default function NomencladoresScreen() {
   const isCompositeForm = selectedType?.formKind === 'ejecutivo-coordinador';
   const isEmpleadoEjecutivoForm = selectedType?.formKind === 'empleado-ejecutivo';
   const isMobileVariableForm = selectedType?.formKind === 'mobile-variable';
+  const isTipoMantenimientoArticuloForm = selectedType?.formKind === 'tipo-mantenimiento-articulo';
   const isEditOnlyForm = isMobileVariableForm;
-  const isOptionsForm = isCompositeForm || isEmpleadoEjecutivoForm;
+  const isOptionsForm = isCompositeForm || isEmpleadoEjecutivoForm || isTipoMantenimientoArticuloForm;
+
+  const handleFilterArticuloChange = (value: string) => {
+    setFilterArticuloId(value);
+    if (selectedType?.formKind === 'tipo-mantenimiento-articulo') {
+      void fetchRecords(selectedType, value);
+    }
+  };
 
   return (
     <ThemedView style={styles.container}>
@@ -705,7 +801,8 @@ export default function NomencladoresScreen() {
                   activeOpacity={0.85}
                   disabled={
                     (isCompositeForm && (loadingOptions || (!ejecutivoOptions.length && !coordinadorOptions.length))) ||
-                    (isEmpleadoEjecutivoForm && loadingOptions && !ejecutivoOptions.length)
+                    (isEmpleadoEjecutivoForm && loadingOptions && !ejecutivoOptions.length) ||
+                    (isTipoMantenimientoArticuloForm && (loadingOptions || !articuloOptions.length))
                   }
                 >
                   <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
@@ -845,6 +942,46 @@ export default function NomencladoresScreen() {
                         </View>
                       </>
                     )
+                  ) : isTipoMantenimientoArticuloForm ? (
+                    loadingOptions ? (
+                      <ThemedView style={styles.loadingBox}>
+                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ThemedText style={styles.loadingText}>Cargando opciones...</ThemedText>
+                      </ThemedView>
+                    ) : (
+                      <>
+                        <ThemedText style={styles.label}>Artículo</ThemedText>
+                        <View style={styles.pickerWrapper}>
+                          <Picker
+                            selectedValue={formArticuloId}
+                            onValueChange={(v) => setFormArticuloId(String(v))}
+                            style={styles.picker}
+                          >
+                            {articuloOptions.length === 0 ? (
+                              <Picker.Item label="Sin opciones disponibles" value="" color="#000000" />
+                            ) : (
+                              articuloOptions.map((opt) => (
+                                <Picker.Item
+                                  key={`art-${opt.id}`}
+                                  label={opt.nombre}
+                                  value={String(opt.id)}
+                                  color="#000000"
+                                />
+                              ))
+                            )}
+                          </Picker>
+                        </View>
+
+                        <ThemedText style={styles.label}>Nombre</ThemedText>
+                        <TextInput
+                          style={styles.input}
+                          value={formNombre}
+                          onChangeText={setFormNombre}
+                          placeholder="Nombre del tipo de mantenimiento"
+                          placeholderTextColor="#999"
+                        />
+                      </>
+                    )
                   ) : isMobileVariableForm ? (
                     <>
                       <ThemedText style={styles.label}>Variable</ThemedText>
@@ -930,6 +1067,30 @@ export default function NomencladoresScreen() {
                 </ThemedView>
               ) : null}
 
+              {!showForm && isTipoMantenimientoArticuloForm ? (
+                <>
+                  <ThemedText style={styles.label}>Filtrar por artículo</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={filterArticuloId}
+                      onValueChange={(v) => handleFilterArticuloChange(String(v))}
+                      style={styles.picker}
+                      enabled={!loadingRecords && !loadingOptions}
+                    >
+                      <Picker.Item label="Todos los artículos" value="0" color="#000000" />
+                      {articuloOptions.map((opt) => (
+                        <Picker.Item
+                          key={`filter-art-${opt.id}`}
+                          label={opt.nombre}
+                          value={String(opt.id)}
+                          color="#000000"
+                        />
+                      ))}
+                    </Picker>
+                  </View>
+                </>
+              ) : null}
+
               {loadingRecords ? (
                 <ThemedView style={styles.loadingBox}>
                   <ActivityIndicator size="large" color="#007AFF" />
@@ -950,6 +1111,9 @@ export default function NomencladoresScreen() {
                         <ThemedText style={styles.recordMeta}>
                           {row.variable_type} · {row.variable_value ?? ''}
                         </ThemedText>
+                      ) : null}
+                      {isTipoMantenimientoArticuloForm && row.articulo_nombre ? (
+                        <ThemedText style={styles.recordMeta}>Artículo: {row.articulo_nombre}</ThemedText>
                       ) : null}
                     </View>
                     <View style={styles.recordActions}>

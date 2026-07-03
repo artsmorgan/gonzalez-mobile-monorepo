@@ -20,6 +20,7 @@ import { ThemedView } from '@/components/ThemedView';
 import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal'; 
 import { formatDateDMY } from '@/utils/formatDate';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
@@ -405,6 +406,9 @@ export default function StaffEvaluationsScreen() {
   const tipoEvaluacionRef = useRef<EvaluationTipo>('Seguridad');
   const comentariosGeneralesRef = useRef<string>('');
   const nombreEvaluadorRef = useRef<string>('');
+  const pendingEmpleadoSearchHitRef = useRef<EmployeeSearchHit | null>(null);
+
+  const [employeeSearchModalVisible, setEmployeeSearchModalVisible] = useState(false);
 
   // Filtros
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
@@ -600,6 +604,23 @@ export default function StaffEvaluationsScreen() {
     setSelectedPuestoId(v.puestoId ?? null);
     setSelectedPlazaId(v.plazaId ?? null);
   }, []);
+
+  const handleEmployeeSearchSelect = useCallback(
+    (hit: EmployeeSearchHit) => {
+      isRestoringHierarchyRef.current = true;
+      pendingEmpleadoSearchHitRef.current = hit;
+      handleFormHierarchyChange({
+        empresaId: hit.path.empresaId,
+        clienteId: hit.path.clienteId,
+        divisionId: hit.path.divisionId,
+        contratoId: hit.path.contratoId,
+        sucursalId: hit.path.sucursalId,
+        puestoId: hit.path.puestoId ?? null,
+        plazaId: hit.path.plazaId ?? null,
+      });
+    },
+    [handleFormHierarchyChange],
+  );
 
   const initializeSectionsForTipo = (tipo: EvaluationTipo) => {
     tipoEvaluacionRef.current = tipo;
@@ -1007,7 +1028,6 @@ export default function StaffEvaluationsScreen() {
     clearSelectedEmpleadoState();
   }, [selectedPlazaId]);
 
-  /** Tras precargar desde `current_marca`, los efectos de cascada deben ver el ref en `true`. Quitar el ref solo cuando ya pasaron (mismo commit). */
   useEffect(() => {
     if (isRestoringHierarchyRef.current) {
       isRestoringHierarchyRef.current = false;
@@ -1018,7 +1038,32 @@ export default function StaffEvaluationsScreen() {
     selectedDivisionId,
     selectedContratoId,
     selectedCorpoId,
+    selectedPuestoId,
+    selectedPlazaId,
   ]);
+
+  useEffect(() => {
+    const hit = pendingEmpleadoSearchHitRef.current;
+    if (!hit || selectedPlazaId == null || Number(selectedPlazaId) !== Number(hit.path.plazaId)) return;
+    pendingEmpleadoSearchHitRef.current = null;
+
+    const emp = empleados.find((e) => e.id === hit.empleadoId);
+    if (emp) {
+      onEmpleadoSelected(hit.empleadoId);
+      return;
+    }
+
+    const nombre = hit.title.replace(/\s*\([^)]*\)\s*$/, '').trim();
+    setSelectedEmpleadoId(hit.empleadoId);
+    empleadoIdRef.current = hit.empleadoId;
+    nombreColaboradorRef.current = nombre;
+    cedulaColaboradorRef.current = hit.cedula;
+    fechaIngresoRef.current = hit.fechaContratacion;
+    setNombreColaborador(nombre);
+    setCedulaColaborador(hit.cedula);
+    setFechaIngreso(hit.fechaContratacion);
+    setFirmaEmpleadoWarning(null);
+  }, [selectedPlazaId, empleados]);
 
   // Cambio de tipo de evaluación
   const handleTipoChange = (tipo: EvaluationTipo) => {
@@ -1123,6 +1168,7 @@ export default function StaffEvaluationsScreen() {
 
   const cancelCreating = useCallback(() => {
     setIsCreating(false);
+    setEmployeeSearchModalVisible(false);
     releaseHeavyCreateFormResources();
   }, [releaseHeavyCreateFormResources]);
 
@@ -2135,6 +2181,11 @@ export default function StaffEvaluationsScreen() {
             labels={{
               sucursal: 'Sucursal (Corpo)',
             }}
+            renderAfterPlaza={
+              <ThemedText style={styles.formHint}>
+                Selecciona una plaza para encontrar al empleado
+              </ThemedText>
+            }
             renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
             pickerStyle={styles.picker}
             fieldGroupStyle={styles.formGroup}
@@ -2144,20 +2195,33 @@ export default function StaffEvaluationsScreen() {
         {/* Empleado de la plaza */}
         <ThemedView style={styles.formGroup}>
           <ThemedText style={styles.formLabel}>Empleado *</ThemedText>
-          <ThemedView style={styles.pickerContainer}>
-            <Picker
-              enabled={selectedPlazaId !== null}
-              selectedValue={selectedEmpleadoId ?? 0}
-              onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
-              style={styles.picker}
-              itemStyle={styles.pickerItem}
+          <View style={styles.pickerRow}>
+            <ThemedView style={[styles.pickerContainer, styles.pickerContainerFlex]}>
+              <Picker
+                enabled={selectedPlazaId !== null}
+                selectedValue={selectedEmpleadoId ?? 0}
+                onValueChange={(value) => onEmpleadoSelected(value ? Number(value) : null)}
+                style={styles.picker}
+                itemStyle={styles.pickerItem}
+              >
+                <Picker.Item label={selectedPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} color="#000000" />
+                {empleados.map((emp) => (
+                  <Picker.Item key={emp.id} label={`${emp.nombre} - ${emp.cedula}`} value={emp.id} color="#000000" />
+                ))}
+              </Picker>
+            </ThemedView>
+            <TouchableOpacity
+              style={styles.searchIconBtn}
+              onPress={() => setEmployeeSearchModalVisible(true)}
+              activeOpacity={0.85}
+              accessibilityLabel="Buscar empleado"
             >
-              <Picker.Item label={selectedPlazaId ? 'Seleccionar empleado...' : 'Seleccione plaza primero'} value={0} color="#000000" />
-              {empleados.map((emp) => (
-                <Picker.Item key={emp.id} label={`${emp.nombre} - ${emp.cedula}`} value={emp.id} color="#000000" />
-              ))}
-            </Picker>
-          </ThemedView>
+              <Ionicons name="search" size={20} color="#FFFFFF" />
+            </TouchableOpacity>
+          </View>
+          <ThemedText style={styles.formHint}>
+            Verifica la jerarquía para determinar que el empleado pertenezca al puesto donde debe ser evaluado
+          </ThemedText>
         </ThemedView>
 
         {/* Nombre colaborador */}
@@ -3015,6 +3079,12 @@ export default function StaffEvaluationsScreen() {
         onHomePress={handleHomePress}
         currentRoute="StaffEvaluations"
       />
+      <EmployeeSearchModal
+        visible={employeeSearchModalVisible}
+        structure={structure}
+        onClose={() => setEmployeeSearchModalVisible(false)}
+        onSelect={handleEmployeeSearchSelect}
+      />
       {QRScannerComponent}
 
       {/* Modal Añadir firma (digital o manual) en collapsable */}
@@ -3361,6 +3431,31 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
+  },
+  pickerContainerFlex: {
+    flex: 1,
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchIconBtn: {
+    width: 48,
+    height: 50,
+    borderRadius: 8,
+    backgroundColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchIconBtnDisabled: {
+    opacity: 0.5,
+  },
+  formHint: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 6,
+    lineHeight: 17,
   },
   picker: {
     height: 50,

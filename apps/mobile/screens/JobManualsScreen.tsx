@@ -12,6 +12,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import { useAuth } from '../contexts/AuthContext';
 import { ThemedView } from '../components/ThemedView';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { ThemedText } from '../components/ThemedText';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
@@ -275,6 +276,10 @@ export default function JobManualsScreen() {
   const [updHasConfirmedPuestos, setUpdHasConfirmedPuestos] = useState(false);
   const [updIsSelectedPuestosExpanded, setUpdIsSelectedPuestosExpanded] = useState(false);
 
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+
   const [textFiles, setTextFiles] = useState<ManualFileLocal[]>([]);
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
@@ -400,6 +405,44 @@ export default function JobManualsScreen() {
       networkState.isInternetReachable === true
     );
   };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+  };
+
+  const fetchCambios = useCallback(
+    async (tabla: string, registroId: number) => {
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) {
+        Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+        return;
+      }
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) throw new Error('Server URL not configured');
+        const resp = await authedFetch({
+          url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+          init: {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!resp) return;
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.status) {
+          throw new Error(data.message || 'No se pudieron cargar los cambios');
+        }
+        setCambiosItems(Array.isArray(data.data) ? data.data : []);
+        setIsCambiosModalVisible(true);
+      } catch (e: any) {
+        Alert.alert('Error', e?.message || 'No se pudieron cargar los cambios');
+      }
+    },
+    [refreshAccessToken, logout],
+  );
 
   const fetchMainStructure = useCallback(async () => {
     try {
@@ -3191,13 +3234,15 @@ export default function JobManualsScreen() {
                   </ThemedView>
                 </TouchableOpacity>
                   {roleName !== 'OPERATIVO' && (
-                    <ScalePressButton
-                      style={styles.manualUpdatePuestosButton}
-                      onPress={() => openUpdManualPuestosModal(manual)}
-                    >
-                      <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
-                      <ThemedText style={styles.manualUpdatePuestosButtonText}>Actualizar puestos</ThemedText>
-                    </ScalePressButton>
+                    <ThemedView style={styles.manualActionsRow}>
+                      <ScalePressButton
+                        style={styles.manualUpdatePuestosButton}
+                        onPress={() => openUpdManualPuestosModal(manual)}
+                      >
+                        <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Actualizar puestos</ThemedText>
+                      </ScalePressButton>
+                    </ThemedView>
                   )}
                 </ThemedView>
               ))
@@ -3205,6 +3250,13 @@ export default function JobManualsScreen() {
           </ThemedView>
         </ThemedView>
       </ScrollView>
+
+      <CambiosAppsModulesModal
+        visible={isCambiosModalVisible}
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       <AppFooter />
 
@@ -5228,15 +5280,33 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#777777',
   },
+  manualActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
   manualUpdatePuestosButton: {
+    flex: 1,
+    minWidth: 140,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    marginTop: 10,
     paddingVertical: 10,
     borderRadius: 8,
     backgroundColor: '#007AFF',
+  },
+  manualChangesButton: {
+    flex: 1,
+    minWidth: 120,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#5856D6',
   },
   manualUpdatePuestosButtonText: {
     color: '#FFFFFF',

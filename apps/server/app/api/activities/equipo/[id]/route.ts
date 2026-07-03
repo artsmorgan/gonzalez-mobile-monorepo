@@ -3,7 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
-import { createReport, updateReport } from "../../../../../utils/createReporteArticuloMantenimiento";
+import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -120,7 +120,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         console.log("Llegamos a la evaluación y notificación");
-        await evaluateAndNotify(req, selected, actividad_marcada.plaza_id, actividad?.nombre_actividad || "actividad", nowIso);
+        await evaluateAndNotify(
+            req,
+            selected,
+            actividad_marcada.plaza_id,
+            actividad?.nombre_actividad || "actividad",
+            nowIso,
+            { puestoId: actividadPuesto.puesto_id },
+        );
         console.log("Evaluación y notificación completada");
         if (allReviewed) {
             const relatedActividadPuestos = await callDynamicPrisma({
@@ -157,7 +164,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
  * - Bueno: si antes no era Bueno, updateReport al último (fecha_solucion = actionTime).
  * - Malo / No está: Bueno→no Bueno → createReport + notificación; otro cambio → updateReport.
  */
-async function evaluateAndNotify(req: NextRequest, articulo: any, corpoId: number, actividadNombre: string, nowIso: string) {
+async function evaluateAndNotify(
+    req: NextRequest,
+    articulo: any,
+    corpoId: number,
+    actividadNombre: string,
+    nowIso: string,
+    estructuraContext?: { puestoId?: number | null; sucursalId?: number | null },
+) {
     const id = Number(articulo?.id || 0);
     const tipo = String(articulo?.tipo || "");
     if (!id || (tipo !== "Plan" && tipo !== "Asignado")) return;
@@ -222,12 +236,18 @@ async function evaluateAndNotify(req: NextRequest, articulo: any, corpoId: numbe
         default:
             if (last_estado === "Bueno") {
                 send_notification = true;
+                const { marca, modelo, serie } = await resolveMarcaModeloSerieFromArticuloEstructura(
+                    req,
+                    articulo,
+                    estructuraContext,
+                );
                 articulos_reporte.push({
                     id: articulo.id,
                     nombre: articulo.nombre,
                     tipo: articulo.tipo,
-                    marca: articulo.marca,
-                    serie: articulo.serie,
+                    marca,
+                    modelo,
+                    serie,
                     cantidad_requerida: articulo.cantidad_requerida,
                     cantidad_real: articulo.cantidad_real,
                     estado: articulo.estado,

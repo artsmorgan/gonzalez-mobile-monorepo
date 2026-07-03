@@ -2,7 +2,7 @@
 import fs from "fs";
 import fsPromises from "fs/promises";
 import path from "path";
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 
@@ -106,7 +106,7 @@ export function filtersMatchChecklistSupervisionListQuery(parsedRowFilters: any,
 }
 
 export async function queryChecklistSupervisionRows(
-    prisma: PrismaClient,
+    prisma: ReportDataAccess,
     filters: ChecklistSupervisionModuleFilters,
     orderKey: ChecklistSupervisionOrderKey,
 ) {

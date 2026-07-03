@@ -12,6 +12,7 @@ import {
   View,
   Dimensions,
 } from 'react-native';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import AppHeader from '@/components/AppHeader';
@@ -800,8 +801,7 @@ export default function CorporateVehiclesScreen() {
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
-  const [cambiosItems, setCambiosItems] = useState<any[]>([]);
-  const [expandedCambioId, setExpandedCambioId] = useState<number | null>(null);
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   // submódulo: usos (modal)
   const [usesModalVisible, setUsesModalVisible] = useState(false);
@@ -908,34 +908,6 @@ export default function CorporateVehiclesScreen() {
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
-    setExpandedCambioId(null);
-  };
-
-  const formatCambioCreatedAt = (value: any) => {
-    if (!value) return '-';
-    try {
-      const date = new Date(value);
-      return date.toLocaleString('es-CR', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: true,
-      });
-    } catch {
-      return String(value);
-    }
-  };
-
-  const formatChangeValue = (prop: string, value: any): string => {
-    if (value === null || value === undefined) return 'N/A';
-    if (typeof value === 'boolean') return value ? 'Sí' : 'No';
-    if (typeof value === 'object') {
-      return JSON.stringify(value, null, 2);
-    }
-    return String(value);
   };
 
   const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
@@ -5818,87 +5790,12 @@ export default function CorporateVehiclesScreen() {
         </ThemedView>
       </Modal>
 
-      {/* Modal: ver cambios */}
-      <Modal
+      <CambiosAppsModulesModal
         visible={isCambiosModalVisible}
-        animationType="fade"
-        transparent
-        presentationStyle="overFullScreen"
-        onRequestClose={closeCambiosModal}
-      >
-        <View style={styles.overlay}>
-          <ThemedView style={styles.floatModalCardMovimientos}>
-            <ThemedView style={styles.floatModalHeader}>
-              <ThemedText style={styles.modalTitle}>{cambiosTitle}</ThemedText>
-              <TouchableOpacity onPress={closeCambiosModal}>
-                <Ionicons name="close" size={24} color="#333" />
-              </TouchableOpacity>
-            </ThemedView>
-
-            <ScrollView style={{ maxHeight: Dimensions.get('window').height * 0.75 }} contentContainerStyle={{ padding: 16 }}>
-              {(!cambiosItems || cambiosItems.length === 0) ? (
-                <ThemedView style={styles.emptyContainer}>
-                  <ThemedText style={styles.emptyText}>No hay cambios registrados</ThemedText>
-                </ThemedView>
-              ) : (
-                cambiosItems.map((row: any) => {
-                  let parsed: any[] = [];
-                  try {
-                    parsed = row?.cambios ? JSON.parse(row.cambios) : [];
-                  } catch {
-                    parsed = [];
-                  }
-                  const createdAtLabel = convertDateTimestampToLocalString(new Date(row?.created_at).toISOString());
-                  const isOpen = expandedCambioId === row.id;
-
-                  return (
-                    <ThemedView key={`chg-${row.id}`} style={styles.cambioCollapsableMain}>
-                      <TouchableOpacity
-                        style={styles.cambioCollapsableHeader}
-                        onPress={() => setExpandedCambioId((prev) => (prev === row.id ? null : row.id))}
-                        activeOpacity={0.8}
-                      >
-                        <ThemedText style={styles.cambioCollapsableTitle}>
-                          {createdAtLabel}
-                        </ThemedText>
-                        <Ionicons
-                          name={isOpen ? "chevron-up" : "chevron-down"}
-                          size={18}
-                          color="#007AFF"
-                        />
-                      </TouchableOpacity>
-
-                      {isOpen && (
-                        <ThemedView style={styles.cambioCollapsableContent}>
-                          <ThemedView style={styles.filterGroupSearch}>
-                            <ThemedText style={styles.filterLabel}>Cambio realizado por:</ThemedText>
-                            <ThemedText style={styles.changeDescription}>
-                              {row.empleado_nombre || 'Desconocido'}
-                              {row.empleado_cedula ? ` - Cédula: ${row.empleado_cedula}` : ''}
-                            </ThemedText>
-                          </ThemedView>
-
-                          {(Array.isArray(parsed) ? parsed : []).length > 0 && (
-                            <ThemedView style={styles.filterGroupSearch}>
-                              <ThemedText style={styles.filterLabel}>Cambios:</ThemedText>
-                              {(Array.isArray(parsed) ? parsed : []).map((c: any, idx: number) => (
-                                <ThemedText key={`c-${row.id}-${idx}`} style={styles.changeDescription}>
-                                  <ThemedText style={{ fontWeight: '800' }}>{String(c?.prop ?? '-')}: </ThemedText>
-                                  {formatChangeValue(c?.prop, c?.after)}
-                                </ThemedText>
-                              ))}
-                            </ThemedView>
-                          )}
-                        </ThemedView>
-                      )}
-                    </ThemedView>
-                  );
-                })
-              )}
-            </ScrollView>
-          </ThemedView>
-        </View>
-      </Modal>
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
 
       {QRScannerComponent}
     </ThemedView>
