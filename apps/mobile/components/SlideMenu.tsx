@@ -473,10 +473,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
   const releaseAction = (module: string) => {
 
-    if (true) {
-      return true;
-    }
-
     const modules = [
       { name: 'acta-entrega-productos', release: false },
       { name: 'activities', release: false },
@@ -488,7 +484,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       { name: 'corporate-vehicles', release: false },
       { name: 'digital-signature', release: true },
       { name: 'documentos-entregados', release: false },
-      { name: 'entrega-puestos', release: false },
+      { name: 'entrega-puestos', release: true },
       { name: 'general-induction-register', release: false },
       { name: 'home', release: true },
       { name: 'incidents', release: false },
@@ -520,8 +516,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     const moduleFind = modules.find((m) => m.name === module);
     if (moduleFind) {
-      return true;
-      // return moduleFind.release;
+      // return true;
+      return moduleFind.release;
     }
     return false;
   }
