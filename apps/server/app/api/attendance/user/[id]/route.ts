@@ -87,17 +87,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         let date_while = currentDate;
         let marcas_planillas: any[] = [];
 
-        while (dias_transcurridos < 5 && marcas_planillas.length == 0) {
+        while (dias_transcurridos < 14 && marcas_planillas.length == 0) {
             const planillasResponse = await axios.get(`${process.env.PLANILLAS_URL}/marcas`, {
                 headers: {
                     "Authorization": `Bearer ${planillasToken}`
                 },
                 params: {
                     empleado_codigo: empleado.cedula,
-                    fecha_inicio: currentDate.toISOString().split("T")[0],
+                    fecha: date_while.toISOString().split("T")[0],
                 }
             });
-
 
             dias_transcurridos++;
             date_while = new Date(date_while.getTime() + 1 * 24 * 60 * 60 * 1000);
@@ -146,14 +145,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             date_while = currentDate;
             marcas_planillas = [];
     
-            while (dias_transcurridos < 7 && marcas_planillas.length == 0) {
+            while (dias_transcurridos < 14 && marcas_planillas.length == 0) {
                 const planillasResponse = await axios.get(`${process.env.PLANILLAS_URL}/marcas`, {
                     headers: {
                         "Authorization": `Bearer ${planillasToken}`
                     },
                     params: {
                         empleado_codigo: empleado.cedula,
-                        fecha_inicio: currentDate.toISOString().split("T")[0],
+                        fecha: date_while.toISOString().split("T")[0],
                     }
                 });
     
@@ -433,8 +432,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         let is_late = false;
         let next_time = null;
 
+        let hora_inicio_use = marcaDia.hora_inicio;
+        if (hora_inicio_use && hora_inicio_use instanceof Date) {
+            hora_inicio_use = hora_inicio_use.toISOString();
+        }
+
             const fecha_marca_string = marcaDia.fecha.split("T")[0];
-            const hora_inicio_string = marcaDia.hora_inicio ? marcaDia.hora_inicio.split("T")[1].split(".")[0] : "00:00:00"; 
+            const hora_inicio_string = marcaDia.hora_inicio ? hora_inicio_use.split("T")[1].split(".")[0] : "00:00:00"; 
             const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string);
 
             let fin_marca = null;
