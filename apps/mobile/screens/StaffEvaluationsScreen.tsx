@@ -372,6 +372,7 @@ export default function StaffEvaluationsScreen() {
 
   // Datos remotos / cache
   const [evaluaciones, setEvaluaciones] = useState<StaffEvaluation[]>([]);
+  const structureRef = useRef<StaffStructureTree>([]);
   const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
 
   // Expand / detalles
@@ -769,11 +770,21 @@ export default function StaffEvaluationsScreen() {
 
   const listFetchGenRef = useRef(0);
 
+  const fetchMainStructure = useCallback(async (): Promise<StaffStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
+    const merged = (await loadMainStructureTreeMerged()) as StaffStructureTree;
+    const tree = Array.isArray(merged) ? merged : [];
+    structureRef.current = tree;
+    setStructure(tree);
+    return tree;
+  }, []);
+
   const bootstrapScreen = useCallback(async () => {
     setIsBootstrapping(true);
     try {
-      const tree = (await loadMainStructureTreeMerged()) as StaffStructureTree;
-      setStructure(Array.isArray(tree) ? tree : []);
+      const tree = await fetchMainStructure();
 
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) {
@@ -800,7 +811,7 @@ export default function StaffEvaluationsScreen() {
     } finally {
       setIsBootstrapping(false);
     }
-  }, [applyHierarchyToFilters]);
+  }, [applyHierarchyToFilters, fetchMainStructure]);
 
   const fetchEvaluationsForFilterCorpo = useCallback(async () => {
     const corpo_id =
@@ -1746,11 +1757,9 @@ export default function StaffEvaluationsScreen() {
     setFilterFechaEvaluacion('');
     try {
       const raw = await AsyncStorage.getItem('current_marca');
-      let tree: StaffStructureTree = Array.isArray(structure) ? structure : [];
+      let tree: StaffStructureTree = structureRef.current.length > 0 ? structureRef.current : (Array.isArray(structure) ? structure : []);
       if (tree.length === 0) {
-        const merged = (await loadMainStructureTreeMerged()) as StaffStructureTree;
-        tree = Array.isArray(merged) ? merged : [];
-        setStructure(tree);
+        tree = await fetchMainStructure();
       }
       if (raw && tree.length > 0) {
         const current = JSON.parse(raw);
@@ -1777,7 +1786,7 @@ export default function StaffEvaluationsScreen() {
       setFilterContratoId(null);
       setFilterCorpoId(null);
     }
-  }, [structure, applyHierarchyToFilters]);
+  }, [applyHierarchyToFilters, fetchMainStructure]);
 
   const submitCreateEvaluation = async () => {
     if (!marcaId || !employee) return;

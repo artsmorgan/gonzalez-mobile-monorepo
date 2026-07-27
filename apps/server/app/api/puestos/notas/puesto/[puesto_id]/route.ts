@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 import {
     mergeNotesWhereWithDateRange,
     validateNotesDateRange,
@@ -26,10 +27,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
       return NextResponse.json({ status: false, message: rangeValidation.message }, { status: 400 });
     }
 
-    const puesto = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } },
-    });
+    const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
     if (!puesto) {
       return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
     }

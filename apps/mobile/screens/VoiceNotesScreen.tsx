@@ -31,7 +31,7 @@ import { createVoiceNote as createVoiceNoteAPI, deleteVoiceNote as deleteVoiceNo
 import { eventBus } from '@/hooks/eventBus';
 import authedFetch from '@/hooks/authedFetch';
 import getValidAccessTokenOrLogout from '@/hooks/getValidAccessTokenOrLogout';
-import { readMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import {
   filterVoiceNotesToPuestoFetchScope,
   isPendingOfflineVoiceNoteCreate,
@@ -326,6 +326,7 @@ export default function VoiceNotesScreen() {
   const [roleName, setRoleName] = useState<RoleName>(null);
   const [marcaPuestoIdFromMarca, setMarcaPuestoIdFromMarca] = useState<number | null>(null);
 
+  const structureRef = useRef<MainStructureTree>([]);
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
@@ -445,23 +446,21 @@ export default function VoiceNotesScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     try {
       setIsStructureLoading(true);
-      const cacheStr = await readMainStructureCacheString();
-      if (cacheStr) {
-        try {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) setStructure(cached);
-          else setStructure([]);
-        } catch {
-          setStructure([]);
-        }
-      } else {
-        setStructure([]);
-      }
+      const merged = await loadMainStructureTreeMerged();
+      const arr = Array.isArray(merged) ? merged : [];
+      structureRef.current = arr;
+      setStructure(arr);
+      return arr;
     } catch (e) {
       console.error('fetchMainStructure voice notes:', e);
+      structureRef.current = [];
       setStructure([]);
+      return [];
     } finally {
       setIsStructureLoading(false);
     }

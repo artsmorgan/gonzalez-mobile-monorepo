@@ -37,6 +37,7 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'apreciacion_vulnerabilidad_actions',
         'notifications_actions',
         'lunchtime_actions',
+        'lunch_time_horario_actions',
         'notes_actions',
         'activities_actions',
         'incidents_actions',
@@ -48,6 +49,7 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'evaluations_staff_actions',
         'voice_notes_actions',
         'attendance_actions',
+        'push_device_actions',
     ];
 
     // Obtener todas las acciones pendientes

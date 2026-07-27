@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { fetchDynamicFile, uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
+import axios from "axios";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -19,6 +21,21 @@ const parseDateInputToDate = (input: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
+/** Extrae [hora, minuto] desde un valor Date/string de hora de marca. */
+const parseClockParts = (value: unknown): string[] | null => {
+  if (value == null || value === "") return null;
+  const iso = value instanceof Date ? value.toISOString() : String(value);
+  const afterT = iso.includes("T") ? iso.split("T")[1] : iso;
+  const parts = afterT.replace(/\.\d+Z?$/i, "").split(":");
+  if (parts.length < 2) return null;
+  return parts;
+};
+
+const formatClockLabel = (value: unknown): string => {
+  const parts = parseClockParts(value);
+  return parts ? `${parts[0]}:${parts[1]}` : "-Sin hora-";
+};
+
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -27,6 +44,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
     if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+
+    const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
+    if (!planillasToken) {
+      return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+    }
 
     const body = await req.json();
     const firmaDigital = String(body?.firma_ejecutivo_cuenta_digital || "").trim();
@@ -61,10 +83,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
     const canSign = myEjecutivoCuentaId !== null && Number(myEjecutivoCuentaId) === Number(existing.ejecutivo_cuenta);
     if (!canSign) {
@@ -88,224 +107,79 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const now = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
 
     if (updated) {
-      const marca_ausente = await callDynamicPrisma({
+
+      /*
+      tipo: MUT
+      empleado_reemplaza_id: 
+      fecha_reemplaza:
+      empleado_ausente_id
+      fecha_ausente
+      coordinado_por_id
+      coordinador_id
+      */
+
+      const marcaAusente = await prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } });
+      const marcaReemplaza = await prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } });
+
+      if (!marcaAusente || !marcaReemplaza) {
+        return NextResponse.json({ status: false, message: "Marca ausente o reemplaza no encontrada" }, { status: 200 });
+      }
+
+      const fechaAusente = new Date(marcaAusente.fecha).toISOString().split("T")[0];
+      const fechaReemplaza = new Date(marcaReemplaza.fecha).toISOString().split("T")[0];
+
+      const coordinador = await callDynamicPrisma({
         req,
         data: {
           action: "GET",
-          table: "c_marca_dia",
-          operation: "findUnique",
-          where: { id: updated.marcaDiaAusente_id },
+          table: "n_ejecutivo_cuenta_coordinador",
+          operation: "findFirst",
+          where: { ejecutivo_cuenta_id: myEjecutivoCuentaId },
         },
       });
 
-      const marca_reemplaza = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_marca_dia",
-          operation: "findUnique",
-          where: { id: updated.marcaDiaReemplaza_id },
-        },
+      if (!coordinador) {
+        return NextResponse.json({ status: false, message: "Coordinador no encontrado" }, { status: 200 });
+      }
+
+      const body = {
+        tipo: 'MUT',
+        empleado_reemplaza_id: updated.empleadoReemplaza_id,
+        fecha_reemplaza: fechaReemplaza,
+        empleado_ausente_id: updated.empleadoAusente_id,
+        fecha_ausente: fechaAusente,
+        coordinado_por_id: 3,
+        coordinador_id: coordinador.coordinador_id,
+      };
+
+      console.log(body);
+      
+      const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/cdg`, body, {
+          headers: {
+              "Authorization": `Bearer ${planillasToken}`,
+              "Content-Type": "application/json"
+          }
       });
 
-      if (marca_ausente && marca_reemplaza) {
+      if (!planillasResponse.data.success) {
+          return NextResponse.json({ status: false, message: "Error al crear el cambio de guardia en Planillas" }, { status: 200 });
+      }
 
-        // Update marca_reemplaza.empleadoReemplaza_id to the current employee id
+      const cambioGuardiaCreated = await prisma.c_cambio_guardia.findUnique({ where: { id: planillasResponse.data.data.id } });
+
+      if (cambioGuardiaCreated) {
+        // Actualizar el mutuo acuerdo con el id del cambio de guardia
         await callDynamicPrisma({
           req,
           data: {
             action: "UPDATE",
-            table: "c_marca_dia",
-            operation: "update",
-            where: { id: marca_reemplaza.id },
+            table: "e_mutuos_acuerdos",
+            where: { id: idNum },
             data: {
-              empleadoReemplaza_id: marca_ausente.empleadoFijo_id,
-              motivo_ausente: 'V_MUT',
+              cambio_guardia_id: cambioGuardiaCreated.id,
             },
           },
         });
-
-        // Update marca_ausente.empleadoReemplaza_id to the current employee id
-        await callDynamicPrisma({
-          req,
-          data: {
-            action: "UPDATE",
-            table: "c_marca_dia",
-            operation: "update",
-            where: { id: marca_ausente.id },
-            data: {
-              empleadoReemplaza_id: marca_reemplaza.empleadoFijo_id, motivo_ausente: 'V_MUT',
-            },
-          },
-        });
-
-        let turno_reemplaza = "Diurno";
-        switch (marca_reemplaza.tipo_turno) {
-          case "M":
-            turno_reemplaza = "Mixto";
-            break;
-          case "N":
-            turno_reemplaza = "Nocturno";
-            break;
-        }
-
-        const hora_inicio_reemplaza = marca_reemplaza.hora_inicio ? marca_reemplaza.hora_inicio.split("T")[1].split(":") : '-Sin hora-';
-        const hora_fin_reemplaza = marca_reemplaza.hora_fin ? marca_reemplaza.hora_fin.split("T")[1].split(":") : '-Sin hora-';
-        console.log(1);
-        const hora_inicio_reemplaza_text = hora_inicio_reemplaza !== '-Sin hora-' ? `${hora_inicio_reemplaza[0]}:${hora_inicio_reemplaza[1]}` : '-Sin hora-';
-        const hora_fin_reemplaza_text = hora_fin_reemplaza !== '-Sin hora-' ? `${hora_fin_reemplaza[0]}:${hora_fin_reemplaza[1]}` : '-Sin hora-';
-        const turno_reemplaza_text = `${turno_reemplaza} ${hora_inicio_reemplaza_text} - ${hora_fin_reemplaza_text}`;
-        
-        let turno_ausente = "Diurno";
-        switch (marca_ausente.tipo_turno) {
-          case "M":
-            turno_ausente = "Mixto";
-            break;
-          case "N":
-            turno_ausente = "Nocturno";
-            break;
-        }
-
-        const hora_inicio_ausente = marca_ausente.hora_inicio.split("T")[1].split(":");
-        const hora_fin_ausente = marca_ausente.hora_fin.split("T")[1].split(":");
-        console.log(2);
-        const hora_inicio_ausente_text = `${hora_inicio_ausente[0]}:${hora_inicio_ausente[1]}`;
-        const hora_fin_ausente_text = `${hora_fin_ausente[0]}:${hora_fin_ausente[1]}`;
-        const turno_ausente_text = `${turno_ausente} ${hora_inicio_ausente_text} - ${hora_fin_ausente_text}`;
-
-        // Obtener el registro de c_cambio_guardia cuyo dato tipo sea 'MUT' y cuyo dato id sea el más alto
-        const lastMutation = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_cambio_guardia", operation: "findFirst", where: { tipo: 'MUT', id: { gt: 0 } }, orderBy: { id: 'desc' } },
-        });
-
-        const empresa_ausente = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "e_estructura_empresa", operation: "findUnique", where: { id: marca_ausente.empresa_id } },
-        });
-
-        if (!empresa_ausente) {
-          return NextResponse.json({ status: false, message: "Empresa del primer turno no encontrada" }, { status: 400 });
-        }
-
-        let consecutivo = null;
-        if (lastMutation) {
-          const separated = lastMutation.consecutivo?.split("-");
-          console.log(3);
-          if (separated && separated.length > 1) {
-            const result = (parseInt(separated[2], 10) + 1)
-              .toString()
-              .padStart(separated[2].length, "0");
-
-              let corp = "CG";
-              switch (empresa_ausente.id) {
-                case 9:
-                  corp = "CG";
-                  break;
-                case 10:
-                  corp = "CH";
-                  break;
-              }
-
-            consecutivo = `${separated[0]}-${corp}-${result}`;
-          }
-        }
-
-        const ejecutivo_cuenta_id = (existing as any)?.ejecutivo_cuenta;
-        let coordinador_id = null;
-        if (ejecutivo_cuenta_id) {
-          const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: ejecutivo_cuenta_id } },
-          });
-          if (ejecutivo_cuenta_coordinador) {
-            coordinador_id = ejecutivo_cuenta_coordinador.coordinador_id;
-          }
-        }
-
-        const cambioGuardiaCreated = await callDynamicPrisma({
-          req,
-          data: {
-            action: "POST",
-            table: "c_cambio_guardia",
-            data: {
-              fecha_reemplaza: marca_reemplaza.fecha,
-              turno_reemplaza: turno_reemplaza_text,
-              fecha_ausente: marca_ausente.fecha,
-              turno_ausente: turno_ausente_text,
-              motivo_ausente: 'V_MUT',
-              updated_at: now,
-              fecha_insercion: now,
-              empleadoReemplaza_id: marca_reemplaza.empleadoFijo_id,
-              plazaReemplaza_id: marca_reemplaza.plaza_id,
-              marcaDiaReemplaza_id: marca_reemplaza.id,
-              empleadoAusente_id: marca_ausente.empleadoFijo_id,
-              plazaAusente_id: marca_ausente.plaza_id,
-              marcaDiaAusente_id: marca_ausente.id,
-              tipo: 'MUT',
-              consecutivo: consecutivo,
-              coordinadoPor_id: 3,
-              coordinador_id: coordinador_id,
-              descripcion: updated.motivo ?? "",
-              mobile_upload: true,
-            },
-          },
-        });
-        if (cambioGuardiaCreated) {
-          if (existing.file_name) {
-            const fetched = await fetchDynamicFile({
-              req,
-              type: "file",
-              url: `mutuos-acuerdos/${existing.id}/${existing.file_name}`,
-            });
-            const fileBase64 = fetched.buffer.toString("base64");
-            const ext = String(existing.file_name).includes(".")
-              ? String(existing.file_name).split(".").pop() || "dat"
-              : "dat";
-            console.log(4);
-            const copiedName = String(existing.file_name);
-            const uploadResp = await uploadDynamicFiles({
-              req,
-              folderPath: `cambio-guardia/${cambioGuardiaCreated.id}`,
-              files: [
-                {
-                  type: "file",
-                  extension: ext,
-                  name: copiedName,
-                  original_name: copiedName,
-                  file_base64: fileBase64,
-                },
-              ],
-            });
-            const copiedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-            if (copiedFiles[0]?.name) {
-              await callDynamicPrisma({
-                req,
-                data: {
-                  action: "UPDATE",
-                  table: "c_cambio_guardia",
-                  where: { id: cambioGuardiaCreated.id },
-                  data: {
-                    document: copiedName,
-                  },
-                },
-              });
-            }
-          }
-
-          // Actualizar el mutuo acuerdo con el id del cambio de guardia
-          await callDynamicPrisma({
-            req,
-            data: {
-              action: "UPDATE",
-              table: "e_mutuos_acuerdos",
-              where: { id: idNum },
-              data: {
-                cambio_guardia_id: cambioGuardiaCreated.id,
-              },
-            },
-          });
-        }
       }
     }
 
@@ -334,42 +208,21 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (recipients.length > 0) {
       const [empleadoAusente, empleadoReemplaza, ejecutivo, marcaAusenteNotif, marcaReemplazaNotif] = await Promise.all([
         empleadoAusenteId
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoAusenteId } },
-          })
+          ? prisma.c_empleado.findUnique({ where: { id: empleadoAusenteId } })
           : null,
         empleadoReemplazaId
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoReemplazaId } },
-          })
+          ? prisma.c_empleado.findUnique({ where: { id: empleadoReemplazaId } })
           : null,
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-        }),
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } },
-        }),
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } },
-        }),
+        prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } }),
+        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } }),
+        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } }),
       ]);
       const [puestoAusente, puestoReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.puesto_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaAusenteNotif as any)?.puesto_id) } },
-          })
+          ? prisma.e_estructura_puesto.findUnique({ where: { id: Number((marcaAusenteNotif as any)?.puesto_id) } })
           : null,
         (marcaReemplazaNotif as any)?.puesto_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaReemplazaNotif as any)?.puesto_id) } },
-          })
+          ? prisma.e_estructura_puesto.findUnique({ where: { id: Number((marcaReemplazaNotif as any)?.puesto_id) } })
           : null,
       ]);
 

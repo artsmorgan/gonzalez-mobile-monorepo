@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 
@@ -68,23 +69,15 @@ const getTurnosFromRange = async (
   };
   if (plazaId != null) where.plaza_id = plazaId;
 
-  const marcas = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "c_marca_dia",
-      operation: "findMany",
-      where,
-      orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-      include: {
-        e_estructura_cliente: { select: { nombre: true } },
-        e_estructura_sucursal: { select: { nombre: true } },
-        e_estructura_puesto: { select: { nombre: true } },
-      },
+  const marcaArray = await prisma.c_marca_dia.findMany({
+    where,
+    orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+    include: {
+      e_estructura_cliente: { select: { nombre: true } },
+      e_estructura_sucursal: { select: { nombre: true } },
+      e_estructura_puesto: { select: { nombre: true } },
     },
   });
-
-  const marcaArray = Array.isArray(marcas) ? marcas : [];
   return marcaArray.map((m: any) => ({
     id: m.id,
     cliente: m.e_estructura_cliente?.nombre || null,
@@ -127,10 +120,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
     }
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const mySupervisorId = parseIntStrict(empleado?.supervisor_id);
 
     // Siempre incluir:
@@ -168,19 +158,13 @@ export async function GET(req: NextRequest) {
     ) as number[];
 
     const empleados = empleadoIds.length
-      ? await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findMany",
-            where: { id: { in: empleadoIds } },
-            select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true, codigo: true },
-          },
+      ? await prisma.c_empleado.findMany({
+          where: { id: { in: empleadoIds } },
+          select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true, codigo: true },
         })
       : [];
 
-    const empleadoById = new Map<number, any>((Array.isArray(empleados) ? empleados : []).map((e: any) => [e.id, e]));
+    const empleadoById = new Map<number, any>(empleados.map((e: any) => [e.id, e]));
     const empleadoNombre = (id?: number | null) => {
       if (!id) return null;
       const e = empleadoById.get(id);
@@ -334,18 +318,12 @@ export async function POST(req: NextRequest) {
     }
 
     // Resolver ejecutivo_cuenta a partir de la sucursal asociada a la plaza seleccionada
-    const plaza = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_plazas",
-        operation: "findFirst",
-        where: { id: plazaId },
-        select: { puesto_id: true },
-      },
+    const plaza = await prisma.e_estructura_plazas.findFirst({
+      where: { id: plazaId },
+      select: { puesto_id: true },
     });
 
-    const plazaPuestoId = parseIntStrict((plaza as any)?.puesto_id);
+    const plazaPuestoId = parseIntStrict(plaza?.puesto_id);
     if (!plazaPuestoId) {
       return NextResponse.json(
         { status: false, message: "La plaza seleccionada no tiene un puesto asociado" },
@@ -353,17 +331,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const puesto = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_puesto",
-        operation: "findFirst",
-        where: { id: plazaPuestoId },
-      },
-    });
+    const puesto = await prisma.e_estructura_puesto.findFirst({ where: { id: plazaPuestoId } });
 
-    const sucursalId = parseIntStrict((puesto as any)?.sucursal_id);
+    const sucursalId = parseIntStrict(puesto?.sucursal_id);
     if (!sucursalId) {
       return NextResponse.json(
         { status: false, message: "El puesto asociado a la plaza no tiene una sucursal válida" },
@@ -371,17 +341,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const sucursal = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_sucursal",
-        operation: "findFirst",
-        where: { id: sucursalId },
-      },
-    });
+    const sucursal = await prisma.e_estructura_sucursal.findFirst({ where: { id: sucursalId } });
 
-    const contratoIdFromSucursal = parseIntStrict((sucursal as any)?.contrato_id);
+    const contratoIdFromSucursal = parseIntStrict(sucursal?.contrato_id);
     if (!contratoIdFromSucursal) {
       return NextResponse.json(
         { status: false, message: "La sucursal asociada no tiene un contrato válido" },
@@ -389,36 +351,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const contrato = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_contrato",
-        operation: "findFirst",
-        where: { id: contratoIdFromSucursal },
-      },
-    });
+    const contrato = await prisma.e_estructura_contrato.findFirst({ where: { id: contratoIdFromSucursal } });
     if (!contrato) {
       return NextResponse.json({ status: false, message: "No se encontró el contrato de la sucursal" }, { status: 400 });
     }
 
     let nombre_cliente = "";
     if (contrato) {
-      const cliente = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findFirst",
-          where: { id: contrato.cliente_id },
-        },
+      const cliente = await prisma.e_estructura_cliente.findFirst({
+        where: { id: contrato.cliente_id ?? undefined },
       });
       if (cliente) {
         nombre_cliente = cliente.nombre;
       }
     }
 
-    const ejecutivoCuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id);
+    const ejecutivoCuenta = parseIntStrict(sucursal?.ejecutivoCuenta_id);
     if (!ejecutivoCuenta) {
       return NextResponse.json(
         { status: false, message: "La sucursal seleccionada no tiene un ejecutivo de cuenta asignado" },
@@ -595,47 +543,25 @@ export async function POST(req: NextRequest) {
     });
 
     const recipients = new Set<number>();
-    const employeePlazas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_empleado_plaza",
-        operation: "findMany",
-        where: { ejecutivoCuenta_id: ejecutivoCuenta },
-        select: { empleado_id: true },
-      },
+    const employeePlazas = await prisma.c_empleado_plaza.findMany({
+      where: { ejecutivoCuenta_id: ejecutivoCuenta },
+      select: { empleado_id: true },
     });
-    for (const row of Array.isArray(employeePlazas) ? employeePlazas : []) {
-      const empId = parseIntStrict((row as any)?.empleado_id);
+    for (const row of employeePlazas) {
+      const empId = parseIntStrict(row.empleado_id);
       if (empId) recipients.add(empId);
     }
     if (recipients.size > 0) {
       // No bloquear la respuesta por notificaciones; si falla, el registro ya fue creado.
 
-      const empleado = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_empleado",
-          operation: "findUnique",
-          where: { id: currentEmployeeId },
-        },
-      });
+      const empleadoNotify = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
 
-      if (empleado) {
-        const empleados_ejecutivos = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findMany",
-            where: { supervisor_id: ejecutivoCuenta },
-          },
-        });
+      if (empleadoNotify) {
+        const empleados_ejecutivos = await prisma.c_empleado.findMany({ where: { supervisor_id: ejecutivoCuenta } });
 
         let empleado_nombre = "";
-        if (empleado) {
-          empleado_nombre = `${empleado.nombre??"" } ${empleado.primer_apellido??""} ${empleado.segundo_apellido??""}`;
+        if (empleadoNotify) {
+          empleado_nombre = `${empleadoNotify.nombre??"" } ${empleadoNotify.primer_apellido??""} ${empleadoNotify.segundo_apellido??""}`;
         }
 
         let tipo_lowercase = tipo.toLowerCase();
@@ -653,7 +579,7 @@ export async function POST(req: NextRequest) {
           0,
           Array.from(recipients),
           `Nueva solicitud de permiso ${tipo_lowercase}`,
-          `El empleado ${empleado_nombre} con cédula ${empleado.cedula??""} ha creado una nueva solicitud de permiso ${tipo_lowercase} para el puesto ${puesto.nombre} (Sucursal ${sucursal.nombre} del cliente ${nombre_cliente}) en las fechas desde ${fecha_desde} hasta ${fecha_hasta} el día ${fecha} a las ${hora}`,
+          `El empleado ${empleado_nombre} con cédula ${empleadoNotify.cedula??""} ha creado una nueva solicitud de permiso ${tipo_lowercase} para el puesto ${puesto?.nombre ?? ""} (Sucursal ${sucursal?.nombre ?? ""} del cliente ${nombre_cliente}) en las fechas desde ${fecha_desde} hasta ${fecha_hasta} el día ${fecha} a las ${hora}`,
            empleados_ejecutivos.map((e: any) => e.id),
         ).catch((error) => {
           const msg = error instanceof Error ? error.message : "Error desconocido";

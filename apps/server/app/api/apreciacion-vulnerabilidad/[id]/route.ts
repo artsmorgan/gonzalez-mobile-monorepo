@@ -4,6 +4,7 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { prisma } from "../../../../utils/prismaClient";
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -62,39 +63,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     // Validar IDs si vienen
     if (cliente_id) {
-      const cliente = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findUnique",
-          where: { id: parseInt(String(cliente_id)) },
-        },
-      });
+      const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
       if (!cliente) return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 200 });
     }
     if (corpo_id) {
-      const corpo = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_sucursal",
-          operation: "findUnique",
-          where: { id: parseInt(String(corpo_id)) },
-        },
-      });
+      const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
       if (!corpo) return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 200 });
     }
     if (puesto_id) {
-      const puesto = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_puesto",
-          operation: "findUnique",
-          where: { id: parseInt(String(puesto_id)) },
-        },
-      });
+      const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
       if (!puesto) return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
     }
 

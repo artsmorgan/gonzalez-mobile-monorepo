@@ -23,6 +23,7 @@ module.exports = ({ config }) => {
         bundleIdentifier: "com.abrjpo98.MonitoreApp"
       },
       android: {
+        googleServicesFile: isLite ? "./google-services-lite.json" : "./google-services-full.json",
         adaptiveIcon: {
           foregroundImage: "./assets/images/adaptive-icon.png",
           backgroundColor: "#ffffff"
@@ -45,6 +46,13 @@ module.exports = ({ config }) => {
           "./plugins/react-native-picker-fix.js"
         ],
         "expo-router",
+        [
+          "expo-notifications",
+          {
+            icon: "./assets/images/icon.png",
+            defaultChannel: "general",
+          },
+        ],
         [
           "expo-splash-screen",
           {
@@ -82,6 +90,11 @@ module.exports = ({ config }) => {
           process.env.NEXT_PUBLIC_API_SERVER ||
           // https://api-gonzalez-mobile-monorepo-production.up.railway.app
           "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+        /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
+        MOBILE_ACCESS_TOKEN:
+          process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
+          process.env.MOBILE_ACCESS_TOKEN ||
+          "",
         APP_VERSION_INFO: {
           "version": "1.0.0",
           "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",

@@ -39,6 +39,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import { RootStackParamList } from '../App';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -306,6 +308,14 @@ export default function PermitRequestScreenV2() {
   const [isGeneratingFirmaEjecutivo, setIsGeneratingFirmaEjecutivo] = useState(false);
   const [isSavingComplete, setIsSavingComplete] = useState(false);
   const [rejectingRecordId, setRejectingRecordId] = useState<number | null>(null);
+
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const planillasRevalidationModalShownRef = useRef(false);
+  const pendingPlanillasActionRef = useRef<
+    | { type: 'approve' }
+    | { type: 'reject'; record: PermitRecord }
+    | null
+  >(null);
 
   const [currentPuestoNombre, setCurrentPuestoNombre] = useState<string | null>(null);
 
@@ -983,23 +993,51 @@ export default function PermitRequestScreenV2() {
     );
   };
 
+  const requestPlanillasRevalidationIfNeeded = async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  };
+
   const executeSaveCompletion = async () => {
     if (!selectedRecord) return;
     if (!firmaEjecutivoDigital) return Alert.alert('Error', 'Debes generar firma digital del ejecutivo');
     if (!firmaEjecutivoManual) return Alert.alert('Error', 'Debes generar firma manual del ejecutivo');
 
-    setIsSavingComplete(true);
     try {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
 
+      const referenceMs = Number(horaAccion) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'approve' };
+        return;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
+      setIsSavingComplete(true);
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request/${selectedRecord.id}`,
         init: {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
+          },
           body: JSON.stringify({
             reemplazo_obligatorio: reemplazoObligatorio,
             turnos: turnosComplete.map((t) => ({ id: t.id, reemplazo_id: t.reemplazo_id ?? null })),
@@ -1040,18 +1078,31 @@ export default function PermitRequestScreenV2() {
   };
 
   const executeRejectRecord = async (record: PermitRecord) => {
-    setRejectingRecordId(record.id);
     try {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
 
+      const referenceMs = Number(horaAccion) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'reject', record };
+        return;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
+      setRejectingRecordId(record.id);
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request/${record.id}/reject`,
         init: {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
+          },
           body: JSON.stringify({
             hora_accion: horaAccion,
           }),
@@ -1069,6 +1120,24 @@ export default function PermitRequestScreenV2() {
     } finally {
       setRejectingRecordId(null);
     }
+  };
+
+  const handlePlanillasRevalidationSuccess = () => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    const pending = pendingPlanillasActionRef.current;
+    pendingPlanillasActionRef.current = null;
+    if (pending?.type === 'approve') {
+      void executeSaveCompletion();
+    } else if (pending?.type === 'reject') {
+      void executeRejectRecord(pending.record);
+    }
+  };
+
+  const handlePlanillasRevalidationDismiss = () => {
+    planillasRevalidationModalShownRef.current = false;
+    pendingPlanillasActionRef.current = null;
+    setShowPlanillasRevalidationModal(false);
   };
 
   const rejectRecord = (record: PermitRecord) => {
@@ -1952,6 +2021,14 @@ export default function PermitRequestScreenV2() {
           </CameraView>
         </ThemedView>
       </Modal>
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
+      />
 
       <AppFooter />
       <SlideMenu

@@ -157,6 +157,7 @@ function findTable1HeaderRow(ws: XLSX.WorkSheet): number | null {
       cellRaw(ws, r, 4),
       cellRaw(ws, r, 5),
       cellRaw(ws, r, 6),
+      cellRaw(ws, r, 7),
     ];
     if (headersMatch(values, PLANTILLA_TABLE1_HEADERS)) return r;
   }

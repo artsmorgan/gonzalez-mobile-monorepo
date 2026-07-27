@@ -1,5 +1,11 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "./hydratePreexistentIncludes";
+
+const CONTRIBUTION_INCLUDE = {
+  c_empleado: true,
+  c_archivos_aporte_incidente: true,
+};
 
 function buildEmpleadoNombre(e: any): string {
   const nombre = (e?.nombre ?? "").toString().trim();
@@ -25,6 +31,8 @@ function buildContributionFileUrl(baseUrl: string, incidentId: number, contribut
 }
 
 export const findContributionIncidents = async (req: NextRequest, incidentId: number, baseUrl?: string) => {
+  const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CONTRIBUTION_INCLUDE);
+
   const aportes = await callDynamicPrisma({
     req,
     data: {
@@ -33,12 +41,10 @@ export const findContributionIncidents = async (req: NextRequest, incidentId: nu
       operation: "findMany",
       where: { incidente_id: incidentId },
       orderBy: { id: "desc" },
-      include: {
-        c_empleado: true,
-        c_archivos_aporte_incidente: true,
-      }
+      ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
     }
   });
+  await hydratePreexistentRelations(aportes, preexistentSpecs);
 
   const origin = baseUrl ?? req.nextUrl.origin;
 

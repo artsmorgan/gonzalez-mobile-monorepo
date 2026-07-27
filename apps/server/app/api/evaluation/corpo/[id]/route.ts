@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -11,10 +12,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const corpo = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findFirst", where: { id } }
-        });
+        const corpo = await prisma.e_estructura_sucursal.findFirst({ where: { id } });
         if (!corpo) return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
 
         const evaluaciones = await callDynamicPrisma({
@@ -55,17 +53,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         for (const evaluacion of evaluaciones) {
             if (evaluacion && evaluacion.isActive === false) continue;
-            const empleado = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: evaluacion.empleado_id } }
-            });
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: evaluacion.empleado_id } });
             if (!empleado) continue;
             if (empleado.fecha_contratacion == null) continue;
             if (empleado.estado == "BA") continue;
-            const evaluador = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: evaluacion.evaluador_id } }
-            });
+            const evaluador = await prisma.c_empleado.findUnique({ where: { id: evaluacion.evaluador_id } });
             if (!evaluador) continue;
             if (evaluador.fecha_contratacion == null) continue;
             if (evaluador.estado == "BA") continue;

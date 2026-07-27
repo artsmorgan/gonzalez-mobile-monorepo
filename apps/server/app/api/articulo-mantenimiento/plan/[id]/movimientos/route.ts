@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../../../utils/sendNotification";
 
 function parseDateOnly(value: any): Date | null {
@@ -33,42 +34,27 @@ function timeToHHmm(val: any): string | null {
     return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 }
 
-async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
-    const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
-    });
+async function getMarcaDiaOrFail(_req: NextRequest, marcaId: number) {
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
     if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
     if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
-    const lastMarca = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_marca_dia",
-            operation: "findFirst",
-            where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-            orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
-        }
+    const lastMarca = await prisma.c_marca_dia.findFirst({
+        where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
     });
     if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
     return { ok: true as const, marcaDia, message: "" };
 }
 
-async function validatePlanOwnership(req: NextRequest, planId: number, marcaId: number) {
-    const marcaRes = await getMarcaDiaOrFail(req, marcaId);
+async function validatePlanOwnership(_req: NextRequest, planId: number, marcaId: number) {
+    const marcaRes = await getMarcaDiaOrFail(_req, marcaId);
     if (!marcaRes.ok) return { ok: false as const, plan: null, marcaDia: null, message: marcaRes.message };
     const marcaDia = marcaRes.marcaDia!;
 
-    const plan = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_articulo_corpo_puesto_plan",
-            operation: "findUnique",
-            where: { id: planId },
-            include: { e_estructura_sucursal: true, e_estructura_puesto: true }
-        }
+    const plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findUnique({
+        where: { id: planId },
+        include: { e_estructura_sucursal: true, e_estructura_puesto: true },
     });
     if (!plan) return { ok: false as const, plan: null, marcaDia: null, message: "Artículo plan no encontrado" };
 

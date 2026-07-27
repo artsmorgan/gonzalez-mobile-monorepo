@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import fs from "fs";
 import path from "path";
@@ -70,10 +71,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if (!marca_id) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
-        const marca = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } }
-        });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -166,20 +164,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 req,
                 data: { action: "GET", table: "n_clasificacion_incidente", operation: "findUnique", where: { id: incident.clasificacion } }
             });
-            const sucursal = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: incident.corpo_id } }
-            });
-            const cliente = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: incident.cliente_id } }
-            });
+            const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: incident.corpo_id } });
+            const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: incident.cliente_id } });
             if (clasificacion && sucursal && cliente) {
                 const fechaSolucion = incident.fecha_solucion instanceof Date ? incident.fecha_solucion.toISOString() : incident.fecha_solucion;
                 const fecha_string = fechaSolucion.split("T")[0];
                 const hora_string = fechaSolucion.split("T")[1].split(".")[0];
                 const description = `Se ha actualizado el incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-                await sendNotificationByRole(req, marca.corpo_id, [marca.plaza_id], "Incidente actualizado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+                await sendNotificationByRole(req, marca.corpo_id ?? 0, [marca.plaza_id ?? 0], "Incidente actualizado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             }
         }
 

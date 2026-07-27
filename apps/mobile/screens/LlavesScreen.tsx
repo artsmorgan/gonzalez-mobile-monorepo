@@ -191,6 +191,7 @@ export default function LlavesScreen() {
   const filterSucursalIdRef = useRef<number | null>(null);
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -538,12 +539,19 @@ export default function LlavesScreen() {
   );
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      setStructure(structureRef.current);
+      return;
+    }
     setIsStructureLoading(true);
     try {
       const merged = await loadMainStructureTreeMerged();
-      setStructure(Array.isArray(merged) ? merged : []);
+      const next = Array.isArray(merged) ? merged : [];
+      structureRef.current = next;
+      setStructure(next);
     } catch (e) {
       console.error('Error loading main structure (Llaves):', e);
+      structureRef.current = [];
       setStructure([]);
     } finally {
       setIsStructureLoading(false);

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
 function parseDateOnly(value: any): Date | null {
@@ -21,22 +22,13 @@ function parseTimeOnly(value: any): Date | null {
 }
 
 async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
-    const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
     if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
     if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
-    const lastMarca = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_marca_dia",
-            operation: "findFirst",
-            where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-            orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
-        }
+    const lastMarca = await prisma.c_marca_dia.findFirst({
+        where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
+        orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
     });
     if (!lastMarca) return { ok: false as const, marcaDia: null, message: "No se encontró la última marca" };
     return { ok: true as const, marcaDia, message: "" };

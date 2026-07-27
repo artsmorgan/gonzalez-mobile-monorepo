@@ -30,15 +30,14 @@ export default async function revertAttendanceLeaving({
     }
 
     const storedPlanillas = await readStoredPlanillasToken();
-    const planillasToken =
-      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
+    const planillasToken = String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
 
     const response = await authedFetch({
       url: `${apiUrl}/api/attendance/${marcaId}/revert-leaving`,
       init: {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ horaAccion, planillasToken }),
+        headers: { 'Content-Type': 'application/json', 'Planillas-Token': encodeURIComponent(planillasToken ?? '') },
+        body: JSON.stringify({ horaAccion }),
       },
       refreshAccessToken,
       logout,

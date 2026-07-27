@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 
@@ -21,15 +22,7 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
             );
         }
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id: puestoIdToUse }
-            }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdToUse } });
         if (!puesto) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
@@ -97,29 +90,13 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
 
 
             if (lastChange) {
-                const empleado = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: lastChange.created_by }
-                    }
-                });
+                const empleado = await prisma.c_empleado.findUnique({ where: { id: lastChange.created_by } });
                 if (empleado) {
                     empleado_name = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
                 }
             }
             if (firstChange) {
-                const empleadoCreador = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: firstChange.created_by }
-                    }
-                });
+                const empleadoCreador = await prisma.c_empleado.findUnique({ where: { id: firstChange.created_by } });
                 if (empleadoCreador) {
                     creador_name = empleadoCreador.nombre + " " + empleadoCreador.primer_apellido + " " + empleadoCreador.segundo_apellido;
                 }
@@ -218,26 +195,10 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
 
         const createdNotes: any[] = [];
         for (const puesto_id of puestos_parse) {
-            const puesto = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_puesto",
-                    operation: "findUnique",
-                    where: { id: puesto_id }
-                }
-            });
+            const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
             if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-            const empleado = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: empleado_id }
-                }
-            });
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
             if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
 
             const newNote = await callDynamicPrisma({
@@ -332,15 +293,7 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
                 },
             });
 
-            const plazaIds = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_plazas",
-                    operation: "findMany",
-                    where: { puesto_id: puesto.id }
-                }
-            });
+            const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
             await sendNotificationByPlaza(req, marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map((plaza: { id: number }) => plaza.id));
             createdNotes.push(newNote);
         }

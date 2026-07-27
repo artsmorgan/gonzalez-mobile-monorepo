@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../utils/createReporteArticuloMantenimiento";
 import { uploadArticuloMantenimientoFiles } from "../../../utils/uploadArticuloMantenimientoFiles";
@@ -56,35 +57,18 @@ export async function processChecklistSupervisionArticulosMantenimiento(
   let sucursalNombre = "Desconocida";
   let puestoNombre = "Desconocido";
   if (puesto_id) {
-    const puesto = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_puesto",
-        operation: "findUnique",
-        where: { id: puesto_id },
-      },
-    });
+    const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
     if (puesto) {
       puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
     }
   }
-  const empleado = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "c_empleado",
-      operation: "findUnique",
-      where: { id: parseInt(String((payload as any)?.id ?? 0)) || 0 },
-    },
+  const empleado = await prisma.c_empleado.findUnique({
+    where: { id: parseInt(String((payload as any)?.id ?? 0)) || 0 },
   });
   if (empleado) {
     empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
   }
-  const sucursal = await callDynamicPrisma({
-    req,
-    data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpo_id } },
-  });
+  const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpo_id } });
   if (sucursal) {
     sucursalNombre = sucursal.nombre;
   }

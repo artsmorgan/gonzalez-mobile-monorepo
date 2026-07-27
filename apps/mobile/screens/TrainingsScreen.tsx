@@ -450,6 +450,7 @@ export default function TrainingsScreen() {
   const [marcaId, setMarcaId] = useState<number | null>(null);
   const [corpoId, setCorpoId] = useState<number | null>(null);
   const [roleName, setRoleName] = useState<string | null>(null);
+  const structureRef = useRef<EmpresaStructure[]>([]);
   const [structure, setStructure] = useState<EmpresaStructure[]>([]);
 
   // Form states
@@ -521,12 +522,17 @@ export default function TrainingsScreen() {
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
 
   const fetchMainStructure = useCallback(async (): Promise<EmpresaStructure[]> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     try {
       const merged = await loadMainStructureTreeMerged();
       const arr = Array.isArray(merged) ? (merged as EmpresaStructure[]) : [];
+      structureRef.current = arr;
       setStructure(arr);
       return arr;
     } catch {
+      structureRef.current = [];
       setStructure([]);
       return [];
     }
@@ -561,7 +567,7 @@ export default function TrainingsScreen() {
       if (!currentMarcaStr) return;
       const marcaObj = JSON.parse(currentMarcaStr);
       if (marcaObj?.id == null) return;
-      const tree = structure.length > 0 ? structure : await fetchMainStructure();
+      const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
       const path = buildHierarchyFromCurrentMarca(marcaObj, tree);
       applyFormHierarchyBatchedFromMarca(path);
     } catch (e) {
@@ -1339,7 +1345,7 @@ export default function TrainingsScreen() {
     setFilterFecha('');
     try {
       const raw = await AsyncStorage.getItem('current_marca');
-      const tree = structure.length > 0 ? structure : await fetchMainStructure();
+      const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
       if (raw) {
         applyHierarchyToFilters(JSON.parse(raw), tree);
       } else {

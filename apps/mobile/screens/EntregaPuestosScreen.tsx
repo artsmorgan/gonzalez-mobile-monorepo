@@ -28,6 +28,7 @@ import {
   hydrateArticulosPuestoFilesForApi,
   serializeArticulosPuestoForStorage,
 } from '@/utils/articuloMantenimientoFiles';
+import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -100,6 +101,7 @@ interface EntregaPuestosInfo {
     nombre: string;
     cantidad: number;
     tipo?: string;
+    articulo_nomenclador_id?: number | null;
     ultimo_mantenimiento?: {
       estado?: 'Bueno' | 'Malo' | 'No está' | string;
       cantidad_real?: number;
@@ -111,6 +113,7 @@ interface ArticuloForm {
   id: number;
   nombre: string;
   tipo?: string;
+  articulo_nomenclador_id?: number | null;
   cantidad_requerida: number;
   cantidad_real: number;
   estado: 'Bueno' | 'Malo' | 'No está';
@@ -527,36 +530,41 @@ export default function EntregaPuestosScreen() {
       setInfo(data.info);
 
       // Inicializar artículos: precargar estado + cantidad_real según último mantenimiento (si existe)
-      const articulosForm: ArticuloForm[] = data.info.articulos.map((art: any) => {
-        const ultimo = art?.ultimo_mantenimiento ?? null;
-        const estadoUltimo = ultimo?.estado;
-        const estado =
-          estadoUltimo === 'Bueno' || estadoUltimo === 'Malo' || estadoUltimo === 'No está'
-            ? (estadoUltimo as ArticuloForm['estado'])
-            : ('Bueno' as const);
+      const articulosForm: ArticuloForm[] = prioritizePlanByArticuloNomencladorId(
+        data.info.articulos.map((art: any) => {
+          const ultimo = art?.ultimo_mantenimiento ?? null;
+          const estadoUltimo = ultimo?.estado;
+          const estado =
+            estadoUltimo === 'Bueno' || estadoUltimo === 'Malo' || estadoUltimo === 'No está'
+              ? (estadoUltimo as ArticuloForm['estado'])
+              : ('Bueno' as const);
 
-        const cantidadRealRaw =
-          typeof ultimo?.cantidad_real === 'number'
-            ? ultimo.cantidad_real
-            : typeof art?.cantidad === 'number'
-              ? art.cantidad
-              : Number(art?.cantidad) || 0;
+          const cantidadRealRaw =
+            typeof ultimo?.cantidad_real === 'number'
+              ? ultimo.cantidad_real
+              : typeof art?.cantidad === 'number'
+                ? art.cantidad
+                : Number(art?.cantidad) || 0;
 
-        const cantidad_real = estado === 'No está' ? 0 : Math.max(0, Number(cantidadRealRaw) || 0);
+          const cantidad_real = estado === 'No está' ? 0 : Math.max(0, Number(cantidadRealRaw) || 0);
 
-        return {
-          id: art.id,
-          nombre: art.nombre,
-          tipo: art.tipo || '',
-          cantidad_requerida: typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad) || 0,
-          cantidad_real,
-          estado,
-          observaciones: art.observaciones || '',
-          ultimo_mantenimiento_id:
-            ultimo?.id != null && Number(ultimo.id) > 0 ? Number(ultimo.id) : null,
-          mantenimiento_files: [],
-        };
-      });
+          return {
+            id: art.id,
+            nombre: art.nombre,
+            tipo: art.tipo || '',
+            articulo_nomenclador_id: Number.isFinite(Number(art?.articulo_nomenclador_id))
+              ? Number(art.articulo_nomenclador_id)
+              : null,
+            cantidad_requerida: typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad) || 0,
+            cantidad_real,
+            estado,
+            observaciones: art.observaciones || '',
+            ultimo_mantenimiento_id:
+              ultimo?.id != null && Number(ultimo.id) > 0 ? Number(ultimo.id) : null,
+            mantenimiento_files: [],
+          };
+        }),
+      );
       setArticulos(articulosForm);
     } catch (err: any) {
       console.error('Error loading data:', err);

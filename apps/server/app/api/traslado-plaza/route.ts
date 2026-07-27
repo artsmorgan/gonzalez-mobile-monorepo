@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(req: NextRequest) {
     try {
@@ -15,48 +15,29 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado en token" }, { status: 401 });
         }
 
-        const acciones = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_accion_personal",
-                operation: "findMany",
-                where: {
-                    empleado_id: empleadoId,
-                    document: null,
-                },
-                orderBy: { fecha_insercion: "desc" },
+        const accionesArray = await prisma.c_accion_personal.findMany({
+            where: {
+                empleado_id: empleadoId,
+                document: null,
             },
+            orderBy: { fecha_insercion: "desc" },
         });
 
-        const accionesArray = Array.isArray(acciones) ? acciones : [];
         const acciones_return: any[] = [];
 
         for (const accion of accionesArray) {
             const [cliente, sucursal, puesto, tipoAccion] = await Promise.all([
                 accion.cliente_id
-                    ? callDynamicPrisma({
-                        req,
-                        data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: accion.cliente_id } },
-                    })
+                    ? prisma.e_estructura_cliente.findUnique({ where: { id: accion.cliente_id } })
                     : null,
                 accion.corpo_id
-                    ? callDynamicPrisma({
-                        req,
-                        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: accion.corpo_id } },
-                    })
+                    ? prisma.e_estructura_sucursal.findUnique({ where: { id: accion.corpo_id } })
                     : null,
                 accion.puesto_id
-                    ? callDynamicPrisma({
-                        req,
-                        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: accion.puesto_id } },
-                    })
+                    ? prisma.e_estructura_puesto.findUnique({ where: { id: accion.puesto_id } })
                     : null,
                 accion.tipoAccion_id
-                    ? callDynamicPrisma({
-                        req,
-                        data: { action: "GET", table: "c_tipo_accion", operation: "findUnique", where: { id: accion.tipoAccion_id } },
-                    })
+                    ? prisma.c_tipo_accion.findUnique({ where: { id: accion.tipoAccion_id } })
                     : null,
             ]);
 

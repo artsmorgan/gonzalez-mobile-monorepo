@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { buildMantenimientoEquipoPlantillaBuffer } from "../../../../../utils/mantenimientoEquipoPlantilla";
 
 export const runtime = "nodejs";
@@ -22,15 +22,8 @@ export async function GET(req: NextRequest) {
 
     const accessToken = getAccessTokenFromRequest(req);
 
-    const articulos = await callDynamicPrisma({
-      req,
-      token: accessToken,
-      data: {
-        action: "GET",
-        table: "n_articulo_corpo_puesto",
-        operation: "findMany",
-        orderBy: { id: "asc" },
-      },
+    const articulos = await prisma.n_articulo_corpo_puesto.findMany({
+      orderBy: { id: "asc" },
     });
 
     const catalog = (Array.isArray(articulos) ? articulos : []).map((a: { id: number; nombre: string }) => ({

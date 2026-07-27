@@ -1,56 +1,91 @@
 import axios from "axios";
-import { prisma } from "./prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { NextRequest } from "next/server";
+import { callDynamicPrisma } from "./callDynamicPrisma";
 
-export async function createTokenPlanillas(empleado_id: number, password: string) {
+type EmpleadoPlanillasRef = {
+    id: number;
+    cedula: string | null;
+};
+
+export async function createTokenPlanillas(
+    request: NextRequest,
+    empleado: EmpleadoPlanillasRef,
+    password: string,
+) {
     const planillasUrl = process.env.PLANILLAS_URL;
     if (!planillasUrl) {
         throw new Error("PLANILLAS_URL no configurado");
     }
-    const empleado = await prisma.c_empleado.findFirst({
-      where: { id: empleado_id }
-      });
-  
-    if (!empleado) {
-      throw new Error("Empleado no encontrado");
+
+    const cedula = String(empleado.cedula ?? "").trim();
+    if (!cedula) {
+        throw new Error("Cédula del empleado no disponible");
     }
-  
-    const url = `${planillasUrl}/login`;
-    console.log('url', url);
-    const response = await axios.post(url, {
-      username: empleado.cedula,
-      password: password
-    }, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-  
-    if (!response.data.success) {
-      throw new Error("Error al iniciar sesión en Planillas");
+
+    const url = `${planillasUrl.replace(/\/+$/, "")}/login`;
+    const response = await axios.post(
+        url,
+        {
+            username: cedula,
+            password,
+        },
+        {
+            headers: {
+                "Content-Type": "application/json",
+            },
+        },
+    );
+
+    if (!response.data?.success) {
+        throw new Error("Error al iniciar sesión en Planillas");
     }
-  
-    let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
-    let expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
-  
-    let mobile_token = await prisma.a_mobile_token_for_planillas.findFirst({
-      where: { empleado_id: empleado_id }
+
+    const now = toZonedTime(new Date(), "America/Costa_Rica");
+    const expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
+    const planillasToken = String(response.data.data.token ?? "");
+
+    const mobile_token = await callDynamicPrisma({
+        req: request,
+        data: {
+            action: "GET",
+            table: "a_mobile_token_for_planillas",
+            operation: "findFirst",
+            where: { empleado_id: empleado.id },
+        },
     });
-  
-    let planillasToken = response.data.data.token;
-  
-    if (mobile_token) {
-        await prisma.a_mobile_token_for_planillas.update({
-          where: { id: mobile_token.id },
-          data: { token: response.data.data.token, created_at: now, expires_at: expires_at }
+
+    if (mobile_token?.id) {
+        await callDynamicPrisma({
+            req: request,
+            data: {
+                action: "UPDATE",
+                table: "a_mobile_token_for_planillas",
+                operation: "update",
+                where: { id: mobile_token.id },
+                data: {
+                    token: planillasToken,
+                    created_at: now,
+                    expires_at,
+                },
+            },
+        });
+    } else {
+        await callDynamicPrisma({
+            req: request,
+            data: {
+                action: "POST",
+                table: "a_mobile_token_for_planillas",
+                operation: "create",
+                data: {
+                    empleado_id: empleado.id,
+                    token: planillasToken,
+                    created_at: now,
+                    expires_at,
+                },
+            },
         });
     }
-    else {
-        await prisma.a_mobile_token_for_planillas.create({
-          data: { empleado_id: empleado_id, token: response.data.data.token, created_at: now, expires_at: expires_at }
-        });
-    }
-  
-    return { planillasToken: planillasToken, planillasTokenExpiresAt: expires_at.getTime() };
-  }
+
+    return { planillasToken, planillasTokenExpiresAt: expires_at.getTime() };
+}

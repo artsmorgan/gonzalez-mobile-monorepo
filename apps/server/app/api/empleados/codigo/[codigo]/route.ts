@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export const runtime = "nodejs";
 
@@ -26,14 +26,8 @@ export async function GET(
       );
     }
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_empleado",
-        operation: "findFirst",
-        where: { codigo: codigoValue },
-      },
+    const empleado = await prisma.c_empleado.findFirst({
+      where: { codigo: codigoValue },
     });
 
     if (!empleado) {
@@ -43,11 +37,10 @@ export async function GET(
       );
     }
 
-    const empleadoObj = empleado as any;
     const nombreCompleto = [
-      empleadoObj?.nombre,
-      empleadoObj?.primer_apellido,
-      empleadoObj?.segundo_apellido,
+      empleado.nombre,
+      empleado.primer_apellido,
+      empleado.segundo_apellido,
     ]
       .filter(Boolean)
       .join(" ")
@@ -57,10 +50,10 @@ export async function GET(
       {
         status: true,
         data: {
-          id: empleadoObj.id,
-          codigo: empleadoObj.codigo,
-          nombre: empleadoObj.nombre,
-          cedula: empleadoObj.cedula,
+          id: empleado.id,
+          codigo: empleado.codigo,
+          nombre: empleado.nombre,
+          cedula: empleado.cedula,
           nombre_completo: nombreCompleto,
         },
       },

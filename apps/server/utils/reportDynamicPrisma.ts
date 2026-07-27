@@ -2,7 +2,34 @@
 import { NextRequest } from "next/server";
 import type { PrismaClient } from "@prisma/client";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 import { isLikelyJwt } from "./resolveUserAccessToken";
+
+/** Tablas preexistentes del proyecto: acceso directo vía Prisma (no `/api/dynamic-prisma`). */
+export const PREEXISTENT_REPORT_TABLES = new Set([
+    "c_accion_personal",
+    "c_cambio_guardia",
+    "c_empleado",
+    "c_empleado_plaza",
+    "c_horario",
+    "c_marca_dia",
+    "c_salida_anticipada",
+    "c_tipo_accion",
+    "e_estructura_articulo_corpo_puesto_entrega",
+    "e_estructura_articulo_corpo_puesto_plan",
+    "e_estructura_cliente",
+    "e_estructura_combo_articulo_cp",
+    "e_estructura_contrato",
+    "e_estructura_empresa",
+    "e_estructura_plazas",
+    "e_estructura_puesto",
+    "e_estructura_sucursal",
+    "n_articulo_corpo_puesto",
+    "n_division",
+    "n_ejecutivo_cuenta",
+    "pg_categoria_empleado",
+    "pg_categoria_salarial",
+]);
 
 type ReadArgs = {
     where?: any;
@@ -21,6 +48,7 @@ type TableHandler = {
     findUnique: (args: ReadArgs) => Promise<any | null>;
     create: (args: { data: any; select?: any; include?: any }) => Promise<any>;
     update: (args: { where: any; data: any; select?: any; include?: any }) => Promise<any>;
+    delete: (args: { where: any; select?: any; include?: any }) => Promise<any>;
 };
 
 export type ReportDataAccess = {
@@ -33,15 +61,20 @@ function resolveServiceBaseUrl(): string {
     return resolveInternalServiceBaseUrl();
 }
 
-/** URL local para worker / procesos internos (evita ngrok y bucles de reintento por timeout). */
+/** Base URL del API para reportes/worker (`SERVER_URL` con fallback local). */
+export function resolveReportServiceBaseUrl(): string {
+    return resolveServiceBaseUrl();
+}
+
+/** URL local cuando `SERVER_URL` no está definido. */
 export function resolveInternalServiceBaseUrl(): string {
     const port = process.env.PORT?.trim() || "3000";
     return `http://127.0.0.1:${port}`;
 }
 
-/** Request sintético para worker con JWT del usuario que encoló el reporte (patrón MantenimientoEquipo). */
+/** Request sintético del worker; apunta a `SERVER_URL` (mismo destino que `callDynamicPrisma`). */
 export function createReportServiceRequest(accessToken?: string): NextRequest {
-    const base = resolveInternalServiceBaseUrl();
+    const base = resolveServiceBaseUrl();
     const headers = new Headers({ "content-type": "application/json" });
     const token = String(accessToken || "").trim();
     if (isLikelyJwt(token)) {
@@ -50,7 +83,30 @@ export function createReportServiceRequest(accessToken?: string): NextRequest {
     return new NextRequest(`${base}/api/reportes/internal`, { headers });
 }
 
-function createTableHandler(table: string, req: NextRequest, token?: string): TableHandler {
+function getDirectPrismaDelegate(table: string) {
+    const delegate = (prisma as PrismaClient & Record<string, TableHandler>)[table];
+    if (!delegate) {
+        throw new Error(`Tabla preexistente sin delegate Prisma: ${table}`);
+    }
+    return delegate;
+}
+
+function createDirectPrismaTableHandler(table: string): TableHandler {
+    const delegate = getDirectPrismaDelegate(table);
+    return {
+        findMany: async (args: ReadArgs = {}) => {
+            const rows = await delegate.findMany(args);
+            return Array.isArray(rows) ? rows : [];
+        },
+        findFirst: async (args: ReadArgs = {}) => delegate.findFirst(args),
+        findUnique: async (args: ReadArgs) => delegate.findUnique(args),
+        create: async (args: { data: any; select?: any; include?: any }) => delegate.create(args),
+        update: async (args: { where: any; data: any; select?: any; include?: any }) => delegate.update(args),
+        delete: async (args: { where: any; select?: any; include?: any }) => delegate.delete(args),
+    };
+}
+
+function createDynamicPrismaTableHandler(table: string, req: NextRequest, token?: string): TableHandler {
     const base = {
         req,
         token,
@@ -135,13 +191,38 @@ function createTableHandler(table: string, req: NextRequest, token?: string): Ta
                 },
             });
         },
+        delete: async (args: { where: any; select?: any; include?: any }) => {
+            return callDynamicPrisma({
+                ...base,
+                data: {
+                    action: "DELETE",
+                    table,
+                    operation: "delete",
+                    where: args.where,
+                    select: args.select,
+                    include: args.include,
+                },
+            });
+        },
     };
 }
 
+function createTableHandler(table: string, req: NextRequest, token?: string): TableHandler {
+    if (PREEXISTENT_REPORT_TABLES.has(table)) {
+        return createDirectPrismaTableHandler(table);
+    }
+    return createDynamicPrismaTableHandler(table, req, token);
+}
+
 /**
- * Proxy de acceso a datos para reportes vía `/api/dynamic-prisma`.
- * Las consultas `findMany` con `{ id: { in: [...] } }` se hacen en una sola petición por tabla.
+ * Proxy de acceso a datos para reportes.
+ * - Tablas en `PREEXISTENT_REPORT_TABLES` → Prisma directo (`DATABASE_URL`).
+ * - Resto de tablas creadas (p. ej. `e_reportes_mobile`) → `callDynamicPrisma` vía `SERVER_URL`.
  */
+export function createWorkerReportDb(): ReportDataAccess {
+    return createReportPrismaClient(createReportServiceRequest());
+}
+
 export function createReportPrismaClient(req: NextRequest, token?: string): ReportDataAccess {
     const handlers = new Map<string, TableHandler>();
     return new Proxy({} as ReportDataAccess, {

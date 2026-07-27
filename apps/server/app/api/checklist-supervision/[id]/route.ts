@@ -10,6 +10,14 @@ import {
   sanitizeArticulosPuestoForPersistence,
   stripMantenimientoFilesFromArticulosPuesto,
 } from "../../../../utils/sanitizeArticulosPuestoForPersistence";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
+
+const CHECKLIST_SUPERVISION_INCLUDE = {
+  e_estructura_cliente: { select: { id: true, nombre: true } },
+  e_estructura_sucursal: { select: { id: true, nombre: true } },
+  e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+  c_imagenes_checklist_supervision: { select: { id: true, name: true, original_name: true } },
+};
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -95,6 +103,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CHECKLIST_SUPERVISION_INCLUDE);
+
     const row = await callDynamicPrisma({
       req,
       data: {
@@ -102,22 +112,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_checklist_supervision",
         operation: "findUnique",
         where: { id },
-        include: {
-          e_estructura_cliente: {
-            select: { id: true, nombre: true },
-          },
-          e_estructura_sucursal: {
-            select: { id: true, nombre: true },
-          },
-          e_estructura_puesto: {
-            select: { id: true, nombre: true, codigo: true },
-          },
-          c_imagenes_checklist_supervision: {
-            select: { id: true, name: true, original_name: true },
-          },
-        }
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       }
     });
+    await hydratePreexistentRelations(row, preexistentSpecs);
 
     if (!row) {
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
@@ -323,6 +321,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CHECKLIST_SUPERVISION_INCLUDE);
+
     const fullRow = await callDynamicPrisma({
       req,
       data: {
@@ -330,14 +330,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_checklist_supervision",
         operation: "findUnique",
         where: { id },
-        include: {
-          e_estructura_cliente: { select: { id: true, nombre: true } },
-          e_estructura_sucursal: { select: { id: true, nombre: true } },
-          e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
-          c_imagenes_checklist_supervision: { select: { id: true, name: true, original_name: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(fullRow, preexistentSpecs);
 
     const mapped = fullRow ? mapChecklistSupervisionPublicRow(fullRow, req.nextUrl.origin) : { id };
 

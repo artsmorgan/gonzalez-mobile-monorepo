@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,6 +23,9 @@ import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import {
   EmpleadoLite,
   formatEmpleadoNombre,
@@ -221,6 +224,48 @@ export default function NomencladoresScreen() {
   const [articuloOptions, setArticuloOptions] = useState<SelectOption[]>([]);
   const [filterArticuloId, setFilterArticuloId] = useState('0');
   const [formArticuloId, setFormArticuloId] = useState('');
+
+  const planillasRevalidationModalShownRef = useRef(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const pendingPlanillasActionRef = useRef<
+    { type: 'save' } | { type: 'delete'; row: NomenclatorRow } | null
+  >(null);
+
+  const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  }, []);
+
+  const handlePlanillasRevalidationSuccess = useCallback(() => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    const pending = pendingPlanillasActionRef.current;
+    pendingPlanillasActionRef.current = null;
+    if (pending?.type === 'save') {
+      void executeSaveRecordRef.current();
+    } else if (pending?.type === 'delete') {
+      void executeDeleteRecordRef.current(pending.row);
+    }
+  }, []);
+
+  const handlePlanillasRevalidationDismiss = useCallback(() => {
+    planillasRevalidationModalShownRef.current = false;
+    pendingPlanillasActionRef.current = null;
+    setShowPlanillasRevalidationModal(false);
+  }, []);
+
+  const executeSaveRecordRef = useRef<() => Promise<void>>(async () => {});
+  const executeDeleteRecordRef = useRef<(row: NomenclatorRow) => Promise<void>>(async () => {});
 
   const refreshOnlineStatus = useCallback(async () => {
     const networkState = await Network.getNetworkStateAsync();
@@ -546,6 +591,27 @@ export default function NomencladoresScreen() {
       return;
     }
 
+    if (selectedType.formKind === 'empleado-ejecutivo') {
+      let referenceMs: number;
+      try {
+        referenceMs = (await getHoraAccion()) || Date.now();
+      } catch {
+        referenceMs = Date.now();
+      }
+
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'save' };
+        return;
+      }
+    }
+
+    await executeSaveRecordRef.current();
+  };
+
+  const executeSaveRecord = async () => {
+    if (!selectedType) return;
+
     let body: Record<string, unknown>;
 
     if (selectedType.formKind === 'ejecutivo-coordinador') {
@@ -613,11 +679,23 @@ export default function NomencladoresScreen() {
         ? `${apiUrl}/api/nomenclators/${selectedType.slug}/${editingId}`
         : `${apiUrl}/api/nomenclators/${selectedType.slug}`;
 
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (selectedType.formKind === 'empleado-ejecutivo') {
+        let referenceMs: number;
+        try {
+          referenceMs = (await getHoraAccion()) || Date.now();
+        } catch {
+          referenceMs = Date.now();
+        }
+        const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+        headers['Planillas-Token'] = encodeURIComponent(planillasTokenCheck.token ?? '');
+      }
+
       const response = await authedFetch({
         url,
         init: {
           method: isEdit ? 'PUT' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(body),
         },
         refreshAccessToken,
@@ -644,6 +722,8 @@ export default function NomencladoresScreen() {
       setSaving(false);
     }
   };
+
+  executeSaveRecordRef.current = executeSaveRecord;
 
   const confirmDelete = (row: NomenclatorRow) => {
     if (!selectedType) return;
@@ -672,12 +752,45 @@ export default function NomencladoresScreen() {
       return;
     }
 
+    if (selectedType.formKind === 'empleado-ejecutivo') {
+      let referenceMs: number;
+      try {
+        referenceMs = (await getHoraAccion()) || Date.now();
+      } catch {
+        referenceMs = Date.now();
+      }
+
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'delete', row };
+        return;
+      }
+    }
+
+    await executeDeleteRecordRef.current(row);
+  };
+
+  const executeDeleteRecord = async (row: NomenclatorRow) => {
+    if (!selectedType) return;
+
     setSaving(true);
     try {
       const apiUrl = getApiUrl();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (selectedType.formKind === 'empleado-ejecutivo') {
+        let referenceMs: number;
+        try {
+          referenceMs = (await getHoraAccion()) || Date.now();
+        } catch {
+          referenceMs = Date.now();
+        }
+        const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+        headers['Planillas-Token'] = encodeURIComponent(planillasTokenCheck.token ?? '');
+      }
+
       const response = await authedFetch({
         url: `${apiUrl}/api/nomenclators/${selectedType.slug}/${row.id}`,
-        init: { method: 'DELETE', headers: { 'Content-Type': 'application/json' } },
+        init: { method: 'DELETE', headers },
         refreshAccessToken,
         logout,
       });
@@ -701,6 +814,8 @@ export default function NomencladoresScreen() {
       setSaving(false);
     }
   };
+
+  executeDeleteRecordRef.current = executeDeleteRecord;
 
   const handleMenuPress = () => setIsMenuVisible(true);
   const handleMenuClose = () => setIsMenuVisible(false);
@@ -765,6 +880,14 @@ export default function NomencladoresScreen() {
       </ScrollView>
 
       <AppFooter />
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
+      />
 
       <SlideMenu
         isVisible={isMenuVisible}

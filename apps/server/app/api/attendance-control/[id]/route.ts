@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { deleteUploadsFileByRelativePath } from "../../../utils/deleteUploadsFileByRelativePath";
@@ -73,7 +74,7 @@ function getTurnoLetter(turno: string): string {
   return String(turno || "").trim().charAt(0).toUpperCase();
 }
 
-async function buildColaboradoresFromMarcas(req: NextRequest, params: { fecha: Date; corpo_id: number; turno: string }) {
+async function buildColaboradoresFromMarcas(_req: NextRequest, params: { fecha: Date; corpo_id: number; turno: string }) {
   const turnoLetter = getTurnoLetter(params.turno);
   if (!["D", "M", "N"].includes(turnoLetter)) {
     throw new Error("Turno inválido");
@@ -82,48 +83,42 @@ async function buildColaboradoresFromMarcas(req: NextRequest, params: { fecha: D
   const start = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 0, 0, 0, 0);
   const end = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 23, 59, 59, 999);
 
-  const marcas = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "c_marca_dia",
-      operation: "findMany",
-      where: {
-        corpo_id: params.corpo_id,
-        tipo_turno: turnoLetter,
-        fecha: {
-          gte: start.toISOString(),
-          lte: end.toISOString(),
-        },
+  const marcas = await prisma.c_marca_dia.findMany({
+    where: {
+      corpo_id: params.corpo_id,
+      tipo_turno: turnoLetter,
+      fecha: {
+        gte: start,
+        lte: end,
       },
-      include: {
-        c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
-          select: {
-            id: true,
-            nombre: true,
-            primer_apellido: true,
-            segundo_apellido: true,
-            cedula: true,
-          },
-        },
-        c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
-          select: {
-            id: true,
-            nombre: true,
-            primer_apellido: true,
-            segundo_apellido: true,
-            cedula: true,
-          },
-        },
-        e_estructura_cliente: { select: { id: true, nombre: true } },
-        e_estructura_sucursal: { select: { id: true, nombre: true } },
-        e_estructura_puesto: { select: { id: true, nombre: true } },
-      },
-      orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     },
+    include: {
+      c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
+        select: {
+          id: true,
+          nombre: true,
+          primer_apellido: true,
+          segundo_apellido: true,
+          cedula: true,
+        },
+      },
+      c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
+        select: {
+          id: true,
+          nombre: true,
+          primer_apellido: true,
+          segundo_apellido: true,
+          cedula: true,
+        },
+      },
+      e_estructura_cliente: { select: { id: true, nombre: true } },
+      e_estructura_sucursal: { select: { id: true, nombre: true } },
+      e_estructura_puesto: { select: { id: true, nombre: true } },
+    },
+    orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
   });
 
-  const colaboradores = (Array.isArray(marcas) ? marcas : []).map((m: any) => {
+  const colaboradores = marcas.map((m) => {
     const empFijo = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
     const empReemplazo = m.c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado;
     const emp = empReemplazo || empFijo;
@@ -257,15 +252,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
       const marcaIds = [...new Set(validSignatures.map((s) => Number(s.marca_id || 0)).filter((id) => id > 0))];
       const marcasRows = marcaIds.length
-        ? await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "c_marca_dia",
-              operation: "findMany",
-              where: { id: { in: marcaIds } },
-              select: { id: true, empleadoFijo_id: true, empleadoReemplaza_id: true },
-            },
+        ? await prisma.c_marca_dia.findMany({
+            where: { id: { in: marcaIds } },
+            select: { id: true, empleadoFijo_id: true, empleadoReemplaza_id: true },
           })
         : [];
       const marcaById = new Map<number, any>();
@@ -400,18 +389,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     let sucursalNombreMap: Record<number, string> = {};
     const fullCorpoId = Number((fullRecord as any)?.corpo_id || corpo_id || 0);
     if (fullCorpoId > 0) {
-      const sucursal = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_sucursal",
-          operation: "findUnique",
-          where: { id: fullCorpoId },
-          select: { id: true, nombre: true },
-        },
+      const sucursal = await prisma.e_estructura_sucursal.findUnique({
+        where: { id: fullCorpoId },
+        select: { id: true, nombre: true },
       });
-      if (sucursal && (sucursal as any).id) {
-        sucursalNombreMap[Number((sucursal as any).id)] = String((sucursal as any).nombre || "");
+      if (sucursal?.id) {
+        sucursalNombreMap[Number(sucursal.id)] = String(sucursal.nombre || "");
       }
     }
 

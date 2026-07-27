@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime, format } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { sanitizeArticulosPuestoForPersistence } from "../../../utils/sanitizeArticulosPuestoForPersistence";
 import { processEntregaPuestosArticulosMantenimiento } from "./articulosMantenimiento";
@@ -147,14 +148,8 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marcaId) },
-            },
+        const marca = await prisma.c_marca_dia.findUnique({
+            where: { id: parseInt(marcaId) },
         });
         if (!marca || !marca.id) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
@@ -199,48 +194,42 @@ export async function GET(req: NextRequest) {
         const marcaFechaISO = marcaFecha.toISOString();
         const marcaHoraInicioISO = marcaHoraInicioTime ? marcaHoraInicioTime.toISOString() : null;
 
-        const marcaAnterior = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    puesto_id: marca.puesto_id,
-                    OR: [
-                        // Fecha anterior
-                        {
-                            fecha: {
-                                lt: marcaFechaISO,
-                            },
+        const marcaAnterior = await prisma.c_marca_dia.findFirst({
+            where: {
+                puesto_id: marca.puesto_id,
+                OR: [
+                    // Fecha anterior
+                    {
+                        fecha: {
+                            lt: marcaFechaISO,
                         },
-                        // Misma fecha pero hora_inicio anterior
-                        marcaHoraInicioISO ? {
-                            fecha: {
-                                equals: marcaFechaISO,
-                            },
-                            hora_inicio: {
-                                lt: marcaHoraInicioISO,
-                            },
-                        } : {
-                            fecha: {
-                                equals: marcaFechaISO,
-                            },
+                    },
+                    // Misma fecha pero hora_inicio anterior
+                    marcaHoraInicioISO ? {
+                        fecha: {
+                            equals: marcaFechaISO,
                         },
-                    ],
-                    AND: [
-                        {
-                            tipo_turno: {
-                                not: "L",
-                            },
+                        hora_inicio: {
+                            lt: marcaHoraInicioISO,
                         },
-                    ]
-                },
-                orderBy: [
-                    { fecha: "desc" },
-                    { hora_inicio: "desc" },
+                    } : {
+                        fecha: {
+                            equals: marcaFechaISO,
+                        },
+                    },
                 ],
+                AND: [
+                    {
+                        tipo_turno: {
+                            not: "L",
+                        },
+                    },
+                ]
             },
+            orderBy: [
+                { fecha: "desc" },
+                { hora_inicio: "desc" },
+            ],
         });
 
         if (!marcaAnterior || !marcaAnterior.id) {
@@ -249,14 +238,8 @@ export async function GET(req: NextRequest) {
 
         let previous_employee = { id: 0, nombre: "Desconocido" };
         if (marcaAnterior.empleadoFijo_id) {
-            const empleado_bd = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: marcaAnterior.empleadoFijo_id },
-                },
+            const empleado_bd = await prisma.c_empleado.findUnique({
+                where: { id: marcaAnterior.empleadoFijo_id },
             });
             if (empleado_bd && empleado_bd.id) {
                 previous_employee = {
@@ -352,19 +335,13 @@ export async function GET(req: NextRequest) {
                 );
 
                 const empleados = empleadoIds.length > 0
-                    ? await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "c_empleado",
-                            operation: "findMany",
-                            where: { id: { in: empleadoIds } },
-                            select: {
-                                id: true,
-                                nombre: true,
-                                primer_apellido: true,
-                                segundo_apellido: true,
-                            },
+                    ? await prisma.c_empleado.findMany({
+                        where: { id: { in: empleadoIds } },
+                        select: {
+                            id: true,
+                            nombre: true,
+                            primer_apellido: true,
+                            segundo_apellido: true,
                         },
                     })
                     : [];
@@ -451,53 +428,42 @@ export async function GET(req: NextRequest) {
             });
         }
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id: marcaAnterior.puesto_id },
-            },
+        if (!marcaAnterior.puesto_id) {
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+        }
+
+        const puesto = await prisma.e_estructura_puesto.findUnique({
+            where: { id: marcaAnterior.puesto_id },
         });
         if (!puesto || !puesto.id) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const articulos_return: { id: number, tipo: string, nombre: string, marca: string, serie: string, modelo: string, cantidad: number }[] = [];
+        const articulos_return: {
+            id: number;
+            tipo: string;
+            nombre: string;
+            marca: string;
+            serie: string;
+            modelo: string;
+            cantidad: number;
+            articulo_nomenclador_id: number | null;
+        }[] = [];
 
         if (puesto.comboArticulosCP_id) {
-            const combo_articulo_cp = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_combo_articulo_cp",
-                    operation: "findUnique",
-                    where: { id: puesto.comboArticulosCP_id },
-                },
+            const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({
+                where: { id: puesto.comboArticulosCP_id },
             });
             if (combo_articulo_cp && combo_articulo_cp.id) {
-                const articulos_combo_articulo_cp = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_articulo_corpo_puesto_plan",
-                        operation: "findMany",
-                        where: { combo_id: combo_articulo_cp.id },
-                    },
+                const articulos_combo_articulo_cp = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+                    where: { combo_id: combo_articulo_cp.id },
                 });
                 const articulosComboArray = Array.isArray(articulos_combo_articulo_cp) ? articulos_combo_articulo_cp : [];
                 for (const articulo of articulosComboArray) {
                     let art_bd = null;
                     if (articulo.articuloCP_id) {
-                        art_bd = await callDynamicPrisma({
-                            req,
-                            data: {
-                                action: "GET",
-                                table: "n_articulo_corpo_puesto",
-                                operation: "findUnique",
-                                where: { id: articulo.articuloCP_id },
-                            },
+                        art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                            where: { id: articulo.articuloCP_id },
                         });
                     }
                     articulos_return.push({
@@ -508,34 +474,26 @@ export async function GET(req: NextRequest) {
                         serie: "",
                         modelo: "",
                         cantidad: articulo.cantidad,
+                        articulo_nomenclador_id:
+                            articulo.articuloCP_id != null && Number.isFinite(Number(articulo.articuloCP_id))
+                                ? Number(articulo.articuloCP_id)
+                                : null,
                     });
                 }
             }
         }
 
-        const articulos_puesto_plan = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_articulo_corpo_puesto_plan",
-                operation: "findMany",
-                where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }],
-                    id: { notIn: articulos_return.map((articulo: any) => articulo.id) }
-                },
+        const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+            where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }],
+                id: { notIn: articulos_return.map((articulo: any) => articulo.id) }
             },
         });
         const articulosPlanArray = Array.isArray(articulos_puesto_plan) ? articulos_puesto_plan : [];
         for (const articulo of articulosPlanArray) {
             let art_bd = null;
             if (articulo.articuloCP_id) {
-                art_bd = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "n_articulo_corpo_puesto",
-                        operation: "findUnique",
-                        where: { id: articulo.articuloCP_id },
-                    },
+                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                    where: { id: articulo.articuloCP_id },
                 });
             }
             articulos_return.push({
@@ -546,30 +504,22 @@ export async function GET(req: NextRequest) {
                 serie: "",
                 modelo: "",
                 cantidad: articulo.cantidad,
+                articulo_nomenclador_id:
+                    articulo.articuloCP_id != null && Number.isFinite(Number(articulo.articuloCP_id))
+                        ? Number(articulo.articuloCP_id)
+                        : null,
             });
         }
 
-        const articulos_puesto_entrega = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_articulo_corpo_puesto_entrega",
-                operation: "findMany",
-                where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }] },
-            },
+        const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+            where: { OR: [{ puesto_id: marcaAnterior.puesto_id }, { corpo_id: marcaAnterior.corpo_id }] },
         });
         const articulosEntregaArray = Array.isArray(articulos_puesto_entrega) ? articulos_puesto_entrega : [];
         for (const articulo of articulosEntregaArray) {
             let art_bd = null;
             if (articulo.nomencladorArticuloCP_id) {
-                art_bd = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "n_articulo_corpo_puesto",
-                        operation: "findUnique",
-                        where: { id: articulo.nomencladorArticuloCP_id },
-                    },
+                art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                    where: { id: articulo.nomencladorArticuloCP_id },
                 });
             }
             articulos_return.push({
@@ -580,6 +530,11 @@ export async function GET(req: NextRequest) {
                 serie: articulo.serie,
                 modelo: articulo.modelo ?? "",
                 cantidad: 1,
+                articulo_nomenclador_id:
+                    articulo.nomencladorArticuloCP_id != null &&
+                    Number.isFinite(Number(articulo.nomencladorArticuloCP_id))
+                        ? Number(articulo.nomencladorArticuloCP_id)
+                        : null,
             });
         }
 
@@ -743,14 +698,8 @@ export async function POST(req: NextRequest) {
                 return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
             }
         } else if (marca_id) {
-            const marca = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findUnique",
-                    where: { id: parseInt(marca_id) },
-                },
+            const marca = await prisma.c_marca_dia.findUnique({
+                where: { id: parseInt(marca_id) },
             });
             if (marca && marca.id && marca.empleadoFijo_id) {
                 const marcaFecha = marca.fecha instanceof Date ? marca.fecha : new Date(marca.fecha);
@@ -885,14 +834,8 @@ export async function POST(req: NextRequest) {
         if (nuevoRegistro) {
             const marcaIdForActivities = marcaRecibeId ?? parseOptionalId(marca_id);
             if (marcaIdForActivities) {
-                const marca = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_marca_dia",
-                        operation: "findUnique",
-                        where: { id: marcaIdForActivities },
-                    },
+                const marca = await prisma.c_marca_dia.findUnique({
+                    where: { id: marcaIdForActivities },
                 });
                 if (marca?.plaza_id && marca?.puesto_id) {
                     const actividadesPuesto = await callDynamicPrisma({
@@ -953,25 +896,13 @@ export async function POST(req: NextRequest) {
 
             let location = "";
             if (puesto_id) {
-                const puesto = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findUnique",
-                        where: { id: puesto_id },
-                    },
+                const puesto = await prisma.e_estructura_puesto.findUnique({
+                    where: { id: puesto_id },
                 });
                 if (puesto && puesto.id) {
                     location = `para el puesto "${puesto.nombre || ""}"`;
-                    const cliente = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "e_estructura_cliente",
-                            operation: "findUnique",
-                            where: { id: cliente_id },
-                        },
+                    const cliente = await prisma.e_estructura_cliente.findUnique({
+                        where: { id: cliente_id },
                     });
                     if (cliente && cliente.id) {
                         location += ` del cliente "${cliente.nombre || ""}"`;
@@ -980,14 +911,8 @@ export async function POST(req: NextRequest) {
             }
 
             let employee = "Desconocido";
-            const empleado = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: empleadoId },
-                },
+            const empleado = await prisma.c_empleado.findUnique({
+                where: { id: empleadoId },
             });
             if (empleado && empleado.id) {
                 employee = `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`;

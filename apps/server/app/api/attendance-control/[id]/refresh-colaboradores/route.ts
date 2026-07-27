@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
 function getTurnoLetter(turno: string): string {
@@ -16,48 +17,42 @@ async function buildColaboradoresFromMarcas(req: NextRequest, params: { fecha: D
   const start = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 0, 0, 0, 0);
   const end = new Date(params.fecha.getFullYear(), params.fecha.getMonth(), params.fecha.getDate(), 23, 59, 59, 999);
 
-  const marcas = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "c_marca_dia",
-      operation: "findMany",
-      where: {
-        corpo_id: params.corpo_id,
-        tipo_turno: turnoLetter,
-        fecha: {
-          gte: start.toISOString(),
-          lte: end.toISOString(),
-        },
+  const marcas = await prisma.c_marca_dia.findMany({
+    where: {
+      corpo_id: params.corpo_id,
+      tipo_turno: turnoLetter,
+      fecha: {
+        gte: start,
+        lte: end,
       },
-      include: {
-        c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
-          select: {
-            id: true,
-            nombre: true,
-            primer_apellido: true,
-            segundo_apellido: true,
-            cedula: true,
-          },
-        },
-        c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
-          select: {
-            id: true,
-            nombre: true,
-            primer_apellido: true,
-            segundo_apellido: true,
-            cedula: true,
-          },
-        },
-        e_estructura_cliente: { select: { id: true, nombre: true } },
-        e_estructura_sucursal: { select: { id: true, nombre: true } },
-        e_estructura_puesto: { select: { id: true, nombre: true } },
-      },
-      orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     },
+    include: {
+      c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
+        select: {
+          id: true,
+          nombre: true,
+          primer_apellido: true,
+          segundo_apellido: true,
+          cedula: true,
+        },
+      },
+      c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
+        select: {
+          id: true,
+          nombre: true,
+          primer_apellido: true,
+          segundo_apellido: true,
+          cedula: true,
+        },
+      },
+      e_estructura_cliente: { select: { id: true, nombre: true } },
+      e_estructura_sucursal: { select: { id: true, nombre: true } },
+      e_estructura_puesto: { select: { id: true, nombre: true } },
+    },
+    orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
   });
 
-  const colaboradores = (Array.isArray(marcas) ? marcas : []).map((m: any) => {
+  const colaboradores = marcas.map((m) => {
     const empFijo = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
     const empReemplazo = m.c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado;
     const emp = empReemplazo || empFijo;

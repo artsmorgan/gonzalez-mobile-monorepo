@@ -5,6 +5,12 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import { hydratePreexistentChildRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+
+const REGISTRO_CAPACITACIONES_INCLUDE = {
+    e_capacitacion_empleado: true,
+    e_capacitacion_puesto: true,
+};
 
 export type RegistroCapacitacionesModuleFilters = ActaEntregaModuleFilters & {
     tipoCapacitacion?: "todos" | "Presencial" | "Virtual" | null;
@@ -170,25 +176,28 @@ export async function queryRegistroCapacitacionesRows(
     filters: RegistroCapacitacionesModuleFilters,
     orderKey: RegistroCapacitacionesOrderKey,
 ) {
+    const { sameGroupInclude } = splitIncludeByTableGroup(REGISTRO_CAPACITACIONES_INCLUDE);
+
     const rows = await prisma.e_registro_capacitaciones.findMany({
         where: buildWhere(filters),
         orderBy: { id: "desc" },
         take: 50_000,
-        include: {
-            e_capacitacion_empleado: {
-                include: {
-                    c_empleado: {
-                        select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true },
-                    },
-                },
-            },
-            e_capacitacion_puesto: {
-                include: {
-                    e_estructura_puesto: { select: { id: true, codigo: true, nombre: true } },
-                },
-            },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
     });
+    await hydratePreexistentChildRelations(rows, "e_capacitacion_empleado", [
+        {
+            relation: "c_empleado",
+            fkField: "empleado_id",
+            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true, cedula: true },
+        },
+    ]);
+    await hydratePreexistentChildRelations(rows, "e_capacitacion_puesto", [
+        {
+            relation: "e_estructura_puesto",
+            fkField: "puesto_id",
+            select: { id: true, codigo: true, nombre: true },
+        },
+    ]);
 
     const empresaIds = [...new Set(rows.map((r) => r.empresa_id).filter((n) => n > 0))];
     const clienteIds = [...new Set(rows.map((r) => r.cliente_id).filter((n) => n > 0))];

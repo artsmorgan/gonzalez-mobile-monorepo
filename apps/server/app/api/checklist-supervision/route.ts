@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { mapChecklistSupervisionPublicRow } from "./mapPublicRow";
@@ -10,6 +11,14 @@ import {
   sanitizeArticulosPuestoForPersistence,
   stripMantenimientoFilesFromArticulosPuesto,
 } from "../../../utils/sanitizeArticulosPuestoForPersistence";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const CHECKLIST_SUPERVISION_INCLUDE = {
+  e_estructura_cliente: { select: { id: true, nombre: true } },
+  e_estructura_sucursal: { select: { id: true, nombre: true } },
+  e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+  c_imagenes_checklist_supervision: { select: { id: true, name: true, original_name: true } },
+};
 
 function safeParseJson<T>(value: any, fallback: T): T {
   if (!value) return fallback;
@@ -98,6 +107,8 @@ export async function GET(req: NextRequest) {
     if (corpoIdStr) where.corpo_id = parseInt(corpoIdStr);
     if (puestoIdStr) where.puesto_id = parseInt(puestoIdStr);
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CHECKLIST_SUPERVISION_INCLUDE);
+
     const rows = await callDynamicPrisma({
       req,
       data: {
@@ -105,23 +116,11 @@ export async function GET(req: NextRequest) {
         table: "c_checklist_supervision",
         operation: "findMany",
         where,
-        include: {
-          e_estructura_cliente: {
-            select: { id: true, nombre: true },
-          },
-          e_estructura_sucursal: {
-            select: { id: true, nombre: true },
-          },
-          e_estructura_puesto: {
-            select: { id: true, nombre: true, codigo: true },
-          },
-          c_imagenes_checklist_supervision: {
-            select: { id: true, name: true, original_name: true },
-          },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         orderBy: { id: "desc" }
       }
     });
+    await hydratePreexistentRelations(rows, preexistentSpecs);
 
     const baseUrl = req.nextUrl.origin;
     const rowsArray = (Array.isArray(rows) ? rows : []).filter((r: any) => r?.isActive !== false);
@@ -217,9 +216,8 @@ export async function POST(req: NextRequest) {
     countImages(evaluationParsed);
     console.log(`Total de imágenes encontradas en evaluación: ${imageCount}`);
 
-    const sucursal = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: parseInt(String(corpo_id)) } }
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({
+      where: { id: parseInt(String(corpo_id)) },
     });
 
     if (!sucursal) {
@@ -347,6 +345,8 @@ export async function POST(req: NextRequest) {
       }
     });
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CHECKLIST_SUPERVISION_INCLUDE);
+
     const fullRow = await callDynamicPrisma({
       req,
       data: {
@@ -354,14 +354,10 @@ export async function POST(req: NextRequest) {
         table: "c_checklist_supervision",
         operation: "findUnique",
         where: { id: created.id },
-        include: {
-          e_estructura_cliente: { select: { id: true, nombre: true } },
-          e_estructura_sucursal: { select: { id: true, nombre: true } },
-          e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
-          c_imagenes_checklist_supervision: { select: { id: true, name: true, original_name: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(fullRow, preexistentSpecs);
 
     const origin = req.nextUrl.origin;
     const mapped = fullRow ? mapChecklistSupervisionPublicRow(fullRow, origin) : { id: created.id };

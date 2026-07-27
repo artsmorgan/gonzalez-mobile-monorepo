@@ -16,10 +16,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id } }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
         const nota = await callDynamicPrisma({
@@ -35,10 +32,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const changes_return: { id: number, nota_id: number, empleado: string, titulo: string, description: string, categoria: string, relevancia: string | null, created_at: Date }[] = [];
         for (const change of changes) {
-            const empleado = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: change.empleado_id } }
-            });
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: change.empleado_id } });
             if (!empleado) continue;
             changes_return.push({
                 id: change.id,

@@ -1,78 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
-import axios from "axios";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
-import { verifyTokenFromBody } from "../../../../utils/verifyTokenFromBody";
+import fs from "fs/promises";
+import path from "path";
+import { verifyMainStructureAccess } from "../verifyMainStructureAccess";
 
+// Función GET para obtener el archivo
 export async function GET(req: NextRequest) {
     try {
-        // Extraer el token JWT real del header Authorization
-        const authHeader = req.headers.get("authorization") || "";
-        const token = authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : "";
-
-        const createdAtParam = req.nextUrl.searchParams.get("created_at");
-        const created_at = createdAtParam ? Number(createdAtParam) : 0;
-
-        // Validaciones requeridas
-        const expectedMobileToken = process.env.MOBILE_ACCESS_TOKEN?.trim();
-        if (!expectedMobileToken) {
-            return NextResponse.json(
-                { status: false, message: "MOBILE_ACCESS_TOKEN no configurado en el servidor" },
-                { status: 500 }
-            );
-        }
-        if (!token) {
-            return NextResponse.json({ status: false, message: "Token no proporcionado" }, { status: 403 });
+        const auth = verifyMainStructureAccess(req);
+        if (!auth.ok) {
+            return NextResponse.json(auth.body, { status: auth.status });
         }
 
-        // Verificamos token (header) y token (payload) igual que en dynamic-prisma.
-        const shouldVerifyAccessToken = true;
-        const tokenValidationHeader = verifyAccessToken(req);
-        const tokenValidationBody = verifyTokenFromBody(token);
-        const tokenValidation = tokenValidationHeader.valid ? tokenValidationHeader : tokenValidationBody;
+        console.log(7);
+        const outPath = path.resolve(process.cwd(), "main-structure.json");
 
-        if (shouldVerifyAccessToken && !tokenValidation.valid) {
+        console.log(8);
+        let data: string;
+        try {
+            data = await fs.readFile(outPath, "utf8");
+        } catch {
+            // Cache inexistente: devolvemos vacío para que el cliente pueda regenerar.
             return NextResponse.json(
-                { status: false, expired: tokenValidation.expired, message: tokenValidation.message },
-                { status: tokenValidation.expired ? 401 : 403 }
+                { status: false, created_at: null, message: "Cache main-structure.json no existe", structure: JSON.stringify([]) },
+                { status: 200 }
             );
         }
 
-        // En este endpoint el mobile no envía mobileAccessToken: lo tomamos desde env.
-        const incomingMobileToken = expectedMobileToken;
-        if (!incomingMobileToken || incomingMobileToken !== expectedMobileToken) {
-            return NextResponse.json({ status: false, message: "mobileAccessToken inválido" }, { status: 403 });
-        }
-
-        // Llamado correcto a dynamic-prisma: usando GET (query params).
-        const response = await axios.get(
-            `${process.env.SERVER_URL}/api/dynamic-prisma/main-structure/last`,
-            {
-                headers: {
-                    Authorization: authHeader,
-                    "Content-Type": "application/json",
-                },
-                params: {
-                    token: token,
-                    mobileAccessToken: incomingMobileToken,
-                    shouldVerifyAccessToken: true,
-                    created_at: Number.isFinite(created_at) ? created_at : 0,
-                },
-                validateStatus: () => true,
+        console.log(9);
+        let parsed: { created_at: unknown; structure: unknown };
+        try {
+            parsed = JSON.parse(data);
+        } catch (e) {
+            // Cache corrupto/truncado: lo movemos a un backup y devolvemos vacío.
+            try {
+                const corruptPath = `${outPath}.corrupt.${Date.now()}`;
+                await fs.rename(outPath, corruptPath);
+            } catch {
+                await fs.unlink(outPath).catch(() => undefined);
             }
-        );
 
-        const data = response.data;
-        if (!data?.status) {
-            return NextResponse.json({ status: false, message: data?.message }, { status: 500 });
+            return NextResponse.json(
+                {
+                    status: false,
+                    created_at: null,
+                    message: "Cache main-structure.json inválida (corrupta/truncada). Se requiere regeneración.",
+                    structure: JSON.stringify([]),
+                },
+                { status: 200 }
+            );
         }
 
-        return NextResponse.json(
-            { status: true, created_at: data.created_at },
-            { status: 200 }
-        );
-    }
-    catch (error: unknown) {
+        console.log(10);
+        const { created_at, structure } = parsed;
+        console.log(11);
+        return NextResponse.json({ status: true, created_at }, { status: 200 });
+    } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("[main-structure] Error al leer main-structure.json:", errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

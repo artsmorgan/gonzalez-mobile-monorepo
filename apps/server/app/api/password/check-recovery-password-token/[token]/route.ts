@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from 'date-fns-tz';
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ token: string }> }) {
     try {
@@ -37,16 +38,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ token: 
             return NextResponse.json({ status: false, message: "Token de recuperación de contraseña expirado" });
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: token_recovery.empleadoId }
-            }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId ?? 0 } });
         if (!empleado) {
             await callDynamicPrisma({
                 req,

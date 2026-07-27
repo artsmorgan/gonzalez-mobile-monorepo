@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { mapComplaintMasterPublicRow } from "./mapPublicRow";
@@ -80,14 +81,8 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marca_id) },
-            },
+        const marcaDia = await prisma.c_marca_dia.findUnique({
+            where: { id: parseInt(marca_id) },
         });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
@@ -214,21 +209,14 @@ export async function POST(req: NextRequest) {
             },
         });
 
-        const sucursal = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_sucursal",
-                operation: "findUnique",
-                where: { id: corpo_id },
-            },
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({
+            where: { id: corpo_id },
         });
 
         if (sucursal) {
-            const sucursalObj = sucursal as any;
             const fecha_string = created_at.toISOString().split("T")[0];
             const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
-            const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursalObj.nombre} de la empresa ${cliente} el día ${fecha_string} a las ${hora_string}`;
+            const description = `Se ha registrado una queja de tipo ${tipo_queja} en la sucursal ${sucursal.nombre} de la empresa ${cliente} el día ${fecha_string} a las ${hora_string}`;
             await sendNotificationByRole(req, corpo_id, [plaza_id], "Queja registrada", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
         }
 

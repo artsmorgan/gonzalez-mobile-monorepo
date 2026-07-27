@@ -1,19 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
-
-function parseDateInput(value: any): Date | null {
-  if (!value) return null;
-  const str = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
-    const [y, m, d] = str.split("-").map((x) => parseInt(x, 10));
-    const date = new Date(y, m - 1, d);
-    if (Number.isNaN(date.getTime())) return null;
-    return date;
-  }
-  const d = new Date(str);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+import { prisma } from "../../../../utils/prismaClient";
 
 function getTurnoLetter(turno: string): string {
   return String(turno || "").trim().charAt(0).toUpperCase();
@@ -28,12 +15,7 @@ export async function GET(req: NextRequest) {
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     const turnoStr = req.nextUrl.searchParams.get("turno");
 
-    console.log('fechaStr', fechaStr);
-    console.log('corpoIdStr', corpoIdStr);
-    console.log('turnoStr', turnoStr);
-
     const fecha = new Date(fechaStr + 'T00:00:00.000Z');
-    console.log('fecha', fecha);
     const corpo_id = corpoIdStr ? parseInt(String(corpoIdStr), 10) : 0;
     const turno = String(turnoStr || "").trim();
 
@@ -55,33 +37,24 @@ export async function GET(req: NextRequest) {
     const start = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 0, 0, 0, 0);
     const end = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 23, 59, 59, 999);
 
-    const marcas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findMany",
-        where: {
-          corpo_id,
-          tipo_turno: turnoLetter,
-          fecha: {
-            gte: start.toISOString(),
-            lte: end.toISOString(),
-          },
+    const marcas = await prisma.c_marca_dia.findMany({
+      where: {
+        corpo_id,
+        tipo_turno: turnoLetter,
+        fecha: {
+          gte: start,
+          lte: end,
         },
-        include: {
-          c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
-            select: {
-              id: true,
-              nombre: true,
-              primer_apellido: true,
-              segundo_apellido: true,
-              cedula: true,
-            },
+      },
+      include: {
+        c_empleado_c_marca_dia_empleadoFijo_idToc_empleado: {
+          select: {
+            id: true,
+            nombre: true,
+            primer_apellido: true,
+            segundo_apellido: true,
+            cedula: true,
           },
-          e_estructura_cliente: { select: { id: true, nombre: true } },
-          e_estructura_sucursal: { select: { id: true, nombre: true } },
-          e_estructura_puesto: { select: { id: true, nombre: true } },
         },
         c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado: {
           select: {
@@ -92,11 +65,14 @@ export async function GET(req: NextRequest) {
             cedula: true,
           },
         },
-        orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
+        e_estructura_cliente: { select: { id: true, nombre: true } },
+        e_estructura_sucursal: { select: { id: true, nombre: true } },
+        e_estructura_puesto: { select: { id: true, nombre: true } },
       },
+      orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     });
 
-    const colaboradores = (Array.isArray(marcas) ? marcas : []).map((m: any) => {
+    const colaboradores = marcas.map((m) => {
       const empFijo = m.c_empleado_c_marca_dia_empleadoFijo_idToc_empleado;
       const empReemplazo = m.c_empleado_c_marca_dia_empleadoReemplaza_idToc_empleado;
       const emp = empReemplazo || empFijo;
@@ -125,7 +101,7 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    const totalPresentes = colaboradores.filter((c: any) => !c.ausente).length;
+    const totalPresentes = colaboradores.filter((c) => !c.ausente).length;
     const totalEmpleadosTurno = colaboradores.length;
 
     return NextResponse.json({

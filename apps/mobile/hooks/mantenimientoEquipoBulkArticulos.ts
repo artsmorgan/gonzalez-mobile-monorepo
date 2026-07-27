@@ -55,10 +55,12 @@ export async function validateMantenimientoEquipoPuestosCodigos({
 
 export async function submitMantenimientoEquipoBulkArticulos({
   articulos,
+  planillasToken,
   refreshAccessToken,
   logout,
 }: {
   articulos: BulkPlantillaArticulo[];
+  planillasToken?: string | null;
   refreshAccessToken: AuthHandlers['refreshAccessToken'];
   logout: AuthHandlers['logout'];
 }): Promise<{
@@ -73,7 +75,10 @@ export async function submitMantenimientoEquipoBulkArticulos({
     url: `${getApiUrl()}/api/mantenimiento-equipo/bulk-articulos`,
     init: {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Planillas-Token': encodeURIComponent(String(planillasToken ?? '')),
+      },
       body: JSON.stringify({
         articulos: articulos.map((a) => ({
           codigo_puesto: a.codigo_puesto,

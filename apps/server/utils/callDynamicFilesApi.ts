@@ -60,6 +60,7 @@ export async function uploadDynamicFiles(params: {
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
     const accessToken = resolveUserAccessToken(req);
 
+    console.log("1 Calling...");
     const response = await axios.post(
         endpoint,
         {
@@ -92,6 +93,7 @@ export async function fetchDynamicFile(params: {
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
     const accessToken = resolveUserAccessToken(req);
 
+    console.log("2 Calling...");
     const response = await axios.get(endpoint, {
         params: {
             type,
@@ -139,6 +141,7 @@ export async function deleteDynamicFile(params: {
     const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
     const accessToken = resolveUserAccessToken(req);
 
+    console.log("3 Calling...");
     const response = await axios.delete(endpoint, {
         params: {
             url,

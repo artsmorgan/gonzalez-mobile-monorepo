@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export type CreatedMantenimientoReport = {
   articuloId: number;
@@ -99,19 +100,8 @@ async function resolvePuestoContext(
   if (!sucursalId) sucursalId = positiveInt(planRow?.corpo_id) ?? 0;
 
   if (puestoId > 0 && !sucursalId) {
-    const puesto = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_puesto",
-        operation: "findUnique",
-        where: { id: puestoId },
-      },
-    });
-    sucursalId =
-      positiveInt(puesto?.sucursal_id) ??
-      positiveInt(puesto?.corpo_id) ??
-      0;
+    const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
+    sucursalId = positiveInt(puesto?.sucursal_id) ?? 0;
   }
 
   return { puestoId, sucursalId };
@@ -132,7 +122,12 @@ async function resolveEntregaDatosForPlan(
 
   const { puestoId, sucursalId } = await resolvePuestoContext(req, planRow, articulo, context);
 
-  const entregaWhere: Record<string, unknown> = {
+  const entregaWhere: {
+    nomencladorArticuloCP_id: number;
+    OR?: Array<{ puesto_id: number } | { corpo_id: number }>;
+    puesto_id?: number;
+    corpo_id?: number;
+  } = {
     nomencladorArticuloCP_id: articuloCP_id,
   };
   if (puestoId > 0 && sucursalId > 0) {
@@ -143,14 +138,8 @@ async function resolveEntregaDatosForPlan(
     entregaWhere.corpo_id = sucursalId;
   }
 
-  const entregas = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "e_estructura_articulo_corpo_puesto_entrega",
-      operation: "findMany",
-      where: entregaWhere,
-    },
+  const entregas = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+    where: entregaWhere,
   });
   const list = Array.isArray(entregas) ? entregas : [];
 
@@ -185,14 +174,8 @@ export async function resolveMarcaModeloSerieFromArticuloEstructura(
   }
 
   if (!isPlanArticuloTipo(articulo?.tipo)) {
-    const asignadoRow = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_articulo_corpo_puesto_entrega",
-        operation: "findUnique",
-        where: { id: artId },
-      },
+    const asignadoRow = await prisma.e_estructura_articulo_corpo_puesto_entrega.findUnique({
+      where: { id: artId },
     });
     return {
       marca: pickNonEmptyString(fromPayload.marca, asignadoRow?.marca),
@@ -201,14 +184,8 @@ export async function resolveMarcaModeloSerieFromArticuloEstructura(
     };
   }
 
-  const planRow = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "e_estructura_articulo_corpo_puesto_plan",
-      operation: "findUnique",
-      where: { id: artId },
-    },
+  const planRow = await prisma.e_estructura_articulo_corpo_puesto_plan.findUnique({
+    where: { id: artId },
   });
 
   const planEntregaDatos = await resolveEntregaDatosForPlan(

@@ -1,16 +1,13 @@
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
+import { prisma } from "./prismaClient";
 
 export async function createLoginMarca(req: NextRequest, id: number, now: Date, deviceName: string, sessionId: string) {
     try {
         const now = toZonedTime(new Date(), "America/Costa_Rica");
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: id } }
-        });
-
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: id } });
         if (!empleado) {
             return { status: false, message: "Empleado no encontrado" };
         }

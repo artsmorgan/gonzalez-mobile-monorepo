@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { findContributionIncidents } from "../../../../../utils/findContributionIncidents";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
@@ -147,10 +148,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       });
       if (incidentData) {
         let clasificacionNombre = "Desconocida";
-        const emp = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoId } }
-        });
+        const emp = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
         if (emp) {
           empleadoNombre = emp.nombre + " " + emp.primer_apellido + " " + emp.segundo_apellido;
         }
@@ -164,10 +162,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
           }
         }
         if (incidentData.corpo_id) {
-          const sucursal = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: incidentData.corpo_id } }
-          });
+          const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: incidentData.corpo_id } });
           if (sucursal) {
             sucursalNombre = sucursal.nombre;
           }

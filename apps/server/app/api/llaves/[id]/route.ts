@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
 function parseId(v: unknown): number | null {
@@ -42,10 +43,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
     if (!marcaDia) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
@@ -220,10 +218,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     if (!marcaIdStr) {
       return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
     }
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
     if (!marcaDia) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }

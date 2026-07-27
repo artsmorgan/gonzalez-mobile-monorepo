@@ -1,9 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
+  e_estructura_empresa: { select: { nombre: true, codigo: true } },
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+};
+
+const GENERAL_INDUCTION_FULL_INCLUDE = {
+  ...GENERAL_INDUCTION_ESTRUCTURA_INCLUDE,
+  c_imagenes_registro_induccion_general: true,
+};
 
 type GeneralInductionImageInput = {
   file_base64: string;
@@ -33,6 +46,29 @@ function safeParseJson<T>(value: any, fallback: T): T {
   }
 }
 
+async function corpoIdsForClienteIds(clienteIds: number[]): Promise<number[]> {
+  if (clienteIds.length === 0) return [];
+  const divisiones = await prisma.n_division.findMany({ select: { id: true } });
+  const contratoIds = new Set<number>();
+  for (const division of divisiones) {
+    const contratos = await prisma.e_estructura_contrato.findMany({
+      where: {
+        cliente_id: { in: clienteIds },
+        division_id: division.id,
+        deleted: null,
+      },
+      select: { id: true },
+    });
+    contratos.forEach((c) => contratoIds.add(c.id));
+  }
+  if (contratoIds.size === 0) return [];
+  const sucursales = await prisma.e_estructura_sucursal.findMany({
+    where: { contrato_id: { in: Array.from(contratoIds) } },
+    select: { id: true },
+  });
+  return sucursales.map((s) => s.id);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -48,143 +84,31 @@ export async function GET(req: NextRequest) {
     if (corpoIdStr) {
       where.corpo_id = parseInt(corpoIdStr);
     } else if (clienteIdStr) {
-      // Si hay cliente pero no corpo, buscar todas las sucursales del cliente
       const clienteId = parseInt(clienteIdStr);
-      const cliente = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findUnique",
-          where: { id: clienteId },
-        },
+      const cliente = await prisma.e_estructura_cliente.findUnique({
+        where: { id: clienteId },
+        select: { id: true },
       });
       if (!cliente) {
         return NextResponse.json({ status: true, data: [] }, { status: 200 });
       }
-      // Obtener todos los contratos del cliente y luego todas las sucursales
-      const divisiones = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "n_division",
-          operation: "findMany",
-        },
-      });
-      const divisionesArray = Array.isArray(divisiones) ? divisiones : [];
-      const contratoIds: number[] = [];
-      for (const division of divisionesArray) {
-        const divisionObj = division as any;
-        const contratos = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_contrato",
-            operation: "findMany",
-            where: {
-              cliente_id: clienteId,
-              division_id: divisionObj.id,
-              deleted: null,
-            },
-            select: { id: true },
-          },
-        });
-        const contratosArray = Array.isArray(contratos) ? contratos : [];
-        contratosArray.forEach((c: any) => {
-          if (!contratoIds.includes(c.id)) contratoIds.push(c.id);
-        });
-      }
-      if (contratoIds.length > 0) {
-        const sucursales = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findMany",
-            where: {
-              contrato_id: { in: contratoIds },
-            },
-            select: { id: true },
-          },
-        });
-        const sucursalesArray = Array.isArray(sucursales) ? sucursales : [];
-        const sucursalIds = sucursalesArray.map((s: any) => s.id);
-        if (sucursalIds.length > 0) {
-          where.corpo_id = { in: sucursalIds };
-        } else {
-          return NextResponse.json({ status: true, data: [] }, { status: 200 });
-        }
+      const sucursalIds = await corpoIdsForClienteIds([clienteId]);
+      if (sucursalIds.length > 0) {
+        where.corpo_id = { in: sucursalIds };
       } else {
         return NextResponse.json({ status: true, data: [] }, { status: 200 });
       }
     } else if (empresaIdStr) {
-      // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findMany",
-          where: { empresa_id: empresaId },
-          select: { id: true },
-        },
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
       });
-      const clientesArray = Array.isArray(clientes) ? clientes : [];
-      const clienteIds = clientesArray.map((c: any) => c.id);
+      const clienteIds = clientes.map((c) => c.id);
       if (clienteIds.length > 0) {
-        // Obtener todos los contratos de estos clientes y luego todas las sucursales
-        const divisiones = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "n_division",
-            operation: "findMany",
-          },
-        });
-        const divisionesArray = Array.isArray(divisiones) ? divisiones : [];
-        const contratoIds: number[] = [];
-        for (const division of divisionesArray) {
-          const divisionObj = division as any;
-          const contratos = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_contrato",
-              operation: "findMany",
-              where: {
-                cliente_id: { in: clienteIds },
-                division_id: divisionObj.id,
-                deleted: null,
-              },
-              select: { id: true },
-            },
-          });
-          const contratosArray = Array.isArray(contratos) ? contratos : [];
-          contratosArray.forEach((c: any) => {
-            if (!contratoIds.includes(c.id)) contratoIds.push(c.id);
-          });
-        }
-        if (contratoIds.length > 0) {
-          const sucursales = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_sucursal",
-              operation: "findMany",
-              where: {
-                contrato_id: { in: contratoIds },
-              },
-              select: { id: true },
-            },
-          });
-          const sucursalesArray = Array.isArray(sucursales) ? sucursales : [];
-          const sucursalIds = sucursalesArray.map((s: any) => s.id);
-          if (sucursalIds.length > 0) {
-            where.corpo_id = { in: sucursalIds };
-          } else {
-            return NextResponse.json({ status: true, data: [] }, { status: 200 });
-          }
+        const sucursalIds = await corpoIdsForClienteIds(clienteIds);
+        if (sucursalIds.length > 0) {
+          where.corpo_id = { in: sucursalIds };
         } else {
           return NextResponse.json({ status: true, data: [] }, { status: 200 });
         }
@@ -197,6 +121,8 @@ export async function GET(req: NextRequest) {
 
     const whereActive = { ...where, isActive: true };
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_FULL_INCLUDE);
+
     const records = await callDynamicPrisma({
       req,
       data: {
@@ -205,14 +131,10 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where: whereActive,
         orderBy: { created_at: "desc" },
-        include: {
-          c_imagenes_registro_induccion_general: true,
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(records, preexistentSpecs);
 
     const recordsArray = Array.isArray(records) ? records : [];
     const recordsWithNames = recordsArray.map((r: any) => ({
@@ -350,6 +272,8 @@ export async function POST(req: NextRequest) {
       createData.fecha = fechaParsed.toISOString();
     }
 
+    const { preexistentSpecs: createPreexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_ESTRUCTURA_INCLUDE);
+
     const record = await callDynamicPrisma({
       req,
       data: {
@@ -357,13 +281,9 @@ export async function POST(req: NextRequest) {
         table: "c_registro_induccion_general",
         operation: "create",
         data: createData,
-        include: {
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
       },
     });
+    await hydratePreexistentRelations(record, createPreexistentSpecs);
     const recordObj = record as any;
 
     // Guardar imágenes (si vienen)
@@ -401,6 +321,8 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_FULL_INCLUDE);
+
     const fullRecord = await callDynamicPrisma({
       req,
       data: {
@@ -408,14 +330,10 @@ export async function POST(req: NextRequest) {
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: recordObj.id },
-        include: {
-          c_imagenes_registro_induccion_general: true,
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(fullRecord, preexistentSpecs);
     const fullRecordObj = fullRecord as any;
     const baseUrl = req.nextUrl.origin;
 
@@ -457,33 +375,19 @@ export async function POST(req: NextRequest) {
       const fechaValue = recordObj.fecha instanceof Date ? recordObj.fecha.toISOString() : (typeof recordObj.fecha === 'string' ? recordObj.fecha : createdAt.toISOString());
       let fechaRegistro = fechaValue.split("T")[0];
       if (recordObj.created_by) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: parseInt(String(recordObj.created_by), 10) },
-          },
+        const empleado = await prisma.c_empleado.findUnique({
+          where: { id: parseInt(String(recordObj.created_by), 10) },
         });
         if (empleado) {
-          const empleadoObj = empleado as any;
-          empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
         }
       }
       if (recordObj.corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: recordObj.corpo_id },
-          },
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: recordObj.corpo_id },
         });
         if (sucursal) {
-          const sucursalObj = sucursal as any;
-          sucursalNombre = sucursalObj.nombre + " (" + sucursalObj.nro_sucursal + ")";
+          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de inducción general en la sucursal " + sucursalNombre + " el día " + fechaRegistro;

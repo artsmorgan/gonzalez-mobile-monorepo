@@ -1,20 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
-
-const parseDateInputToDate = (input: unknown): Date | null => {
-  if (!input) return null;
-  if (input instanceof Date) return isNaN(input.getTime()) ? null : input;
-  const s = String(input).trim();
-  if (!s) return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
-    const [y, m, d] = s.split("-");
-    const parsed = new Date(parseInt(y, 10), parseInt(m, 10) - 1, parseInt(d, 10), 0, 0, 0, 0);
-    return isNaN(parsed.getTime()) ? null : parsed;
-  }
-  const parsed = new Date(s);
-  return isNaN(parsed.getTime()) ? null : parsed;
-};
+import { prisma } from "../../../../utils/prismaClient";
 
 const formatHoraLabel = (value?: string | null) => {
   if (!value) return null;
@@ -62,24 +48,17 @@ export async function GET(req: NextRequest) {
     };
     if (plazaId != null && !Number.isNaN(plazaId)) where.plaza_id = plazaId;
 
-    const marcas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findMany",
-        where,
-        orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true } },
-          e_estructura_puesto: { select: { nombre: true } },
-        },
+    const rows = await prisma.c_marca_dia.findMany({
+      where,
+      orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+      include: {
+        e_estructura_cliente: { select: { nombre: true } },
+        e_estructura_sucursal: { select: { nombre: true } },
+        e_estructura_puesto: { select: { nombre: true } },
       },
     });
 
-    const rows = Array.isArray(marcas) ? marcas : [];
-    const data = rows.map((m: any) => ({
+    const data = rows.map((m) => ({
       id: m.id,
       cliente: m.e_estructura_cliente?.nombre || null,
       sucursal: m.e_estructura_sucursal?.nombre || null,

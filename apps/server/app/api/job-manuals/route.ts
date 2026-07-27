@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByPlaza } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
@@ -33,14 +34,8 @@ export async function GET(req: NextRequest) {
             );
         }
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id: targetPuestoId },
-            },
+        const puesto = await prisma.e_estructura_puesto.findUnique({
+            where: { id: targetPuestoId },
         });
 
         if (!puesto) {
@@ -320,14 +315,8 @@ export async function POST(req: NextRequest) {
             }
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marca_id) },
-            },
+        const marca = await prisma.c_marca_dia.findUnique({
+            where: { id: parseInt(marca_id) },
         });
         if (!marca) {
             return NextResponse.json(
@@ -380,15 +369,9 @@ export async function POST(req: NextRequest) {
         }
 
         // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
-        const existingPuestos = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findMany",
-                where: { id: { in: puestosParsed } },
-                select: { id: true },
-            },
+        const existingPuestos = await prisma.e_estructura_puesto.findMany({
+            where: { id: { in: puestosParsed } },
+            select: { id: true },
         });
         const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
         const confirmedPuestoIds = Array.from(
@@ -483,19 +466,14 @@ export async function POST(req: NextRequest) {
 
 
         // 3) Buscar plazas de los puestos confirmados para notificación
-        const plazas = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_plazas",
-                operation: "findMany",
-                where: {
-                    puesto_id: { in: confirmedPuestoIds }, deleted: null,
-                    OR: [
-                        { fecha_inactivacion: null },
-                        { fecha_inactivacion: { gte: toZonedTime(new Date(), "America/Costa_Rica") } },
-                    ],
-                }, // In: confirmedPuestoIds
+        const plazas = await prisma.e_estructura_plazas.findMany({
+            where: {
+                puesto_id: { in: confirmedPuestoIds },
+                deleted: null,
+                OR: [
+                    { fecha_inactivacion: null },
+                    { fecha_inactivacion: { gte: toZonedTime(new Date(), "America/Costa_Rica") } },
+                ],
             },
         });
 

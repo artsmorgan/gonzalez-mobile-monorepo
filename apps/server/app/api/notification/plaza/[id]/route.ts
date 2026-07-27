@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -14,10 +15,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Plaza no especificado" }, { status: 200 });
         }
 
-        const plaza = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_plazas", operation: "findUnique", where: { id } }
-        });
+        const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id } });
         if (!plaza) {
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }

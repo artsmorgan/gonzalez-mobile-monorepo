@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
@@ -141,10 +142,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
     }
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
     if (!marcaDia) {
       return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
     }
@@ -232,19 +230,13 @@ export async function POST(req: NextRequest) {
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
       if (created.created_by) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: created.created_by } }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: created.created_by } });
         if (empleado) {
           empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
         }
       }
       if (created.corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: created.corpo_id } }
-        });
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: created.corpo_id } });
         if (sucursal) {
           sucursalNombre = sucursal.nombre;
         }

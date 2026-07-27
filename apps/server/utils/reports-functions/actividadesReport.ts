@@ -7,6 +7,20 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import {
+    attachLocationChainToPuestos,
+    flattenChildRows,
+    hydratePreexistentChildRelations,
+    splitIncludeByTableGroup,
+} from "../hydratePreexistentIncludes";
+
+const ACTIVIDADES_REPORT_INCLUDE = {
+    e_actividades_puesto: {
+        include: {
+            e_actividades_puesto_plaza: true,
+        },
+    },
+};
 
 export type ActividadesModuleFilters = ActaEntregaModuleFilters;
 export type ActividadesOrderKey = "fecha" | "nombre_actividad";
@@ -359,44 +373,35 @@ export async function queryActividadesReportRows(prisma: ReportDataAccess, filte
               ? { none: {} }
               : { some: { puesto_id: { in: resolvedPuestoIds } } };
 
+    const { sameGroupInclude } = splitIncludeByTableGroup(ACTIVIDADES_REPORT_INCLUDE);
+
     const acts = await prisma.e_actividades.findMany({
         where: {
             ...(Object.keys(fechaWhere).length ? { fecha_inicio: fechaWhere } : {}),
             ...(puestoClause ? { e_actividades_puesto: puestoClause } : {}),
         },
-        include: {
-            e_actividades_puesto: {
-                include: {
-                    e_estructura_puesto: {
-                        select: {
-                            id: true,
-                            nombre: true,
-                            codigo: true,
-                            e_estructura_sucursal: {
-                                select: {
-                                    nombre: true,
-                                    e_estructura_contrato: {
-                                        select: {
-                                            empresa_id: true,
-                                            e_estructura_cliente: { select: { nombre: true } },
-                                        },
-                                    },
-                                },
-                            },
-                        },
-                    },
-                    e_actividades_puesto_plaza: {
-                        include: {
-                            e_estructura_plazas: {
-                                select: { id: true, nombre: true, codigo_plaza: true },
-                            },
-                        },
-                    },
-                },
-            },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         take: 50_000,
     });
+
+    const actividadesPuesto = flattenChildRows(acts, "e_actividades_puesto");
+    await hydratePreexistentChildRelations(acts, "e_actividades_puesto", [
+        {
+            relation: "e_estructura_puesto",
+            fkField: "puesto_id",
+            select: { id: true, nombre: true, codigo: true, corpo_id: true },
+        },
+    ]);
+    await attachLocationChainToPuestos(
+        actividadesPuesto.map((ap: any) => ap.e_estructura_puesto).filter(Boolean),
+    );
+    await hydratePreexistentChildRelations(actividadesPuesto, "e_actividades_puesto_plaza", [
+        {
+            relation: "e_estructura_plazas",
+            fkField: "plaza_id",
+            select: { id: true, nombre: true, codigo_plaza: true },
+        },
+    ]);
 
     const sorted = [...acts].sort((a, b) => {
         if (orderKey === "nombre_actividad") {

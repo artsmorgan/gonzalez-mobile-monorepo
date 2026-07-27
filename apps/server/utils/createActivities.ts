@@ -1,19 +1,21 @@
 import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export async function getActivities(req: NextRequest, id: number) {
     try {
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
             return { status: false, message: "Marca no encontrada" };
         }
 
         const fechaMarca = marcaDia.fecha instanceof Date ? marcaDia.fecha : new Date(marcaDia.fecha);
         const now = toZonedTime(new Date(), "America/Costa_Rica");
+
+        if (!marcaDia.hora_inicio) {
+            return { status: false, message: "Hora de inicio no establecida" };
+        }
 
         const horaInicioMarca = marcaDia.hora_inicio instanceof Date
             ? marcaDia.hora_inicio
@@ -127,6 +129,9 @@ export async function getActivities(req: NextRequest, id: number) {
             // Para actividades de tipo Inventario: siempre refrescar artículos del puesto y actualizar el registro
             // (tanto si el registro se acaba de crear como si ya existía al recargar la ventana).
             if (es_revision_equipo) {
+                if (!marcaDia.puesto_id) {
+                    continue;
+                }
                 const articlesFromPuesto = await buildArticlesFromPuesto(req, marcaDia.puesto_id);
                 let existingParsed: any[] = [];
                 try {
@@ -229,48 +234,28 @@ export async function getActivities(req: NextRequest, id: number) {
  * Obtiene los artículos del puesto con la misma lógica que GET /api/entrega-puestos
  * (combo -> plan directo sin duplicados -> asignados/entrega; luego último mantenimiento por artículo).
  */
-async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
+async function buildArticlesFromPuesto(_req: NextRequest, puestoId: number) {
     const articulos_return: any[] = [];
 
-    const puesto = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } },
-    });
+    const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
     if (!puesto || !puesto.id) return articulos_return;
+    const corpoId = puesto.sucursal_id;
 
     // 1) Artículos del combo del puesto (si existe) — igual que entrega-puestos
     if (puesto.comboArticulosCP_id) {
-        const combo_articulo_cp = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_combo_articulo_cp",
-                operation: "findUnique",
-                where: { id: puesto.comboArticulosCP_id },
-            },
+        const combo_articulo_cp = await prisma.e_estructura_combo_articulo_cp.findUnique({
+            where: { id: puesto.comboArticulosCP_id },
         });
         if (combo_articulo_cp && combo_articulo_cp.id) {
-            const articulos_combo_articulo_cp = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_articulo_corpo_puesto_plan",
-                    operation: "findMany",
-                    where: { combo_id: combo_articulo_cp.id },
-                },
+            const articulos_combo_articulo_cp = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+                where: { combo_id: combo_articulo_cp.id },
             });
             const articulosComboArray = Array.isArray(articulos_combo_articulo_cp) ? articulos_combo_articulo_cp : [];
             for (const articulo of articulosComboArray) {
                 let art_bd = null;
                 if (articulo.articuloCP_id) {
-                    art_bd = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "n_articulo_corpo_puesto",
-                            operation: "findUnique",
-                            where: { id: articulo.articuloCP_id },
-                        },
+                    art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                        where: { id: articulo.articuloCP_id },
                     });
                 }
                 const cantidad = Number(articulo.cantidad) || 0;
@@ -293,30 +278,20 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
     }
 
     // 2) Plan directo del puesto (evitar duplicados por id) — igual que entrega-puestos
-    const articulos_puesto_plan = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_articulo_corpo_puesto_plan",
-            operation: "findMany",
-            where: {
-                OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }],
-                id: { notIn: articulos_return.map((a: any) => a.id) },
-            },
+    const planOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+    if (corpoId != null) planOr.push({ corpo_id: corpoId });
+    const articulos_puesto_plan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+        where: {
+            OR: planOr,
+            id: { notIn: articulos_return.map((a: any) => a.id) },
         },
     });
     const articulosPlanArray = Array.isArray(articulos_puesto_plan) ? articulos_puesto_plan : [];
     for (const articulo of articulosPlanArray) {
         let art_bd = null;
         if (articulo.articuloCP_id) {
-            art_bd = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "n_articulo_corpo_puesto",
-                    operation: "findUnique",
-                    where: { id: articulo.articuloCP_id },
-                },
+            art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                where: { id: articulo.articuloCP_id },
             });
         }
         const cantidad = Number(articulo.cantidad) || 0;
@@ -337,27 +312,17 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
     }
 
     // 3) Asignados del puesto (entrega) — mismo where que entrega-puestos: OR puesto_id / corpo_id
-    const articulos_puesto_entrega = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_articulo_corpo_puesto_entrega",
-            operation: "findMany",
-            where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] },
-        },
+    const entregaOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+    if (corpoId != null) entregaOr.push({ corpo_id: corpoId });
+    const articulos_puesto_entrega = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+        where: { OR: entregaOr },
     });
     const articulosEntregaArray = Array.isArray(articulos_puesto_entrega) ? articulos_puesto_entrega : [];
     for (const articulo of articulosEntregaArray) {
         let art_bd = null;
         if (articulo.nomencladorArticuloCP_id) {
-            art_bd = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "n_articulo_corpo_puesto",
-                    operation: "findUnique",
-                    where: { id: articulo.nomencladorArticuloCP_id },
-                },
+            art_bd = await prisma.n_articulo_corpo_puesto.findUnique({
+                where: { id: articulo.nomencladorArticuloCP_id },
             });
         }
         articulos_return.push({
@@ -384,7 +349,7 @@ async function buildArticlesFromPuesto(req: NextRequest, puestoId: number) {
         if (planIds.length) or.push({ articulo_plan_id: { in: planIds } });
         if (asignadoIds.length) or.push({ articulo_asignado_id: { in: asignadoIds } });
         const mantenimientos = await callDynamicPrisma({
-            req,
+            req: _req,
             data: {
                 action: "GET",
                 table: "c_articulo_mantenimiento",

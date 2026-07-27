@@ -45,12 +45,12 @@ export default async function saveMarca({
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                 },
                 body: JSON.stringify({
                     type: data_params.type,
                     reason: data_params.reason,
                     horaAccion: data_params.horaAccion,
-                    planillasToken,
                 }),
             },
             refreshAccessToken,

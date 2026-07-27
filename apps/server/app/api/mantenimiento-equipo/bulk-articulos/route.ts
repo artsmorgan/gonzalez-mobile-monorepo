@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
+import axios from "axios";
 
 export const runtime = "nodejs";
 
@@ -75,6 +76,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
     }
 
+    const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
+
+    if (!planillasToken) {
+        return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+    }
+
     const body = await req.json();
     const articulosRaw = body?.articulos;
 
@@ -139,14 +146,8 @@ export async function POST(req: NextRequest) {
     }
 
     const articuloNums = Array.from(new Set(articulos.map((a) => a.numero_articulo)));
-    const catalogRows = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "n_articulo_corpo_puesto",
-        operation: "findMany",
-        where: { id: { in: articuloNums } },
-      },
+    const catalogRows = await prisma.n_articulo_corpo_puesto.findMany({
+      where: { id: { in: articuloNums } },
     });
     const catalogIds = new Set(
       (Array.isArray(catalogRows) ? catalogRows : []).map((a: { id: number }) => Number(a.id)),
@@ -164,14 +165,8 @@ export async function POST(req: NextRequest) {
     }
 
     const codigosPuesto = Array.from(new Set(articulos.map((a) => a.codigo_puesto)));
-    const puestos = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_puesto",
-        operation: "findMany",
-        where: { codigo: { in: codigosPuesto } },
-      },
+    const puestos = await prisma.e_estructura_puesto.findMany({
+      where: { codigo: { in: codigosPuesto } },
     });
     const puestoIdByCodigo = new Map<string, number>();
     for (const p of Array.isArray(puestos) ? puestos : []) {
@@ -193,28 +188,16 @@ export async function POST(req: NextRequest) {
 
     const puestoIds = Array.from(new Set(puestoIdByCodigo.values()));
 
-    const existingPlans = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_articulo_corpo_puesto_plan",
-        operation: "findMany",
-        where: {
-          puesto_id: { in: puestoIds },
-          articuloCP_id: { in: articuloNums },
-        },
+    const existingPlans = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+      where: {
+        puesto_id: { in: puestoIds },
+        articuloCP_id: { in: articuloNums },
       },
     });
-    const existingEntregas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_articulo_corpo_puesto_entrega",
-        operation: "findMany",
-        where: {
-          puesto_id: { in: puestoIds },
-          nomencladorArticuloCP_id: { in: articuloNums },
-        },
+    const existingEntregas = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+      where: {
+        puesto_id: { in: puestoIds },
+        nomencladorArticuloCP_id: { in: articuloNums },
       },
     });
 
@@ -237,6 +220,7 @@ export async function POST(req: NextRequest) {
     let createdPlans = 0;
     let createdEntregas = 0;
 
+    const articulos_send = [];
     for (const art of articulos) {
       const puestoId = puestoIdByCodigo.get(art.codigo_puesto)!;
       const planKey = `${puestoId}:${art.numero_articulo}`;
@@ -245,21 +229,7 @@ export async function POST(req: NextRequest) {
       if (!fechaEntregaDb) continue;
 
       if (!planKeys.has(planKey)) {
-        await callDynamicPrisma({
-          req,
-          data: {
-            action: "POST",
-            table: "e_estructura_articulo_corpo_puesto_plan",
-            operation: "create",
-            data: {
-              puesto_id: puestoId,
-              corpo_id: null,
-              cantidad: art.cantidad,
-              articuloCP_id: art.numero_articulo,
-              combo_id: null,
-            },
-          },
-        });
+        articulos_send.push(art);
         planKeys.add(planKey);
         createdPlans++;
       } else {
@@ -269,23 +239,7 @@ export async function POST(req: NextRequest) {
       }
 
       if (!entregaKeys.has(entregaKey)) {
-        await callDynamicPrisma({
-          req,
-          data: {
-            action: "POST",
-            table: "e_estructura_articulo_corpo_puesto_entrega",
-            operation: "create",
-            data: {
-              puesto_id: puestoId,
-              corpo_id: null,
-              marca: art.marca,
-              serie: art.serie,
-              modelo: art.modelo,
-              fechaEntrega: fechaEntregaDb,
-              nomencladorArticuloCP_id: art.numero_articulo,
-            },
-          },
-        });
+        articulos_send.push(art);
         entregaKeys.add(entregaKey);
         createdEntregas++;
       } else {
@@ -294,6 +248,26 @@ export async function POST(req: NextRequest) {
         );
       }
     }
+
+
+
+    const bodySend = convertToFormattedData(articulos_send);
+
+    console.log(bodySend);
+    
+    const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/articulos-puesto/carga-masiva`, bodySend, { 
+      headers: {
+          "Authorization": `Bearer ${planillasToken}`,
+          "Content-Type": "application/json"
+      }
+  });
+
+  if (!planillasResponse.data.success) {
+      return NextResponse.json(
+          { status: false, message: "Error al actualizar la ubicación del puesto" },
+          { status: 500 }
+      );
+  }
 
     return NextResponse.json(
       {
@@ -310,4 +284,28 @@ export async function POST(req: NextRequest) {
     console.error("Error in POST /api/mantenimiento-equipo/bulk-articulos:", errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
+}
+
+function convertToFormattedData(data: BulkArticuloInput[]): { items: any[] } {
+  let formattedList: any[] = [];
+  for (const item of data) {
+    // Asegurarse de que no exista ya una combinación de codigo_puesto y numero_articulo
+    const existingItem = formattedList.find((i) => i.codigo_puesto === item.codigo_puesto && i.numero_articulo === item.numero_articulo);
+    if (existingItem) {
+      continue;
+    }
+
+    let formattedFecha = item.fecha_entrega.split(" ")[0].split("-").reverse().join("-");
+
+    formattedList.push({
+      codigo_puesto: item.codigo_puesto,
+      numero_articulo: item.numero_articulo,
+      cantidad: item.cantidad,
+      serie: item.serie,
+      marca: item.marca,
+      modelo: item.modelo ?? "",
+      fecha_entrega: formattedFecha,
+    });
+  }
+  return { items: formattedList };
 }

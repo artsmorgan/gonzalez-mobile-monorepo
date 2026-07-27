@@ -112,3 +112,11 @@ export async function persistStoredPlanillasToken({
     AsyncStorage.setItem(PLANILLAS_TOKEN_EXPIRES_AT_KEY, String(expiresAtMs)),
   ]);
 }
+
+export function buildPlanillasTokenRequestHeaders(
+  planillasToken: string | null | undefined,
+): Record<string, string> {
+  return {
+    'Planillas-Token': encodeURIComponent(String(planillasToken ?? '')),
+  };
+}

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
-import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { prisma } from "../../../../../utils/prismaClient";
+import axios from "axios";
 
 export const runtime = "nodejs";
 
@@ -12,7 +12,22 @@ export async function PUT(
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, expired: expired, message: message },
+                { status: expired ? 401 : 403 }
+            );
+        }
+
+        const planillasToken =
+            decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
+            null;
+        if (!planillasToken) {
+            return NextResponse.json(
+                { status: false, message: "Token de Planillas requerido" },
+                { status: 401 }
+            );
+        }
 
         const resolvedParams = await context.params;
         const { id } = resolvedParams;
@@ -21,16 +36,13 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
-        const { file_base64, extension, original_name, type, mimeType } = await req.json();
+        const { file_base64, extension, original_name, type } = await req.json();
 
         if (!file_base64 || !extension) {
             return NextResponse.json({ status: false, message: "Archivo no válido" }, { status: 400 });
         }
 
-        const existingRecord = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_accion_personal", operation: "findUnique", where: { id: accionId } }
-        });
+        const existingRecord = await prisma.c_accion_personal.findUnique({ where: { id: accionId } });
 
         if (!existingRecord) {
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
@@ -39,10 +51,12 @@ export async function PUT(
         const tokenEmployeeId = payload?.id ? parseInt(String(payload.id), 10) : 0;
         const recordEmployeeId = existingRecord?.empleado_id ? parseInt(String(existingRecord.empleado_id), 10) : 0;
         if (!tokenEmployeeId || tokenEmployeeId !== recordEmployeeId) {
-            return NextResponse.json({ status: false, message: "No autorizado para subir archivo en este registro" }, { status: 403 });
+            return NextResponse.json(
+                { status: false, message: "No autorizado para subir archivo en este registro" },
+                { status: 403 }
+            );
         }
 
-        // Verificar si ya existe un archivo subido
         if (existingRecord.document) {
             return NextResponse.json(
                 { status: false, message: "Ya existe un archivo subido. No se pueden subir más archivos." },
@@ -51,44 +65,55 @@ export async function PUT(
         }
 
         const ext = String(extension).replace(".", "").trim() || "dat";
-        const fileType = (type === "image" || type === "video" || type === "audio") ? type : "file";
+        const fileType = type === "image" || type === "video" || type === "audio" ? type : "file";
         const documentName = String(original_name || "").trim() || `archivo.${ext}`;
-        const uploadResp = await uploadDynamicFiles({
-            req,
-            folderPath: `archivos-acciones/${accionId}`,
-            files: [{ type: fileType, extension: ext, name: documentName, original_name: documentName, file_base64: file_base64 }],
-        });
-        const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-        const fileName = uploaded[0]?.name || "";
 
-        if (!fileName) {
-            return NextResponse.json({ status: false, message: "Error al subir el archivo" }, { status: 400 });
+        const planillasUrl = process.env.PLANILLAS_URL?.trim();
+        if (!planillasUrl) {
+            return NextResponse.json(
+                { status: false, message: "PLANILLAS_URL no configurado" },
+                { status: 500 }
+            );
         }
 
-        // Actualizar registro con el nombre original del archivo (no el generado)
-        const updatedRecord = await callDynamicPrisma({
-            req,
-            data: {
-                action: "UPDATE",
-                table: "c_accion_personal",
-                where: { id: accionId },
-                data: {
-                    document: documentName,
-                    mobile_upload: true,
-                }
+        const planillasResponse = await axios.post(
+            `${planillasUrl}/acciones/${accionId}/archivo`,
+            {
+                archivo_base64: file_base64,
+                nombre: documentName,
+                extension: ext,
+                tipo: fileType,
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${planillasToken}`,
+                    "Content-Type": "application/json",
+                },
             }
-        });
+        );
 
+        if (!planillasResponse.data?.success) {
+            return NextResponse.json(
+                { status: false, message: "Error al subir el archivo" },
+                { status: 500 }
+            );
+        }
+
+        const updatedRecord = await prisma.c_accion_personal.findUnique({ where: { id: accionId } });
         const baseUrl = req.nextUrl.origin;
+        const finalDocument = updatedRecord?.document || documentName;
+
         return NextResponse.json(
             {
                 status: true,
                 message: "Archivo subido correctamente",
                 data: {
-                    id: updatedRecord.id,
-                    document: updatedRecord.document,
-                    mobile_upload: updatedRecord.mobile_upload ?? false,
-                    url: baseUrl ? `${baseUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(fileName)}` : "",
+                    id: accionId,
+                    document: finalDocument,
+                    mobile_upload: updatedRecord?.mobile_upload ?? true,
+                    url: baseUrl
+                        ? `${baseUrl}/api/traslado-plaza/${accionId}/get-file/${encodeURIComponent(finalDocument)}`
+                        : "",
                 },
             },
             { status: 200 }
@@ -99,4 +124,3 @@ export async function PUT(
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
-

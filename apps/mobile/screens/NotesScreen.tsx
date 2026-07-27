@@ -335,6 +335,7 @@ export default function NotesScreen() {
 
   // Estructura principal (caché) + enviar notas al cliente
   const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
+  const mainStructureRef = useRef<MainStructureTree>([]);
   const [isSendNotesModalVisible, setIsSendNotesModalVisible] = useState(false);
   const [sendEmpresaId, setSendEmpresaId] = useState<number | null>(null);
   const [sendClienteId, setSendClienteId] = useState<number | null>(null);
@@ -515,17 +516,19 @@ export default function NotesScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (mainStructureRef.current.length > 0) {
+      return mainStructureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const parsed = await loadMainStructureTreeMerged();
-      if (Array.isArray(parsed)) {
-        setMainStructure(parsed);
-        return parsed;
-      }
-      setMainStructure([]);
-      return [];
+      const tree = Array.isArray(parsed) ? parsed : [];
+      mainStructureRef.current = tree;
+      setMainStructure(tree);
+      return tree;
     } catch (e) {
       console.error('Error loading main structure (Notes):', e);
+      mainStructureRef.current = [];
       setMainStructure([]);
       return [];
     } finally {
@@ -1119,11 +1122,20 @@ export default function NotesScreen() {
     const filterPid = numOrNull(filterPuestoIdRef.current);
     const listPuestoId = isOperativo ? (filterPid ?? marcaPuestoId) : filterPid;
 
-    let structureForLabels: MainStructureTree = Array.isArray(mainStructure) ? mainStructure : [];
-    if (!Array.isArray(structureForLabels) || structureForLabels.length === 0) {
+    let structureForLabels: MainStructureTree =
+      mainStructureRef.current.length > 0
+        ? mainStructureRef.current
+        : Array.isArray(mainStructure) && mainStructure.length > 0
+          ? mainStructure
+          : [];
+    if (!structureForLabels.length) {
       try {
         const parsed = await loadMainStructureTreeMerged();
         structureForLabels = Array.isArray(parsed) ? parsed : [];
+        if (structureForLabels.length) {
+          mainStructureRef.current = structureForLabels;
+          setMainStructure(structureForLabels);
+        }
       } catch {
         structureForLabels = [];
       }

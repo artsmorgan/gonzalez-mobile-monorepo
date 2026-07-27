@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { createReport, updateReport, resolveMarcaModeloSerieFromArticuloEstructura } from "../../../../../utils/createReporteArticuloMantenimiento";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
@@ -17,10 +18,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const { e, es_correcto, motivo_incorrecto, file, articulo_id, estado: estadoBody, cantidad_real: cantidadRealBody, hora_accion } = await req.json();
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: e } }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: e } });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }

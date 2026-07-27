@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export const EJECUTIVO_COORDINADOR_SLUG = "coordinadores-ejecutivos";
 export const EJECUTIVO_COORDINADOR_TABLE = "n_ejecutivo_cuenta_coordinador";
@@ -26,24 +27,12 @@ function mapIdNombre(row: unknown): IdNombre | null {
 
 export async function fetchEjecutivoCoordinadorOptions(req: NextRequest) {
     const [ejecutivosRaw, coordinadoresRaw] = await Promise.all([
-        callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "n_ejecutivo_cuenta",
-                operation: "findMany",
-                orderBy: { nombre: "asc" },
-            },
+        prisma.n_ejecutivo_cuenta.findMany({
+            orderBy: { nombre: "asc" },
         }),
-        callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "n_coordinador",
-                operation: "findMany",
-                where: { coordinadoPor_id: 3, activo: true },
-                orderBy: { nombre: "asc" },
-            },
+        prisma.n_coordinador.findMany({
+            where: { coordinadoPor_id: 3, activo: true },
+            orderBy: { nombre: "asc" },
         }),
     ]);
 

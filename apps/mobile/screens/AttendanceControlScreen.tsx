@@ -413,6 +413,7 @@ export default function AttendanceControlScreen() {
 
   // Estructura jerárquica
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   // Form states - Jerarquía
@@ -1002,14 +1003,19 @@ export default function AttendanceControlScreen() {
 
   /** Misma fuente que Activities / PhysicalMinuteAgenda: `loadMainStructureTreeMerged`. */
   const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const loaded = await loadMainStructureTreeMerged();
       const tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      structureRef.current = tree;
       setStructure(tree);
       return tree;
     } catch (e) {
       console.error('AttendanceControl loadMainStructureCache:', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {
@@ -1463,11 +1469,17 @@ export default function AttendanceControlScreen() {
     try {
       const raw = await AsyncStorage.getItem('current_marca');
       const current = raw ? JSON.parse(raw) : null;
-      let formTree: MainStructureTree = structure;
+      let formTree: MainStructureTree = structureRef.current;
+      if (!formTree?.length) {
+        formTree = Array.isArray(structure) && structure.length > 0 ? structure : [];
+      }
       if (!formTree?.length) {
         const loaded = await loadMainStructureTreeMerged().catch(() => []);
         formTree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
-        if (formTree.length) setStructure(formTree);
+        if (formTree.length) {
+          structureRef.current = formTree;
+          setStructure(formTree);
+        }
       }
       const path = buildHierarchyFromCurrentMarca(current, formTree);
       applyFormHierarchyPath(path);
@@ -1522,11 +1534,17 @@ export default function AttendanceControlScreen() {
     setPreviewColaboradores([]);
     setEmployeeSignaturesByMarca({});
     // Cargar jerarquía desde corpo_id en el árbol (empresa → sucursal)
-    let editTree: MainStructureTree = structure;
+    let editTree: MainStructureTree = structureRef.current;
+    if (!editTree?.length) {
+      editTree = Array.isArray(structure) && structure.length > 0 ? structure : [];
+    }
     if (!editTree?.length) {
       const loaded = await loadMainStructureTreeMerged().catch(() => []);
       editTree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
-      if (editTree.length) setStructure(editTree);
+      if (editTree.length) {
+        structureRef.current = editTree;
+        setStructure(editTree);
+      }
     }
     const corpoNum =
       record.corpo_id != null && record.corpo_id !== ''

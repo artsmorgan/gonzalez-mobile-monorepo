@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest) {
@@ -16,15 +17,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca o empleado no especificados" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(m) }
-            }
-        });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(m) } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { PrismaClient } from "@prisma/client";
-import { createReportPrismaClient, createReportServiceRequest } from "./reportDynamicPrisma";
+import { createReportPrismaClient, createReportServiceRequest, type ReportDataAccess } from "./reportDynamicPrisma";
+import { finalizeReportJobAsError, hasExceededReportAttempts } from "./reportJobQueue";
 import { completeReportJob } from "./reportMobileFileStorage";
 import {
     buildActaEntregaExcelBuffer,
@@ -242,9 +242,22 @@ type StoredFilters = {
     serviceAccessToken?: string;
 };
 
-export async function runMobileReportJob(prisma: PrismaClient, reportId: number): Promise<void> {
-    const row = await prisma.e_reportes_mobile.findUnique({ where: { id: reportId } });
+export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: number): Promise<void> {
+    const row = await queueDb.e_reportes_mobile.findUnique({ where: { id: reportId } });
     if (!row) return;
+
+    const estado = String(row.estado || "").toLowerCase();
+    if (estado === "error" || estado === "completado") return;
+
+    if (hasExceededReportAttempts(row.attemps, row.max_attempts)) {
+        await finalizeReportJobAsError(
+            queueDb,
+            reportId,
+            row.error_message || "Máximo de intentos alcanzado",
+            row,
+        );
+        return;
+    }
 
     let parsed: StoredFilters = {};
     try {
@@ -266,7 +279,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const tokens = await queryRefreshTokensUserLogin(reportDb, mf, orderKey as UserLoginOrderKey);
             const buf = await buildUserLoginExcelBuffer(tokens);
             /** Misma raíz que `dynamic-prisma/files`: solo disco bajo `public/uploads`, sin guardar binarios ni rutas en BD. */
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -278,7 +291,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildActaEntregaExcelBufferByType(rows, "Individual", row.nombre)
                     : await buildActaEntregaExcelBuffer(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -291,7 +304,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildAgendaMinutaIndividualZip(rows, row.nombre)
                     : await buildAgendaMinutaExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
 
@@ -303,7 +316,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildAperturaCierrePuestoExcelIndividual(rows, row.nombre)
                     : await buildAperturaCierrePuestoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -315,7 +328,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildVulnerabilidadExcelIndividual(rows, row.nombre)
                     : await buildVulnerabilidadExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -327,7 +340,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildActividadesExcelIndividual(rows, row.nombre)
                     : await buildActividadesExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -339,7 +352,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildControlAsistenciaExcelIndividual(rows, row.nombre)
                     : await buildControlAsistenciaExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -351,7 +364,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildDocumentosEntregadosExcelIndividual(rows, row.nombre)
                     : await buildDocumentosEntregadosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -363,7 +376,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildEncuestaSatisfaccionExcelIndividual(rows, row.nombre)
                     : await buildEncuestaSatisfaccionExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -375,7 +388,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildEntregaPuestoExcelIndividual(rows, row.nombre)
                     : await buildEntregaPuestoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -383,7 +396,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const mf = normalizeAccionesPersonalesFilters(parsed.moduleFilters || {});
             const rows = await queryAccionesPersonalesRows(reportDb, mf, orderKey as AccionesPersonalesOrderKey);
             const buf = await buildAccionesPersonalesExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
         if (moduleKey === "incidentes") {
@@ -394,7 +407,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildIncidenteExcelIndividual(rows, row.nombre)
                     : await buildIncidenteExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
         if (moduleKey === "llaves") {
@@ -406,7 +419,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildLlavesIndividualZip(rows, row.nombre)
                     : await buildLlavesExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
         if (moduleKey === "llaveros") {
@@ -418,7 +431,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildLlaverosIndividualZip(rows, row.nombre)
                     : await buildLlaverosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
         if (moduleKey === "bitacora_novedades") {
@@ -426,7 +439,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const bnvOrder = String(row.order_by || "titulo").trim();
             const rows = await queryBitacoraNovedadesRows(reportDb, mf, bnvOrder as BitacoraNovedadesOrderKey);
             const buf = await buildBitacoraNovedadesExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
         if (moduleKey === "maestro_quejas") {
@@ -438,7 +451,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildMaestroQuejasExcelIndividual(rows, String(row.nombre ?? ""))
                     : await buildMaestroQuejasExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
         if (moduleKey === "checklist_supervision") {
@@ -446,7 +459,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const ckOrder = String(row.order_by || "empresa_id").trim();
             const rows = await queryChecklistSupervisionRows(reportDb, mf, ckOrder as ChecklistSupervisionOrderKey);
             const buf = await buildChecklistSupervisionExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -458,7 +471,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildMutuosAcuerdosExcelIndividual(rows, row.nombre)
                     : await buildMutuosAcuerdosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -467,7 +480,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const evpOrder = String(row.order_by || "empresa_id").trim();
             const rows = await queryEvaluacionEmpleadoRows(reportDb, mf, evpOrder as EvaluacionPersonalOrderKey);
             const buf = await buildEvaluacionPersonalExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -480,7 +493,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildProductoNoConformeExcelIndividual(rows, row.nombre)
                     : await buildProductoNoConformeExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -493,7 +506,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildInduccionRecorridoExcelIndividual(rows, row.nombre)
                     : await buildInduccionRecorridoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -502,7 +515,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const mpOrder = String(row.order_by || "title").trim() as ManualesPuestoOrderKey;
             const rows = await queryManualesPuestoRows(reportDb, mf, mpOrder);
             const buf = await buildManualesPuestoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -511,7 +524,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const apOrder = String(row.order_by || "empresa_id").trim() as ArticulosPuestoOrderKey;
             const rows = await queryArticulosPuestoRows(reportDb, mf, apOrder);
             const buf = await buildArticulosPuestoExcelConsolidado(reportDb, rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -520,7 +533,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const maOrder = String(row.order_by || "puesto_id").trim() as MantenimientoArticulosOrderKey;
             const rows = await queryMantenimientoArticulosRows(reportDb, mf, maOrder);
             const buf = await buildMantenimientoArticulosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -529,7 +542,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const rvcOrder = String(row.order_by || "puesto_id").trim() as RegistroVehiculosCorporativosOrderKey;
             const rows = await queryRegistroVehiculosCorporativosRows(reportDb, mf, rvcOrder);
             const buf = await buildRegistroVehiculosCorporativosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -542,7 +555,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildRevisionVehiculosExcelIndividual(rows, String(row.nombre ?? ""))
                     : await buildRevisionVehiculosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -556,7 +569,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
                 reportType === "Individual"
                     ? await buildRegistroVisitasIndividualZip(rows, String(row.nombre ?? ""))
                     : await buildRegistroVisitasExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
 
@@ -565,7 +578,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const nvOrder = String(row.order_by || "empresa_id").trim() as NotasVozOrderKey;
             const rows = await queryNotasVozRows(reportDb, mf, nvOrder);
             const buf = await buildNotasVozExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -574,7 +587,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const cupOrder = String(row.order_by || "empresa_id").trim() as CambiosUbicacionPuestoOrderKey;
             const rows = await queryCambiosUbicacionPuestoRows(reportDb, mf, cupOrder);
             const buf = await buildCambiosUbicacionPuestoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -583,7 +596,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const rcOrder = String(row.order_by || "empresa_id").trim() as RegistroCapacitacionesOrderKey;
             const rows = await queryRegistroCapacitacionesRows(reportDb, mf, rcOrder);
             const buf = await buildRegistroCapacitacionesExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -597,7 +610,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const buf = isIndividual
                 ? await buildRegistroInduccionGeneralIndividualZip(rows, row.nombre)
                 : await buildRegistroInduccionGeneralExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
 
@@ -606,7 +619,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const taOrder = String(row.order_by || "empresa_id").trim() as TiempoAlmuerzoOrderKey;
             const rows = await queryTiempoAlmuerzoRows(reportDb, mf, taOrder);
             const buf = await buildTiempoAlmuerzoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -615,7 +628,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const lmOrder = String(row.order_by || "cedula_empleado").trim() as LoginMarcaOrderKey;
             const rows = await queryLoginMarcaRows(reportDb, mf, lmOrder);
             const buf = await buildLoginMarcaExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: "xlsx" });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
 
@@ -629,7 +642,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const buf = isIndividual
                 ? await buildSolicitudesPermisoExcelIndividual(rows, row.nombre)
                 : await buildSolicitudesPermisoExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
 
@@ -643,11 +656,11 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
             const buf = isIndividual
                 ? await buildVisitasVehiculosIndividualZip(rows, String(row.nombre ?? ""))
                 : await buildVisitasVehiculosExcelConsolidado(rows);
-            await completeReportJob({ req, prisma, reportId, row, buffer: buf, extension: ext });
+            await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
 
-        await prisma.e_reportes_mobile.update({
+        await queueDb.e_reportes_mobile.update({
             where: { id: reportId },
             data: {
                 estado: "error",
@@ -657,7 +670,7 @@ export async function runMobileReportJob(prisma: PrismaClient, reportId: number)
     } catch (e) {
         console.error("runMobileReportJob", reportId, e);
         const msg = e instanceof Error ? e.message : String(e);
-        await prisma.e_reportes_mobile.update({
+        await queueDb.e_reportes_mobile.update({
             where: { id: reportId },
             data: { estado: "error", error_message: msg },
         });

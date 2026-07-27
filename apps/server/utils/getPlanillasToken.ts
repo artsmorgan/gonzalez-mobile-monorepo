@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import axios from "axios";
 import { toZonedTime } from "date-fns-tz";
+import { prisma } from "./prismaClient";
 
 export async function getPlanillasToken(req: NextRequest, empleado_id: number) {
     // findFirst
@@ -26,15 +27,7 @@ async function createTokenPlanillas(req: NextRequest, empleado_id: number, mobil
     if (!planillasUrl) {
         throw new Error("PLANILLAS_URL no configurado");
     }
-    const empleado = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            operation: "findFirst",
-            table: "c_empleado",
-            where: { id: empleado_id }
-        }
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
     if (!empleado) {
         throw new Error("Empleado no encontrado");
     }

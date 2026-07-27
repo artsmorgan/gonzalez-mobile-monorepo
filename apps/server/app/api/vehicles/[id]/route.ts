@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs";
 import { createVehicleImage } from "../../../../utils/createVehicleImage";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroVehiculoLocationAnchors } from "../../../../utils/registroCorpoPuesto";
 import { deleteDynamicFile } from "../../../../utils/callDynamicFilesApi";
 
@@ -50,10 +51,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 200 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }

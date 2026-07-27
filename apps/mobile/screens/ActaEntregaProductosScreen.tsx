@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -532,6 +532,7 @@ export default function ActaEntregaProductosScreen() {
 
   // Estructura jerárquica (árbol mergeado + fragmentos para selects como en PuestoUbicacion)
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   // Form - Jerarquía
@@ -1011,22 +1012,7 @@ export default function ActaEntregaProductosScreen() {
       const contratoNum = contratoIdRaw != null && contratoIdRaw !== '' ? Number(contratoIdRaw) : null;
 
       let divId: number | null = getMarcaRoleDivisionId(current);
-      if (divId == null && empresaNum && clienteNum && contratoNum) {
-        try {
-          const tree: MainStructureTree = (await loadMainStructureTreeMerged()) as MainStructureTree;
-          if (tree.length > 0) {
-            const derived = findDivisionIdForContratoInStructure(
-              tree,
-              Number.isFinite(Number(empresaNum)) ? empresaNum : null,
-              Number.isFinite(Number(clienteNum)) ? clienteNum : null,
-              Number.isFinite(Number(contratoNum)) ? contratoNum : null,
-            );
-            if (derived != null) divId = derived;
-          }
-        } catch {
-          /* ignore */
-        }
-      }
+      // División derivada del árbol: ver useEffect tras `fetchMainStructure` (evita merge extra aquí).
 
       setMarcaEmpresaId(empresaNum);
       setMarcaClienteId(clienteNum);
@@ -1056,9 +1042,12 @@ export default function ActaEntregaProductosScreen() {
     setIsStructureLoading(true);
     try {
       const mergedTree = await loadMainStructureTreeMerged();
-      setStructure(Array.isArray(mergedTree) ? (mergedTree as MainStructureTree) : []);
+      const next = Array.isArray(mergedTree) ? (mergedTree as MainStructureTree) : [];
+      structureRef.current = next;
+      setStructure(next);
     } catch (e) {
       console.error('ActaEntrega fetchMainStructure:', e);
+      structureRef.current = [];
       setStructure([]);
     } finally {
       setIsStructureLoading(false);
@@ -1086,12 +1075,9 @@ export default function ActaEntregaProductosScreen() {
       const contratoIdRaw = currentMarca?.contrato?.id ?? currentMarca?.contrato_id;
       const corpoIdRaw = currentMarca?.corpo?.id ?? currentMarca?.corpo_id;
 
-      let structureForDivision: MainStructureTree = [];
-      try {
-        const t = await loadMainStructureTreeMerged();
-        structureForDivision = Array.isArray(t) ? (t as MainStructureTree) : [];
-      } catch {
-        structureForDivision = [];
+      let structureForDivision = structureRef.current;
+      if (!Array.isArray(structureForDivision) || structureForDivision.length === 0) {
+        structureForDivision = Array.isArray(structure) && structure.length > 0 ? structure : [];
       }
       const divisionIdFromMarca = resolveMarcaDivisionIdForTree(currentMarca, structureForDivision);
 
@@ -1186,7 +1172,7 @@ export default function ActaEntregaProductosScreen() {
       setError('Error al cargar actas');
       setIsLoadingData(false);
     }
-  }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, roleName]);
+  }, [logout, refreshAccessToken, filterEmpresaId, filterClienteId, filterDivisionId, filterContratoId, filterCorpoId, roleName, structure]);
 
   const fetchRecordsRef = useRef(fetchRecords);
   useEffect(() => {
@@ -1194,6 +1180,7 @@ export default function ActaEntregaProductosScreen() {
   }, [fetchRecords]);
 
   useEffect(() => {
+    if (isStructureLoading) return;
     fetchRecordsRef.current();
   }, [
     filterEmpresaId,
@@ -1202,79 +1189,8 @@ export default function ActaEntregaProductosScreen() {
     filterContratoId,
     filterCorpoId,
     roleName,
+    isStructureLoading,
   ]);
-
-  /**
-   * Jerarquía desde el mismo árbol que `loadMainStructureTreeMerged` (pantalla Minuta física), encadenando nodos.
-   */
-  const filterEmpresas = useMemo(
-    () => (Array.isArray(structure) ? structure : []),
-    [structure],
-  );
-
-  const filterClientes = useMemo(() => {
-    if (filterEmpresaId == null) return [];
-    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
-    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
-  }, [filterEmpresaId, filterEmpresas]);
-
-  const filterDivisiones = useMemo(() => {
-    if (filterEmpresaId == null || filterClienteId == null) return [];
-    const empresa = filterEmpresas.find((e: any) => Number(e.id) === Number(filterEmpresaId));
-    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(filterClienteId));
-    return Array.isArray(cliente?.division) ? cliente.division : [];
-  }, [filterEmpresaId, filterClienteId, filterEmpresas]);
-
-  const filterContratos = useMemo(() => {
-    if (filterDivisionId == null) return [];
-    const division = filterDivisiones.find((d: any) => Number(d.id) === Number(filterDivisionId));
-    return Array.isArray(division?.contratos) ? division.contratos : [];
-  }, [filterDivisionId, filterDivisiones]);
-
-  const filterSucursales = useMemo(() => {
-    if (filterContratoId == null) return [];
-    const contrato = filterContratos.find((c: any) => Number(c.id) === Number(filterContratoId));
-    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
-  }, [filterContratoId, filterContratos]);
-
-  const formEmpresas = useMemo(
-    () => (Array.isArray(structure) ? structure : []),
-    [structure],
-  );
-
-  const formClientes = useMemo(() => {
-    if (formEmpresaId == null) return [];
-    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
-    return Array.isArray(empresa?.clientes) ? empresa.clientes : [];
-  }, [formEmpresaId, formEmpresas]);
-
-  const formDivisiones = useMemo(() => {
-    if (formEmpresaId == null || formClienteId == null) return [];
-    const empresa = formEmpresas.find((e: any) => Number(e.id) === Number(formEmpresaId));
-    const cliente = empresa?.clientes?.find((c: any) => Number(c.id) === Number(formClienteId));
-    return Array.isArray(cliente?.division) ? cliente.division : [];
-  }, [formEmpresaId, formClienteId, formEmpresas]);
-
-  const formContratos = useMemo(() => {
-    if (formDivisionId == null) return [];
-    const division = formDivisiones.find((d: any) => Number(d.id) === Number(formDivisionId));
-    return Array.isArray(division?.contratos) ? division.contratos : [];
-  }, [formDivisionId, formDivisiones]);
-
-  const formSucursales = useMemo(() => {
-    if (formContratoId == null) return [];
-    const contrato = formContratos.find((c: any) => Number(c.id) === Number(formContratoId));
-    return Array.isArray(contrato?.sucursales) ? contrato.sucursales : [];
-  }, [formContratoId, formContratos]);
-
-  const formPuestos = useMemo(() => {
-    if (formCorpoId == null) return [];
-    const contrato = formContratos.find((c: any) => Number(c.id) === Number(formContratoId));
-    const sucursal = (Array.isArray(contrato?.sucursales) ? contrato.sucursales : []).find(
-      (s: any) => Number(s.id) === Number(formCorpoId),
-    );
-    return (Array.isArray(sucursal?.puestos) ? sucursal.puestos : []) as MainStructurePuestoNode[];
-  }, [formCorpoId, formContratoId, formContratos]);
 
   /**
    * Tras cargar `structure`, completar división desde contrato de la marca si el API dejó

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 
@@ -47,10 +48,7 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
         const myEjecutivoCuentaId = empleado?.supervisor_id ? Number(empleado.supervisor_id) : null;
         const isExecutive =
             Number(existing.ejecutivo_cuenta) === currentEmployeeId ||
@@ -100,86 +98,33 @@ export async function PUT(
 
         const empleadoIdSolicitud = Number((existing as any)?.empleado_id || 0);
         if (empleadoIdSolicitud) {
-            const empleadoSolicitante = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: empleadoIdSolicitud },
-                },
-            });
-            const ejecutivo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: currentEmployeeId },
-                },
-            });
+            const empleadoSolicitante = await prisma.c_empleado.findUnique({ where: { id: empleadoIdSolicitud } });
+            const ejecutivo = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
 
             // Intentar resolver puesto desde la plaza de la solicitud (fallback a existing.puesto_id).
             const plazaId = Number((existing as any)?.plaza_id || 0);
             let puestoId = Number((existing as any)?.puesto_id || 0);
             if (!puestoId && plazaId) {
-                const plaza = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_plazas",
-                        operation: "findUnique",
-                        where: { id: plazaId },
-                        select: { puesto_id: true },
-                    },
+                const plaza = await prisma.e_estructura_plazas.findUnique({
+                    where: { id: plazaId },
+                    select: { puesto_id: true },
                 });
-                puestoId = Number((plaza as any)?.puesto_id || 0);
+                puestoId = Number(plaza?.puesto_id || 0);
             }
+
             const puesto = puestoId
-                ? await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findUnique",
-                        where: { id: puestoId },
-                    },
-                })
-                : null;
+                ? await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } })
+                : null
 
                 let sucursalNombre = "Desconocida";
                 let clienteNombre = "Desconocido";
-                if (puesto) {
-                    const sucursal = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "e_estructura_sucursal",
-                            operation: "findUnique",
-                            where: { id: puesto.sucursal_id },
-                        },
-                    });
-                    if (sucursal) {
+                if (puesto && puesto.sucursal_id) {
+                    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: puesto.sucursal_id } });
+                    if (sucursal && sucursal.contrato_id) {
                         sucursalNombre = sucursal.nombre;
-                        const contrato = await callDynamicPrisma({
-                            req,
-                            data: {
-                                action: "GET",
-                                table: "e_estructura_contrato",
-                                operation: "findUnique",
-                                where: { id: sucursal.contrato_id },
-                            },
-                        });
-                        if (contrato) {
-                            const cliente = await callDynamicPrisma({
-                                req,
-                                data: {
-                                    action: "GET",
-                                    table: "e_estructura_cliente",
-                                    operation: "findUnique",
-                                    where: { id: contrato.cliente_id },
-                                },
-                            });
+                        const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: sucursal.contrato_id } });
+                        if (contrato && contrato.cliente_id) {
+                            const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: contrato.cliente_id } });
                             if (cliente) {
                                 clienteNombre = cliente.nombre;
                             }

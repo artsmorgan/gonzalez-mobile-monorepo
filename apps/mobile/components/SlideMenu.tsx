@@ -516,8 +516,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     const moduleFind = modules.find((m) => m.name === module);
     if (moduleFind) {
-      // return true;
-      return moduleFind.release;
+       return true;
+      //return moduleFind.release;
     }
     return false;
   }
@@ -1507,7 +1507,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('lunch-time') && styles.activeMenuItemText
                   ]}
                 >
-                  Tiempo de Almuerzo
+                  Tiempo de alimentación
                 </ThemedText>
               </TouchableOpacity>
             )}

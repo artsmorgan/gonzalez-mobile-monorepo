@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { transporter } from '../../../../transporter';
 import { toZonedTime } from 'date-fns-tz';
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 
 export async function POST(request: NextRequest) {
     try {
@@ -16,18 +17,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Buscar el empleado por cédula
-        const empleado = await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findFirst",
-                where: {
-                    cedula: cedula
-                }
-            }
-        });
+        const empleado = await prisma.c_empleado.findFirst({ where: { cedula: cedula } }); 
 
         // Si no se encuentra el empleado
         if (!empleado) {

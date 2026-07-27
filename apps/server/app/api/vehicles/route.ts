@@ -5,6 +5,7 @@ import { toZonedTime } from "date-fns-tz";
 import { createVehicleImage } from "../../../utils/createVehicleImage";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroVehiculoLocationAnchors } from "../../../utils/registroCorpoPuesto";
 
 export async function GET(req: NextRequest) {
@@ -25,10 +26,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 200 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca) } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca) } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -58,10 +56,7 @@ export async function GET(req: NextRequest) {
         const vehiculos_return: any[] = [];
         for (const v of vehiculos) {
 
-            const responsable = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: v.responsable_id } }
-            });
+            const responsable = await prisma.c_empleado.findUnique({ where: { id: v.responsable_id } });
             if (!responsable) {
                 return NextResponse.json({ status: false, message: "Responsable no encontrado" }, { status: 200 });
             }
@@ -131,10 +126,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -260,11 +252,8 @@ export async function POST(req: NextRequest) {
                     );
                 }
             }
-            const empleado = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: payload.id } }
-            });
-            if (empleado) {
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            if (empleado && marcaDia.plaza_id) {
                 const entrada = new_vehicle.hora_entrada;
                 const fecha_entrada = entrada.split("T")[0];
                 const hora_entrada = entrada.split("T")[1].split(".")[0];

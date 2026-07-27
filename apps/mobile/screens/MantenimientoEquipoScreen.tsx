@@ -30,6 +30,8 @@ import {
 } from '../hooks/movimientosArticulosMantenimientoFunctions';
 import Constants from 'expo-constants';
 import getHoraAccion from '../hooks/getHoraAccion';
+import { isStoredPlanillasTokenValid } from '../hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
 import authedFetch from '../hooks/authedFetch';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -54,6 +56,7 @@ import {
     type BulkPlantillaArticulo,
 } from '@/hooks/mantenimientoEquipoBulkArticulos';
 import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEquipoPlantillaLocal';
+import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -739,10 +742,16 @@ export default function MantenimientoEquipoScreen() {
     const [isBulkValidatingPlantilla, setIsBulkValidatingPlantilla] = useState(false);
     const [isBulkSubmitting, setIsBulkSubmitting] = useState(false);
 
+    const planillasRevalidationModalShownRef = useRef(false);
+    const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+    const pendingPlanillasBulkSubmitRef = useRef(false);
+    const executeSubmitBulkArticulosRef = useRef<() => Promise<void>>(async () => {});
+
     const canBulkArticulosPuesto = marcaDivisionNombre === 'Administrativos';
 
     // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
     const [structure, setStructure] = useState<any[]>([]);
+    const structureRef = useRef<any[]>([]);
     const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
     const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
     const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
@@ -1323,13 +1332,31 @@ export default function MantenimientoEquipoScreen() {
     }, []);
 
     const fetchMainStructure = useCallback(async () => {
+        if (structureRef.current.length > 0) {
+            setStructure(structureRef.current);
+            return;
+        }
         try {
             const merged = await loadMainStructureTreeMerged();
-            setStructure(Array.isArray(merged) && merged.length > 0 ? merged : []);
+            const next = Array.isArray(merged) && merged.length > 0 ? merged : [];
+            structureRef.current = next;
+            setStructure(next);
         } catch (e) {
             console.error('Error fetching main structure:', e);
         }
     }, []);
+
+    const getMainStructureTree = useCallback(async (): Promise<any[] | null> => {
+        if (structureRef.current.length > 0) return structureRef.current;
+        if (Array.isArray(structure) && structure.length > 0) return structure;
+        const merged = await loadMainStructureTreeMerged();
+        const next = Array.isArray(merged) && merged.length > 0 ? merged : null;
+        if (next) {
+            structureRef.current = next;
+            setStructure(next);
+        }
+        return next;
+    }, [structure]);
 
     const applyFiltersFromPuestoId = useCallback((puestoIdToApply: number | null) => {
         if (!puestoIdToApply) return;
@@ -1498,6 +1525,97 @@ export default function MantenimientoEquipoScreen() {
         }
     }, [getConnectionStatus, refreshAccessToken, logout]);
 
+    const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+        const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+        if (tokenCheck.valid) {
+            planillasRevalidationModalShownRef.current = false;
+            return true;
+        }
+
+        if (!planillasRevalidationModalShownRef.current) {
+            planillasRevalidationModalShownRef.current = true;
+            setShowPlanillasRevalidationModal(true);
+        }
+
+        return false;
+    }, []);
+
+    const handlePlanillasRevalidationSuccess = useCallback(() => {
+        setShowPlanillasRevalidationModal(false);
+        planillasRevalidationModalShownRef.current = false;
+        if (pendingPlanillasBulkSubmitRef.current) {
+            pendingPlanillasBulkSubmitRef.current = false;
+            void executeSubmitBulkArticulosRef.current();
+        }
+    }, []);
+
+    const handlePlanillasRevalidationDismiss = useCallback(() => {
+        planillasRevalidationModalShownRef.current = false;
+        pendingPlanillasBulkSubmitRef.current = false;
+        setShowPlanillasRevalidationModal(false);
+    }, []);
+
+    const executeSubmitBulkArticulos = useCallback(async () => {
+        if (bulkPlantillaArticulos.length === 0) {
+            Alert.alert('Validación', 'Sube una plantilla con al menos un artículo.');
+            return;
+        }
+
+        let referenceMs: number;
+        try {
+            referenceMs = (await getHoraAccion()) || Date.now();
+        } catch {
+            referenceMs = Date.now();
+        }
+
+        const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+        if (!hasValidPlanillasToken) {
+            pendingPlanillasBulkSubmitRef.current = true;
+            return;
+        }
+
+        const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+        const planillasToken = planillasTokenCheck.token;
+
+        try {
+            setIsBulkSubmitting(true);
+            const result = await submitMantenimientoEquipoBulkArticulos({
+                articulos: bulkPlantillaArticulos,
+                planillasToken,
+                refreshAccessToken,
+                logout,
+            });
+            if (!result.status) {
+                const errText =
+                    result.errors?.length
+                        ? result.errors.slice(0, 8).join('\n')
+                        : result.message || 'No se pudo completar la operación.';
+                Alert.alert('Error', errText);
+                return;
+            }
+            let msg = result.message || 'Operación completada.';
+            if (result.skipped?.length) {
+                msg += `\n\nOmitidos (${result.skipped.length}):\n${result.skipped.slice(0, 5).join('\n')}`;
+            }
+            Alert.alert('Listo', msg);
+            closeBulkArticulosModal();
+            await fetchReportes({ force: true });
+        } catch (e: unknown) {
+            const errMsg = e instanceof Error ? e.message : 'Error al actualizar.';
+            Alert.alert('Error', errMsg);
+        } finally {
+            setIsBulkSubmitting(false);
+        }
+    }, [
+        bulkPlantillaArticulos,
+        closeBulkArticulosModal,
+        requestPlanillasRevalidationIfNeeded,
+        refreshAccessToken,
+        logout,
+    ]);
+
+    executeSubmitBulkArticulosRef.current = executeSubmitBulkArticulos;
+
     const handleSubmitBulkArticulos = useCallback(async () => {
         if (!(await getConnectionStatus())) {
             Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
@@ -1515,40 +1633,13 @@ export default function MantenimientoEquipoScreen() {
                 { text: 'Cancelar', style: 'cancel' },
                 {
                     text: 'Actualizar',
-                    onPress: async () => {
-                        try {
-                            setIsBulkSubmitting(true);
-                            const result = await submitMantenimientoEquipoBulkArticulos({
-                                articulos: bulkPlantillaArticulos,
-                                refreshAccessToken,
-                                logout,
-                            });
-                            if (!result.status) {
-                                const errText =
-                                    result.errors?.length
-                                        ? result.errors.slice(0, 8).join('\n')
-                                        : result.message || 'No se pudo completar la operación.';
-                                Alert.alert('Error', errText);
-                                return;
-                            }
-                            let msg = result.message || 'Operación completada.';
-                            if (result.skipped?.length) {
-                                msg += `\n\nOmitidos (${result.skipped.length}):\n${result.skipped.slice(0, 5).join('\n')}`;
-                            }
-                            Alert.alert('Listo', msg);
-                            closeBulkArticulosModal();
-                            await fetchReportes({ force: true });
-                        } catch (e: unknown) {
-                            const errMsg = e instanceof Error ? e.message : 'Error al actualizar.';
-                            Alert.alert('Error', errMsg);
-                        } finally {
-                            setIsBulkSubmitting(false);
-                        }
+                    onPress: () => {
+                        void executeSubmitBulkArticulos();
                     },
                 },
             ],
         );
-    }, [bulkPlantillaArticulos, closeBulkArticulosModal, getConnectionStatus, refreshAccessToken, logout]);
+    }, [bulkPlantillaArticulos, getConnectionStatus, executeSubmitBulkArticulos]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
         if (roleName === 'OPERATIVO') {
@@ -1611,12 +1702,6 @@ export default function MantenimientoEquipoScreen() {
             }
         }
     };
-
-    const getMainStructureTree = useCallback(async (): Promise<any[] | null> => {
-        if (Array.isArray(structure) && structure.length > 0) return structure;
-        const merged = await loadMainStructureTreeMerged();
-        return Array.isArray(merged) && merged.length > 0 ? merged : null;
-    }, [structure]);
 
     const findPuestoNodeInTree = useCallback((tree: any[], targetPuestoId: number) => {
         for (const empresa of tree) {
@@ -1689,7 +1774,8 @@ export default function MantenimientoEquipoScreen() {
         });
 
         const finishMantenimientoEquipoList = (raw: ArticuloPuestoMantenimientoItem[]) => {
-            const n = raw.map((x) => normalizeMantenimientoEquipoReporteItem(x));
+            const prioritized = prioritizePlanByArticuloNomencladorId(raw);
+            const n = prioritized.map((x) => normalizeMantenimientoEquipoReporteItem(x));
             setReportes(n);
             return n;
         };
@@ -1703,7 +1789,9 @@ export default function MantenimientoEquipoScreen() {
             if (!(await getConnectionStatus())) {
                 const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
                 if (fromPuesto && fromPuesto.length > 0) {
-                    return fromPuesto as ArticuloPuestoMantenimientoItem[];
+                    return prioritizePlanByArticuloNomencladorId(
+                        fromPuesto as ArticuloPuestoMantenimientoItem[],
+                    );
                 }
             }
 
@@ -1737,12 +1825,14 @@ export default function MantenimientoEquipoScreen() {
 
                 const data = await response.json();
                 if (data.status && Array.isArray(data.data)) {
-                    const list: ArticuloPuestoMantenimientoItem[] = data.data.map((it: any) => ({
-                        ...it,
-                        tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
-                        mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos.map(normalizeMantenimiento) : [],
-                        movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
-                    }));
+                    const list: ArticuloPuestoMantenimientoItem[] = prioritizePlanByArticuloNomencladorId(
+                        data.data.map((it: any) => ({
+                            ...it,
+                            tipos_mantenimiento: Array.isArray(it.tipos_mantenimiento) ? it.tipos_mantenimiento : [],
+                            mantenimientos: Array.isArray(it.mantenimientos) ? it.mantenimientos.map(normalizeMantenimiento) : [],
+                            movimientos: Array.isArray(it.movimientos) ? it.movimientos : [],
+                        })),
+                    );
                     await writePuestoArticulosList(puestoIdForQuery, list);
                     void updateMainStructureCacheFromFetchedPuesto({
                         puestoId: puestoIdForQuery,
@@ -1751,7 +1841,9 @@ export default function MantenimientoEquipoScreen() {
                     return list;
                 }
                 const fromPuesto = await readPuestoArticulosList(puestoIdForQuery);
-                return fromPuesto?.length ? (fromPuesto as ArticuloPuestoMantenimientoItem[]) : [];
+                return fromPuesto?.length
+                    ? prioritizePlanByArticuloNomencladorId(fromPuesto as ArticuloPuestoMantenimientoItem[])
+                    : [];
             }
 
             // Offline: mostrar artículos del puesto desde main_structure_cache
@@ -1759,33 +1851,35 @@ export default function MantenimientoEquipoScreen() {
             if (tree && puestoIdForQuery) {
                 const puestoNode: any = findPuestoNodeInTree(tree, puestoIdForQuery);
                 const articulosRaw: any[] = Array.isArray(puestoNode?.articulos) ? puestoNode.articulos : [];
-                const listFromStructure: ArticuloPuestoMantenimientoItem[] = articulosRaw.map((a: any) => {
-                    const source = normalizeArticuloSource(a?.tipo);
-                    const estructuraId = Number(a.id);
-                    const ultimo = a.ultimo_mantenimiento ?? a.ultimo_registro_mantenimiento ?? null;
-                    const mantenimientosOffline = Array.isArray(a.mantenimientos)
-                        ? a.mantenimientos.map(normalizeMantenimiento)
-                        : ultimo
-                            ? [normalizeMantenimiento(ultimo)]
-                            : [];
-                    return {
-                        key: `${source}-${estructuraId}`,
-                        source,
-                        estructura_id: estructuraId,
-                        articulo_nomenclador_id: Number.isFinite(Number(a?.articulo_nomenclador_id))
-                            ? Number(a.articulo_nomenclador_id)
-                            : null,
-                        articulo_nombre: a.nombre ?? 'Desconocido',
-                        tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
-                        marca: a.marca ?? null,
-                        modelo: a.modelo ?? null,
-                        serie: a.serie ?? null,
-                        tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
-                        mantenimientos: mantenimientosOffline,
-                        movimientos: Array.isArray(a.movimientos) ? a.movimientos : [],
-                        ultimo_mantenimiento: ultimo,
-                    };
-                });
+                const listFromStructure: ArticuloPuestoMantenimientoItem[] = prioritizePlanByArticuloNomencladorId(
+                    articulosRaw.map((a: any) => {
+                        const source = normalizeArticuloSource(a?.tipo);
+                        const estructuraId = Number(a.id);
+                        const ultimo = a.ultimo_mantenimiento ?? a.ultimo_registro_mantenimiento ?? null;
+                        const mantenimientosOffline = Array.isArray(a.mantenimientos)
+                            ? a.mantenimientos.map(normalizeMantenimiento)
+                            : ultimo
+                                ? [normalizeMantenimiento(ultimo)]
+                                : [];
+                        return {
+                            key: `${source}-${estructuraId}`,
+                            source,
+                            estructura_id: estructuraId,
+                            articulo_nomenclador_id: Number.isFinite(Number(a?.articulo_nomenclador_id))
+                                ? Number(a.articulo_nomenclador_id)
+                                : null,
+                            articulo_nombre: a.nombre ?? 'Desconocido',
+                            tipo: source === 'plan' ? 'Plan de puesto' : 'Asignado al puesto',
+                            marca: a.marca ?? null,
+                            modelo: a.modelo ?? null,
+                            serie: a.serie ?? null,
+                            tipos_mantenimiento: Array.isArray(a.tipos_mantenimiento) ? a.tipos_mantenimiento : [],
+                            mantenimientos: mantenimientosOffline,
+                            movimientos: Array.isArray(a.movimientos) ? a.movimientos : [],
+                            ultimo_mantenimiento: ultimo,
+                        };
+                    }),
+                );
 
                 if (listFromStructure.length > 0) {
                     await writePuestoArticulosList(puestoIdForQuery, listFromStructure);
@@ -1793,10 +1887,14 @@ export default function MantenimientoEquipoScreen() {
                     return listFromStructure;
                 }
                 const puestoList = await readPuestoArticulosList(puestoIdForQuery);
-                return puestoList?.length ? (puestoList as ArticuloPuestoMantenimientoItem[]) : [];
+                return puestoList?.length
+                    ? prioritizePlanByArticuloNomencladorId(puestoList as ArticuloPuestoMantenimientoItem[])
+                    : [];
             }
             const puestoList = await readPuestoArticulosList(puestoIdForQuery);
-            return puestoList?.length ? (puestoList as ArticuloPuestoMantenimientoItem[]) : [];
+            return puestoList?.length
+                ? prioritizePlanByArticuloNomencladorId(puestoList as ArticuloPuestoMantenimientoItem[])
+                : [];
         };
 
         try {
@@ -2018,7 +2116,10 @@ export default function MantenimientoEquipoScreen() {
                 rn?.roleDivision?.role?.nombre === 'OPERATIVO' || rn?.role_division?.role?.nombre === 'OPERATIVO';
             if (isOperativoCatch && numOrNull(rn?.corpo?.id ?? rn?.corpo_id)) {
                 const corpoE = numOrNull(rn?.corpo?.id ?? rn?.corpo_id)!;
-                const treeE = await loadMainStructureTreeMerged().catch(() => []);
+                const treeE =
+                    structureRef.current.length > 0
+                        ? structureRef.current
+                        : ((await loadMainStructureTreeMerged().catch(() => [])) as any[]);
                 const metas = findPuestosInCorpo(Array.isArray(treeE) ? treeE : [], corpoE);
                 const fallbackMerged: ArticuloPuestoMantenimientoItem[] = [];
                 for (const pm of metas) {
@@ -2141,7 +2242,9 @@ export default function MantenimientoEquipoScreen() {
                 ? listOrNull
                 : (await readPuestoArticulosList(Number(pid)));
         if (!raw?.length) return;
-        const pl = raw.map((x) => normalizeMantenimientoEquipoReporteItem(x as ArticuloPuestoMantenimientoItem));
+        const pl = prioritizePlanByArticuloNomencladorId(
+            raw.map((x) => normalizeMantenimientoEquipoReporteItem(x as ArticuloPuestoMantenimientoItem)),
+        );
         setReportes(pl);
         const row = pl.find((r) => r.key === reporteKey);
         if (!row) return;
@@ -2651,7 +2754,10 @@ export default function MantenimientoEquipoScreen() {
                 const { puestoId, source, estructuraId, mantenimientoId, patch } = params;
                 if (!puestoId || !source || !estructuraId || !mantenimientoId) return;
 
-                const tree = await loadMainStructureTreeMerged();
+                const tree =
+                    structureRef.current.length > 0
+                        ? structureRef.current
+                        : await loadMainStructureTreeMerged();
                 if (!Array.isArray(tree) || tree.length === 0) return;
 
                 const expectedTipo = source === 'plan' ? 'Plan' : 'Asignado';
@@ -2710,7 +2816,10 @@ export default function MantenimientoEquipoScreen() {
             try {
                 if (!puestoId || !Array.isArray(items) || items.length === 0) return;
 
-                const tree = await loadMainStructureTreeMerged();
+                const tree =
+                    structureRef.current.length > 0
+                        ? structureRef.current
+                        : await loadMainStructureTreeMerged();
                 if (!Array.isArray(tree) || tree.length === 0) {
                     await syncPuestoArticulosFragmentFromReportesList(puestoId, items);
                     return;
@@ -5736,6 +5845,13 @@ export default function MantenimientoEquipoScreen() {
             </Modal>
 
             <AppFooter />
+            <PlanillasPasswordRevalidationModal
+                visible={showPlanillasRevalidationModal}
+                refreshAccessToken={refreshAccessToken}
+                logout={logout}
+                onSuccess={handlePlanillasRevalidationSuccess}
+                onDismiss={handlePlanillasRevalidationDismiss}
+            />
             <SlideMenu isVisible={isMenuVisible} onClose={handleMenuClose} onHomePress={handleHomePress} currentRoute="MantenimientoEquipo" />
             {QRScannerComponent}
         </ThemedView>

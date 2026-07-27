@@ -45,6 +45,7 @@ import {
   refreshPuestoArticulosFromServer,
   rewritePuestoArticulosInMainStructure,
 } from '@/hooks/puestoArticulosSync';
+import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 import { serializeArticulosPuestoForStorage } from '@/utils/articuloMantenimientoFiles';
@@ -938,6 +939,8 @@ export default function ChecklistSupervisionScreen() {
 
   // Estados para estructura jerárquica
   const [structure, setStructure] = useState<StructureNode[]>([]);
+  const structureRef = useRef<StructureNode[]>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
   const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
@@ -1121,14 +1124,22 @@ export default function ChecklistSupervisionScreen() {
 
   // Cargar estructura principal (fragmentos mergeados o caché legada)
   const fetchMainStructure = useCallback(async (): Promise<StructureNode[]> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
+    setIsStructureLoading(true);
     try {
       const parsed = await loadMainStructureTreeMerged();
       const tree = Array.isArray(parsed) ? parsed : [];
+      structureRef.current = tree;
       setStructure(tree);
       return tree;
     } catch (error) {
       console.error('Error fetching main structure:', error);
+      structureRef.current = [];
       setStructure([]);
+    } finally {
+      setIsStructureLoading(false);
     }
     return [];
   }, []);
@@ -1365,7 +1376,9 @@ export default function ChecklistSupervisionScreen() {
           setArticulos([]);
           return;
         }
-        const articulosForm: ArticuloForm[] = sourceArticulos.map((art: any, index: number) => {
+        const articulosForm: ArticuloForm[] = prioritizePlanByArticuloNomencladorId(
+          sourceArticulos,
+        ).map((art: any, index: number) => {
           const aid = Number(art?.id ?? art?.estructura_id);
           const ultimo = art?.ultimo_mantenimiento ?? null;
           const estadoUltimo = ultimo?.estado;
@@ -1393,7 +1406,7 @@ export default function ChecklistSupervisionScreen() {
             nombre: art.nombre || art.articulo_nombre || 'Desconocido',
             tipo,
             cantidad_requerida: normalizeCantidadNecesaria(
-              typeof art?.cantidad === 'number' ? art.cantidad : Number(art?.cantidad)
+              typeof art?.cantidad_necesaria === 'number' ? art.cantidad_necesaria : Number(art?.cantidad)
             ),
             cantidad_real,
             estado,
@@ -3085,11 +3098,14 @@ export default function ChecklistSupervisionScreen() {
                   </ThemedView>
 
                   {/* Jerarquía para filtros (sucursal = alcance del listado) */}
-                  {structure.length === 0 ? (
+                  {isStructureLoading ? (
+                    <ThemedText style={styles.emptyText}>Cargando jerarquía…</ThemedText>
+                  ) : structure.length === 0 ? (
                     <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
                   ) : (
                     <HierarchyPickerFields
                       structure={structure}
+                      isLoading={isStructureLoading}
                       levels={['cliente', 'contrato', 'sucursal']}
                       emptyPickerValue={0}
                       values={{
@@ -3160,6 +3176,7 @@ export default function ChecklistSupervisionScreen() {
               {/* Jerarquía para formulario (incluye puesto) */}
               <HierarchyPickerFields
                 structure={structure}
+                isLoading={isStructureLoading}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 emptyPickerValue={0}
                 values={{

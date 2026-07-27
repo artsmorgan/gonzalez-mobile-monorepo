@@ -1,6 +1,6 @@
 /**
  * Debe mantenerse alineado con `mergeMainStructureFragments` en
- * `apps/server/app/api/dynamic-prisma/main-structure/route.ts`.
+ * `apps/server/app/api/main-structure/mergeMainStructureFragments.ts`.
  */
 export function mergeMainStructureFragments(fragments: Record<string, any>): any[] {
   const empresasRaw = fragments.empresas;

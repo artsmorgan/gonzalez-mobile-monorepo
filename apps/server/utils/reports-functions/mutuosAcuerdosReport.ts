@@ -371,14 +371,9 @@ export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters:
         }
     }
 
-    const orderBy: Prisma.e_mutuos_acuerdosOrderByWithRelationInput =
-        orderKey === "created_at"
-            ? { created_at: "desc" }
-            : ({ [orderKey]: "asc" } as Prisma.e_mutuos_acuerdosOrderByWithRelationInput);
-
     const rows = await prisma.e_mutuos_acuerdos.findMany({
         where: { AND: and },
-        orderBy,
+        orderBy: { created_at: "desc" },
         take: 50_000,
     });
 

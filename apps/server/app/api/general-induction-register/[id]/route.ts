@@ -3,6 +3,18 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
+
+const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
+  e_estructura_empresa: { select: { nombre: true, codigo: true } },
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+};
+
+const GENERAL_INDUCTION_FULL_INCLUDE = {
+  ...GENERAL_INDUCTION_ESTRUCTURA_INCLUDE,
+  c_imagenes_registro_induccion_general: true,
+};
 
 const stripDataUrlBase64 = (raw: string): string => {
   const s = String(raw || "").trim();
@@ -181,13 +193,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         operation: "update",
         where: { id: idNum },
         data: updateData,
-        include: {
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
       },
     });
+    const { preexistentSpecs: updatePreexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_ESTRUCTURA_INCLUDE);
+    await hydratePreexistentRelations(updated, updatePreexistentSpecs);
     const updatedObj = updated as any;
 
     // Guardar nuevas imágenes (si vienen)
@@ -223,6 +232,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_FULL_INCLUDE);
+
     const fullRecord = await callDynamicPrisma({
       req,
       data: {
@@ -230,14 +241,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_registro_induccion_general",
         operation: "findUnique",
         where: { id: idNum },
-        include: {
-          c_imagenes_registro_induccion_general: true,
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(fullRecord, preexistentSpecs);
     const fullRecordObj = fullRecord as any;
     const baseUrl = req.nextUrl.origin;
 

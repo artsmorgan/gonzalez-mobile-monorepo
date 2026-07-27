@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+
+const MUTUOS_ACUERDOS_CORPO_INCLUDE = {
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+  n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
+};
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
@@ -15,12 +23,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
 
     const currentEmployeeId = parseInt(String((payload as any)?.id ?? 0), 10) || 0;
     const empleado = currentEmployeeId
-      ? await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } }
-      })
+      ? await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } })
       : null;
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
+
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(MUTUOS_ACUERDOS_CORPO_INCLUDE);
 
     const records = await callDynamicPrisma({
       req,
@@ -30,13 +37,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
         operation: "findMany",
         where: { corpo_id: corpoIdNum, isActive: true },
         orderBy: { created_at: "desc" },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-          n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
-        }
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       }
     });
+    await hydratePreexistentRelations(records, preexistentSpecs);
 
     const mapped = records.map((r: any) => ({
       ...r,

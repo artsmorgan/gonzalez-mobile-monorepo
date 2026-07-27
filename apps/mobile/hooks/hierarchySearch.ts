@@ -175,12 +175,9 @@ export async function searchHierarchy(
   query: string,
   treeHint?: any[],
 ): Promise<{ hits: HierarchySearchHit[]; tree: any[] }> {
-  const tree =
-    Array.isArray(treeHint) && treeHint.length > 0
-      ? treeHint
-      : ((await loadMainStructureTreeMerged()) as any[]);
-
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  const tree = Array.isArray(treeHint)
+    ? treeHint
+    : ((await loadMainStructureTreeMerged()) as any[]);
 
   const hits = searchHierarchyInTree(Array.isArray(tree) ? tree : [], level, query);
   return { hits, tree: Array.isArray(tree) ? tree : [] };

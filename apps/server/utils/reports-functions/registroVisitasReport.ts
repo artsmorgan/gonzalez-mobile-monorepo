@@ -7,6 +7,15 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+
+const REGISTRO_VISITAS_INCLUDE = {
+    e_activo_visitante: { include: { n_tipo_activo_visitas: { select: { nombre: true } } } },
+    c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
+    e_estructura_cliente: { select: { id: true, nombre: true } },
+    e_estructura_sucursal: { select: { id: true, nombre: true, nro_sucursal: true } },
+    e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+};
 
 export type RegistroVisitasModuleFilters = ActaEntregaModuleFilters & {
     /** Filtro por `responsable_id` (empleado responsable en `e_registro_personas`). */
@@ -228,28 +237,6 @@ function formatActivosDetallesForExcelCell(detalles: unknown): string {
     return lines.join("\n");
 }
 
-function orderByClause(key: RegistroVisitasOrderKey): Prisma.e_registro_personasOrderByWithRelationInput {
-    switch (key) {
-        case "cliente_id":
-            return { cliente_id: "asc" };
-        case "division_id":
-            return { division_id: "asc" };
-        case "contrato_id":
-            return { contrato_id: "asc" };
-        case "corpo_id":
-            return { corpo_id: "asc" };
-        case "puesto_id":
-            return { puesto_id: "asc" };
-        case "created_at":
-            return { created_at: "asc" };
-        case "nombre":
-            return { nombre: "asc" };
-        case "empresa_id":
-        default:
-            return { empresa_id: "asc" };
-    }
-}
-
 async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> {
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
@@ -305,19 +292,41 @@ export async function queryRegistroVisitasRows(
     if (filters.tipoVisitante === "normal") where.es_funcionario = false;
     if (filters.tipoVisitante === "funcionario") where.es_funcionario = true;
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(REGISTRO_VISITAS_INCLUDE);
+
     const raw = await prisma.e_registro_personas.findMany({
         where,
-        include: {
-            e_activo_visitante: { include: { n_tipo_activo_visitas: { select: { nombre: true } } } },
-            c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
-            e_estructura_cliente: { select: { id: true, nombre: true } },
-            e_estructura_sucursal: { select: { id: true, nombre: true, nro_sucursal: true } },
-            e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
-        },
-        orderBy: [orderByClause(orderKey), { id: "asc" }],
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        orderBy: { id: "desc" },
         take: opts?.take != null && opts.take > 0 ? opts.take : undefined,
     });
-    return enrichRows(prisma, raw);
+    await hydratePreexistentRelations(raw, preexistentSpecs);
+    const enriched = await enrichRows(prisma, raw);
+    return sortRegistroVisitasRows(enriched, orderKey);
+}
+
+function sortRegistroVisitasRows(rows: any[], orderKey: RegistroVisitasOrderKey): any[] {
+    return [...rows].sort((a: any, b: any) => {
+        switch (orderKey) {
+            case "empresa_id":
+                return a.empresa_nombre.localeCompare(b.empresa_nombre, "es");
+            case "cliente_id":
+                return (a.e_estructura_cliente?.nombre ?? "").localeCompare(b.e_estructura_cliente?.nombre ?? "", "es");
+            case "division_id":
+                return a.division_nombre.localeCompare(b.division_nombre, "es");
+            case "contrato_id":
+                return a.contrato_nombre.localeCompare(b.contrato_nombre, "es");
+            case "corpo_id":
+                return (a.e_estructura_sucursal?.nombre ?? "").localeCompare(b.e_estructura_sucursal?.nombre ?? "", "es");
+            case "puesto_id":
+                return (a.e_estructura_puesto?.nombre ?? "").localeCompare(b.e_estructura_puesto?.nombre ?? "", "es");
+            case "nombre":
+                return String(a.nombre ?? "").localeCompare(String(b.nombre ?? ""), "es");
+            case "created_at":
+            default:
+                return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        }
+    });
 }
 
 const NO_BORDER: Partial<ExcelJS.Borders> = {};

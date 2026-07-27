@@ -15,10 +15,17 @@ import { useColorScheme } from './hooks/useColorScheme';
 import saveLunchTime from './hooks/saveLunchTime';
 import {
   computeLunchEndTimeMs,
+  markLunchTimeAsCompleted,
   mergeCurrentMarcaHierarchyIntoLunchRequest,
   releaseLunchTimerCompletionLock,
   tryAcquireLunchTimerCompletionLock,
 } from './hooks/lunchTimeMarcaHierarchy';
+import {
+  clearHorarioMinutosActions,
+  LUNCH_TIME_HORARIO_ACTIONS_KEY,
+  readHorarioMinutosActions,
+  updateHorarioMinutosAlmuerzo,
+} from './hooks/lunchTimeHorarioApi';
 import { useAuth } from './contexts/AuthContext';
 import { createVehicle, updateVehicle, deleteVehicle, deleteVehicleAttachment } from './hooks/vehiclesFunctions';
 import { getFile, deleteFile } from './hooks/fileStorage';
@@ -164,17 +171,28 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import { FORCE_OFFLINE } from './constants/syncFlags';
 import { resolveAppConnectivity } from './hooks/resolveAppConnectivity';
+import {
+  CURRENT_MARCA_UPDATED_EVENT,
+  extractPushData,
+  flushPushDeviceActions,
+  PUSH_DEVICE_ACTIONS_KEY,
+  resolvePushNavigationTarget,
+  syncPushDeviceRegistration,
+} from './hooks/pushNotificationsService';
+import * as Notifications from 'expo-notifications';
 import saveManualSignature from './hooks/saveManualSignature';
 import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
 import revertAttendanceLeaving from './hooks/revertAttendanceLeaving';
 import {
-  attachPlanillasTokenToPlanillasAttendanceActions,
-  pendingAttendanceActionsRequirePlanillasToken,
   readAttendanceActions,
   removeAttendanceActionById,
   writeAttendanceActions,
 } from './hooks/attendanceActionsStorage';
+import {
+  attachPlanillasTokenToAllPendingActions,
+  pendingActionsRequirePlanillasToken,
+} from './hooks/planillasPendingActions';
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
@@ -216,6 +234,10 @@ import {
   BITACORA_VEHICULO_DETENIDO_EVAL_TYPE,
 } from './hooks/corporateEvaluationsSync';
 import { CacheSyncActionsOverlay } from './components/CacheSyncActionsOverlay';
+import {
+  HIERARCHY_UPDATE_OVERLAY_HIDE_EVENT,
+  HIERARCHY_UPDATE_OVERLAY_SHOW_EVENT,
+} from './hooks/backgroundMainStructureDownload';
 
 /** Re-lee la cola en disco y aplica el mismo criterio que .filter, para no reintroducir acciones ya quitadas. */
 async function persistFilteredMantenimientoEquipoActionQueue(
@@ -458,17 +480,20 @@ function AppContent() {
   const [loaded] = useFonts({
     SpaceMono: require('./assets/fonts/SpaceMono-Regular.ttf'),
   });
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, accessToken, refreshAccessToken, logout } = useAuth();
 
   const navigationRef = useRef<any>(null);
   const routeNameRef = useRef<string | undefined>(undefined);
   // 🆕 Variable de estado para conexión a internet
   const [isConnected, setIsConnected] = React.useState<boolean | null>(null);
   const [cacheSyncModalVisible, setCacheSyncModalVisible] = React.useState(false);
+  const [hierarchyUpdateModalVisible, setHierarchyUpdateModalVisible] = React.useState(false);
   const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = React.useState(false);
   const planillasRevalidationModalShownRef = useRef(false);
   const cacheSyncFadeAnim = useRef(new Animated.Value(0));
+  const hierarchyUpdateFadeAnim = useRef(new Animated.Value(0));
   const cacheSyncOverlayActiveRef = useRef(false);
+  const hierarchyUpdateOverlayActiveRef = useRef(false);
 
   const dismissCacheSyncOverlayOnly = useCallback(() => {
     Animated.timing(cacheSyncFadeAnim.current, {
@@ -483,12 +508,64 @@ function AppContent() {
     });
   }, []);
 
+  const dismissHierarchyUpdateOverlayOnly = useCallback(() => {
+    Animated.timing(hierarchyUpdateFadeAnim.current, {
+      toValue: 0,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        hierarchyUpdateOverlayActiveRef.current = false;
+        setHierarchyUpdateModalVisible(false);
+      }
+    });
+  }, []);
+
+  const showHierarchyUpdateOverlay = useCallback(() => {
+    hierarchyUpdateOverlayActiveRef.current = true;
+    setHierarchyUpdateModalVisible(true);
+    hierarchyUpdateFadeAnim.current.setValue(0);
+    requestAnimationFrame(() => {
+      Animated.timing(hierarchyUpdateFadeAnim.current, {
+        toValue: 1,
+        duration: 220,
+        useNativeDriver: true,
+      }).start();
+    });
+  }, []);
+
+  const hideHierarchyUpdateOverlay = useCallback(() => {
+    if (!hierarchyUpdateOverlayActiveRef.current) return;
+    Animated.timing(hierarchyUpdateFadeAnim.current, {
+      toValue: 0,
+      duration: 300,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        hierarchyUpdateOverlayActiveRef.current = false;
+        setHierarchyUpdateModalVisible(false);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    const onShow = () => showHierarchyUpdateOverlay();
+    const onHide = () => hideHierarchyUpdateOverlay();
+    eventBus.on(HIERARCHY_UPDATE_OVERLAY_SHOW_EVENT, onShow);
+    eventBus.on(HIERARCHY_UPDATE_OVERLAY_HIDE_EVENT, onHide);
+    return () => {
+      eventBus.off(HIERARCHY_UPDATE_OVERLAY_SHOW_EVENT, onShow);
+      eventBus.off(HIERARCHY_UPDATE_OVERLAY_HIDE_EVENT, onHide);
+    };
+  }, [showHierarchyUpdateOverlay, hideHierarchyUpdateOverlay]);
+
   /**
    * Colas de sincronización. Bitácoras: `bitacora_vehiculo_detenido_cache` (`bySucursalId`). Checklists: misma forma en
    * `checklist_supervision_cache` (`checklistSupervisionCacheStorage`). Jerarquía: `loadMainStructureTreeMerged` / fragmentos.
    */
   const ACTION_STORAGE_KEYS = [
     'lunch_time_actions',
+    LUNCH_TIME_HORARIO_ACTIONS_KEY,
     'vehicles_actions',
     'bitacora_vehiculo_detenido_actions',
     'llaves_actions',
@@ -515,6 +592,7 @@ function AppContent() {
     'job_manuals_actions',
     'checklist_supervision_actions',
     'attendance_actions',
+    PUSH_DEVICE_ACTIONS_KEY,
   ];
 
   const authedFetchCb = useCallback(
@@ -602,7 +680,7 @@ function AppContent() {
   }, [authedFetchCb]);
 
   const requestPlanillasTokenForSyncIfNeeded = useCallback(async (): Promise<boolean> => {
-    const requiresPlanillas = await pendingAttendanceActionsRequirePlanillasToken();
+    const requiresPlanillas = await pendingActionsRequirePlanillasToken();
     if (!requiresPlanillas) {
       return true;
     }
@@ -635,7 +713,7 @@ function AppContent() {
 
     const stored = await readStoredPlanillasToken();
     if (stored?.token) {
-      await attachPlanillasTokenToPlanillasAttendanceActions(stored.token);
+      await attachPlanillasTokenToAllPendingActions(stored.token);
     }
 
     eventBus.emit('syncCachesRequested');
@@ -695,7 +773,7 @@ function AppContent() {
 
       const storedPlanillas = await readStoredPlanillasToken();
       if (storedPlanillas?.token) {
-        await attachPlanillasTokenToPlanillasAttendanceActions(storedPlanillas.token);
+        await attachPlanillasTokenToAllPendingActions(storedPlanillas.token);
       }
 
         console.log(' -------------------------- sincronizando cachés');
@@ -713,6 +791,7 @@ function AppContent() {
         let actionsSyncError: unknown = null;
         try {
           await checkAttendanceActionsCache();
+          await checkLunchTimeHorarioActionsCache();
           // Incidente debe existir en servidor antes que aportes (acciones con incidentLocalKey).
           await checkIncidentsActionsCache();
           await checkIncidentContributionsActionsCache();
@@ -727,6 +806,7 @@ function AppContent() {
         checkDocumentosEntregadosActionsCache(),
         checkApreciacionVulnerabilidadActionsCache(),
         checkNotificationsActionsCache(),
+        checkPushDeviceActionsCache(),
         checkVisitorsActionsCache(),
         checkNotesActionsCache(),
         checkSurveysActionsCache(),
@@ -3212,6 +3292,14 @@ function AppContent() {
     }
   }
 
+  const checkPushDeviceActionsCache = async () => {
+    if (!employee) return;
+    const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+    if (!token) return;
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    await flushPushDeviceActions({ accessToken: token, apiUrl });
+  };
+
   const checkNotificationsActionsCache = async () => {
     if (!employee) return;
 
@@ -3275,6 +3363,31 @@ function AppContent() {
       }
     }
   }
+
+  const checkLunchTimeHorarioActionsCache = async () => {
+    if (!employee) return;
+
+    const actions = await readHorarioMinutosActions();
+    if (!actions.length) return;
+
+    console.log('Sincronizando acciones de minutos de alimentación (horario):', actions.length);
+
+    for (const action of actions) {
+      try {
+        if (action.type === 'update_minutos') {
+          const result = await updateHorarioMinutosAlmuerzo(action.horarioId, action.minutos, {
+            refreshAccessToken,
+            logout,
+          }, action.planillasToken);
+          if (result.status) {
+            await clearHorarioMinutosActions();
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando acción de minutos de horario:', error);
+      }
+    }
+  };
 
   const checkLunchTimeActionsCache = async () => {
     if (!employee) return;
@@ -5248,6 +5361,10 @@ function AppContent() {
             }
 
             try {
+              const storedPlanillas = await readStoredPlanillasToken();
+              const planillasToken =
+                String(action?.planillasToken ?? '').trim() || storedPlanillas?.token || null;
+
               const response = await authedFetch({
                 url: `${apiUrl}/api/puestos/${action.puesto_id}/ubicacion`,
                 init: {
@@ -5255,10 +5372,12 @@ function AppContent() {
                   headers: {
                     'Content-Type': 'application/json',
                     'ngrok-skip-browser-warning': '69420',
+                    'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                   },
                   body: JSON.stringify({
                     latitud: action.payload.latitud,
                     longitud: action.payload.longitud,
+                    horaAccion: action.payload?.horaAccion ?? action.horaAccion,
                   }),
                 },
                 refreshAccessToken,
@@ -7908,8 +8027,10 @@ function AppContent() {
 
         await AsyncStorage.removeItem('temp_state');
 
+        await markLunchTimeAsCompleted();
+
         Alert.alert(
-          '🎉 ¡Tiempo de Almuerzo Completado!',
+          '🎉 ¡Tiempo de alimentación completado!',
           'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
           [{ text: 'OK', onPress: async () => {} }]
         );
@@ -7930,6 +8051,7 @@ function AppContent() {
         await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
 
         await AsyncStorage.removeItem('temp_state');
+        await markLunchTimeAsCompleted();
         Alert.alert(
           'Modo Offline',
           'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
@@ -8080,8 +8202,8 @@ function AppContent() {
 
       if (horaAccion >= thresholdMs) {
         Alert.alert(
-          'Recordatorio de almuerzo',
-          'Ya cumpliste el 75% de tu jornada. Recuerda tomar tu tiempo de almuerzo.'
+          'Recordatorio de alimentación',
+          'Ya cumpliste el 75% de tu jornada. Recuerda tomar tu tiempo de alimentación.'
         );
         // Desactivar el alert para no volver a mostrarlo
         await AsyncStorage.setItem('alert_lunch_time', 'false');
@@ -8093,6 +8215,8 @@ function AppContent() {
 
   const get_notifications = async () => {
     console.log('+++++++++++++++++++++++++++++++++++++++++ Getting notifications...');
+    const planillas_token = await AsyncStorage.getItem('planillas_token');
+    console.log('planillas_token:', planillas_token);
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) {
       console.log('[notifications] Omitido: sin conexión', connectivity.reason);
@@ -8218,6 +8342,107 @@ function AppContent() {
     return () => clearInterval(locationIntervalId);
   }, []);
 
+  /** Registro FCM tras login / restauración de sesión; se actualiza si cambia current_marca. */
+  useEffect(() => {
+    if (!employee?.id || !accessToken) return;
+
+    let cancelled = false;
+    const run = async () => {
+      if (cancelled) return;
+      try {
+        await syncPushDeviceRegistration({
+          empleadoId: employee.id,
+          accessToken,
+          apiUrl: Constants.expoConfig?.extra?.API_SERVER,
+        });
+      } catch (error) {
+        console.error('[push] Error registrando dispositivo:', error);
+      }
+    };
+
+    void run();
+    const onMarcaUpdated = () => {
+      void run();
+    };
+    eventBus.on(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+    return () => {
+      cancelled = true;
+      eventBus.off(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+    };
+  }, [employee?.id, accessToken]);
+
+  /** Listeners FCM: primer plano + tap (background/cerrada). */
+  useEffect(() => {
+    if (!employee?.id) return;
+
+    const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
+      try {
+        const data = extractPushData(notification.request.content);
+        console.log('[push] Notificación en primer plano:', data);
+        eventBus.emit('pushNotificationReceived', {
+          title: notification.request.content.title,
+          body: notification.request.content.body,
+          data,
+        });
+        // Integración con inbox existente
+        eventBus.emit('notificationsUpdated');
+        eventBus.emit('notificationsUpdatedCounter');
+        eventBus.emit('syncCachesRequested');
+      } catch (error) {
+        console.error('[push] Error procesando notificación recibida:', error);
+      }
+    });
+
+    const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        const data = extractPushData(response.notification.request.content);
+        console.log('[push] Notificación abierta:', data);
+        eventBus.emit('pushNotificationOpened', data);
+
+        const target = resolvePushNavigationTarget(data);
+        if (target?.screen && navigationRef.current) {
+          // Pequeño delay para cold start
+          setTimeout(() => {
+            try {
+              navigationRef.current?.navigate(target.screen as any, target.params as any);
+            } catch (navErr) {
+              console.warn('[push] No se pudo navegar a', target.screen, navErr);
+              navigationRef.current?.navigate('Notifications');
+            }
+          }, 400);
+        }
+      } catch (error) {
+        console.error('[push] Error procesando apertura de notificación:', error);
+      }
+    });
+
+    // Cold start: notificación que abrió la app
+    void (async () => {
+      try {
+        const last = await Notifications.getLastNotificationResponseAsync();
+        if (!last) return;
+        const data = extractPushData(last.notification.request.content);
+        const target = resolvePushNavigationTarget(data);
+        if (target?.screen) {
+          setTimeout(() => {
+            try {
+              navigationRef.current?.navigate(target.screen as any, target.params as any);
+            } catch {
+              navigationRef.current?.navigate('Notifications');
+            }
+          }, 800);
+        }
+      } catch (error) {
+        console.error('[push] Error leyendo última notificación:', error);
+      }
+    })();
+
+    return () => {
+      receivedSub.remove();
+      responseSub.remove();
+    };
+  }, [employee?.id]);
+
   if (!loaded) {
     return null;
   }
@@ -8301,6 +8526,12 @@ function AppContent() {
         visible={cacheSyncModalVisible}
         fadeAnim={cacheSyncFadeAnim.current}
         onRequestClose={dismissCacheSyncOverlayOnly}
+      />
+      <CacheSyncActionsOverlay
+        visible={hierarchyUpdateModalVisible}
+        fadeAnim={hierarchyUpdateFadeAnim.current}
+        onRequestClose={dismissHierarchyUpdateOverlayOnly}
+        message="Actualizando jerarquía, no cierre la aplicación"
       />
       <PlanillasPasswordRevalidationModal
         visible={showPlanillasRevalidationModal}

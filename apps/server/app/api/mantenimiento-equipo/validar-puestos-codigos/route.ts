@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
-import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 
 export const runtime = "nodejs";
 
@@ -35,14 +35,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const puestos = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_puesto",
-        operation: "findMany",
-        where: { codigo: { in: codigos } },
-      },
+    const puestos = await prisma.e_estructura_puesto.findMany({
+      where: { codigo: { in: codigos } },
     });
 
     const puestoByCodigo = new Map<string, { id: number; codigo: string; nombre: string }>();

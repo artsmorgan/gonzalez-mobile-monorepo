@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -68,15 +69,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
     const puestoById = new Map<number, { id: number; nombre: string; codigo: string | null }>();
     if (allPuestoIds.length > 0) {
-      const puestosRows = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_puesto",
-          operation: "findMany",
-          where: { id: { in: allPuestoIds } },
-          select: { id: true, nombre: true, codigo: true },
-        },
+      const puestosRows = await prisma.e_estructura_puesto.findMany({
+        where: { id: { in: allPuestoIds } },
+        select: { id: true, nombre: true, codigo: true },
       });
       for (const row of Array.isArray(puestosRows) ? puestosRows : []) {
         const id = Number((row as { id?: number }).id);

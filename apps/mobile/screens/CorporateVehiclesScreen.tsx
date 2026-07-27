@@ -785,6 +785,7 @@ export default function CorporateVehiclesScreen() {
 
   // estructura
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -1109,18 +1110,25 @@ export default function CorporateVehiclesScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      setStructure(structureRef.current);
+      return;
+    }
     setIsStructureLoading(true);
     try {
       const fragments = await loadMainStructureFragmentsObject();
       if (fragments && Object.keys(fragments).length > 0) {
         const mergedFromFrag = mergeMainStructureFragments(fragments);
         if (Array.isArray(mergedFromFrag) && mergedFromFrag.length > 0) {
+          structureRef.current = mergedFromFrag;
           setStructure(mergedFromFrag);
           return;
         }
       }
       const merged = await loadMainStructureTreeMerged();
-      if (Array.isArray(merged)) setStructure(merged);
+      const next = Array.isArray(merged) ? merged : [];
+      structureRef.current = next;
+      setStructure(next);
     } finally {
       setIsStructureLoading(false);
     }
@@ -1357,7 +1365,10 @@ export default function CorporateVehiclesScreen() {
       if (!sucursalId || !Array.isArray(vehicles) || vehicles.length === 0) return;
 
       try {
-        const tree = await loadMainStructureTreeMerged();
+        const tree =
+          structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
 
         let updated = false;
@@ -1516,6 +1527,8 @@ export default function CorporateVehiclesScreen() {
 
         if (updated) {
           await persistMergedMainStructureTree(tree, [Number(sucursalId)]);
+          structureRef.current = tree;
+          setStructure(tree);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicles):', e);
@@ -1530,7 +1543,10 @@ export default function CorporateVehiclesScreen() {
       if (!vehiculoId || !Array.isArray(usos) || usos.length === 0) return;
 
       try {
-        const tree = await loadMainStructureTreeMerged();
+        const tree =
+          structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
 
         const sidResolved =
@@ -1608,6 +1624,8 @@ export default function CorporateVehiclesScreen() {
 
         if (updated) {
           await persistMergedMainStructureTree(tree, [Number(sidResolved)]);
+          structureRef.current = tree;
+          setStructure(tree);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicle uses):', e);
@@ -1622,7 +1640,10 @@ export default function CorporateVehiclesScreen() {
       if (!sucursalId || !Number.isFinite(vehiculoId) || !Array.isArray(mantenimientos) || mantenimientos.length === 0) return;
 
       try {
-        const tree = await loadMainStructureTreeMerged();
+        const tree =
+          structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged();
         if (!Array.isArray(tree) || tree.length === 0) return;
 
         let updated = false;
@@ -1694,6 +1715,8 @@ export default function CorporateVehiclesScreen() {
 
         if (updated) {
           await persistMergedMainStructureTree(tree, [Number(sucursalId)]);
+          structureRef.current = tree;
+          setStructure(tree);
         }
       } catch (e) {
         console.error('Error updating main_structure_cache (fetched vehicle maintenances):', e);

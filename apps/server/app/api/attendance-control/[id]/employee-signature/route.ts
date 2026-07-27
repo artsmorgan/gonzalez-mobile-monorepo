@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -34,19 +35,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       return NextResponse.json({ status: false, message: "Control no encontrado" }, { status: 404 });
     }
 
-    const marca = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: marcaId },
-        select: {
-          id: true,
-          hora_entrada_digitada: true,
-          empleadoFijo_id: true,
-          empleadoReemplaza_id: true,
-        },
+    const marca = await prisma.c_marca_dia.findUnique({
+      where: { id: marcaId },
+      select: {
+        id: true,
+        hora_entrada_digitada: true,
+        empleadoFijo_id: true,
+        empleadoReemplaza_id: true,
       },
     });
     if (!marca) {

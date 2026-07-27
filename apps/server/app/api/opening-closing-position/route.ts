@@ -1,11 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
 
 export const runtime = "nodejs";
+
+const OPENING_CLOSING_FULL_INCLUDE = {
+    c_imagenes_apertura_cierre_puesto: true,
+    e_estructura_cliente: { select: { nombre: true } },
+    e_estructura_sucursal: { select: { nombre: true } },
+    e_estructura_puesto: { select: { nombre: true } },
+    n_division: { select: { nombre: true } },
+};
 
 type OpeningClosingImageInput = {
     file_base64: string;
@@ -59,14 +69,8 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(String(marca_id), 10) },
-            },
+        const marcaDia = await prisma.c_marca_dia.findUnique({
+            where: { id: parseInt(String(marca_id), 10) },
         });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
@@ -189,49 +193,28 @@ export async function POST(req: NextRequest) {
             let clienteNombre = "Desconocido";
             let fechaRegistro = fechaDate.toISOString().split("T")[0];
             if (newRecordObj.created_by) {
-                const empleado = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: parseInt(String(newRecordObj.created_by), 10) },
-                    },
+                const empleado = await prisma.c_empleado.findUnique({
+                    where: { id: parseInt(String(newRecordObj.created_by), 10) },
                 });
                 if (empleado) {
-                    const empleadoObj = empleado as any;
-                    empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+                    empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
                 }
 
             }
             if (newRecordObj.corpo_id) {
-                const sucursal = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_sucursal",
-                        operation: "findUnique",
-                        where: { id: newRecordObj.corpo_id },
-                    },
+                const sucursal = await prisma.e_estructura_sucursal.findUnique({
+                    where: { id: newRecordObj.corpo_id },
                 });
                 if (sucursal) {
-                    const sucursalObj = sucursal as any;
-                    sucursalNombre = sucursalObj.nombre + " (" + sucursalObj.nro_sucursal + ")";
+                    sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
                 }
             }
             if (newRecordObj.cliente_id) {
-                const cliente = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_cliente",
-                        operation: "findUnique",
-                        where: { id: newRecordObj.cliente_id },
-                    },
+                const cliente = await prisma.e_estructura_cliente.findUnique({
+                    where: { id: newRecordObj.cliente_id },
                 });
                 if (cliente) {
-                    const clienteObj = cliente as any;
-                    clienteNombre = clienteObj.nombre;
+                    clienteNombre = cliente.nombre;
                 }
             }
             const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de apertura-cierre de puesto de tipo " + newRecordObj.tipo + " en la sucursal " + sucursalNombre + " para el cliente " + clienteNombre + " el día " + fechaRegistro;
@@ -274,6 +257,8 @@ export async function POST(req: NextRequest) {
             }
         }
 
+        const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(OPENING_CLOSING_FULL_INCLUDE);
+
         const fullRecord = await callDynamicPrisma({
             req,
             data: {
@@ -281,15 +266,10 @@ export async function POST(req: NextRequest) {
                 table: "c_apertura_cierre_puesto",
                 operation: "findUnique",
                 where: { id: newRecordObj.id },
-                include: {
-                    c_imagenes_apertura_cierre_puesto: true,
-                    e_estructura_cliente: { select: { nombre: true } },
-                    e_estructura_sucursal: { select: { nombre: true } },
-                    e_estructura_puesto: { select: { nombre: true } },
-                    n_division: { select: { nombre: true } },
-                },
+                ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
             },
         });
+        await hydratePreexistentRelations(fullRecord, preexistentSpecs);
 
         const baseUrl = req.nextUrl.origin;
         const recordToSend: any = fullRecord ?? newRecordObj;
@@ -300,32 +280,16 @@ export async function POST(req: NextRequest) {
         const conId = Number((recordToSend as any)?.contrato_id);
         if (Number.isFinite(empId) && empId > 0) {
             try {
-                const emp = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_empresa",
-                        operation: "findUnique",
-                        where: { id: empId },
-                    },
-                });
-                empresaNombre = emp && typeof (emp as any).nombre === "string" ? String((emp as any).nombre) : null;
+                const emp = await prisma.e_estructura_empresa.findUnique({ where: { id: empId } });
+                empresaNombre = emp && typeof emp.nombre === "string" ? String(emp.nombre) : null;
             } catch {
                 empresaNombre = null;
             }
         }
         if (Number.isFinite(conId) && conId > 0) {
             try {
-                const con = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_contrato",
-                        operation: "findUnique",
-                        where: { id: conId },
-                    },
-                });
-                contratoNombre = con && typeof (con as any).nombre === "string" ? String((con as any).nombre) : null;
+                const con = await prisma.e_estructura_contrato.findUnique({ where: { id: conId } });
+                contratoNombre = con && typeof con.nombre === "string" ? String(con.nombre) : null;
             } catch {
                 contratoNombre = null;
             }

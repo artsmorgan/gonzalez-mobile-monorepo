@@ -1,9 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextRequest } from "next/server";
-import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export async function assertCorpoAllowedForMarca(
-    req: NextRequest,
+    _req: NextRequest,
     marcaDia: any,
     corpoIdReq: number
 ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -14,10 +14,7 @@ export async function assertCorpoAllowedForMarca(
     if (!Number.isFinite(marcaClienteId) || marcaClienteId <= 0) {
         return { ok: false, message: "La sucursal no corresponde a la marca indicada" };
     }
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdReq } }
-    });
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdReq } });
     if (!sucursal) {
         return { ok: false, message: "Sucursal no encontrada" };
     }
@@ -25,54 +22,35 @@ export async function assertCorpoAllowedForMarca(
     if (!Number.isFinite(contratoId) || contratoId <= 0) {
         return { ok: false, message: "La sucursal no tiene contrato asociado" };
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoId } }
-    });
+    await prisma.e_estructura_contrato.findUnique({ where: { id: contratoId } });
     return { ok: true };
 }
 
-async function getClienteIdForSucursal(req: NextRequest, sucursalId: number): Promise<number | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
-    });
+async function getClienteIdForSucursal(_req: NextRequest, sucursalId: number): Promise<number | null> {
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
     if (!sucursal?.contrato_id) {
         return null;
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
+    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: Number(sucursal.contrato_id) } });
     const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
     return Number.isFinite(cliente_id) && cliente_id > 0 ? cliente_id : null;
 }
 
 async function clienteAndPuestoForCorpo(
-    req: NextRequest,
+    _req: NextRequest,
     corpoId: number
 ): Promise<{ cliente_id: number; puesto_id: number } | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoId } }
-    });
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoId } });
     if (!sucursal?.contrato_id) {
         return null;
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
+    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: Number(sucursal.contrato_id) } });
     const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
     if (!Number.isFinite(cliente_id) || cliente_id <= 0) {
         return null;
     }
-    const puestos = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpoId } }
-    });
-    const list = Array.isArray(puestos) ? puestos : [];
-    const puesto_id = list[0]?.id != null ? Number(list[0].id) : NaN;
+    const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpoId } });
+    const puesto_id = puestos[0]?.id != null ? Number(puestos[0].id) : NaN;
     if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
         return null;
     }
@@ -91,10 +69,7 @@ export async function resolveClienteYPuestoParaAlta(
             : NaN;
 
     if (Number.isFinite(puestoParsed) && puestoParsed > 0) {
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoParsed } }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoParsed } });
         if (!puesto) {
             return { ok: false, message: "Puesto no encontrado" };
         }
@@ -129,7 +104,7 @@ export async function resolveClienteYPuestoParaAlta(
 
 /** Cadena empresa/división/contrato/cliente coherente con la sucursal (`e_estructura_sucursal`). */
 export async function getRegistroVehiculoLocationAnchors(
-    req: NextRequest,
+    _req: NextRequest,
     corpoId: number
 ): Promise<
     | { ok: true; empresa_id: number; division_id: number; contrato_id: number; cliente_id: number }
@@ -139,21 +114,12 @@ export async function getRegistroVehiculoLocationAnchors(
     if (!Number.isFinite(cid) || cid <= 0) {
         return { ok: false, message: "Sucursal no válida" };
     }
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: cid } },
-    });
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: cid } });
     if (!sucursal?.contrato_id) {
         return { ok: false, message: "La sucursal no tiene contrato asociado" };
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_contrato",
-            operation: "findUnique",
-            where: { id: Number(sucursal.contrato_id) },
-        },
+    const contrato = await prisma.e_estructura_contrato.findUnique({
+        where: { id: Number(sucursal.contrato_id) },
     });
     if (!contrato) {
         return { ok: false, message: "Contrato no encontrado" };

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "114129532373",
+    "project_id": "monitoreapp-56ad8",
+    "storage_bucket": "monitoreapp-56ad8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:114129532373:android:2dab26ac2da219801bb95c",
+        "android_client_info": {
+          "package_name": "com.abrjpo98.MonitoreApp.full"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCmIu7xAmTX12cZU8NRdNiGSXxsBmvblZI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

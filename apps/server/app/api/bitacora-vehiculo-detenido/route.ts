@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import {
@@ -101,10 +102,7 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marcaIdStr) } }
-      });
+      const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
       if (!marcaDia) {
         return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
       }
@@ -114,20 +112,10 @@ export async function GET(req: NextRequest) {
       }
 
       // Obtener la última marca del empleado (simplificado: obtener la más reciente)
-      const lastMarca = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_marca_dia",
-          operation: "findFirst",
-          where: { empleadoFijo_id: marcaDia.empleadoFijo_id },
-          orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }]
-        }
-      });
+      const lastMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { fecha: "desc", hora_inicio: "desc" } });
       if (!lastMarca) {
         return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
       }
-
 
       empresaId = marcaDia.empresa_id;
       clienteId = marcaDia.cliente_id;
@@ -229,17 +217,14 @@ export async function POST(req: NextRequest) {
     let sucursalId = sucursal_id ? Number(sucursal_id) : 0;
 
     if (marca_id) {
-      const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
-      });
+      const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
       if (!marcaDia) {
         return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
       }
       // Si no vienen ids explícitos, usamos los de marca
-      if (!empresaId) empresaId = marcaDia.empresa_id;
-      if (!clienteId) clienteId = marcaDia.cliente_id;
-      if (!sucursalId) sucursalId = marcaDia.corpo_id;
+      if (!empresaId) empresaId = marcaDia.empresa_id ?? 0;
+      if (!clienteId) clienteId = marcaDia.cliente_id ?? 0;
+      if (!sucursalId) sucursalId = marcaDia.corpo_id ?? 0;
     }
 
     if (!empresaId || !clienteId || !sucursalId) {
@@ -250,21 +235,15 @@ export async function POST(req: NextRequest) {
     let contratoIdFinal = ctId;
     let puestoIdFinal = puestoId;
     if (marca_id && (!puestoIdFinal || !contratoIdFinal)) {
-      const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
-      });
+      const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
       if (marcaDia) {
         if (!puestoIdFinal) puestoIdFinal = Number((marcaDia as any).puesto_id ?? 0);
         if (!contratoIdFinal) contratoIdFinal = Number((marcaDia as any).contrato_id ?? 0);
       }
     }
     if (puestoIdFinal) {
-      const puestoRow = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoIdFinal } }
-      });
-      const sidP = puestoRow ? Number((puestoRow as any).sucursal_id ?? 0) : 0;
+      const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdFinal } });
+      const sidP = puestoRow ? Number(puestoRow.sucursal_id ?? 0) : 0;
       if (sidP > 0 && sidP !== Number(sucursalId)) {
         return NextResponse.json(
           { status: false, message: "El puesto no pertenece a la sucursal indicada" },
@@ -272,21 +251,15 @@ export async function POST(req: NextRequest) {
         );
       }
     }
-    const sucRow = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: Number(sucursalId) } }
-    });
-    const contratoFromSucursal = sucRow ? Number((sucRow as any).contrato_id ?? 0) : 0;
+    const sucRow = await prisma.e_estructura_sucursal.findUnique({ where: { id: Number(sucursalId) } });
+    const contratoFromSucursal = sucRow ? Number(sucRow.contrato_id ?? 0) : 0;
     if (!contratoIdFinal && contratoFromSucursal) {
       contratoIdFinal = contratoFromSucursal;
     }
     if (contratoIdFinal && !divisionIdFinal) {
-      const ctRow = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoIdFinal } }
-      });
-      if (ctRow && (ctRow as any).division_id != null) {
-        divisionIdFinal = Number((ctRow as any).division_id);
+      const ctRow = await prisma.e_estructura_contrato.findUnique({ where: { id: contratoIdFinal } });
+      if (ctRow && ctRow.division_id != null) {
+        divisionIdFinal = Number(ctRow.division_id);
       }
     }
     if (!divisionIdFinal || !contratoIdFinal || !puestoIdFinal) {
@@ -455,19 +428,13 @@ export async function POST(req: NextRequest) {
     const fechaEntrada = createdAt.toISOString().split("T")[0];
     const horaEntrada = createdAt.toISOString().split("T")[1].split(".")[0];
     if (created.created_by) {
-      const empleado = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: created.created_by } }
-      });
+      const empleado = await prisma.c_empleado.findUnique({ where: { id: created.created_by } });
       if (empleado) {
         empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
       }
     }
     if (sucursalId) {
-      const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
-      });
+      const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
       if (sucursal) {
         sucursalNombre = sucursal.nombre;
       }

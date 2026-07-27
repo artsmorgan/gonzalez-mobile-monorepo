@@ -1,33 +1,25 @@
 import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export async function createAccionPersonal(req: NextRequest, marcaId: number, tipo_accion_id: number, permiso_id: number, ausencia_id: number, salida_anticipada_id: number, comentarios: string | null, coordinadoPor_id: number, coordinador_id: number, usuario_insercion: string) {
 
     console.log("Procedemos a crear la acción personal");
     try {
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
         if (!marcaDia) {
             return { status: false, message: "Marca no encontrada" };
         }
 
         // Obtener el empleado
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: marcaDia.empleadoFijo_id } }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id ?? 0 } });
         if (!empleado) {
             return { status: false, message: "Empleado no encontrado" };
         }
 
         // Obtener el salario
-        const empleado_plaza = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado_plaza", operation: "findFirst", where: { empleado_id: marcaDia.empleadoFijo_id, plaza_id: marcaDia.plaza_id } }
-        });
+        const empleado_plaza = await prisma.c_empleado_plaza.findFirst({ where: { empleado_id: marcaDia.empleadoFijo_id, plaza_id: marcaDia.plaza_id } });
         if (!empleado_plaza) {
             return { status: false, message: "Empleado plaza no encontrada" };
         }
@@ -47,15 +39,7 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
             parsePositiveInt((empleado_plaza as { categoriaSalarial_id?: unknown }).categoriaSalarial_id);
 
         if (categoriaSalarialId == null && marcaDia.plaza_id) {
-            const plazaEstructura = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_plazas",
-                    operation: "findUnique",
-                    where: { id: marcaDia.plaza_id },
-                },
-            });
+            const plazaEstructura = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
             categoriaSalarialId = parsePositiveInt((plazaEstructura as { categoriaSalarial_id?: unknown })?.categoriaSalarial_id);
         }
 
@@ -66,15 +50,7 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
             };
         }
 
-        const categoriaSalarial = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "pg_categoria_salarial",
-                operation: "findUnique",
-                where: { id: categoriaSalarialId },
-            },
-        });
+        const categoriaSalarial = await prisma.pg_categoria_salarial.findUnique({ where: { id: categoriaSalarialId } });
         if (!categoriaSalarial) {
             return { status: false, message: "Categoría salarial no encontrada" };
         }
@@ -113,9 +89,8 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
         futureDateString = futureDateString + "T00:00:00.000Z";
 
         // Obtener el último consecutivo de la tabla c_accion_personal
-        const ultimoConsecutivo = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_accion_personal", operation: "findFirst", orderBy: { id: "desc" } }
+        const ultimoConsecutivo = await prisma.c_accion_personal.findFirst({
+            orderBy: { id: "desc" }
         });
         if (!ultimoConsecutivo) {
             return { status: false, message: "No se encontró el último consecutivo" };
@@ -144,12 +119,8 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
         console.log("consecutivo", consecutivo);
 
         // Crear la acción personal
-        const accionPersonal = await callDynamicPrisma({
-            req,
+        const accionPersonal = await prisma.c_accion_personal.create({
             data: {
-                action: "POST",
-                table: "c_accion_personal",
-                data: {
                     empleado_id: marcaDia.empleadoFijo_id,
                     plaza_id: marcaDia.plaza_id,
                     puesto_id: marcaDia.puesto_id,
@@ -186,7 +157,6 @@ export async function createAccionPersonal(req: NextRequest, marcaId: number, ti
                     usuario_insercion: usuario_insercion,
                     mobile_upload: true,
                 }
-            }
         });
 
         console.log("accionPersonal created: ", accionPersonal);

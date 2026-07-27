@@ -2,9 +2,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const VULNERABILIDAD_ESTRUCTURA_INCLUDE = {
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true } },
+  e_estructura_puesto: { select: { nombre: true } },
+};
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -18,6 +26,8 @@ export async function GET(req: NextRequest) {
     const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(VULNERABILIDAD_ESTRUCTURA_INCLUDE);
+
     const rows = await callDynamicPrisma({
       req,
       data: {
@@ -25,14 +35,11 @@ export async function GET(req: NextRequest) {
         table: "c_boleta_apreciacion_vulnerabilidad",
         operation: "findMany",
         where: { isActive: true },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true } },
-          e_estructura_puesto: { select: { nombre: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         orderBy: { id: "desc" },
       },
     });
+    await hydratePreexistentRelations(rows, preexistentSpecs);
 
     const rowsArray = Array.isArray(rows) ? rows : [];
     const mapped = [];
@@ -133,33 +140,9 @@ export async function POST(req: NextRequest) {
 
     // Validar IDs existan (mínimo)
     const [cliente, corpo, puesto] = await Promise.all([
-      callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findUnique",
-          where: { id: parseInt(String(cliente_id)) },
-        },
-      }),
-      callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_sucursal",
-          operation: "findUnique",
-          where: { id: parseInt(String(corpo_id)) },
-        },
-      }),
-      callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_puesto",
-          operation: "findUnique",
-          where: { id: parseInt(String(puesto_id)) },
-        },
-      }),
+      prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } }),
+      prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } }),
+      prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } }),
     ]);
     if (!cliente) return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 200 });
     if (!corpo) return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 200 });
@@ -239,44 +222,26 @@ export async function POST(req: NextRequest) {
       let puestoNombre = "Desconocido";
       let fechaRegistro = now.toISOString().split("T")[0];
       let horaRegistro = now.toISOString().split("T")[1].split(".")[0];
-      const empleado = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_empleado",
-          operation: "findUnique",
-          where: { id: parseInt(String(payload?.id ?? "0"), 10) },
-        },
+      const empleado = await prisma.c_empleado.findUnique({
+        where: { id: parseInt(String(payload?.id ?? "0"), 10) },
       });
       if (empleado) {
-        empNombre = (empleado as any).nombre + " " + (empleado as any).primer_apellido + " " + (empleado as any).segundo_apellido;
+        empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
       }
       if ((created as any).corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: (created as any).corpo_id },
-          },
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: (created as any).corpo_id },
         });
         if (sucursal) {
-          sucursalNombre = (sucursal as any).nombre;
+          sucursalNombre = sucursal.nombre;
         }
       }
       if ((created as any).puesto_id) {
-        const puesto = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_puesto",
-            operation: "findUnique",
-            where: { id: (created as any).puesto_id },
-          },
+        const puesto = await prisma.e_estructura_puesto.findUnique({
+          where: { id: (created as any).puesto_id },
         });
         if (puesto) {
-          puestoNombre = (puesto as any).nombre + " (" + (puesto as any).codigo + ")";
+          puestoNombre = puesto.nombre + " (" + puesto.codigo + ")";
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha registrado una apreciación de vulnerabilidad en el puesto " + puestoNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;

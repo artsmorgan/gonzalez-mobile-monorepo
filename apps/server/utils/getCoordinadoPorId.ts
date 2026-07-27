@@ -1,45 +1,22 @@
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import { prisma } from "./prismaClient";
 
 export async function getCoordinadoPorId(req: NextRequest, marcaDia: any) {
     let coordinadoPorId = 9;
 
     console.log("A");
-    const contrato = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_contrato",
-            operation: "findUnique",
-            where: { id: marcaDia.contrato_id }
-        }
-    });
+    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id } });
 
     console.log("B");
-    const plaza = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "e_estructura_plazas",
-            operation: "findUnique",
-            where: { id: marcaDia.plaza_id }
-        }
-    });
+    const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
 
-    if (!plaza || !contrato) {
+    if (!plaza || !contrato || !contrato.division_id) {
         return coordinadoPorId;
     }
 
     console.log("C");
-    const division = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "n_division",
-            operation: "findUnique",
-            where: { id: contrato.division_id }
-        }
-    });
+    const division = await prisma.n_division.findUnique({ where: { id: contrato.division_id } });
 
     if (!division) {
         return coordinadoPorId;
@@ -77,32 +54,10 @@ export async function getCoordinadoPorId(req: NextRequest, marcaDia: any) {
     
     if (plaza.categoriaSalarial_id) {
         console.log("D");
-        const categoria_salarial = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "pg_categoria_salarial",
-                operation: "findFirst",
-                where: {
-                    id: plaza.categoriaSalarial_id
-                }
-            }
-        });
-
+        const categoria_salarial = await prisma.pg_categoria_salarial.findUnique({ where: { id: plaza.categoriaSalarial_id } });
         if (categoria_salarial && categoria_salarial.categoriaEmpleado_id) {
             console.log("E");
-            const categoria_empleado = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "pg_categoria_empleado",
-                    operation: "findFirst",
-                    where: {
-                        id: categoria_salarial.categoriaEmpleado_id
-                    }
-                }
-            });
-
+            const categoria_empleado = await prisma.pg_categoria_empleado.findUnique({ where: { id: categoria_salarial.categoriaEmpleado_id } });
             if (categoria_empleado) {
                 console.log("F");
                 coordinadoPorId = combinaciones[division.codigo + "_" + categoria_empleado.codigo] as number;
