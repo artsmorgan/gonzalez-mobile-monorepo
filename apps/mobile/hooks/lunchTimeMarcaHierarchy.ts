@@ -1,6 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const LUNCH_TIMER_COMPLETING_KEY = 'lunch_timer_completing';
+export const LUNCH_TIME_COMPLETED_KEY = 'lunch_time_completed';
+
+export async function markLunchTimeAsCompleted(): Promise<void> {
+  await AsyncStorage.setItem(LUNCH_TIME_COMPLETED_KEY, 'true');
+}
+
+export async function isLunchTimeCompleted(): Promise<boolean> {
+  return (await AsyncStorage.getItem(LUNCH_TIME_COMPLETED_KEY)) === 'true';
+}
+
+export async function resetLunchTimeCompleted(): Promise<void> {
+  await AsyncStorage.removeItem(LUNCH_TIME_COMPLETED_KEY);
+}
 
 export type LunchTempState = {
   running: boolean;

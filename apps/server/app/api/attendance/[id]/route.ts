@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { getActivities } from "../../../../utils/createActivities";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
@@ -7,13 +8,11 @@ import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
 import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 import getRoleDivision from "../../../../utils/getRoleDivision";
 import { createLoginMarca } from "../../../../utils/createLoginMarca";
+import { getMonitoringPostMinutes } from "../../../../utils/getMonitoringPostMinutes";
 import axios from "axios";
 
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
-    const empleado = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id } }
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id } });
     if (!empleado) {
         return "MonitoreApp";
     }
@@ -29,18 +28,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { type, reason, horaAccion, planillasToken } = await req.json();
+        const { type, reason, horaAccion } = await req.json();
+
+        // Planillas token deben ser obtenido del header de la request
+        const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
+        if (!planillasToken) {
+            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+        }
 
         // Obtener siempre la última marca agregada
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
         }
@@ -55,30 +52,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Ya has marcado la entrada" }, { status: 200 });
                 }
 
-                const previousUserMarca = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_marca_dia",
-                        operation: "findFirst",
-                        where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } },
-                        orderBy: { id: "desc" }
-                    }
+                const previousUserMarca = await prisma.c_marca_dia.findFirst({
+                    where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } },
+                    orderBy: { id: "desc" },
                 });
 
                 if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
                     const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason, payload, planillasToken);
                 }
 
-                empleado = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: payload.id }
-                    }
-                });
+                empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
                 if (!empleado) {
                     return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
                 }
@@ -87,14 +70,21 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 const time = horaAccionDate.toISOString().split('T')[1].split('.')[0];
                 const time_split = time.split(':');
 
+                const monitoringPostMinutes = await getMonitoringPostMinutes(req);
                 let is_late = false;
                 if (marcaDia.hora_inicio) {
-                    const momentoEntrada = new Date(marcaDia.fecha).getTime() + new Date(marcaDia.hora_inicio).getTime();
-                    if (momentoEntrada < new Date(horaAccion).getTime()) {
+                    const fechaIso = new Date(marcaDia.fecha).toISOString().split("T")[0];
+                    const horaIso = new Date(marcaDia.hora_inicio).toISOString().split("T")[1];
+                    const momentoEntrada = new Date(`${fechaIso}T${horaIso}`).getTime();
+                    const lateThreshold = momentoEntrada + monitoringPostMinutes * 60 * 1000;
+                    if (new Date(horaAccion).getTime() > lateThreshold) {
                         is_late = true;
                     }
                 }
 
+                console.log("is_late", is_late);
+
+                console.log("Procedemos a marcar entrada");
                 const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/entrada`, {
                     marca_id: marcaDia.id,
                     hora_entrada: `${time_split[0]}:${time_split[1]}`,
@@ -111,15 +101,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Error al marcar la entrada en Planillas" }, { status: 200 });
                 }
                 
-                const updated = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_marca_dia",
-                        operation: "findUnique",
-                        where: { id: marcaDia.id }
-                    }
-                });
+                console.log("Marcamos entrada en Planillas");
+                
+                const updated = await prisma.c_marca_dia.findUnique({ where: { id: marcaDia.id } });
 
                 if (!updated) {
                     return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
@@ -129,28 +113,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 const marca_fecha = updated.fecha ? new Date(updated.fecha).toISOString().split('T')[0] : "1970-01-01";
 
                 const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
-                const hora_entrada_digitada = new Date(updated.hora_entrada_digitada);
+                const hora_entrada_digitada = updated.hora_entrada_digitada ? new Date(updated.hora_entrada_digitada) : null;
 
                 await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, hora_entrada_digitada, null, null, true);
-
-                const current_corpo = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_sucursal",
-                        operation: "findUnique",
-                        where: { id: marcaDia.corpo_id }
-                    }
-                });
-                const current_puesto = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findUnique",
-                        where: { id: marcaDia.puesto_id ?? 0 }
-                    }
-                });
+                
+                if (!marcaDia.corpo_id) {
+                    return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 200 });
+                }
+                
+                const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
+                const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id ?? 0 } });
                 let puesto_name = "Indefinido";
                 if (current_puesto) {
                     puesto_name = current_puesto.nombre;
@@ -158,13 +130,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 if (empleado && current_corpo) {
                     if (marcaDia.fecha && marcaDia.hora_entrada_digitada) {
                         let desc_tardia = "";
-                        if (marcaDia.hora_inicio) {
-                            const momentoEntrada = new Date(marcaDia.fecha).getTime() + new Date(marcaDia.hora_inicio).getTime();
-                            if (momentoEntrada < new Date(marcaDia.hora_entrada_digitada).getTime()) {
-                                const lateTime = await getLateTime(req, marcaDia.id, new Date(marcaDia.hora_entrada_digitada).getTime());
-                                if (lateTime) {
-                                    desc_tardia = " con una tardía de " + lateTime;
-                                }
+                        if (is_late) {
+                            const lateTime = await getLateTime(req, marcaDia.id, new Date(horaAccion).getTime());
+                            if (lateTime) {
+                                desc_tardia = " con una tardía de " + lateTime;
                             }
                         }
                         const title = "Ingreso de trabajo confirmado";
@@ -197,17 +166,13 @@ async function marcar_salida(req: NextRequest, id: number, horaAccion: string, r
 try {
     const now = new Date(horaAccion);
 
-    const marcaDia = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_marca_dia",
-            operation: "findUnique",
-            where: { id }
-        }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
     if (!marcaDia) {
         return { status: false, message: "Marca no encontrada" };
+    }
+
+    if (!marcaDia.corpo_id) {
+        return { status: false, message: "No se encontró la sucursal" };
     }
 
     const time = now.toISOString().split('T')[1];
@@ -216,7 +181,10 @@ try {
     if (marcaDia.hora_inicio && marcaDia.hora_fin) {
         const fechaMarca = new Date(marcaDia.fecha);
         const horaFinMarca = new Date(marcaDia.hora_fin);
-        const endDate = new Date(fechaMarca.toISOString().split('T')[0]+'T'+horaFinMarca.toISOString().split('T')[1]);
+        let endDate = new Date(fechaMarca.toISOString().split('T')[0]+'T'+horaFinMarca.toISOString().split('T')[1]);
+        if (new Date(marcaDia.hora_inicio) > new Date(marcaDia.hora_fin)) {
+            endDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000);
+        }
 
         console.log("endDate", endDate);
 
@@ -225,15 +193,7 @@ try {
         }
     }
 
-    const empleado = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: payload.id }
-        }
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
 
     if (empleado && is_early) {
         if (empleado) {
@@ -245,11 +205,25 @@ try {
         }
     }
 
-    const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/salida`, {
+    if (!empleado) {
+        return { status: false, message: "Empleado no encontrado" };
+    }
+
+    let bodyPlanillas: any = {
         marca_id: marcaDia.id,
         hora_salida: `${time_split[0]}:${time_split[1]}`,
         empleado_codigo: empleado.cedula
-    }, {
+    };
+
+    if (is_early) {
+        bodyPlanillas.salida_anticipada = true;
+        bodyPlanillas.motivo = reason;
+        bodyPlanillas.is_puesto_no_cubierto = false;
+    }
+
+    console.log("bodyPlanillas", bodyPlanillas);
+
+    const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/salida`, bodyPlanillas, {
         headers: {
             "Authorization": `Bearer ${planillasToken}`,
             "Content-Type": "application/json"
@@ -257,18 +231,11 @@ try {
     });
 
     if (!planillasResponse.data.success) {
+        console.log("Error al marcar la salida en Planillas", planillasResponse);
         return { status: false, message: "Error al marcar la salida en Planillas" };
     }
 
-    const updated = await callDynamicPrisma({
-        req,
-        data: {
-            action: "GET",
-            table: "c_marca_dia",
-            operation: "findUnique",
-            where: { id: marcaDia.id }
-        }
-    });
+    const updated = await prisma.c_marca_dia.findUnique({ where: { id: marcaDia.id } });
 
     if (!updated) {
         return { status: false, message: "No se pudo actualizar la marca del dia" };
@@ -282,6 +249,10 @@ try {
     const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
 
     let hora_salida_real = null;
+
+    if (!marcaDia.hora_inicio || !marcaDia.hora_fin) {
+        return { status: false, message: "No se encontró la hora de inicio o fin" };
+    }
     
     if (new Date(marcaDia.hora_inicio) < new Date(marcaDia.hora_fin)) {
         const marca_hora_salida = marcaDia.hora_fin ? new Date(marcaDia.hora_fin).toISOString().split('T')[1] : "00:00:00";
@@ -323,10 +294,7 @@ try {
     if (!session) {
         return { status: false, message: "Session no encontrada" };
     }
-    const marcaDia = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } }
-    });
+    const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
     if (!marcaDia) {
         return { status: false, message: "Marca no encontrada" };
     }
@@ -371,7 +339,7 @@ try {
 }
 catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    console.log(errorMessage);
+    console.log(error);
     return { status: false, message: errorMessage };
 }
 }
@@ -380,15 +348,7 @@ async function check_unmarked_activities(req: NextRequest, id: number) {
 const activities = await getActivities(req, id);
 if (activities.status) {
     if (activities.actividades && activities.actividades.length > 0) {
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
             return { status: false, message: "Marca no encontrada" };
         }
@@ -415,16 +375,10 @@ if (activities.status) {
                 unmarked_activities += ", ";
             }
         }
-        const empleado = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: marcaDia.empleadoFijo_id ? marcaDia.empleadoFijo_id : marcaDia.empleadoReemplaza_id ?? 0 }
-            }
+        const empleado = await prisma.c_empleado.findUnique({
+            where: { id: marcaDia.empleadoFijo_id ? marcaDia.empleadoFijo_id : marcaDia.empleadoReemplaza_id ?? 0 },
         });
-        if (empleado && unmarked) {
+        if (empleado && unmarked && marcaDia.corpo_id) {
             // Remover la última coma
             unmarked_activities = unmarked_activities.slice(0, -2);
             const title = "Actividades sin marcar";
@@ -441,15 +395,7 @@ return { status: true, message: "Actividades marcadas correctamente" };
 
 
 const getLateTime = async (req: NextRequest, id: number, horaAccion: number | null) => {
-const marcaDia = await callDynamicPrisma({
-    req,
-    data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id }
-    }
-});
+const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
 if (!marcaDia) {
     return null;
 }

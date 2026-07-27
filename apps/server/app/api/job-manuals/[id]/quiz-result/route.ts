@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 
@@ -123,14 +124,8 @@ export async function PUT(
       },
     });
 
-    const marca = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: marca_id },
-      },
+    const marca = await prisma.c_marca_dia.findUnique({
+      where: { id: marca_id },
     });
     if (!marca) {
       return NextResponse.json(

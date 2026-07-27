@@ -53,6 +53,7 @@ export function reportItemToArticuloTreeNode(item: ReportListItem): any {
       : Array.isArray(item.mantenimientos) && item.mantenimientos.length > 0
         ? item.mantenimientos[0]
         : null;
+  console.log("item", item);
   return sanitizeArticuloNodeForCache({
     id: item.estructura_id,
     tipo: expectedTipo,

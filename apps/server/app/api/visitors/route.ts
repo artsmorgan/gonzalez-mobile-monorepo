@@ -2,137 +2,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
-import fs from "fs";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
-import path from "path";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { visitorsResolveHierarchyFromPuestoId } from "../../../utils/visitorsResolveHierarchyFromPuesto";
-
-async function assertCorpoAllowedForMarca(
-    req: NextRequest,
-    marcaDia: any,
-    corpoIdReq: number
-): Promise<{ ok: true } | { ok: false; message: string }> {
-    if (Number(marcaDia.corpo_id) === corpoIdReq) {
-        return { ok: true };
-    }
-    const marcaClienteId = marcaDia.cliente_id != null ? Number(marcaDia.cliente_id) : NaN;
-    if (!Number.isFinite(marcaClienteId) || marcaClienteId <= 0) {
-        return { ok: false, message: "La sucursal no corresponde a la marca indicada" };
-    }
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdReq } }
-    });
-    if (!sucursal) {
-        return { ok: false, message: "Sucursal no encontrada" };
-    }
-    const contratoId = sucursal.contrato_id != null ? Number(sucursal.contrato_id) : NaN;
-    if (!Number.isFinite(contratoId) || contratoId <= 0) {
-        return { ok: false, message: "La sucursal no tiene contrato asociado" };
-    }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: contratoId } }
-    });
-    return { ok: true };
-}
-
-async function getClienteIdForSucursal(req: NextRequest, sucursalId: number): Promise<number | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
-    });
-    if (!sucursal?.contrato_id) {
-        return null;
-    }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
-    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
-    return Number.isFinite(cliente_id) && cliente_id > 0 ? cliente_id : null;
-}
-
-async function clienteAndPuestoForCorpo(
-    req: NextRequest,
-    corpoId: number
-): Promise<{ cliente_id: number; puesto_id: number } | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoId } }
-    });
-    if (!sucursal?.contrato_id) {
-        return null;
-    }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
-    const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
-    if (!Number.isFinite(cliente_id) || cliente_id <= 0) {
-        return null;
-    }
-    const puestos = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpoId } }
-    });
-    const list = Array.isArray(puestos) ? puestos : [];
-    const puesto_id = list[0]?.id != null ? Number(list[0].id) : NaN;
-    if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
-        return null;
-    }
-    return { cliente_id, puesto_id };
-}
-
-async function resolveClienteYPuestoParaAlta(
-    req: NextRequest,
-    marcaDia: any,
-    targetCorpoId: number,
-    bodyPuestoId: unknown
-): Promise<{ ok: true; cliente_id: number; puesto_id: number } | { ok: false; message: string }> {
-    const puestoParsed =
-        bodyPuestoId != null && bodyPuestoId !== ""
-            ? parseInt(String(bodyPuestoId), 10)
-            : NaN;
-
-    if (Number.isFinite(puestoParsed) && puestoParsed > 0) {
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoParsed } }
-        });
-        if (!puesto) {
-            return { ok: false, message: "Puesto no encontrado" };
-        }
-        const sid = puesto.sucursal_id != null ? Number(puesto.sucursal_id) : NaN;
-        if (sid !== Number(targetCorpoId)) {
-            return { ok: false, message: "El puesto no pertenece a la sucursal indicada" };
-        }
-        const clienteId = await getClienteIdForSucursal(req, targetCorpoId);
-        if (clienteId == null) {
-            return { ok: false, message: "No se pudo resolver el cliente para la sucursal indicada" };
-        }
-        return { ok: true, cliente_id: clienteId, puesto_id: puestoParsed };
-    }
-
-    let clienteIdFinal = marcaDia.cliente_id;
-    let puestoIdFinal = marcaDia.puesto_id;
-    if (Number(targetCorpoId) !== Number(marcaDia.corpo_id)) {
-        const cp = await clienteAndPuestoForCorpo(req, targetCorpoId);
-        if (!cp) {
-            return { ok: false, message: "No se pudo resolver cliente/puesto para la sucursal indicada" };
-        }
-        clienteIdFinal = cp.cliente_id;
-        puestoIdFinal = cp.puesto_id;
-    }
-    const cid = Number(clienteIdFinal);
-    const pid = Number(puestoIdFinal);
-    if (!Number.isFinite(cid) || cid <= 0 || !Number.isFinite(pid) || pid <= 0) {
-        return { ok: false, message: "Marca o sucursal sin cliente/puesto válido" };
-    }
-    return { ok: true, cliente_id: cid, puesto_id: pid };
-}
+import {
+    assertCorpoAllowedForMarca,
+    resolveClienteYPuestoParaAlta,
+} from "../../../utils/registroCorpoPuesto";
 
 export async function GET(req: NextRequest) {
     try {
@@ -152,10 +30,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 200 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca) } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca) } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -185,10 +60,7 @@ export async function GET(req: NextRequest) {
         const visitas_return: any[] = [];
         for (const v of visitas) {
 
-            const responsable = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: v.responsable_id } }
-            });
+            const responsable = await prisma.c_empleado.findUnique({ where: { id: v.responsable_id } });
             if (!responsable) {
                 return NextResponse.json({ status: false, message: "Responsable no encontrado" }, { status: 200 });
             }
@@ -222,10 +94,7 @@ export async function GET(req: NextRequest) {
             let puesto_nombre: string | null = null;
             const puestoIdNum = v.puesto_id != null ? Number(v.puesto_id) : NaN;
             if (Number.isFinite(puestoIdNum) && puestoIdNum > 0) {
-                const puestoRow = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoIdNum } }
-                });
+                const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdNum } });
                 puesto_nombre = puestoRow?.nombre != null ? String(puestoRow.nombre) : null;
             }
 
@@ -297,10 +166,7 @@ export async function POST(req: NextRequest) {
 
 
         // Verificar marca
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(marca_id) } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marcaDia) {
             return NextResponse.json(
                 { status: false, message: "Marca no encontrada" },
@@ -410,11 +276,8 @@ export async function POST(req: NextRequest) {
         });
 
         if (new_visita) {
-            const empleado = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: payload.id } }
-            });
-            if (empleado) {
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
+            if (empleado && marcaDia.plaza_id) {
                 const entrada = new_visita.hora_entrada;
                 const fecha_entrada = entrada.split("T")[0];
                 const hora_entrada = entrada.split("T")[1].split(".")[0];

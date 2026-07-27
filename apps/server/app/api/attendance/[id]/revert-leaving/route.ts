@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import axios from "axios";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { id } = await context.params;
@@ -17,7 +17,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         try {
             const body = await req.json();
             const raw = body?.horaAccion;
-            planillasToken = body?.planillasToken ?? null;
+            // Planillas token deben ser obtenido del header de la request
+            planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
+            if (!planillasToken) {
+                return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+            }
             const n = raw != null ? Number(raw) : NaN;
             if (Number.isFinite(n)) horaAccion = n;
         } catch {
@@ -31,17 +35,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "planillasToken requerido" }, { status: 200 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: idNum } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: idNum } });
 
         if (!marcaDia) return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: marcaDia.empleadoFijo_id } }
-        });
+        if (!marcaDia.empleadoFijo_id) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id } });
         
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
 

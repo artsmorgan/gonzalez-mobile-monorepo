@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ReportDataAccess } from "../reportDynamicPrisma";
+import { hydratePreexistentRelations } from "../hydratePreexistentIncludes";
 
 import ExcelJS from "exceljs";
 
@@ -91,37 +92,15 @@ export async function queryRefreshTokensUserLogin(
 
     const empleadoIds = collectEmpleadoIngresoIdsFromFilters(filters);
     if (empleadoIds.length > 0) {
-        console.log("empleadoIds", empleadoIds);
         where.empleadoId = empleadoIds.length === 1 ? empleadoIds[0] : { in: empleadoIds };
-    }
-
-    let orderBy: any = { id: "desc" as const };
-    switch (orderKey) {
-        case "nombre_usuario":
-            orderBy = { c_empleado: { nombre: "asc" } };
-            break;
-        case "token":
-            orderBy = { token: "asc" };
-            break;
-        case "createdAt":
-            orderBy = { createdAt: "desc" };
-            break;
-        case "expiresAt":
-            orderBy = { expiresAt: "desc" };
-            break;
-        case "sessionId":
-            orderBy = { sessionId: "asc" };
-            break;
-        default:
-            orderBy = { createdAt: "desc" };
     }
 
     const rows = await prisma.refresh_token.findMany({
         where,
-        include: { c_empleado: true },
-        orderBy,
+        orderBy: { id: "desc" },
         take: 50_000,
     });
+    await hydratePreexistentRelations(rows, [{ relation: "c_empleado", fkField: "empleadoId" }]);
 
     let next = rows;
     /* Refuerzo: solo filas cuyo empleadoId está en el filtro (evita filas ajenas si el where no aplicó como se espera). */
@@ -133,7 +112,29 @@ export async function queryRefreshTokensUserLogin(
         next = next.filter((r) => parseDeviceEntries(r.device).length > 1);
     }
 
-    return next;
+    return sortUserLoginRows(next, orderKey);
+}
+
+function sortUserLoginRows(rows: any[], orderKey: UserLoginOrderKey): any[] {
+    return [...rows].sort((a, b) => {
+        switch (orderKey) {
+            case "nombre_usuario": {
+                const na = a.c_empleado ? buildEmpleadoNombre(a.c_empleado) : "";
+                const nb = b.c_empleado ? buildEmpleadoNombre(b.c_empleado) : "";
+                return na.localeCompare(nb, "es");
+            }
+            case "token":
+                return String(a.token ?? "").localeCompare(String(b.token ?? ""), "es");
+            case "createdAt":
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            case "expiresAt":
+                return new Date(b.expiresAt).getTime() - new Date(a.expiresAt).getTime();
+            case "sessionId":
+                return String(a.sessionId ?? "").localeCompare(String(b.sessionId ?? ""), "es");
+            default:
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        }
+    });
 }
 
 export async function buildUserLoginExcelBuffer(rows: any[]): Promise<Buffer> {

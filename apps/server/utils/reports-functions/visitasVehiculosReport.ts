@@ -7,6 +7,14 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+
+const REGISTRO_VEHICULOS_INCLUDE = {
+    c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
+    e_estructura_cliente: { select: { id: true, nombre: true } },
+    e_estructura_sucursal: { select: { id: true, nombre: true, nro_sucursal: true } },
+    e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+};
 
 export type VisitasVehiculosModuleFilters = ActaEntregaModuleFilters & {
     responsableIds?: number[] | null;
@@ -189,26 +197,6 @@ export function filtersMatchVisitasVehiculosListQuery(
     return true;
 }
 
-function orderByClause(key: VisitasVehiculosOrderKey): Prisma.e_registro_vehiculosOrderByWithRelationInput {
-    switch (key) {
-        case "cliente_id":
-            return { cliente_id: "asc" };
-        case "division_id":
-            return { division_id: "asc" };
-        case "contrato_id":
-            return { contrato_id: "asc" };
-        case "corpo_id":
-            return { corpo_id: "asc" };
-        case "puesto_id":
-            return { puesto_id: "asc" };
-        case "created_at":
-            return { created_at: "asc" };
-        case "empresa_id":
-        default:
-            return { empresa_id: "asc" };
-    }
-}
-
 async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> {
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
@@ -275,17 +263,15 @@ export async function queryVisitasVehiculosRows(
         where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { OR: placaOr }];
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(REGISTRO_VEHICULOS_INCLUDE);
+
     const raw = await prisma.e_registro_vehiculos.findMany({
         where,
-        include: {
-            c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
-            e_estructura_cliente: { select: { id: true, nombre: true } },
-            e_estructura_sucursal: { select: { id: true, nombre: true, nro_sucursal: true } },
-            e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
-        },
-        orderBy: [orderByClause(orderKey), { id: "asc" }],
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+        orderBy: { id: "desc" },
         take: opts?.take != null && opts.take > 0 ? opts.take : undefined,
     });
+    await hydratePreexistentRelations(raw, preexistentSpecs);
 
     const enriched = await enrichRows(prisma, raw);
     return [...enriched].sort((a: any, b: any) => {

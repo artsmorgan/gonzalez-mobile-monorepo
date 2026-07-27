@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 
@@ -41,10 +42,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
     const canReject = myEjecutivoCuentaId !== null && Number(myEjecutivoCuentaId) === Number(existing.ejecutivo_cuenta);
     if (!canReject) {
@@ -96,72 +94,39 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (recipients.length > 0) {
       const [empleadoAusente, empleadoReemplaza, ejecutivo, marcaAusenteNotif, marcaReemplazaNotif] = await Promise.all([
         empleadoAusenteId
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoAusenteId } },
-          })
+          ? prisma.c_empleado.findUnique({ where: { id: empleadoAusenteId } })
           : null,
         empleadoReemplazaId
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleadoReemplazaId } },
-          })
+          ? prisma.c_empleado.findUnique({ where: { id: empleadoReemplazaId } })
           : null,
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-        }),
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } },
-        }),
-        callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } },
-        }),
+        prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } }),
+        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } }),
+        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } }),
       ]);
       const [puestoAusente, puestoReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.puesto_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaAusenteNotif as any)?.puesto_id) } },
-          })
+          ? prisma.e_estructura_puesto.findUnique({ where: { id: Number((marcaAusenteNotif as any)?.puesto_id) } })
           : null,
         (marcaReemplazaNotif as any)?.puesto_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: Number((marcaReemplazaNotif as any)?.puesto_id) } },
-          })
+          ? prisma.e_estructura_puesto.findUnique({ where: { id: Number((marcaReemplazaNotif as any)?.puesto_id) } })
           : null,
       ]);
 
       const [sucursalAusente, sucursalReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.corpo_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: Number((marcaAusenteNotif as any)?.corpo_id) } },
-          })
+          ? prisma.e_estructura_sucursal.findUnique({ where: { id: Number((marcaAusenteNotif as any)?.corpo_id) } })
           : null,
         (marcaReemplazaNotif as any)?.corpo_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: Number((marcaReemplazaNotif as any)?.corpo_id) } },
-          })
+          ? prisma.e_estructura_sucursal.findUnique({ where: { id: Number((marcaReemplazaNotif as any)?.corpo_id) } })
           : null,
       ]);
 
       const [clienteAusente, clienteReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.cliente_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: Number((marcaAusenteNotif as any)?.cliente_id) } },
-          })
+          ? prisma.e_estructura_cliente.findUnique({ where: { id: Number((marcaAusenteNotif as any)?.cliente_id) } })
           : null,
         (marcaReemplazaNotif as any)?.cliente_id
-          ? callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: Number((marcaReemplazaNotif as any)?.cliente_id) } },
-          })
+          ? prisma.e_estructura_cliente.findUnique({ where: { id: Number((marcaReemplazaNotif as any)?.cliente_id) } })
           : null,
       ]);
 

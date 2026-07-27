@@ -17,13 +17,28 @@ import {
   buildLunchTempState,
   computeLunchEndTimeMs,
   computeRemainingSecondsFromTempState,
+  isLunchTimeCompleted,
+  markLunchTimeAsCompleted,
   mergeCurrentMarcaHierarchyIntoLunchRequest,
   releaseLunchTimerCompletionLock,
   tryAcquireLunchTimerCompletionLock,
 } from '../hooks/lunchTimeMarcaHierarchy';
+import {
+  extractHorarioIdFromMarca,
+  fetchLunchMinutesByMarcaId,
+  isValidLunchMinutesValue,
+  persistLocalLunchMinutesConfig,
+  queueHorarioMinutosUpdateAction,
+  updateHorarioMinutosAlmuerzo,
+} from '../hooks/lunchTimeHorarioApi';
 import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
+import {
+  isStoredPlanillasTokenValid,
+  readStoredPlanillasToken,
+} from '../hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
 import getCurrentUserDigitalSignature, {
   SIGNATURE_USER_ACTION_SCREEN,
 } from '../hooks/getCurrentUserDigitalSignature';
@@ -38,8 +53,20 @@ interface LunchTimeConfig {
 }
 
 function isValidLunchMinutes(minutos: unknown): boolean {
-  const n = Number(minutos);
-  return Number.isFinite(n) && n > 0;
+  return isValidLunchMinutesValue(minutos);
+}
+
+async function isLunchCounterStarted(): Promise<boolean> {
+  const tempRaw = await AsyncStorage.getItem('temp_state');
+  if (tempRaw) {
+    try {
+      const tempObj = JSON.parse(tempRaw);
+      if (tempObj?.startTime) return true;
+    } catch {
+      /* ignore */
+    }
+  }
+  return false;
 }
 
 /** Iniciar timer / registro manual: exige GPS activo; Alert de caché solo tras intento fallido. */
@@ -75,6 +102,8 @@ export default function LunchTimeScreen() {
   const [error, setError] = useState<string | null>(null);
   const [needsManualMinutes, setNeedsManualMinutes] = useState(false);
   const [manualMinutesInput, setManualMinutesInput] = useState('');
+  const [isEditingMinutes, setIsEditingMinutes] = useState(false);
+  const [lunchAlreadyCompleted, setLunchAlreadyCompleted] = useState(false);
   const [inactivityReason, setInactivityReason] = useState('');
   const [inactivities, setInactivities] = useState<InactivityData[]>([]);
   const [currentInactivityStart, setCurrentInactivityStart] = useState<Date | null>(null);
@@ -104,6 +133,11 @@ export default function LunchTimeScreen() {
   const inactivitiesRef = useRef(inactivities);
   const currentInactivityStartRef = useRef(currentInactivityStart);
   const firmaEmpleadoRef = useRef(firmaEmpleado);
+
+  const planillasRevalidationModalShownRef = useRef(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const pendingPlanillasActionRef = useRef<{ minutos: number; marcaObj: Record<string, unknown> } | null>(null);
+  const saveLunchMinutesRef = useRef<(parsed: number) => Promise<void>>(async () => {});
 
   useFocusEffect(
     useCallback(() => {
@@ -201,7 +235,11 @@ export default function LunchTimeScreen() {
   // Fetch timer configuration on component mount
   useEffect(() => {
     if (employee) {
-      fetchTimerConfig();
+      void (async () => {
+        const completed = await isLunchTimeCompleted();
+        setLunchAlreadyCompleted(completed);
+        await fetchTimerConfig();
+      })();
     }
   }, [employee]);
 
@@ -381,6 +419,7 @@ export default function LunchTimeScreen() {
   }
 
   const getConnectionStatus = async (): Promise<boolean> => {
+    // return false;
     const networkState = await Network.getNetworkStateAsync();
 
     return (
@@ -413,7 +452,8 @@ export default function LunchTimeScreen() {
   const applyTimerConfig = async (
     minutos: number,
     marcaDiaId: string,
-    configObj: Record<string, unknown>
+    configObj: Record<string, unknown>,
+    options?: { updateRemainingIfIdle?: boolean }
   ) => {
     const updatedConfigObj = {
       ...configObj,
@@ -428,10 +468,136 @@ export default function LunchTimeScreen() {
       marcaDiaId,
     };
     setTimerConfig(config);
-    setTimeRemaining(minutos * 60);
+
+    const shouldUpdateRemaining = options?.updateRemainingIfIdle !== false;
+    if (shouldUpdateRemaining) {
+      const counterStarted = await isLunchCounterStarted();
+      if (!counterStarted && !isTimerActive && startTimeRef.current == null) {
+        setTimeRemaining(minutos * 60);
+      }
+    }
+
     setNeedsManualMinutes(false);
     setManualMinutesInput('');
+    setIsEditingMinutes(false);
   };
+
+  const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  }, []);
+
+  const handlePlanillasRevalidationSuccess = useCallback(() => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    const pending = pendingPlanillasActionRef.current;
+    pendingPlanillasActionRef.current = null;
+    if (pending) {
+      void saveLunchMinutesRef.current(pending.minutos);
+    }
+  }, []);
+
+  const handlePlanillasRevalidationDismiss = useCallback(() => {
+    planillasRevalidationModalShownRef.current = false;
+    pendingPlanillasActionRef.current = null;
+    setShowPlanillasRevalidationModal(false);
+  }, []);
+
+  const syncHorarioMinutosAlmuerzo = async (
+    minutos: number,
+    marcaObj: Record<string, unknown>,
+    horaAccionMs?: number,
+  ) => {
+    const horarioId = extractHorarioIdFromMarca(marcaObj);
+    if (horarioId == null) {
+      Alert.alert('Error', 'No se encontró el horario de la marca actual.');
+      return false;
+    }
+
+    const isConnected = await getConnectionStatus();
+    if (isConnected) {
+      let referenceMs = horaAccionMs;
+      if (referenceMs == null || !Number.isFinite(referenceMs)) {
+        try {
+          referenceMs = (await getHoraAccion()) || Date.now();
+        } catch {
+          referenceMs = Date.now();
+        }
+      }
+
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { minutos, marcaObj };
+        return false;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
+      const result = await updateHorarioMinutosAlmuerzo(horarioId, minutos, {
+        refreshAccessToken,
+        logout,
+      }, planillasToken);
+      if (!result.status) {
+        Alert.alert('Error', result.message ?? 'No se pudo actualizar los minutos de alimentación en el horario.');
+        return false;
+      }
+      return true;
+    }
+
+    const storedPlanillas = await readStoredPlanillasToken();
+    await queueHorarioMinutosUpdateAction(horarioId, minutos, storedPlanillas?.token ?? null);
+    Alert.alert(
+      'Modo offline',
+      'Los minutos se guardaron localmente y se sincronizarán con el horario cuando haya conexión.'
+    );
+    return true;
+  };
+
+  const saveLunchMinutes = async (parsed: number) => {
+    const current_marca = await AsyncStorage.getItem('current_marca');
+    if (!current_marca) {
+      Alert.alert('Error', 'No se encontró la marca actual.');
+      return;
+    }
+
+    const current_marca_obj = JSON.parse(current_marca) as Record<string, unknown>;
+    if (!current_marca_obj.id) {
+      Alert.alert('Error', 'No se encontró el identificador de la marca actual.');
+      return;
+    }
+
+    let horaAccion: number | undefined;
+    try {
+      const ha = await getHoraAccion();
+      if (ha) horaAccion = ha;
+    } catch {
+      horaAccion = undefined;
+    }
+
+    const synced = await syncHorarioMinutosAlmuerzo(parsed, current_marca_obj, horaAccion);
+    if (!synced) return;
+
+    const configObj = await persistLocalLunchMinutesConfig(parsed);
+    await applyTimerConfig(parsed, String(current_marca_obj.id), configObj);
+
+    const counterStarted = await isLunchCounterStarted();
+    if (!counterStarted) {
+      await handleReset(parsed);
+    }
+  };
+
+  saveLunchMinutesRef.current = saveLunchMinutes;
 
   const handleAcceptManualMinutes = async () => {
     const parsed = parseInt(manualMinutesInput.trim(), 10);
@@ -441,39 +607,45 @@ export default function LunchTimeScreen() {
     }
 
     Alert.alert(
-      'Confirmar minutos de almuerzo',
-      `¿Desea establecer ${parsed} minutos de almuerzo?`,
+      'Confirmar minutos de alimentación',
+      `¿Desea establecer ${parsed} minutos de alimentación?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
           text: 'Confirmar',
           onPress: async () => {
             try {
-              const current_marca = await AsyncStorage.getItem('current_marca');
-              if (!current_marca) {
-                Alert.alert('Error', 'No se encontró la marca actual.');
-                return;
-              }
-              const current_marca_obj = JSON.parse(current_marca);
-              if (!current_marca_obj.id) {
-                Alert.alert('Error', 'No se encontró el identificador de la marca actual.');
-                return;
-              }
-
-              const stored = await AsyncStorage.getItem('lunch_time_config');
-              let configObj: Record<string, unknown> = { status: true };
-              if (stored) {
-                try {
-                  configObj = JSON.parse(stored);
-                } catch {
-                  configObj = { status: true };
-                }
-              }
-
-              await applyTimerConfig(parsed, String(current_marca_obj.id), configObj);
+              await saveLunchMinutes(parsed);
             } catch (err) {
-              console.error('Error saving manual lunch minutes:', err);
+              console.error('Error saving lunch minutes:', err);
               Alert.alert('Error', 'No se pudo guardar la configuración de minutos.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleUpdateLunchMinutes = async () => {
+    const parsed = parseInt(manualMinutesInput.trim(), 10);
+    if (!isValidLunchMinutes(parsed)) {
+      Alert.alert('Error', 'Ingrese una cantidad válida de minutos (mayor a 0).');
+      return;
+    }
+
+    Alert.alert(
+      'Actualizar minutos de alimentación',
+      `¿Desea actualizar a ${parsed} minutos de alimentación?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Actualizar',
+          onPress: async () => {
+            try {
+              await saveLunchMinutes(parsed);
+            } catch (err) {
+              console.error('Error updating lunch minutes:', err);
+              Alert.alert('Error', 'No se pudo actualizar los minutos de alimentación.');
             }
           },
         },
@@ -522,10 +694,15 @@ export default function LunchTimeScreen() {
 
       await AsyncStorage.removeItem('temp_state');
 
-      const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado correctamente' : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
+      await markLunchTimeAsCompleted();
+      setLunchAlreadyCompleted(true);
+
+      const msg = requestData.es_manual
+        ? 'Registro de tiempo de alimentación guardado correctamente'
+        : 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!';
 
       Alert.alert(
-        '🎉 ¡Tiempo de Almuerzo Completado!',
+        '🎉 ¡Tiempo de alimentación completado!',
         msg,
         [
           {
@@ -555,7 +732,12 @@ export default function LunchTimeScreen() {
 
       await AsyncStorage.removeItem('temp_state');
 
-      const msg = requestData.es_manual ? 'Registro de tiempo de almuerzo guardado localmente. Se sincronizará cuando haya conexión.' : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.';
+      await markLunchTimeAsCompleted();
+      setLunchAlreadyCompleted(true);
+
+      const msg = requestData.es_manual
+        ? 'Registro de tiempo de alimentación guardado localmente. Se sincronizará cuando haya conexión.'
+        : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.';
 
       Alert.alert(
         'Modo Offline',
@@ -596,6 +778,22 @@ export default function LunchTimeScreen() {
         throw new Error('No current marca id found');
       }
 
+      const marcaId = Number(current_marca_obj.id);
+      let fetchedFromServer = false;
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const serverData = await fetchLunchMinutesByMarcaId(marcaId, {
+          refreshAccessToken,
+          logout,
+        });
+        if (serverData) {
+          fetchedFromServer = true;
+          await persistLocalLunchMinutesConfig(serverData.minutos, {
+            tiene_almuerzo: serverData.tiene_almuerzo,
+          });
+        }
+      }
+
       let lunch_time_config_obj: Record<string, unknown> | null = null;
       const lunch_time_config = await AsyncStorage.getItem('lunch_time_config');
       if (lunch_time_config) {
@@ -632,8 +830,17 @@ export default function LunchTimeScreen() {
       };
 
       setTimerConfig(config);
-      setTimeRemaining(config.minutos * 60);
       setNeedsManualMinutes(false);
+
+      const counterStarted = await isLunchCounterStarted();
+      if (fetchedFromServer && !counterStarted) {
+        await handleReset(config.minutos);
+        return;
+      }
+
+      if (!counterStarted) {
+        setTimeRemaining(config.minutos * 60);
+      }
 
       await restoreCurrentState();
     } catch (error) {
@@ -646,6 +853,12 @@ export default function LunchTimeScreen() {
 
   const handleStart = async () => {
     if (!timerConfig || timeRemaining <= 0) return;
+
+    if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
+      setLunchAlreadyCompleted(true);
+      Alert.alert('No disponible', 'Ya registraste un tiempo de alimentación en este turno.');
+      return;
+    }
 
     const isFirstStartOfSession =
       !firmaEmpleadoRef.current?.trim() && startTimeRef.current == null;
@@ -728,16 +941,42 @@ export default function LunchTimeScreen() {
     });
   };
 
-  const handleReset = async () => {
+  const handleReset = async (minutesOverride?: number) => {
+    let minutes = minutesOverride ?? timerConfig?.minutos;
+
+    if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) {
+      try {
+        const stored = await AsyncStorage.getItem('lunch_time_config');
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          const fromConfig = Number(parsed?.minutos);
+          if (Number.isFinite(fromConfig) && fromConfig > 0) {
+            minutes = fromConfig;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     setIsTimerActive(false);
+    timerActiveRef.current = false;
     setStartTime(null);
+    startTimeRef.current = null;
     setEndTime(null);
+    endTimeRef.current = null;
     setInactivities([]);
+    inactivitiesRef.current = [];
     setCurrentInactivityStart(null);
+    currentInactivityStartRef.current = null;
     setInactivityReason('');
     setFirmaEmpleado('');
-    if (timerConfig) {
-      setTimeRemaining(timerConfig.minutos * 60);
+    firmaEmpleadoRef.current = '';
+
+    if (minutes != null && Number.isFinite(minutes) && minutes > 0) {
+      const remainingSeconds = Math.round(minutes * 60);
+      setTimeRemaining(remainingSeconds);
+      timeRemainingRef.current = remainingSeconds;
     }
 
     await AsyncStorage.removeItem('temp_state');
@@ -802,7 +1041,7 @@ export default function LunchTimeScreen() {
     // Validar que las inactividades no empiecen antes del tiempo de inicio
     inactivities.forEach((inactivity, index) => {
       if (inactivity.startTime < startTime) {
-        errors.push(`La pausa #${index + 1} no puede empezar antes del tiempo de inicio del almuerzo`);
+        errors.push(`La pausa #${index + 1} no puede empezar antes del tiempo de inicio de alimentación`);
       }
 
       // Validar que la hora de inicio no sea mayor a la hora de fin
@@ -844,12 +1083,12 @@ export default function LunchTimeScreen() {
 
       // Verificar que el tiempo efectivo no exceda los minutos disponibles
       if (totalEffectiveLunchTime > availableMinutes) {
-        errors.push(`El tiempo efectivo de almuerzo (${totalEffectiveLunchTime.toFixed(1)} minutos) excede los ${availableMinutes} minutos disponibles`);
+        errors.push(`El tiempo efectivo de alimentación (${totalEffectiveLunchTime.toFixed(1)} minutos) excede los ${availableMinutes} minutos disponibles`);
       }
 
       // Verificar que el tiempo entre el inicio y la primera pausa no sea negativo
       if (timeToFirstPause < 0) {
-        errors.push(`La primera pausa no puede empezar antes del tiempo de inicio del almuerzo`);
+        errors.push(`La primera pausa no puede empezar antes del tiempo de inicio de alimentación`);
       }
     }
 
@@ -869,7 +1108,13 @@ export default function LunchTimeScreen() {
     return new Date(startTime.getTime() + (totalMinutes * 60 * 1000));
   };
 
-  const handleManualLunchTime = () => {
+  const handleManualLunchTime = async () => {
+    if (lunchAlreadyCompleted || (await isLunchTimeCompleted())) {
+      setLunchAlreadyCompleted(true);
+      Alert.alert('No disponible', 'Ya registraste un tiempo de alimentación en este turno.');
+      return;
+    }
+
     setIsManualModalVisible(true);
     setManualStartHour('');
     setManualStartMinute('');
@@ -997,7 +1242,7 @@ export default function LunchTimeScreen() {
   const handleManualSubmit = async () => {
     // Validar hora de inicio
     if (!manualStartHour || !manualStartMinute) {
-      Alert.alert('Error', 'Por favor ingresa la hora de inicio del almuerzo');
+      Alert.alert('Error', 'Por favor ingresa la hora de inicio del tiempo de alimentación');
       return;
     }
 
@@ -1095,7 +1340,7 @@ export default function LunchTimeScreen() {
     const endTime_string = `${endTime_split[0]} ${endTime_split[1].split('.')[0]}`;
 
     if (endTime > marca_end_time) {
-      validationErrors.push('El tiempo de fin del almuerzo no puede ser mayor a la hora de fin de la marca actual');
+      validationErrors.push('El tiempo de fin de alimentación no puede ser mayor a la hora de fin de la marca actual');
     }
 
     if (validationErrors.length > 0) {
@@ -1105,7 +1350,7 @@ export default function LunchTimeScreen() {
 
     Alert.alert(
       'Confirmar Registro Manual',
-      `¿Estás seguro de que deseas registrar este tiempo de almuerzo?\n\nInicio: ${initial_string}\nFin: ${endTime_string}\nPausas: ${inactivitiesWithToday.length}`,
+      `¿Estás seguro de que deseas registrar este tiempo de alimentación?\n\nInicio: ${initial_string}\nFin: ${endTime_string}\nPausas: ${inactivitiesWithToday.length}`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
@@ -1133,7 +1378,7 @@ export default function LunchTimeScreen() {
               await sendLunchTimeRecord(requestData);
               setIsManualModalVisible(false);
             } catch (error) {
-              Alert.alert('Error', 'No se pudo registrar el tiempo de almuerzo');
+              Alert.alert('Error', 'No se pudo registrar el tiempo de alimentación');
             }
           }
         }
@@ -1152,7 +1397,7 @@ export default function LunchTimeScreen() {
 
   return (
     <ThemedView style={styles.fullContainer}>
-      <AppHeader onMenuPress={handleMenuPress} title="Tiempo de Almuerzo" />
+      <AppHeader onMenuPress={handleMenuPress} title="Tiempo de alimentación" />
 
       <ScrollView style={styles.scrollView}>
         <ThemedView style={styles.container}>
@@ -1160,12 +1405,46 @@ export default function LunchTimeScreen() {
           {/* Module Title */}
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              {getActionIcon('lunch-time')} Tiempo de Almuerzo
+              {getActionIcon('lunch-time')} Tiempo de alimentación
             </ThemedText>
             <ThemedText style={styles.subtitle}>
               Temporizador de descanso
             </ThemedText>
           </ThemedView>
+
+          {lunchAlreadyCompleted && (
+            <ThemedView style={styles.completedBanner}>
+              <ThemedText style={styles.completedBannerText}>
+                Ya registraste un tiempo de alimentación en este turno.
+              </ThemedText>
+            </ThemedView>
+          )}
+
+          {!isLoadingConfig && !error && (timerConfig || needsManualMinutes || isEditingMinutes) && (
+            <TouchableOpacity
+              style={styles.editMinutesOpenButton}
+              onPress={() => {
+                if (isEditingMinutes) {
+                  setIsEditingMinutes(false);
+                  setManualMinutesInput('');
+                  return;
+                }
+                setManualMinutesInput(
+                  timerConfig?.minutos != null ? String(timerConfig.minutos) : ''
+                );
+                setIsEditingMinutes(true);
+              }}
+              accessibilityLabel={isEditingMinutes ? 'Cancelar edición de minutos' : 'Modificar minutos'}
+            >
+              <ThemedText style={styles.editMinutesOpenButtonText}>
+                <Ionicons
+                  name={isEditingMinutes ? 'close' : 'pencil'}
+                  size={20}
+                  color="#FFFFFF"
+                />
+              </ThemedText>
+            </TouchableOpacity>
+          )}
 
           {/* Timer Section */}
           {isLoadingConfig ? (
@@ -1185,13 +1464,17 @@ export default function LunchTimeScreen() {
                 <ThemedText style={styles.retryButtonText}>Reintentar</ThemedText>
               </TouchableOpacity>
             </ThemedView>
-          ) : needsManualMinutes ? (
+          ) : needsManualMinutes || isEditingMinutes ? (
             <ThemedView style={[styles.timerContainer, styles.manualMinutesContainer]}>
               <ThemedText style={styles.containerTitle}>
-                Configurar minutos de almuerzo
+                {isEditingMinutes
+                  ? 'Actualizar minutos de alimentación'
+                  : 'Configurar minutos de alimentación'}
               </ThemedText>
               <ThemedText style={styles.manualMinutesHint}>
-                No se encontró una duración válida de almuerzo. Ingrese la cantidad de minutos para continuar.
+                {isEditingMinutes
+                  ? 'Ingrese la nueva cantidad de minutos. Se actualizará el horario correspondiente.'
+                  : 'No se encontró una duración válida de alimentación. Ingrese la cantidad de minutos para continuar.'}
               </ThemedText>
               <ThemedView style={styles.manualMinutesForm}>
                 <TextInput
@@ -1205,9 +1488,11 @@ export default function LunchTimeScreen() {
                 />
                 <TouchableOpacity
                   style={styles.manualMinutesButton}
-                  onPress={handleAcceptManualMinutes}
+                  onPress={isEditingMinutes ? handleUpdateLunchMinutes : handleAcceptManualMinutes}
                 >
-                  <ThemedText style={styles.manualMinutesButtonText}>Aceptar</ThemedText>
+                  <ThemedText style={styles.manualMinutesButtonText}>
+                    {isEditingMinutes ? 'Guardar' : 'Aceptar'}
+                  </ThemedText>
                 </TouchableOpacity>
               </ThemedView>
             </ThemedView>
@@ -1215,7 +1500,11 @@ export default function LunchTimeScreen() {
             <ThemedView style={styles.timerContainer}>
               {/* Container Title */}
               <ThemedText style={styles.containerTitle}>
-                Inicia tu tiempo de almuerzo y añade pausas
+                Inicia tu tiempo de alimentación y añade pausas
+              </ThemedText>
+
+              <ThemedText style={styles.minutesSummaryTextStandalone}>
+                Minutos configurados: {timerConfig.minutos}
               </ThemedText>
 
               {/* Timer Display */}
@@ -1273,9 +1562,9 @@ export default function LunchTimeScreen() {
                 <View style={styles.buttonRow}>
                   {!isTimerActive ? (
                     <TouchableOpacity
-                      style={styles.startButton}
+                      style={[styles.startButton, lunchAlreadyCompleted && styles.manualButtonDisabled]}
                       onPress={handleStart}
-                      disabled={timeRemaining === 0 || isGeneratingFirmaEmpleado}
+                      disabled={timeRemaining === 0 || isGeneratingFirmaEmpleado || lunchAlreadyCompleted}
                     >
                       {isGeneratingFirmaEmpleado ? (
                         <ActivityIndicator size="small" color="#FFFFFF" />
@@ -1294,7 +1583,7 @@ export default function LunchTimeScreen() {
 
                   <TouchableOpacity
                     style={styles.resetButton}
-                    onPress={handleReset}
+                    onPress={() => void handleReset()}
                   >
                     {getActionIcon('reset')}
                   </TouchableOpacity>
@@ -1303,11 +1592,12 @@ export default function LunchTimeScreen() {
                 {/* Manual Registration Button - Only visible when timer is stopped */}
                 {!isTimerActive && (
                   <TouchableOpacity
-                    style={styles.manualButton}
+                    style={[styles.manualButton, lunchAlreadyCompleted && styles.manualButtonDisabled]}
                     onPress={handleManualLunchTime}
+                    disabled={lunchAlreadyCompleted}
                   >
                     <ThemedText style={styles.manualButtonText}>
-                      Registro Manual
+                      Registro manual
                     </ThemedText>
                   </TouchableOpacity>
                 )}
@@ -1319,6 +1609,14 @@ export default function LunchTimeScreen() {
       </ScrollView>
 
       <AppFooter />
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
+      />
 
       <SlideMenu
         isVisible={isMenuVisible}
@@ -1344,7 +1642,7 @@ export default function LunchTimeScreen() {
             <ThemedView style={styles.modalContainer}>
               {/* Modal Header */}
               <View style={styles.modalHeader}>
-                <ThemedText style={styles.modalTitle}>Registro Manual de Almuerzo</ThemedText>
+                <ThemedText style={styles.modalTitle}>Registro manual de alimentación</ThemedText>
                 <TouchableOpacity onPress={() => setIsManualModalVisible(false)}>
                   <ThemedText style={styles.closeButton}>✕</ThemedText>
                 </TouchableOpacity>
@@ -1354,7 +1652,7 @@ export default function LunchTimeScreen() {
               <ScrollView style={styles.modalContent}>
                 {/* Start Time Input */}
                 <ThemedView style={styles.inputGroup}>
-                  <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de Inicio del Almuerzo:</ThemedText>
+                  <ThemedText style={[styles.inputLabel, { color: '#000000' }]}>Hora de inicio del tiempo de alimentación:</ThemedText>
                   <TouchableOpacity style={styles.timePickerButton} onPress={() => openStartTimePicker()}>
                     <ThemedText style={styles.timePickerButtonText}>
                       {manualStartHour && manualStartMinute ? `${manualStartHour}:${manualStartMinute}` : 'Seleccionar hora'}
@@ -1689,6 +1987,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: '100%',
   },
+  manualButtonDisabled: {
+    opacity: 0.5,
+  },
   manualButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
@@ -1991,6 +2292,80 @@ const styles = StyleSheet.create({
   },
   manualMinutesContainer: {
     gap: 8,
+  },
+  completedBanner: {
+    backgroundColor: '#FFF4E5',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#FFD699',
+  },
+  completedBannerText: {
+    color: '#8A5A00',
+    fontSize: 14,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  topEditMinutesRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: 4,
+  },
+  editMinutesOpenButton: {
+    backgroundColor: '#007AFF',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 20,
+    width: '100%',
+  },
+  editMinutesOpenButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  pencilButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#E8F1FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  minutesSummaryTextStandalone: {
+    fontSize: 14,
+    color: '#333333',
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 8,
+    width: '100%',
+  },
+  minutesSummaryRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  minutesSummaryText: {
+    fontSize: 14,
+    color: '#333333',
+    fontWeight: '600',
+    flex: 1,
+  },
+  editMinutesButton: {
+    backgroundColor: '#E8F1FF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+  },
+  editMinutesButtonText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '600',
   },
   manualMinutesHint: {
     fontSize: 14,

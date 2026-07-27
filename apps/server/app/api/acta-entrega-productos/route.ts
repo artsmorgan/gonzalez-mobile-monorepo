@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyAccessTokenByApi } from '../../../utils/verifyAccessTokenByApi';
 import { callDynamicPrisma } from '../../../utils/callDynamicPrisma';
+import { prisma } from '../../../utils/prismaClient';
 import { toZonedTime } from 'date-fns-tz';
 import { sendNotificationByRole } from '../../../utils/sendNotification';
 import { uploadDynamicFiles } from '../../../utils/callDynamicFilesApi';
@@ -39,15 +40,9 @@ export async function GET(req: NextRequest) {
     } else if (empresaIdStr) {
       // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findMany",
-          where: { empresa_id: empresaId },
-          select: { id: true },
-        },
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
       });
       const clientesArray = Array.isArray(clientes) ? clientes : [];
       const clienteIds = clientesArray.map((c: any) => c.id);
@@ -145,14 +140,8 @@ export async function POST(req: NextRequest) {
 
     if (!marca_id) return NextResponse.json({ status: false, message: 'Marca no especificada' }, { status: 400 });
 
-    const marcaDia = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findUnique",
-        where: { id: parseInt(String(marca_id), 10) },
-      },
+    const marcaDia = await prisma.c_marca_dia.findUnique({
+      where: { id: parseInt(String(marca_id), 10) },
     });
     if (!marcaDia) return NextResponse.json({ status: false, message: 'Marca no encontrada' }, { status: 404 });
 
@@ -270,48 +259,27 @@ export async function POST(req: NextRequest) {
       let clienteNombre = "Desconocido";
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       if (payload?.id) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: parseInt(String(payload.id), 10) },
-          },
+        const empleado = await prisma.c_empleado.findUnique({
+          where: { id: parseInt(String(payload.id), 10) },
         });
         if (empleado) {
-          const empleadoObj = empleado as any;
-          empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
         }
       }
       if (newRecordObj.corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: newRecordObj.corpo_id },
-          },
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: newRecordObj.corpo_id },
         });
         if (sucursal) {
-          const sucursalObj = sucursal as any;
-          sucursalNombre = sucursalObj.nombre + " (" + sucursalObj.nro_sucursal + ")";
+          sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
         }
       }
       if (newRecordObj.cliente_id) {
-        const cliente = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_cliente",
-            operation: "findUnique",
-            where: { id: newRecordObj.cliente_id },
-          },
+        const cliente = await prisma.e_estructura_cliente.findUnique({
+          where: { id: newRecordObj.cliente_id },
         });
         if (cliente) {
-          const clienteObj = cliente as any;
-          clienteNombre = clienteObj.nombre;
+          clienteNombre = cliente.nombre;
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha creado un registro de acta de entrega de productos para el cliente " + clienteNombre + " en la sucursal " + sucursalNombre + " el día " + fechaRegistro;

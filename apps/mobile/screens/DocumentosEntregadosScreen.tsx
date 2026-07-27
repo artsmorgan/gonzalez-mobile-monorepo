@@ -285,6 +285,7 @@ export default function DocumentosEntregadosScreen() {
   const [marcaPuestoId, setMarcaPuestoId] = useState<number | null>(null);
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -534,8 +535,18 @@ export default function DocumentosEntregadosScreen() {
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
-      const loaded = await loadMainStructureTreeMerged().catch(() => []);
-      const tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+      let tree = structureRef.current;
+      if (!tree.length && Array.isArray(structure) && structure.length > 0) {
+        tree = structure;
+      }
+      if (!tree.length) {
+        const loaded = await loadMainStructureTreeMerged().catch(() => []);
+        tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
+        if (tree.length) {
+          structureRef.current = tree;
+          setStructure(tree);
+        }
+      }
       const divId =
         tree.length > 0
           ? resolveMarcaDivisionForTree(currentMarca, tree) ?? getDivisionIdFromMarcaJson(currentMarca)
@@ -568,9 +579,18 @@ export default function DocumentosEntregadosScreen() {
 
       let tree = treeFromCaller;
       if (!tree?.length) {
+        tree = structureRef.current.length > 0 ? structureRef.current : undefined;
+      }
+      if (!tree?.length && Array.isArray(structure) && structure.length > 0) {
+        tree = structure;
+      }
+      if (!tree?.length) {
         const loaded = await loadMainStructureTreeMerged().catch(() => []);
         tree = Array.isArray(loaded) ? (loaded as MainStructureTree) : [];
-        if (tree.length) setStructure(tree);
+        if (tree.length) {
+          structureRef.current = tree;
+          setStructure(tree);
+        }
       }
       const divResolved =
         tree && tree.length > 0 ? resolveMarcaDivisionForTree(marca, tree) : null;
@@ -592,14 +612,19 @@ export default function DocumentosEntregadosScreen() {
   }, []);
 
   const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const tree = await loadMainStructureTreeMerged();
       const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+      structureRef.current = arr;
       setStructure(arr);
       return arr;
     } catch (e) {
       console.error('Error loading main structure (documentos entregados):', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {

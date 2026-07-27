@@ -2,6 +2,12 @@
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import { hydratePreexistentChildRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+
+const MANUALES_PUESTO_INCLUDE = {
+    e_puestos_manual_puesto: true,
+    e_empleado_visualizacion_manual_puesto: true,
+};
 
 export type ManualesPuestoOrderKey = "title" | "created_at";
 
@@ -291,21 +297,28 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
             ? { created_at: "desc" as const }
             : { title: "asc" as const };
 
+    const { sameGroupInclude } = splitIncludeByTableGroup(MANUALES_PUESTO_INCLUDE);
+
     const rows = await prisma.e_manual_puesto.findMany({
         where,
         orderBy,
         take: 10_000,
-        include: {
-            e_puestos_manual_puesto: {
-                include: { e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } } },
-            },
-            e_empleado_visualizacion_manual_puesto: {
-                include: {
-                    c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
-                },
-            },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
     });
+    await hydratePreexistentChildRelations(rows, "e_puestos_manual_puesto", [
+        {
+            relation: "e_estructura_puesto",
+            fkField: "puesto_id",
+            select: { id: true, nombre: true, codigo: true },
+        },
+    ]);
+    await hydratePreexistentChildRelations(rows, "e_empleado_visualizacion_manual_puesto", [
+        {
+            relation: "c_empleado",
+            fkField: "empleado_id",
+            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+        },
+    ]);
 
     const empresaIds = [...new Set(rows.map((r) => r.empresa_id).filter((n) => n > 0))];
     const clienteIds = [...new Set(rows.map((r) => r.cliente_id).filter((n) => n > 0))];

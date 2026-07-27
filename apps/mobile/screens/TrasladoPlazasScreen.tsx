@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -30,6 +30,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
+import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import authedFetch from '@/hooks/authedFetch';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'TrasladoPlazas'>;
@@ -131,6 +133,42 @@ export default function TrasladoPlazasScreen() {
     const [uploadingFile, setUploadingFile] = useState<string | null>(null);
     const [localFiles, setLocalFiles] = useState<LocalFile[]>([]);
     const [pendingFile, setPendingFile] = useState<{ accionId: number | string; file: LocalFile } | null>(null);
+
+    const planillasRevalidationModalShownRef = useRef(false);
+    const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+    const pendingPlanillasUploadRef = useRef<{ accionId: number | string; file: LocalFile } | null>(null);
+    const uploadFileRef = useRef<(accionId: number | string, file: LocalFile) => Promise<void>>(async () => {});
+
+    const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+        const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+        if (tokenCheck.valid) {
+            planillasRevalidationModalShownRef.current = false;
+            return true;
+        }
+
+        if (!planillasRevalidationModalShownRef.current) {
+            planillasRevalidationModalShownRef.current = true;
+            setShowPlanillasRevalidationModal(true);
+        }
+
+        return false;
+    }, []);
+
+    const handlePlanillasRevalidationSuccess = useCallback(() => {
+        setShowPlanillasRevalidationModal(false);
+        planillasRevalidationModalShownRef.current = false;
+        const pending = pendingPlanillasUploadRef.current;
+        pendingPlanillasUploadRef.current = null;
+        if (pending) {
+            void uploadFileRef.current(pending.accionId, pending.file);
+        }
+    }, []);
+
+    const handlePlanillasRevalidationDismiss = useCallback(() => {
+        planillasRevalidationModalShownRef.current = false;
+        pendingPlanillasUploadRef.current = null;
+        setShowPlanillasRevalidationModal(false);
+    }, []);
 
     const toggleExpanded = (key: string) => {
         setExpanded((prev) => {
@@ -333,15 +371,34 @@ export default function TrasladoPlazasScreen() {
             setUploadingFile(file.id);
             const isConnected = await getConnectionStatus();
 
+            const planillasType =
+                file.type === 'image' || file.type === 'video' || file.type === 'audio' ? file.type : 'file';
+
             const requestData = {
                 file_base64: file.base64,
-                extension: file.extension,
+                extension: String(file.extension || '').replace('.', '').trim() || 'dat',
                 original_name: file.name,
-                type: file.type,
+                type: planillasType,
                 mimeType: file.mimeType,
             };
 
             if (isConnected && typeof accionId === 'number' && accionId > 0) {
+                let referenceMs: number;
+                try {
+                    referenceMs = (await getHoraAccion()) || Date.now();
+                } catch {
+                    referenceMs = Date.now();
+                }
+
+                const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+                if (!hasValidPlanillasToken) {
+                    pendingPlanillasUploadRef.current = { accionId, file };
+                    return;
+                }
+
+                const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+                const planillasToken = planillasTokenCheck.token;
+
                 const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                 if (!apiUrl) {
                     throw new Error('Server URL not configured');
@@ -353,6 +410,7 @@ export default function TrasladoPlazasScreen() {
                         method: 'PUT',
                         headers: {
                             'Content-Type': 'application/json',
+                            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                         },
                         body: JSON.stringify(requestData),
                     },
@@ -375,7 +433,7 @@ export default function TrasladoPlazasScreen() {
                     throw new Error(data.message || 'Error al subir el archivo');
                 }
             } else {
-                // Modo offline: guardar en actions
+                const storedPlanillas = await readStoredPlanillasToken();
                 const actionsStr = await AsyncStorage.getItem('archivos_acciones_actions');
                 const actions = actionsStr ? JSON.parse(actionsStr) : [];
                 const actionId = `action_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -385,11 +443,11 @@ export default function TrasladoPlazasScreen() {
                     type: 'archivo_accion',
                     accion_id: accionId,
                     payload: requestData,
+                    planillasToken: storedPlanillas?.token ?? undefined,
                     synced: false,
                 });
                 await AsyncStorage.setItem('archivos_acciones_actions', JSON.stringify(actions));
 
-                // Actualizar cache local
                 const cacheStr = await AsyncStorage.getItem('archivos_acciones_cache');
                 const cache = cacheStr ? JSON.parse(cacheStr) : [];
                 const updatedCache = cache.map((item: ArchivoAccionUI) => {
@@ -406,7 +464,6 @@ export default function TrasladoPlazasScreen() {
                 await AsyncStorage.setItem('archivos_acciones_cache', JSON.stringify(updatedCache));
                 setRecords(updatedCache);
 
-                // Mantener el archivo local para reconstrucción
                 Alert.alert('Guardado (offline)', 'El archivo se subirá cuando vuelva la conexión.');
             }
         } catch (err: any) {
@@ -416,6 +473,8 @@ export default function TrasladoPlazasScreen() {
             setUploadingFile(null);
         }
     };
+
+    uploadFileRef.current = uploadFile;
 
     const getFileUrl = (item: ArchivoAccionUI): string | null => {
         if (!item.document || String(item.document).startsWith('pending_')) return null;
@@ -778,6 +837,13 @@ export default function TrasladoPlazasScreen() {
             <SlideMenu isVisible={isMenuVisible} onClose={() => setIsMenuVisible(false)} onHomePress={() => navigation.navigate('Home')} currentRoute="TrasladoPlazas" />
             {renderList()}
             {renderPendingFileModal()}
+            <PlanillasPasswordRevalidationModal
+                visible={showPlanillasRevalidationModal}
+                refreshAccessToken={refreshAccessToken}
+                logout={logout}
+                onSuccess={handlePlanillasRevalidationSuccess}
+                onDismiss={handlePlanillasRevalidationDismiss}
+            />
             <AppFooter />
         </ThemedView>
     );

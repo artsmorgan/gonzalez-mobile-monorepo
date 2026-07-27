@@ -29,6 +29,7 @@ import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache'
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import { loadPuestoArticulosForTable, refreshPuestoArticulosFromServer, rewritePuestoArticulosInMainStructure } from '@/hooks/puestoArticulosSync';
+import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import ArticuloMantenimientoArchivosModal from '@/components/ArticuloMantenimientoArchivosModal';
 import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimientoFiles';
 
@@ -995,6 +996,7 @@ export default function ActivitiesScreen() {
 
   /** Jerarquía: mismo árbol que PhysicalMinuteAgenda (`loadMainStructureTreeMerged` → encadenar nodos). */
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [assignToAllDivision, setAssignToAllDivision] = useState(false);
   const [selectedDivisionForAll, setSelectedDivisionForAll] = useState<number | null>(null);
@@ -1017,14 +1019,19 @@ export default function ActivitiesScreen() {
    * Misma fuente que PhysicalMinuteAgendaScreen: `loadMainStructureTreeMerged` (fragmentos + caché legada si hace falta).
    */
   const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const tree = await loadMainStructureTreeMerged();
       const empresas = Array.isArray(tree) ? tree : [];
+      structureRef.current = empresas as MainStructureTree;
       setStructure(empresas as MainStructureTree);
       return empresas as MainStructureTree;
     } catch (error) {
       console.error('Error loading main structure:', error);
+      structureRef.current = [];
       setStructure([]);
       setCatalogError('No se pudo leer la jerarquía guardada.');
       return [];
@@ -1089,7 +1096,10 @@ export default function ActivitiesScreen() {
         origin: 'activities',
       });
       const merged = await loadMainStructureTreeMerged();
-      if (Array.isArray(merged)) setStructure(merged as MainStructureTree);
+      if (Array.isArray(merged)) {
+        structureRef.current = merged as MainStructureTree;
+        setStructure(merged as MainStructureTree);
+      }
     } catch (e) {
       console.error('Error updating main_structure_cache from activities:', e);
     }
@@ -1254,7 +1264,9 @@ export default function ActivitiesScreen() {
         return [];
       }
       const sourceArticulos = await loadPuestoArticulosForTable(puestoId);
-      const normalized: Inventario[] = (Array.isArray(sourceArticulos) ? sourceArticulos : [])
+      const normalized: Inventario[] = prioritizePlanByArticuloNomencladorId(
+        Array.isArray(sourceArticulos) ? sourceArticulos : [],
+      )
         .map((art: any) => {
           const aid = Number(art?.id ?? art?.estructura_id);
           if (!Number.isFinite(aid) || aid <= 0) return null;
@@ -2135,7 +2147,7 @@ export default function ActivitiesScreen() {
               for (const puesto of sucursal?.puestos || []) {
                 if (Number(puesto?.id) !== targetId) continue;
                 const source = Array.isArray(puesto?.articulos) ? puesto.articulos : [];
-                return source
+                return prioritizePlanByArticuloNomencladorId(source)
                   .map((art: any) => normalizeInventoryArticle(art))
                   .filter((art: PuestoArticuloOption | null): art is PuestoArticuloOption => art != null);
               }

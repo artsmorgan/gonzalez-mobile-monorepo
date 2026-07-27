@@ -86,3 +86,13 @@ export async function writeMainStructureCacheString(json: string): Promise<void>
     /* ignore */
   }
 }
+/** Persiste el árbol mergeado en caché monolítica (AsyncStorage o archivo según tamaño). */
+export async function writeMainStructureCacheTree(tree: unknown[]): Promise<void> {
+  if (!Array.isArray(tree) || tree.length === 0) return;
+  try {
+    await writeMainStructureCacheString(JSON.stringify(tree));
+  } catch {
+    /* ignore */
+  }
+}
+

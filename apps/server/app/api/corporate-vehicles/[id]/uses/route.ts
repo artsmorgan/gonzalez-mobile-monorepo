@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 
@@ -240,34 +241,20 @@ export async function POST(
         let vehiculoPlaca = vehiculoObj.placa;
         let sucursalNombre = "Desconocida";
         if (vehiculoObj.sucursal_id) {
-          const sucursal = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_sucursal",
-              operation: "findUnique",
-              where: { id: vehiculoObj.sucursal_id },
-            },
+          const sucursal = await prisma.e_estructura_sucursal.findUnique({
+            where: { id: vehiculoObj.sucursal_id },
           });
           if (sucursal) {
-            const sucursalObj = sucursal as any;
-            sucursalNombre = sucursalObj.nombre;
+            sucursalNombre = sucursal.nombre;
           }
         }
         let empNombre = "Desconocido";
         if (Number(payload?.id ?? "0")) {
-          const empleado = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "c_empleado",
-              operation: "findUnique",
-              where: { id: Number(payload?.id ?? "0") },
-            },
+          const empleado = await prisma.c_empleado.findUnique({
+            where: { id: Number(payload?.id ?? "0") },
           });
           if (empleado) {
-            const empleadoObj = empleado as any;
-            empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+            empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
           }
         }
         let fechaRegistro = fechaValue.toISOString().split("T")[0];

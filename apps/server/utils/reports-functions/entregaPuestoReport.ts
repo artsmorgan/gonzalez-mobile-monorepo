@@ -3,6 +3,24 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
+import {
+    attachContratoDivisionToSucursales,
+    hydratePreexistentRelations,
+    splitIncludeByTableGroup,
+} from "../hydratePreexistentIncludes";
+
+const ENTREGA_PUESTO_INCLUDE = {
+    e_estructura_cliente: { select: { id: true, nombre: true, empresa_id: true } },
+    e_estructura_sucursal: {
+        select: {
+            id: true,
+            nombre: true,
+            nro_sucursal: true,
+            contrato_id: true,
+        },
+    },
+    e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
+};
 
 /** Mismos filtros geográficos / fechas que acta + campos propios de `e_registro_entrega_puesto`. */
 export type EntregaPuestoModuleFilters = {
@@ -354,26 +372,16 @@ export async function queryEntregaPuestoRows(
     if (filters.divisionIds?.length) sucursalFilter.e_estructura_contrato = { division_id: { in: filters.divisionIds } };
     if (Object.keys(sucursalFilter).length) where.e_estructura_sucursal = sucursalFilter;
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(ENTREGA_PUESTO_INCLUDE);
+
     const rows = await prisma.e_registro_entrega_puesto.findMany({
         where,
         take: 50_000,
         orderBy: { id: "desc" },
-        include: {
-            e_estructura_cliente: { select: { id: true, nombre: true, empresa_id: true } },
-            e_estructura_sucursal: {
-                select: {
-                    id: true,
-                    nombre: true,
-                    nro_sucursal: true,
-                    contrato_id: true,
-                    e_estructura_contrato: {
-                        select: { id: true, nombre: true, nro_contrato: true, division_id: true, n_division: { select: { id: true, nombre: true } } },
-                    },
-                },
-            },
-            e_estructura_puesto: { select: { id: true, nombre: true, codigo: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
     });
+    await hydratePreexistentRelations(rows, preexistentSpecs);
+    await attachContratoDivisionToSucursales(rows.map((r: any) => r.e_estructura_sucursal).filter(Boolean));
 
     const enriched = rows.map((r: any) => {
         const empId = Number(r.e_estructura_cliente?.empresa_id ?? 0) || 0;

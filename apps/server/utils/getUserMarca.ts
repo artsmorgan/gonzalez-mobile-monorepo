@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "./callDynamicPrisma";
 import { getMonitoringPreviousMinutes } from "./getMonitoringPreviousMinutes";
+import { prisma } from "./prismaClient";
 
 export async function getUserMarca(req: NextRequest, id: number) {
     try {
@@ -10,17 +11,11 @@ export async function getUserMarca(req: NextRequest, id: number) {
         const nowPlusMonitoringWindow = new Date(now.getTime() + monitoringPreviousMinutes * 60 * 1000);
 
         // Paso 1: Buscar si existe un registro dentro de la ventana previa al inicio
-        const proximo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: id,
-                    // fecha + hora_inicio >= now
-                    OR: [
-                        {
+        const proximo = await prisma.c_marca_dia.findFirst({
+            where: {
+                empleadoFijo_id: id,
+                OR: [
+                    {
                             fecha: {
                                 gt: now, // fecha futura
                             },
@@ -35,11 +30,7 @@ export async function getUserMarca(req: NextRequest, id: number) {
                         },
                     ],
                 },
-                orderBy: [
-                    { fecha: "asc" },
-                    { hora_inicio: "asc" },
-                ],
-            },
+                orderBy: { fecha: "asc", hora_inicio: "asc" },
         });
 
         console.log("Primer paso");
@@ -55,15 +46,10 @@ export async function getUserMarca(req: NextRequest, id: number) {
         }
 
         // Paso 2: Si no hay ninguno dentro de la ventana, tomar el último anterior
-        const ultimo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: id,
-                    OR: [
+        const ultimo = await prisma.c_marca_dia.findFirst({
+            where: {
+                empleadoFijo_id: id,
+                OR: [
                         {
                             fecha: {
                                 lt: now, // fecha pasada
@@ -78,12 +64,8 @@ export async function getUserMarca(req: NextRequest, id: number) {
                             },
                         },
                     ],
-                },
-                orderBy: [
-                    { fecha: "desc" },
-                    { hora_inicio: "desc" },
-                ],
             },
+            orderBy: { fecha: "desc", hora_inicio: "desc" },
         });
 
         console.log("Segundo paso");

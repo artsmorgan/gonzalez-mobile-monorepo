@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import getHoraAccion, { getCostaRicaReferenceTimeMs } from './getHoraAccion';
+import getHoraAccion from './getHoraAccion';
 import { resolveAppConnectivity } from './resolveAppConnectivity';
 
 export type AuthSessionMode = 'planillas' | 'legacy';
@@ -111,7 +111,7 @@ export async function isPlanillasSessionExpired(referenceMs?: number): Promise<b
     try {
       nowMs = await getHoraAccion();
     } catch {
-      nowMs = getCostaRicaReferenceTimeMs();
+      nowMs = new Date().getTime();
     }
   }
 

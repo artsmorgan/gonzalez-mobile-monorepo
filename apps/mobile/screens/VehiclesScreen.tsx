@@ -254,6 +254,7 @@ export default function VehiclesScreen() {
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
   const [roleName, setRoleName] = useState<string | null>(null);
+  const structureRef = useRef<MainStructureTree>([]);
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
@@ -636,17 +637,23 @@ export default function VehiclesScreen() {
 
   /** Solo caché local (main_structure_cache); no llama a /api/main-structure. */
   const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const merged = await loadMainStructureTreeMerged();
       if (Array.isArray(merged) && merged.length > 0) {
+        structureRef.current = merged;
         setStructure(merged);
         return merged;
       }
+      structureRef.current = [];
       setStructure([]);
       return [];
     } catch (e) {
       console.error('Error loading main structure (Vehicles):', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {
@@ -2138,7 +2145,7 @@ export default function VehiclesScreen() {
      * Jerarquía ANTES de `setEditingVehicle`: IDs guardados en el registro o caché local
      * (sin /api/main-structure). Evita Pickers con selectedValue inexistente en Android.
      */
-    const tree = structure.length > 0 ? structure : await fetchMainStructure();
+    const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
     if (!applyVehicleHierarchyToForm(vehicle)) {
       if (tree.length > 0) {
         const pid = numOrNull(vehicle.puesto_id);

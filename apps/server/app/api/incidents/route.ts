@@ -2,10 +2,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
 import { findContributionIncidents } from "../../../utils/findContributionIncidents";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const INCIDENTS_LIST_INCLUDE = {
+    n_ejecutivo_cuenta: true,
+    n_clasificacion_incidente: true,
+    c_archivos_incidente: true,
+    _count: {
+        select: {
+            c_contribucion_incidente: true,
+        },
+    },
+};
 
 type IncidentFileInput = {
     type: string; // image | audio | video | document
@@ -66,17 +79,11 @@ export async function GET(req: NextRequest) {
                 ? parseInt(String(payload.id), 10)
                 : NaN;
         const empleadoSesion = Number.isFinite(tokenEmpleadoId)
-            ? await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: tokenEmpleadoId },
-                },
-            })
+            ? await prisma.c_empleado.findUnique({ where: { id: tokenEmpleadoId } })
             : null;
         const supervisorId = empleadoSesion?.supervisor_id ?? null;
+
+        const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(INCIDENTS_LIST_INCLUDE);
 
         const incidents = await callDynamicPrisma({
             req,
@@ -86,18 +93,10 @@ export async function GET(req: NextRequest) {
                 operation: "findMany",
                 where: { corpo_id: corpoId, isActive: true },
                 orderBy: { id: "desc" },
-                include: {
-                    n_ejecutivo_cuenta: true,
-                    n_clasificacion_incidente: true,
-                    c_archivos_incidente: true,
-                    _count: {
-                        select: {
-                            c_contribucion_incidente: true,
-                        },
-                    },
-                }
+                ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
             }
         });
+        await hydratePreexistentRelations(incidents, preexistentSpecs);
 
         const incidentsMapped = [];
 
@@ -206,10 +205,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: parseInt(String(marca_id)) } }
-        });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -258,10 +254,7 @@ export async function POST(req: NextRequest) {
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica") as Date;
 
-        const sucursal = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdFinal } }
-        });
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdFinal } });
 
         if (!sucursal) {
             return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
@@ -339,21 +332,17 @@ export async function POST(req: NextRequest) {
             req,
             data: { action: "GET", table: "n_clasificacion_incidente", operation: "findUnique", where: { id: parseInt(String(clasificacion_id)) } }
         });
-        const cliente = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: clienteIdFinal } }
-        });
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: clienteIdFinal } });
         if (clasificacion && sucursal && cliente) {
             const fecha_string = fecha_incidente.split("T")[0];
             const hora_string = fecha_incidente.split("T")[1].split(".")[0];
             const description = `Se ha reportado un incidente de tipo ${clasificacion.nombre} en la sucursal ${sucursal.nombre} de la empresa ${cliente.nombre} el día ${fecha_string} a las ${hora_string}`;
-            const supervisors = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "c_empleado", operation: "findMany", where: { supervisor_id: sucursal.ejecutivoCuenta_id ?? 0 } }
+            const supervisors = await prisma.c_empleado.findMany({
+                where: { supervisor_id: sucursal.ejecutivoCuenta_id ?? 0 },
             });
             console.log("supervisors", supervisors.length);
             const supervisorIds = supervisors.map((s: any) => s.id);
-            await sendNotificationByRole(req, corpoIdFinal, [marca.plaza_id], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
+            await sendNotificationByRole(req, corpoIdFinal, [marca.plaza_id ?? 0], "Incidente reportado", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
             await sendNotificationByEmployee(req, corpoIdFinal, [parseInt(String(payload?.id ?? "0"))], "Incidente reportado", description, supervisorIds);
         }
 

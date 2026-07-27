@@ -541,6 +541,7 @@ export default function ComplaintsMasterScreen() {
   type RoleName = 'OPERATIVO' | 'SUPERVISOR' | 'ADMINISTRATIVO' | string | null;
   const [roleName, setRoleName] = useState<RoleName>(null);
   const [structure, setStructure] = useState<ComplaintsStructureTree>([]);
+  const structureRef = useRef<ComplaintsStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -711,17 +712,20 @@ export default function ComplaintsMasterScreen() {
   };
 
   const fetchMainStructure = useCallback(async (): Promise<ComplaintsStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const parsed = await loadMainStructureTreeMerged();
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        setStructure(parsed as ComplaintsStructureTree);
-        return parsed as ComplaintsStructureTree;
-      }
-      setStructure([]);
-      return [];
+      const tree = Array.isArray(parsed) && parsed.length > 0 ? (parsed as ComplaintsStructureTree) : [];
+      structureRef.current = tree;
+      setStructure(tree);
+      return tree;
     } catch (e) {
       console.error('Error loading main structure for complaints master:', e);
+      structureRef.current = [];
+      setStructure([]);
       return [];
     } finally {
       setIsStructureLoading(false);
@@ -1588,7 +1592,7 @@ export default function ComplaintsMasterScreen() {
     setFirmaResponsable(null);
 
     const current = await loadMarcaContext();
-    const tree = structure.length ? structure : await fetchMainStructure();
+    const tree = structureRef.current.length ? structureRef.current : await fetchMainStructure();
     const role = current?.roleDivision?.role?.nombre ?? current?.role_division?.role?.nombre ?? null;
     if (role !== 'OPERATIVO' && current) {
       const empresaIdRaw = current?.empresa?.id ?? current?.empresa_id;
@@ -1706,7 +1710,7 @@ export default function ComplaintsMasterScreen() {
     setAccionCorrectivaPreventiva(record.accion_correctiva_preventiva || '');
 
     if (!isOperativo) {
-      const tree = structure.length ? structure : await fetchMainStructure();
+      const tree = structureRef.current.length ? structureRef.current : await fetchMainStructure();
       const eid =
         record.empresa_id != null && Number.isFinite(Number(record.empresa_id)) ? Number(record.empresa_id) : null;
       const cid =
@@ -1940,7 +1944,7 @@ export default function ComplaintsMasterScreen() {
         return;
       }
 
-      const treeForFk = structure.length ? structure : (await fetchMainStructure());
+      const treeForFk = structureRef.current.length ? structureRef.current : (await fetchMainStructure());
       const fk = buildCreateFkIds(currentMarcaData, treeForFk);
       if (!fk) {
         Alert.alert(
@@ -2157,7 +2161,7 @@ export default function ComplaintsMasterScreen() {
         return;
       }
       const currentMarcaData = JSON.parse(currentMarca);
-      const treeForFk = structure.length ? structure : (await fetchMainStructure());
+      const treeForFk = structureRef.current.length ? structureRef.current : (await fetchMainStructure());
       const fk = buildCreateFkIds(currentMarcaData, treeForFk);
       if (!fk) {
         Alert.alert(

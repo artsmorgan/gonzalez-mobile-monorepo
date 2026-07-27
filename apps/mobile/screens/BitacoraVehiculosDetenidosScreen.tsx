@@ -716,6 +716,7 @@ export default function BitacoraVehiculosDetenidosScreen() {
   const serverRevisionImageUrlCacheRef = useRef<Map<string, string>>(new Map());
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   /** Jerarquía del formulario (visible si no es OPERATIVO). */
@@ -918,18 +919,25 @@ export default function BitacoraVehiculosDetenidosScreen() {
     }
   }, []);
 
-  const fetchMainStructure = useCallback(async () => {
+  const fetchMainStructure = useCallback(async (options?: { force?: boolean }) => {
+    if (!options?.force && structureRef.current.length > 0) {
+      if (structure.length === 0) setStructure(structureRef.current);
+      return;
+    }
     setIsStructureLoading(true);
     try {
       const loaded = await loadMainStructureTreeMerged();
-      setStructure(Array.isArray(loaded) ? loaded : []);
+      const next = Array.isArray(loaded) ? loaded : [];
+      structureRef.current = next;
+      setStructure(next);
     } catch (e) {
       console.error('Error loading main structure (bitácora vehículos):', e);
+      structureRef.current = [];
       setStructure([]);
     } finally {
       setIsStructureLoading(false);
     }
-  }, []);
+  }, [structure.length]);
 
   const filterEmpresaOptions = useMemo(() => structure ?? [], [structure]);
   const filterClienteOptionsMemo = useMemo(() => {
@@ -1798,7 +1806,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const fromMain = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
       let list = Array.isArray(fromMain) ? fromMain.map(normalizeVehiculoNodeFromTree) : [];
       if (list.length === 0) {
-        const tree = await loadMainStructureTreeMerged();
+        const tree =
+          structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged();
         list = getVehiculosCorporativosFromTree(Array.isArray(tree) ? tree : [], corpoId);
       }
       setCorporateVehicles(list);
@@ -1816,7 +1827,10 @@ export default function BitacoraVehiculosDetenidosScreen() {
       if (Array.isArray(fromMain) && fromMain.length > 0) {
         return fromMain.map(normalizeVehiculoNodeFromTree);
       }
-      const tree = await loadMainStructureTreeMerged();
+      const tree =
+        structureRef.current.length > 0
+          ? structureRef.current
+          : await loadMainStructureTreeMerged();
       if (!Array.isArray(tree) || tree.length === 0) return [];
       return getVehiculosCorporativosFromTree(tree, corpoId);
     } catch {
@@ -2139,7 +2153,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
         setTempVehicle(null);
         setPrefillFormHierarchyLocked(false);
 
-        await fetchMainStructure();
+        if (structureRef.current.length === 0) {
+          await fetchMainStructure();
+        } else if (structure.length === 0) {
+          setStructure(structureRef.current);
+        }
 
         const rawM = await AsyncStorage.getItem('current_marca');
         const marca = rawM ? JSON.parse(rawM) : null;
@@ -2289,7 +2307,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
     setSelectedCorporateUseId(null);
     setSelectedCorporateVehicleIdLocal(null);
     setSelectedCorporateUseIdLocal(null);
-    await fetchMainStructure();
+    if (structureRef.current.length === 0) {
+      await fetchMainStructure();
+    } else if (structure.length === 0) {
+      setStructure(structureRef.current);
+    }
     await applyCurrentMarcaToFormHierarchy();
     await loadMarcaContext();
     await resetForm('Vehículo');
@@ -2345,7 +2367,11 @@ export default function BitacoraVehiculosDetenidosScreen() {
       const usoIdFromItem = item.uso_id !== undefined && item.uso_id !== null ? Number(item.uso_id) : null;
 
       const treeArr =
-        Array.isArray(structure) && structure.length > 0 ? structure : await loadMainStructureTreeMerged();
+        structureRef.current.length > 0
+          ? structureRef.current
+          : Array.isArray(structure) && structure.length > 0
+            ? structure
+            : await loadMainStructureTreeMerged();
       const rawM = await AsyncStorage.getItem('current_marca');
       const marca = rawM ? JSON.parse(rawM) : null;
       const rn =

@@ -1,6 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+
+const OPENING_CLOSING_LIST_INCLUDE = {
+    c_imagenes_apertura_cierre_puesto: true,
+    e_estructura_cliente: { select: { nombre: true } },
+    e_estructura_sucursal: { select: { nombre: true } },
+    e_estructura_puesto: { select: { nombre: true } },
+    n_division: { select: { nombre: true } },
+};
 
 export async function GET(
     req: NextRequest,
@@ -22,6 +32,8 @@ export async function GET(
         const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
         const baseUrl = host ? `${proto}://${host}` : "";
 
+        const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(OPENING_CLOSING_LIST_INCLUDE);
+
         const records = await callDynamicPrisma({
             req,
             data: {
@@ -35,15 +47,10 @@ export async function GET(
                 orderBy: {
                     created_at: 'desc'
                 },
-                include: {
-                    c_imagenes_apertura_cierre_puesto: true,
-                    e_estructura_cliente: { select: { nombre: true } },
-                    e_estructura_sucursal: { select: { nombre: true } },
-                    e_estructura_puesto: { select: { nombre: true } },
-                    n_division: { select: { nombre: true } },
-                },
+                ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
             },
         });
+        await hydratePreexistentRelations(records, preexistentSpecs);
 
         const recordsArray = Array.isArray(records) ? records : [];
 
@@ -68,17 +75,9 @@ export async function GET(
         await Promise.all([
             ...empresaIds.map(async (id) => {
                 try {
-                    const row = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "e_estructura_empresa",
-                            operation: "findUnique",
-                            where: { id },
-                        },
-                    });
-                    if (row && typeof (row as any).nombre === "string") {
-                        empresaNombreById.set(id, String((row as any).nombre));
+                    const row = await prisma.e_estructura_empresa.findUnique({ where: { id } });
+                    if (row && typeof row.nombre === "string") {
+                        empresaNombreById.set(id, String(row.nombre));
                     }
                 } catch {
                     /* ignore */
@@ -86,17 +85,9 @@ export async function GET(
             }),
             ...contratoIds.map(async (id) => {
                 try {
-                    const row = await callDynamicPrisma({
-                        req,
-                        data: {
-                            action: "GET",
-                            table: "e_estructura_contrato",
-                            operation: "findUnique",
-                            where: { id },
-                        },
-                    });
-                    if (row && typeof (row as any).nombre === "string") {
-                        contratoNombreById.set(id, String((row as any).nombre));
+                    const row = await prisma.e_estructura_contrato.findUnique({ where: { id } });
+                    if (row && typeof row.nombre === "string") {
+                        contratoNombreById.set(id, String(row.nombre));
                     }
                 } catch {
                     /* ignore */

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
@@ -78,16 +79,10 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ message: "Datos incompletos" }, { status: 400 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } }
-        });
-        if (!marca) return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
+        if (!marca || !marca.cliente_id) return NextResponse.json({ message: "Marca no encontrada o cliente" }, { status: 404 });
 
-        const cliente = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: marca.cliente_id } }
-        });
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
         if (!cliente) return NextResponse.json({ message: "Cliente no encontrado" }, { status: 404 });
 
         const corpoIdToUse = corpo_id ?? marca.corpo_id;
@@ -106,36 +101,21 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ message: "Jerarquía incompleta (empresa, cliente, división y contrato requeridos)" }, { status: 400 });
         }
 
-        const corpo = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoIdToUse } }
-        });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdToUse } });
         if (!corpo) return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoIdToUse } }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdToUse } });
         if (!puesto) return NextResponse.json({ message: "Puesto no encontrado" }, { status: 404 });
 
-        const plaza = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_plazas", operation: "findUnique", where: { id: plazaIdToUse } }
-        });
+        const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: plazaIdToUse } });
         if (!plaza) return NextResponse.json({ message: "Plaza no encontrada" }, { status: 404 });
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: empleado_id } }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
         if (!empleado) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
         if (empleado.fecha_contratacion == null) return NextResponse.json({ message: "Empleado no ha sido contratado" }, { status: 400 });
         if (empleado.estado == "BA") return NextResponse.json({ message: "Empleado fue dado de baja" }, { status: 400 });
 
-        const evaluador = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: evaluador_id } }
-        });
+        const evaluador = await prisma.c_empleado.findUnique({ where: { id: evaluador_id } });
         if (!evaluador) return NextResponse.json({ message: "Evaluador no encontrado" }, { status: 404 });
         if (evaluador.fecha_contratacion == null) return NextResponse.json({ message: "Evaluador no ha sido contratado" }, { status: 400 });
         if (evaluador.estado == "BA") return NextResponse.json({ message: "Evaluador fue dado de baja" }, { status: 400 });

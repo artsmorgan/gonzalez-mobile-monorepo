@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 
 export const runtime = "nodejs";
+
+const OPENING_CLOSING_FULL_INCLUDE = {
+    c_imagenes_apertura_cierre_puesto: true,
+    e_estructura_cliente: { select: { nombre: true } },
+    e_estructura_sucursal: { select: { nombre: true } },
+    e_estructura_puesto: { select: { nombre: true } },
+    n_division: { select: { nombre: true } },
+};
 
 type OpeningClosingImageInput = {
     file_base64: string;
@@ -240,6 +250,8 @@ export async function PUT(
             });
         }
 
+        const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(OPENING_CLOSING_FULL_INCLUDE);
+
         const fullRecord = await callDynamicPrisma({
             req,
             data: {
@@ -247,15 +259,10 @@ export async function PUT(
                 table: "c_apertura_cierre_puesto",
                 operation: "findUnique",
                 where: { id },
-                include: {
-                    c_imagenes_apertura_cierre_puesto: true,
-                    e_estructura_cliente: { select: { nombre: true } },
-                    e_estructura_sucursal: { select: { nombre: true } },
-                    e_estructura_puesto: { select: { nombre: true } },
-                    n_division: { select: { nombre: true } },
-                },
+                ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
             },
         });
+        await hydratePreexistentRelations(fullRecord, preexistentSpecs);
 
         const baseUrl = req.nextUrl.origin;
 
@@ -266,32 +273,16 @@ export async function PUT(
         const conIdPut = Number(rec?.contrato_id);
         if (Number.isFinite(empIdPut) && empIdPut > 0) {
             try {
-                const emp = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_empresa",
-                        operation: "findUnique",
-                        where: { id: empIdPut },
-                    },
-                });
-                empresaNombrePut = emp && typeof (emp as any).nombre === "string" ? String((emp as any).nombre) : null;
+                const emp = await prisma.e_estructura_empresa.findUnique({ where: { id: empIdPut } });
+                empresaNombrePut = emp && typeof emp.nombre === "string" ? String(emp.nombre) : null;
             } catch {
                 empresaNombrePut = null;
             }
         }
         if (Number.isFinite(conIdPut) && conIdPut > 0) {
             try {
-                const con = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_contrato",
-                        operation: "findUnique",
-                        where: { id: conIdPut },
-                    },
-                });
-                contratoNombrePut = con && typeof (con as any).nombre === "string" ? String((con as any).nombre) : null;
+                const con = await prisma.e_estructura_contrato.findUnique({ where: { id: conIdPut } });
+                contratoNombrePut = con && typeof con.nombre === "string" ? String(con.nombre) : null;
             } catch {
                 contratoNombrePut = null;
             }

@@ -367,6 +367,7 @@ export default function PhysicalMinuteAgendaScreen() {
   const [roleName, setRoleName] = useState<string | null>(null);
 
   // structure
+  const structureRef = useRef<StructureTree>([]);
   const [structure, setStructure] = useState<any[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
@@ -544,13 +545,18 @@ export default function PhysicalMinuteAgendaScreen() {
   };
 
   const fetchMainStructure = useCallback(async (): Promise<StructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const mergedTree = await loadMainStructureTreeMerged();
       if (Array.isArray(mergedTree)) {
+        structureRef.current = mergedTree as StructureTree;
         setStructure(mergedTree as StructureTree);
         return mergedTree as StructureTree;
       }
+      structureRef.current = [];
       setStructure([]);
       return [];
       /*
@@ -989,7 +995,7 @@ export default function PhysicalMinuteAgendaScreen() {
     setEditingRecord(null);
     setIsCreating(true);
     resetForm(horaAccion);
-    const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+    const tree = structureRef.current.length ? structureRef.current : await fetchMainStructure();
     const current = await loadMarcaContext();
     if (current?.id != null) {
       applyHierarchyFormFromMarca(current, tree);
@@ -1021,7 +1027,7 @@ export default function PhysicalMinuteAgendaScreen() {
 
     const { meta } = parseAcuerdosPayload(r.acuerdos);
     const puestoIdFromRecord = Number(meta?.puesto_id ?? r.puesto_id ?? 0) || null;
-    const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+    const tree = structureRef.current.length ? structureRef.current : await fetchMainStructure();
     const pathByPuesto = resolveHierarchyByPuestoId(tree, puestoIdFromRecord);
     pendingEditHierarchyRef.current = {
       empresaId: (pathByPuesto?.empresaId ?? meta?.empresa_id ?? null) as any,
@@ -2482,7 +2488,7 @@ export default function PhysicalMinuteAgendaScreen() {
                         try {
                           const current = JSON.parse(marcaStr);
                           if (current?.id != null) {
-                            const tree = structure.length ? (structure as StructureTree) : await fetchMainStructure();
+                            const tree = structureRef.current.length ? structureRef.current : await fetchMainStructure();
                             applyHierarchyFiltersFromMarca(current, tree);
                             setFilterFecha('');
                             setFilterHoraInicio('');

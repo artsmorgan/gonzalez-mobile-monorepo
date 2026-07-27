@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+
+const GENERAL_INDUCTION_FULL_INCLUDE = {
+  c_imagenes_registro_induccion_general: true,
+  e_estructura_empresa: { select: { nombre: true, codigo: true } },
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+};
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
@@ -15,6 +23,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
       return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(GENERAL_INDUCTION_FULL_INCLUDE);
+
     const records = await callDynamicPrisma({
       req,
       data: {
@@ -26,14 +36,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
           isActive: true,
         },
         orderBy: { created_at: "desc" },
-        include: {
-          c_imagenes_registro_induccion_general: true,
-          e_estructura_empresa: { select: { nombre: true, codigo: true } },
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(records, preexistentSpecs);
 
     const recordsArray = Array.isArray(records) ? records : [];
     const recordsWithNames = recordsArray.map((r: any) => ({

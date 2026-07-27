@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const MUTUOS_ACUERDOS_LIST_INCLUDE = {
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+  n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
+};
 
 const turnoTexto = (tipoTurno?: string | null) => {
   const first = String(tipoTurno || "").trim().charAt(0).toUpperCase();
@@ -118,29 +126,22 @@ const formatShiftIntervalLabel = (marca: any, interval: ShiftInterval): string =
 };
 
 const fetchMarcasOriginalesEmpleado = async (
-  req: NextRequest,
   empleadoId: number,
   fechaGte: Date,
   fechaLte: Date
 ) => {
-  const rows = await callDynamicPrisma({
-    req,
-    data: {
-      action: "GET",
-      table: "c_marca_dia",
-      operation: "findMany",
-      where: {
-        empleadoFijo_id: empleadoId,
-        fecha: { gte: fechaGte, lte: fechaLte },
-      },
-      select: {
-        id: true,
-        fecha: true,
-        hora_entrada: true,
-        hora_salida: true,
-        hora_inicio: true,
-        hora_fin: true,
-      },
+  const rows = await prisma.c_marca_dia.findMany({
+    where: {
+      empleadoFijo_id: empleadoId,
+      fecha: { gte: fechaGte, lte: fechaLte },
+    },
+    select: {
+      id: true,
+      fecha: true,
+      hora_entrada: true,
+      hora_salida: true,
+      hora_inicio: true,
+      hora_fin: true,
     },
   });
   return Array.isArray(rows) ? rows : [];
@@ -217,7 +218,6 @@ const validateEmployeeTakingExchangedShift = (
 };
 
 const validateMutuoAcuerdoShiftExchange = async (
-  req: NextRequest,
   marcaAusente: any,
   marcaReemplaza: any
 ): Promise<ExchangeConflictResult> => {
@@ -242,8 +242,8 @@ const validateMutuoAcuerdoShiftExchange = async (
   const marcaDiaReemplazaId = Number(marcaReemplaza.id);
 
   const [marcasAusente, marcasReemplaza] = await Promise.all([
-    fetchMarcasOriginalesEmpleado(req, empleadoAusenteId, fechaGte, fechaLte),
-    fetchMarcasOriginalesEmpleado(req, empleadoReemplazaId, fechaGte, fechaLte),
+    fetchMarcasOriginalesEmpleado(empleadoAusenteId, fechaGte, fechaLte),
+    fetchMarcasOriginalesEmpleado(empleadoReemplazaId, fechaGte, fechaLte),
   ]);
 
   const checkSegundoTurno = validateEmployeeTakingExchangedShift(
@@ -275,10 +275,7 @@ export async function GET(req: NextRequest) {
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
 
     const where: any = {
@@ -301,6 +298,8 @@ export async function GET(req: NextRequest) {
       ],
     };
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(MUTUOS_ACUERDOS_LIST_INCLUDE);
+
     const records = await callDynamicPrisma({
       req,
       data: {
@@ -309,13 +308,10 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where,
         orderBy: { created_at: "desc" },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-          n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(records, preexistentSpecs);
 
     const marcaIds = Array.from(
       new Set(
@@ -346,43 +342,25 @@ export async function GET(req: NextRequest) {
 
     const [marcas, empleados, plazas] = await Promise.all([
       marcaIds.length > 0
-        ? callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_marca_dia",
-            operation: "findMany",
-            where: { id: { in: marcaIds } },
-            include: {
-              e_estructura_cliente: { select: { nombre: true } },
-              e_estructura_sucursal: { select: { nombre: true } },
-              e_estructura_puesto: { select: { nombre: true } },
-            },
+        ? prisma.c_marca_dia.findMany({
+          where: { id: { in: marcaIds } },
+          include: {
+            e_estructura_cliente: { select: { nombre: true } },
+            e_estructura_sucursal: { select: { nombre: true } },
+            e_estructura_puesto: { select: { nombre: true } },
           },
         })
         : [],
       empleadoIds.length > 0
-        ? callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findMany",
-            where: { id: { in: empleadoIds } },
-            select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true },
-          },
+        ? prisma.c_empleado.findMany({
+          where: { id: { in: empleadoIds } },
+          select: { id: true, nombre: true, primer_apellido: true, segundo_apellido: true },
         })
         : [],
       plazaIds.length > 0
-        ? callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_plazas",
-            operation: "findMany",
-            where: { id: { in: plazaIds } },
-            select: { id: true, nombre: true },
-          },
+        ? prisma.e_estructura_plazas.findMany({
+          where: { id: { in: plazaIds } },
+          select: { id: true, nombre: true },
         })
         : [],
     ]);
@@ -470,24 +448,8 @@ export async function POST(req: NextRequest) {
     }
 
     const [marcaAusente, marcaReemplaza] = await Promise.all([
-      callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_marca_dia",
-          operation: "findUnique",
-          where: { id: marcaDiaAusente_id },
-        },
-      }),
-      callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_marca_dia",
-          operation: "findUnique",
-          where: { id: marcaDiaReemplaza_id },
-        },
-      }),
+      prisma.c_marca_dia.findUnique({ where: { id: marcaDiaAusente_id } }),
+      prisma.c_marca_dia.findUnique({ where: { id: marcaDiaReemplaza_id } }),
     ]);
 
     if (!marcaAusente || !marcaReemplaza) {
@@ -504,15 +466,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (marca o formulario)" }, { status: 400 });
     }
 
-    const contrRow = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_contrato",
-        operation: "findUnique",
-        where: { id: resolvedContratoId },
-        select: { id: true, division_id: true },
-      },
+    const contrRow = await prisma.e_estructura_contrato.findUnique({
+      where: { id: resolvedContratoId },
+      select: { id: true, division_id: true },
     });
     const divisionFromContrato = parseIntStrict((contrRow as any)?.division_id);
     const resolvedDivisionId =
@@ -540,21 +496,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen cliente/sucursal válidos" }, { status: 400 });
     }
 
-    const exchangeValidation = await validateMutuoAcuerdoShiftExchange(req, marcaAusente, marcaReemplaza);
+    const exchangeValidation = await validateMutuoAcuerdoShiftExchange(marcaAusente, marcaReemplaza);
     if (!exchangeValidation.ok) {
       return NextResponse.json({ status: false, message: exchangeValidation.message }, { status: 400 });
     }
 
     // Obtener ejecutivo_cuenta desde la sucursal (corpo_id) asociada a las marcas
-    const sucursal = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_estructura_sucursal",
-        operation: "findUnique",
-        where: { id: Number(marcaAusente.corpo_id) },
-        select: { ejecutivoCuenta_id: true },
-      },
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({
+      where: { id: Number(marcaAusente.corpo_id) },
+      select: { ejecutivoCuenta_id: true },
     });
     const ejecutivo_cuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id ?? (sucursal as any)?.ejecutivo_cuenta_id);
     if (!ejecutivo_cuenta) {
@@ -678,82 +628,40 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    const empleadoAusente = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_empleado",
-        operation: "findUnique",
-        where: { id: Number(marcaAusente.empleadoFijo_id) },
-      },
+    const empleadoAusente = await prisma.c_empleado.findUnique({
+      where: { id: Number(marcaAusente.empleadoFijo_id) },
     });
-    const empleadoReemplaza = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_empleado",
-        operation: "findUnique",
-        where: { id: Number(marcaReemplaza.empleadoFijo_id) },
-      },
+    const empleadoReemplaza = await prisma.c_empleado.findUnique({
+      where: { id: Number(marcaReemplaza.empleadoFijo_id) },
     });
 
     const recipients = new Set<number>();
-    const employeePlazas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_empleado_plaza",
-        operation: "findMany",
-        where: { ejecutivoCuenta_id: ejecutivo_cuenta },
-        select: { empleado_id: true },
-      },
+    const employeePlazas = await prisma.c_empleado_plaza.findMany({
+      where: { ejecutivoCuenta_id: ejecutivo_cuenta },
+      select: { empleado_id: true },
     });
     
     recipients.add(createdBy)
 
     if (recipients.size > 0) {
-      const empleados_ejecutivos = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "c_empleado",
-          operation: "findMany",
-          where: { supervisor_id: ejecutivo_cuenta },
-        },
+      const empleados_ejecutivos = await prisma.c_empleado.findMany({
+        where: { supervisor_id: ejecutivo_cuenta },
       });
 
-      const puestoAusente = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_puesto",
-          operation: "findUnique",
-          where: { id: marcaAusente.puesto_id },
-        },
+      const puestoAusente = await prisma.e_estructura_puesto.findUnique({
+        where: { id: Number(marcaAusente.puesto_id) },
       });
 
       let sucursalNombreAusente = "Desconocida";
       let clienteNombreAusente = "Desconocido";
       if (puestoAusente) {
-        const sucursalAusente = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: marcaAusente.corpo_id },
-          },
+        const sucursalAusente = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: marcaAusente.corpo_id },
         });
         if (sucursalAusente) {
           sucursalNombreAusente = sucursalAusente.nombre;
-          let clienteAusente = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_cliente",
-              operation: "findUnique",
-              where: { id: marcaAusente.cliente_id },
-            },
+          let clienteAusente = await prisma.e_estructura_cliente.findUnique({
+            where: { id: marcaAusente.cliente_id },
           });
           if (clienteAusente) {
             clienteNombreAusente = clienteAusente.nombre;
@@ -761,38 +669,20 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const puestoReemplaza = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_puesto",
-          operation: "findUnique",
-          where: { id: marcaReemplaza.puesto_id },
-        },
+      const puestoReemplaza = await prisma.e_estructura_puesto.findUnique({
+        where: { id: Number(marcaReemplaza.puesto_id) },
       });
 
       let sucursalNombreReemplaza = "Desconocida";
       let clienteNombreReemplaza = "Desconocido";
       if (puestoReemplaza) {
-        const sucursalReemplaza = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: marcaReemplaza.corpo_id },
-          },
+        const sucursalReemplaza = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: marcaReemplaza.corpo_id },
         });
         if (sucursalReemplaza) {
           sucursalNombreReemplaza = sucursalReemplaza.nombre;
-          let clienteReemplaza = await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_cliente",
-              operation: "findUnique",
-              where: { id: marcaReemplaza.cliente_id },
-            },
+          let clienteReemplaza = await prisma.e_estructura_cliente.findUnique({
+            where: { id: marcaReemplaza.cliente_id },
           });
           if (clienteReemplaza) {
             clienteNombreReemplaza = clienteReemplaza.nombre;
@@ -801,8 +691,8 @@ export async function POST(req: NextRequest) {
       }
 
       const employeeIds = (Array.isArray(empleados_ejecutivos) ? empleados_ejecutivos : []).map((e: any) => e.id);
-      employeeIds.push(empleadoAusente.id);
-      employeeIds.push(empleadoReemplaza.id);
+      if (empleadoAusente?.id) employeeIds.push(empleadoAusente.id);
+      if (empleadoReemplaza?.id) employeeIds.push(empleadoReemplaza.id);
 
       const puestoNombreAusente = puestoAusente ? puestoAusente.nombre : "Desconocido";
       const puestoNombreReemplaza = puestoReemplaza ? puestoReemplaza.nombre : "Desconocido";

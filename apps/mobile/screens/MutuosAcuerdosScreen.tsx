@@ -43,6 +43,8 @@ import {
   rejectMutuoAcuerdoEjecutivo,
   signMutuoAcuerdoEjecutivo,
 } from '@/hooks/mutuosAcuerdosFunctions';
+import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { saveFile, getFile, deleteFile } from '@/hooks/fileStorage';
 import type { RootStackParamList } from '../App';
@@ -234,6 +236,10 @@ export default function MutuosAcuerdosScreen() {
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState('Cambios');
   const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const planillasRevalidationModalShownRef = useRef(false);
+  const resumeExecutiveApprovalAfterPlanillasRef = useRef(false);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -904,6 +910,21 @@ export default function MutuosAcuerdosScreen() {
     ]);
   };
 
+  const requestPlanillasRevalidationIfNeeded = async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+
+    return false;
+  };
+
   const finalizeExecutiveApproval = async () => {
     try {
       if (!signingRecordId) {
@@ -922,12 +943,24 @@ export default function MutuosAcuerdosScreen() {
         Alert.alert('Error', 'No se pudo obtener la hora de la acción');
         return;
       }
+
+      const referenceMs = Number(horaAccion) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        resumeExecutiveApprovalAfterPlanillasRef.current = true;
+        return;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       setIsSigning(true);
       const response = await signMutuoAcuerdoEjecutivo({
         id: signingRecordId,
         firma_ejecutivo_cuenta_manual: manualFormatted,
         firma_ejecutivo_cuenta_digital: firmaEjecutivoDigital,
         hora_accion: new Date(horaAccion).toISOString(),
+        planillasToken,
         refreshAccessToken,
         logout,
       });
@@ -943,6 +976,21 @@ export default function MutuosAcuerdosScreen() {
     } finally {
       setIsSigning(false);
     }
+  };
+
+  const handlePlanillasRevalidationSuccess = () => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    if (resumeExecutiveApprovalAfterPlanillasRef.current) {
+      resumeExecutiveApprovalAfterPlanillasRef.current = false;
+      void finalizeExecutiveApproval();
+    }
+  };
+
+  const handlePlanillasRevalidationDismiss = () => {
+    planillasRevalidationModalShownRef.current = false;
+    resumeExecutiveApprovalAfterPlanillasRef.current = false;
+    setShowPlanillasRevalidationModal(false);
   };
 
   const renderMarcaList = (section: SectionKey, sectionState: EmployeeSectionState) => {
@@ -1749,6 +1797,14 @@ export default function MutuosAcuerdosScreen() {
         title={cambiosTitle}
         items={cambiosItems}
         onClose={closeCambiosModal}
+      />
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
       />
 
       <AppFooter />

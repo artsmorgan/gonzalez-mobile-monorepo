@@ -847,7 +847,10 @@ export default function OpeningClosingPositionScreen() {
       if (!currentMarcaStr) return;
       const currentMarca = JSON.parse(currentMarcaStr);
       if (currentMarca?.id == null) return;
-      const tree = await loadMainStructureTreeMerged();
+      const tree =
+        structureRef.current.length > 0
+          ? structureRef.current
+          : ((await loadMainStructureTreeMerged().catch(() => [])) as MainStructureTree);
       const hierarchy = buildHierarchyFromCurrentMarca(
         currentMarca,
         Array.isArray(tree) ? tree : []
@@ -1057,7 +1060,7 @@ export default function OpeningClosingPositionScreen() {
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
           const marcaStr = await AsyncStorage.getItem('current_marca');
           const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
-          const tree = await loadMainStructureTreeMerged();
+          const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
           if (currentMarca?.id != null) {
             await syncMarcaFromStorage({
               applyFiltersFromMarca: true,

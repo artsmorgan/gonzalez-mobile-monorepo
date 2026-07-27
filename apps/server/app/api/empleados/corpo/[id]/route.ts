@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -11,33 +12,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const corpo = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_sucursal", operation: "findFirst", where: { id } }
-        });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id } });
         if (!corpo) return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
 
         const empleados_return: { id: number, nombre: string, cedula: string, codigo: string, fecha_contratacion: string }[] = [];
-        const puestos = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpo.id } }
-        });
+        const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpo.id } });
         for (const puesto of puestos) {
-            const plazas = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_plazas", operation: "findMany", where: { puesto_id: puesto.id } }
-            });
+            const plazas = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
             for (const plaza of plazas) {
-                const empleados_plazas = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "c_empleado_plaza", operation: "findMany", where: { plaza_id: plaza.id } }
-                });
+                const empleados_plazas = await prisma.c_empleado_plaza.findMany({ where: { plaza_id: plaza.id } });
                 for (const emp_pl of empleados_plazas) {
                     if (emp_pl.empleado_id) {
-                        const empleado = await callDynamicPrisma({
-                            req,
-                            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: emp_pl.empleado_id } }
-                        });
+                        const empleado = await prisma.c_empleado.findUnique({ where: { id: emp_pl.empleado_id } }); 
                         if (empleado) {
                             if (empleado.fecha_contratacion == null) continue;
                             if (empleado.estado == "BA") continue;

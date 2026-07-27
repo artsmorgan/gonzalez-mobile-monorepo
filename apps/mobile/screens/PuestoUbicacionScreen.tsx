@@ -37,6 +37,11 @@ import {
 import getHoraAccion from '@/hooks/getHoraAccion';
 import resolvePuestoUbicacionCoordinates from '@/hooks/resolvePuestoUbicacionCoordinates';
 import {
+  isStoredPlanillasTokenValid,
+  readStoredPlanillasToken,
+} from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
+import {
   DEVICE_COORDS_POLL_SILENT,
   DEVICE_COORDS_USER_ACTION,
 } from '@/hooks/resolveDeviceCoordinates';
@@ -314,6 +319,7 @@ export default function PuestoUbicacionScreen() {
     const navigation = useNavigation<PuestoUbicacionScreenNavigationProp>();
 
     // Estructura principal (árbol mergeado para current_marca / búsqueda por puesto)
+    const structureRef = useRef<MainStructureTree>([]);
     const [structure, setStructure] = useState<MainStructureTree>([]);
     /** Fragmentos por clave servidor (`divisiones`, `empresa_X_clientes`, …); null = modo legado monolítico */
     const [mainFragments, setMainFragments] = useState<Record<string, any> | null>(null);
@@ -348,6 +354,13 @@ export default function PuestoUbicacionScreen() {
     /** Evita volver a pisar filtros desde `current_marca` en cada foco. */
     const listFiltersSyncedFromMarcaOnceRef = useRef(false);
 
+    const planillasRevalidationModalShownRef = useRef(false);
+    const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+    const pendingPlanillasActionRef = useRef<{ latitud: number | null; longitud: number | null } | null>(null);
+    const putPuestoUbicacionRef = useRef<
+        (latitud: number | null, longitud: number | null) => Promise<boolean>
+    >(async () => false);
+
     /** Coordenadas GPS guardadas al confirmar en el dispositivo (clave = id de puesto en string). */
     const [dispositivoUbicacionMap, setDispositivoUbicacionMap] = useState<
         Record<string, { lat: string; lng: string }>
@@ -372,6 +385,7 @@ export default function PuestoUbicacionScreen() {
                 setMainFragments(fragments);
                 const merged = mergeMainStructureFragments(fragments);
                 if (Array.isArray(merged) && merged.length > 0) {
+                    structureRef.current = merged as MainStructureTree;
                     setStructure(merged);
                     return;
                 }
@@ -380,6 +394,7 @@ export default function PuestoUbicacionScreen() {
             const tree = await loadMainStructureTreeMerged();
             const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
             if (arr.length > 0) {
+                structureRef.current = arr;
                 setStructure(arr);
             }
 
@@ -393,6 +408,9 @@ export default function PuestoUbicacionScreen() {
 
     // Misma base que los pickers: fragmentos mergeados; fallback solo si no hay árbol mergeable.
     const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+        if (structureRef.current.length > 0) {
+            return structureRef.current;
+        }
         try {
             setIsStructureLoading(true);
             setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
@@ -402,17 +420,20 @@ export default function PuestoUbicacionScreen() {
                 setMainFragments(fragments);
                 const merged = mergeMainStructureFragments(fragments);
                 if (Array.isArray(merged) && merged.length > 0) {
+                    structureRef.current = merged as MainStructureTree;
                     setStructure(merged);
                     return merged as MainStructureTree;
                 }
                 const tree = await loadMainStructureTreeMerged();
                 const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+                structureRef.current = arr;
                 setStructure(arr);
                 return arr;
             }
             setMainFragments(null);
             const tree = await loadMainStructureTreeMerged();
             const arr = Array.isArray(tree) ? (tree as MainStructureTree) : [];
+            structureRef.current = arr;
             setStructure(arr);
             return arr;
         } catch (error) {
@@ -535,6 +556,37 @@ export default function PuestoUbicacionScreen() {
     }, [filterPuestoId, getDeviceLocation]);
 
     /** PUT `/api/puestos/[id]/ubicacion`: coordenadas nuevas o `{ latitud: null, longitud: null }` para borrar en servidor y cachés locales. */
+    const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+        const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+        if (tokenCheck.valid) {
+            planillasRevalidationModalShownRef.current = false;
+            return true;
+        }
+
+        if (!planillasRevalidationModalShownRef.current) {
+            planillasRevalidationModalShownRef.current = true;
+            setShowPlanillasRevalidationModal(true);
+        }
+
+        return false;
+    }, []);
+
+    const handlePlanillasRevalidationSuccess = useCallback(() => {
+        setShowPlanillasRevalidationModal(false);
+        planillasRevalidationModalShownRef.current = false;
+        const pending = pendingPlanillasActionRef.current;
+        pendingPlanillasActionRef.current = null;
+        if (pending) {
+            void putPuestoUbicacionRef.current(pending.latitud, pending.longitud);
+        }
+    }, []);
+
+    const handlePlanillasRevalidationDismiss = useCallback(() => {
+        planillasRevalidationModalShownRef.current = false;
+        pendingPlanillasActionRef.current = null;
+        setShowPlanillasRevalidationModal(false);
+    }, []);
+
     const putPuestoUbicacion = useCallback(
         async (latitud: number | null, longitud: number | null): Promise<boolean> => {
             if (!filterPuestoId) {
@@ -550,6 +602,15 @@ export default function PuestoUbicacionScreen() {
                 const isConnected = await getConnectionStatus();
 
                 if (isConnected) {
+                    const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(horaAccion);
+                    if (!hasValidPlanillasToken) {
+                        pendingPlanillasActionRef.current = { latitud, longitud };
+                        return false;
+                    }
+
+                    const planillasTokenCheck = await isStoredPlanillasTokenValid(horaAccion);
+                    const planillasToken = planillasTokenCheck.token;
+
                     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                     if (!apiUrl) throw new Error('Server URL not configured');
 
@@ -560,6 +621,7 @@ export default function PuestoUbicacionScreen() {
                             headers: {
                                 'Content-Type': 'application/json',
                                 'ngrok-skip-browser-warning': '69420',
+                                'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
                             },
                             body: JSON.stringify({ latitud, longitud, horaAccion }),
                         },
@@ -583,6 +645,9 @@ export default function PuestoUbicacionScreen() {
                     Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
                     return false;
                 } else {
+                    const storedPlanillas = await readStoredPlanillasToken();
+                    const planillasToken = storedPlanillas?.token ?? null;
+
                     const id_local = `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                     const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -599,6 +664,7 @@ export default function PuestoUbicacionScreen() {
                         action: 'update',
                         type: 'puesto_ubicacion',
                         payload: { latitud, longitud, horaAccion },
+                        planillasToken,
                         synced: false,
                     });
 
@@ -644,8 +710,17 @@ export default function PuestoUbicacionScreen() {
                 setIsUpdating(false);
             }
         },
-        [filterPuestoId, filterCorpoId, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache],
+        [
+            filterPuestoId,
+            filterCorpoId,
+            refreshAccessToken,
+            logout,
+            updatePuestoCoordsInMainStructureCache,
+            requestPlanillasRevalidationIfNeeded,
+        ],
     );
+
+    putPuestoUbicacionRef.current = putPuestoUbicacion;
 
     const requestConfirmClearUbicacion = useCallback(() => {
         if (!filterPuestoId) {
@@ -731,103 +806,17 @@ export default function PuestoUbicacionScreen() {
         if (ok) setManualUbicacionModalVisible(false);
     }, [manualLatText, manualLngText, putPuestoUbicacion]);
 
-    // Sincronizar acciones offline cuando se restaura la conexión
+    // Delegar sincronización offline a App.tsx (valida token de Planillas antes de sincronizar).
     useEffect(() => {
-        const handler = async () => {
-            const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-            if (!actionsStr) return;
-
-            let actions = JSON.parse(actionsStr);
-            const puestoUbicacionActions = actions.filter(
-                (a: any) => a.type === 'puesto_ubicacion' && !a.synced
-            );
-
-            if (puestoUbicacionActions.length === 0) return;
-
-            for (const action of puestoUbicacionActions) {
-                try {
-                    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                    if (!apiUrl) continue;
-
-                    const response = await authedFetch({
-                        url: `${apiUrl}/api/puestos/${action.puesto_id}/ubicacion`,
-                        init: {
-                            method: 'PUT',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'ngrok-skip-browser-warning': '69420',
-                            },
-                            body: JSON.stringify({
-                                latitud: action.payload.latitud,
-                                longitud: action.payload.longitud,
-                                horaAccion: action.payload?.horaAccion ?? action.horaAccion,
-                            }),
-                        },
-                        refreshAccessToken,
-                        logout,
-                    });
-
-                    if (response) {
-                        const data = await response.json();
-                        if (data.status) {
-                            const rawLat = action?.payload?.latitud;
-                            const rawLng = action?.payload?.longitud;
-                            const clearingUbicacion = rawLat === null && rawLng === null;
-                            const lat = clearingUbicacion ? null : String(rawLat ?? '');
-                            const lng = clearingUbicacion ? null : String(rawLng ?? '');
-                            if (!clearingUbicacion && (!lat || !lng)) {
-                                continue;
-                            }
-
-                            await writePuestoUbicacionDispositivo(action.puesto_id, lat, lng);
-                            setDispositivoUbicacionMap(await readPuestoUbicacionDispositivoMap());
-
-                            await updatePuestoCoordsInMainStructureCache(
-                                action.puesto_id,
-                                lat,
-                                lng,
-                                action.sucursal_id ?? filterCorpoId ?? null,
-                            );
-
-                            if (Number(filterPuestoId) === Number(action.puesto_id)) {
-                                setPuestoData({ lat, lng });
-                            }
-
-                            // Marcar como sincronizado
-                            actions = actions.filter(
-                                (a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'puesto_ubicacion')
-                            );
-                            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
-
-                            // Actualizar cache
-                            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
-                            if (cacheStr) {
-                                const cache = JSON.parse(cacheStr);
-                                const updatedCache = cache.map((item: any) => {
-                                    if (item.id_local === action.id && item.type === 'puesto_ubicacion') {
-                                        return { ...item, synced: true };
-                                    }
-                                    return item;
-                                });
-                                await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
-                            }
-                        }
-                    }
-                } catch (error) {
-                    console.error('Error syncing puesto ubicacion action:', error);
-                }
-            }
-
-            // Recargar estructura después de sincronizar
-            await loadMainStructureCache();
+        const handler = () => {
+            eventBus.emit('syncCachesRequested');
         };
 
         eventBus.on('connectionRestored', handler);
         return () => {
             eventBus.off('connectionRestored', handler);
         };
-
-    }, [loadMainStructureCache, filterCorpoId, refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache, filterPuestoId]);
+    }, []);
 
     useFocusEffect(
         useCallback(() => {
@@ -1102,6 +1091,14 @@ export default function PuestoUbicacionScreen() {
                     </ThemedView>
                 </KeyboardAvoidingView>
             </Modal>
+
+            <PlanillasPasswordRevalidationModal
+                visible={showPlanillasRevalidationModal}
+                refreshAccessToken={refreshAccessToken}
+                logout={logout}
+                onSuccess={handlePlanillasRevalidationSuccess}
+                onDismiss={handlePlanillasRevalidationDismiss}
+            />
 
             <AppFooter />
             <SlideMenu

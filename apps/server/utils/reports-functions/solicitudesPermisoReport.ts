@@ -7,6 +7,19 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+
+const SOLICITUDES_PERMISO_INCLUDE = {
+    c_empleado: {
+        select: {
+            id: true,
+            codigo: true,
+            nombre: true,
+            primer_apellido: true,
+            segundo_apellido: true,
+        },
+    },
+};
 
 export type SolicitudesPermisoModuleFilters = ActaEntregaModuleFilters & {
     empleadoIds?: number[] | null;
@@ -223,22 +236,15 @@ export async function querySolicitudesPermisoRows(
     if (filters.tipoSalario && filters.tipoSalario !== "todos") where.tipo = filters.tipoSalario;
     if (filters.estado) where.estado = filters.estado;
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(SOLICITUDES_PERMISO_INCLUDE);
+
     let rows = await prisma.c_solicitud_permiso.findMany({
         where,
-        include: {
-            c_empleado: {
-                select: {
-                    id: true,
-                    codigo: true,
-                    nombre: true,
-                    primer_apellido: true,
-                    segundo_apellido: true,
-                },
-            },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         orderBy: { id: "desc" },
         take: 50_000,
     });
+    await hydratePreexistentRelations(rows, preexistentSpecs);
 
     const tiposTurno = filters.tiposTurno ?? [];
     if (tiposTurno.length) {

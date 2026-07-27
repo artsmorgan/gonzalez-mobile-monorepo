@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
 
@@ -22,63 +23,47 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         // - Incluir comboArticulosCP (si existe)
         // - Incluir plan directo del puesto evitando duplicados
         // - Incluir asignados (entrega) del puesto
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
         if (!puesto) return NextResponse.json({ status: true, data: [] }, { status: 200 });
+        const corpoId = puesto.sucursal_id;
 
         const planRows: any[] = [];
 
         // 1) Artículos del combo del puesto (si existe)
-        if ((puesto as any).comboArticulosCP_id) {
-            const combo = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_combo_articulo_cp", operation: "findUnique", where: { id: (puesto as any).comboArticulosCP_id } }
+        if (puesto.comboArticulosCP_id) {
+            const combo = await prisma.e_estructura_combo_articulo_cp.findUnique({
+                where: { id: puesto.comboArticulosCP_id },
             });
             if (combo) {
-                const comboPlan = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_articulo_corpo_puesto_plan",
-                        operation: "findMany",
-                        where: { combo_id: combo.id },
-                        include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
-                        orderBy: { id: "asc" }
-                    }
+                const comboPlan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+                    where: { combo_id: combo.id },
+                    include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+                    orderBy: { id: "asc" },
                 });
                 planRows.push(...comboPlan);
             }
         }
 
         // 2) Plan directo del puesto (evitar duplicados por id)
-        const directPlan = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_articulo_corpo_puesto_plan",
-                operation: "findMany",
-                where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }],
-                    id: { notIn: planRows.map((p: any) => p.id) }
-                },
-                include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
-                orderBy: { id: "asc" }
-            }
+        const planOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+        if (corpoId != null) planOr.push({ corpo_id: corpoId });
+        const directPlan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+            where: {
+                OR: planOr,
+                id: { notIn: planRows.map((p: any) => p.id) },
+            },
+            include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+            orderBy: { id: "asc" },
         });
         planRows.push(...directPlan);
 
         // 3) Asignados del puesto (entrega)
-        const asignadosRows = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_articulo_corpo_puesto_entrega",
-                operation: "findMany",
-                where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] },
-                include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
-                orderBy: { id: "asc" }
-            }
+        const entregaOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+        if (corpoId != null) entregaOr.push({ corpo_id: corpoId });
+        const asignadosRows = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+            where: { OR: entregaOr },
+            include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+            orderBy: { id: "asc" },
         });
 
         // Cargar tipos de mantenimiento por nomenclador (en bulk)

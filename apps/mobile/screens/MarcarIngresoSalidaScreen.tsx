@@ -34,6 +34,10 @@ import {
   getMonitoringPreviousMinutesFromStorage,
   setMonitoringPreviousMinutesStorage,
 } from '@/hooks/monitoringPreviousMinutesStorage';
+import {
+  getMonitoringPostMinutesFromStorage,
+  setMonitoringPostMinutesStorage,
+} from '@/hooks/monitoringPostMinutesStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import resolveMarcaIngresoCoordinates from '@/hooks/resolveMarcaIngresoCoordinates';
 import {
@@ -41,11 +45,13 @@ import {
   DEVICE_COORDS_USER_ACTION,
 } from '@/hooks/resolveDeviceCoordinates';
 import { eventBus } from '@/hooks/eventBus';
+import { CURRENT_MARCA_UPDATED_EVENT } from '@/hooks/pushNotificationsService';
 import authedFetch from '@/hooks/authedFetch';
 import {
   isStoredPlanillasTokenValid,
   PLANILLAS_TOKEN_EXPIRES_AT_KEY,
   PLANILLAS_TOKEN_KEY,
+  readStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '../components/PlanillasPasswordRevalidationModal';
 import { deleteAllFiles } from '@/hooks/fileStorage';
@@ -64,23 +70,28 @@ import { syncVisitorsCacheFromNetwork } from '@/hooks/visitorsCacheHelpers';
 import {
   MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
   MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
-  persistMainStructureFragments,
 } from '@/hooks/mainStructureFragmentsStorage';
-import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import { requestBackgroundMainStructureDownload } from '@/hooks/backgroundMainStructureDownload';
+import { resetLunchTimeCompleted } from '@/hooks/lunchTimeMarcaHierarchy';
 
 type MarcarIngresoSalidaScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'MarcarIngresoSalida'>;
 
 interface AttendanceSuccessResponse {
   estado: 'Ingresado' | 'No ingresado';
   is_late: boolean;
+  is_salida_anticipada?: boolean;
   current_time: string;
   change_available: boolean;
   next_time: string;
+  monitoring_post_minutes?: number;
   marca: {
     id: number;
     hora_entrada_digitada: string | null;
     hora_salida_digitada: string | null;
+    hora_salida_anticipada?: string | null;
+    /** Persistidos en `current_marca` para validación local (salida anticipada / tardía). */
+    is_late?: boolean;
+    is_salida_anticipada?: boolean;
     // Recibido desde el endpoint de asistencia (necesario para flujos que dependen del empleado fijo).
     empleadoFijo_id?: number | null;
     hora_inicio: string;
@@ -147,6 +158,8 @@ interface AttendanceErrorResponse {
   mark_blocked?: boolean;
   current_time?: number;
   monitoring_previous_minutes?: number;
+  monitoring_post_minutes?: number;
+  is_salida_anticipada?: boolean;
   marca?: AttendanceSuccessResponse['marca'];
 }
 
@@ -161,6 +174,110 @@ async function evaluateInternetConnection(): Promise<boolean> {
     networkState.isConnected === true &&
     networkState.isInternetReachable === true
   );
+}
+
+function resolveMarcaIsSalidaAnticipada(marca: Record<string, unknown> | null | undefined): boolean {
+  if (!marca) return false;
+  if (typeof marca.is_salida_anticipada === 'boolean') return marca.is_salida_anticipada;
+  return marca.hora_salida_anticipada != null;
+}
+
+function resolveMarcaIsLate(marca: Record<string, unknown> | null | undefined): boolean {
+  if (!marca) return false;
+  return marca.is_late === true;
+}
+
+function buildMarcaInicioMs(marca: {
+  fecha: string;
+  hora_inicio: string;
+}): number | null {
+  try {
+    const fecha = String(marca.fecha).split('-');
+    if (fecha.length < 3 || marca.hora_inicio == null) return null;
+    const day = parseInt(String(fecha[2]).slice(0, 2), 10);
+    const inicioTurno = toZonedTime(new Date(marca.hora_inicio), 'America/Costa_Rica');
+    inicioTurno.setFullYear(parseInt(fecha[0], 10), parseInt(fecha[1], 10) - 1, day);
+    const ms = inicioTurno.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildMarcaFinMs(marca: {
+  fecha: string;
+  hora_inicio: string;
+  hora_fin: string;
+}): number | null {
+  try {
+    const fecha = String(marca.fecha).split('-');
+    if (fecha.length < 3 || marca.hora_fin == null) return null;
+    const day = parseInt(String(fecha[2]).slice(0, 2), 10);
+    const finTurno = toZonedTime(new Date(marca.hora_fin), 'America/Costa_Rica');
+    finTurno.setFullYear(
+      parseInt(fecha[0], 10),
+      parseInt(fecha[1], 10) - 1,
+      marca.hora_inicio > marca.hora_fin ? day + 1 : day
+    );
+    const ms = finTurno.getTime();
+    return Number.isFinite(ms) ? ms : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveIsLateFromLocalMarca(
+  marca: Record<string, unknown> | null | undefined,
+  attendanceIsLate?: boolean
+): Promise<boolean> {
+  if (attendanceIsLate === true) return true;
+  if (resolveMarcaIsLate(marca)) return true;
+
+  try {
+    const raw = await AsyncStorage.getItem('current_marca');
+    if (raw) {
+      const stored = JSON.parse(raw) as Record<string, unknown>;
+      if (
+        marca?.id != null &&
+        Number(stored.id) === Number(marca.id) &&
+        resolveMarcaIsLate(stored)
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return false;
+}
+
+/** Adjunta flags de asistencia a la marca (para persistir en `current_marca`). */
+function attachMarcaAttendanceFlags(
+  marca: Record<string, unknown>,
+  flags: { is_late?: boolean; is_salida_anticipada?: boolean }
+): Record<string, unknown> {
+  const is_late =
+    typeof flags.is_late === 'boolean' ? flags.is_late : resolveMarcaIsLate(marca);
+  const is_salida_anticipada =
+    typeof flags.is_salida_anticipada === 'boolean'
+      ? flags.is_salida_anticipada
+      : resolveMarcaIsSalidaAnticipada(marca);
+  return {
+    ...marca,
+    is_late,
+    is_salida_anticipada,
+  };
+}
+
+async function persistCurrentMarcaWithFlags(
+  marca: Record<string, unknown>,
+  flags?: { is_late?: boolean; is_salida_anticipada?: boolean }
+): Promise<Record<string, unknown>> {
+  const withFlags = attachMarcaAttendanceFlags(marca, flags ?? {});
+  await AsyncStorage.setItem('current_marca', JSON.stringify(withFlags));
+  eventBus.emit(CURRENT_MARCA_UPDATED_EVENT, withFlags);
+  return withFlags;
 }
 
 /** GPS activo obligatorio; caché solo si falla la lectura nueva. Alert de caché solo con DEVICE_COORDS_USER_ACTION. */
@@ -208,15 +325,20 @@ export default function MarcarIngresoSalidaScreen() {
   /** Aviso informativo entrada (cerrable), mismo patrón que ChecklistSupervisionScreen. */
   const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
   const [monitoringPreviousMinutes, setMonitoringPreviousMinutes] = useState<number>(15);
+  const [monitoringPostMinutes, setMonitoringPostMinutes] = useState<number>(0);
   /** Re-render del reloj cuando no hay `attendanceData` (hora local CR como respaldo). */
   const [clockTick, setClockTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const minutes = await getMonitoringPreviousMinutesFromStorage();
+      const [previousMinutes, postMinutes] = await Promise.all([
+        getMonitoringPreviousMinutesFromStorage(),
+        getMonitoringPostMinutesFromStorage(),
+      ]);
       if (!cancelled) {
-        setMonitoringPreviousMinutes(minutes);
+        setMonitoringPreviousMinutes(previousMinutes);
+        setMonitoringPostMinutes(postMinutes);
       }
     })();
     return () => {
@@ -224,12 +346,20 @@ export default function MarcarIngresoSalidaScreen() {
     };
   }, []);
 
-  const persistMonitoringPreviousMinutesFromResponse = async (
-    payload: { monitoring_previous_minutes?: unknown } | null | undefined
+  const persistMonitoringMinutesFromResponse = async (
+    payload: {
+      monitoring_previous_minutes?: unknown;
+      monitoring_post_minutes?: unknown;
+    } | null | undefined
   ) => {
-    if (payload?.monitoring_previous_minutes == null) return;
-    const minutes = await setMonitoringPreviousMinutesStorage(payload.monitoring_previous_minutes);
-    setMonitoringPreviousMinutes(minutes);
+    if (payload?.monitoring_previous_minutes != null) {
+      const minutes = await setMonitoringPreviousMinutesStorage(payload.monitoring_previous_minutes);
+      setMonitoringPreviousMinutes(minutes);
+    }
+    if (payload?.monitoring_post_minutes != null) {
+      const minutes = await setMonitoringPostMinutesStorage(payload.monitoring_post_minutes);
+      setMonitoringPostMinutes(minutes);
+    }
   };
   useEffect(() => {
     const handler = () => {
@@ -368,7 +498,10 @@ export default function MarcarIngresoSalidaScreen() {
       setHoraAccion(nowMs);
 
       const marcaWithTime: Record<string, unknown> = { ...marca, current_time: nowMs };
-      await setCurrentAttendanceData(marcaWithTime, nowMs);
+      await setCurrentAttendanceData(marcaWithTime, nowMs, {
+        is_late: resolveMarcaIsLate(marca),
+        is_salida_anticipada: resolveMarcaIsSalidaAnticipada(marca),
+      });
 
       const validation = await runLocalValidationForMarca(marcaWithTime, nowMs, {
         validateLocationForEntrada: false,
@@ -389,7 +522,6 @@ export default function MarcarIngresoSalidaScreen() {
         );
       }
 
-      await AsyncStorage.setItem('current_marca', JSON.stringify(marcaWithTime));
       return { nowMs, validation };
     },
     []
@@ -489,12 +621,17 @@ export default function MarcarIngresoSalidaScreen() {
     const marcaPayload = await resolveMarcaPayloadFromBlockedError(errorData, horaAccionValue);
     if (!marcaPayload) return false;
 
-    await persistMonitoringPreviousMinutesFromResponse(errorData);
+    await persistMonitoringMinutesFromResponse(errorData);
     await applyNomenclatorsFromAttendanceMarca(marcaPayload);
 
     const nowMs = Number(marcaPayload.current_time) || horaAccionValue || Date.now();
-    await AsyncStorage.setItem('current_marca', JSON.stringify(marcaPayload));
-    await setCurrentAttendanceData(marcaPayload, nowMs);
+    await setCurrentAttendanceData(marcaPayload, nowMs, {
+      is_salida_anticipada:
+        typeof errorData.is_salida_anticipada === 'boolean'
+          ? errorData.is_salida_anticipada
+          : resolveMarcaIsSalidaAnticipada(marcaPayload),
+      is_late: resolveMarcaIsLate(marcaPayload),
+    });
 
     const validation = await runLocalValidationForMarca(marcaPayload, nowMs, {
       validateLocationForEntrada: false,
@@ -713,9 +850,8 @@ export default function MarcarIngresoSalidaScreen() {
 
       const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
       const planillasToken = planillasTokenCheck.token;
-      const attendanceUserUrl = planillasToken
-        ? `${apiUrl}/api/attendance/user/${employee.id}?pt=${encodeURIComponent(planillasToken)}`
-        : `${apiUrl}/api/attendance/user/${employee.id}`;
+      console.log('planillasToken', planillasToken);
+      const attendanceUserUrl = `${apiUrl}/api/attendance/user/${employee.id}`;
 
       const response = await authedFetch({
         url: attendanceUserUrl,
@@ -723,6 +859,7 @@ export default function MarcarIngresoSalidaScreen() {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
           },
         },
         refreshAccessToken,
@@ -744,7 +881,7 @@ export default function MarcarIngresoSalidaScreen() {
 
       if (result) {
         marca_send = data.marca;
-        await persistMonitoringPreviousMinutesFromResponse(data);
+        await persistMonitoringMinutesFromResponse(data);
         await applyNomenclatorsFromAttendanceMarca(marca_send);
 
         const server_time = await AsyncStorage.getItem('server_time');
@@ -774,13 +911,24 @@ export default function MarcarIngresoSalidaScreen() {
         ) {
           shouldUpdateData = true;
         }
-        await AsyncStorage.setItem('current_marca', JSON.stringify(marca_send));
+        await AsyncStorage.setItem(
+          'current_marca',
+          JSON.stringify(
+            attachMarcaAttendanceFlags(marca_send, {
+              is_late: data.is_late,
+              is_salida_anticipada: data.is_salida_anticipada,
+            })
+          )
+        );
       }
 
       if (result) {
         setMarkingBlocked(false);
         setRevertMarcaId(null);
-        await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now());
+        await setCurrentAttendanceData(marca_send, horaAccionValue || Date.now(), {
+          is_late: data.is_late,
+          is_salida_anticipada: data.is_salida_anticipada,
+        });
 
         const validation = await runLocalValidationForMarca(marca_send, horaAccionValue || Date.now(), {
           validateLocationForEntrada: false,
@@ -793,15 +941,13 @@ export default function MarcarIngresoSalidaScreen() {
 
         console.log("shouldUpdateData", shouldUpdateData);
         if (shouldUpdateData && marca_send) {
-          // Mostrar el mismo loader y mensaje de espera que al marcar entrada manualmente
-          setIsProcessingMark(true);
-          setProcessingType('entrada');
           try {
             let horaAccion = marca_send.hora_entrada_digitada ? new Date(marca_send.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
             await hydrateAfterEntrada(marca_send, horaAccion, false);
-          } finally {
-            setIsProcessingMark(false);
-            setProcessingType(null);
+            Alert.alert('Éxito', 'Ingreso registrado correctamente');
+            requestBackgroundMainStructureDownload({ refreshAccessToken, logout }, marca_send);
+          } catch (hydrateError) {
+            console.error('Error hydrating auto-ingreso:', hydrateError);
           }
         }
       } else {
@@ -830,9 +976,14 @@ export default function MarcarIngresoSalidaScreen() {
     }
   };
 
-  const setCurrentAttendanceData = async (data: any, horaAccionValue: number) => {
+  const setCurrentAttendanceData = async (
+    data: any,
+    horaAccionValue: number,
+    serverFlags?: { is_late?: boolean; is_salida_anticipada?: boolean }
+  ) => {
     const marca = data;
     const monitoringMinutes = await getMonitoringPreviousMinutesFromStorage();
+    const postMinutes = await getMonitoringPostMinutesFromStorage();
 
     const fecha = marca.fecha.split('-');
     fecha[2] = fecha[2].slice(0, 2);
@@ -842,12 +993,15 @@ export default function MarcarIngresoSalidaScreen() {
     let next_time = toZonedTime(new Date(estado == "No ingresado" ? marca.hora_inicio : marca.hora_fin), "America/Costa_Rica");
     next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
 
+    let inicioTurno = toZonedTime(new Date(marca.hora_inicio), "America/Costa_Rica");
+    inicioTurno.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, parseInt(fecha[2]));
+
     let next_change_time = new Date(next_time.getTime());
     next_change_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, marca.hora_inicio > marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
     next_change_time.setMinutes(next_change_time.getMinutes() - monitoringMinutes);
 
     let change_available = true;
-    let is_late = false;
+    let is_late = resolveMarcaIsLate(marca);
 
     const now = horaAccionValue;
 
@@ -855,19 +1009,45 @@ export default function MarcarIngresoSalidaScreen() {
       if (now < next_change_time.getTime()) {
         change_available = false;
       }
+      // Solo recalcular is_late si aún no viene persistido/servidor.
+      if (typeof serverFlags?.is_late !== 'boolean' && typeof marca.is_late !== 'boolean') {
+        const lateThreshold = inicioTurno.getTime() + postMinutes * 60 * 1000;
+        if (now > lateThreshold) {
+          is_late = true;
+        }
+      }
+    } else if (
+      typeof serverFlags?.is_late !== 'boolean' &&
+      typeof marca.is_late !== 'boolean' &&
+      marca.hora_entrada_digitada
+    ) {
+      const lateThreshold = inicioTurno.getTime() + postMinutes * 60 * 1000;
+      is_late = new Date(marca.hora_entrada_digitada).getTime() > lateThreshold;
     }
 
-    if (now > next_time.getTime()) {
-      is_late = true;
+    if (typeof serverFlags?.is_late === 'boolean') {
+      is_late = serverFlags.is_late;
     }
+
+    const is_salida_anticipada =
+      typeof serverFlags?.is_salida_anticipada === 'boolean'
+        ? serverFlags.is_salida_anticipada
+        : resolveMarcaIsSalidaAnticipada(marca);
+
+    const marcaWithFlags = await persistCurrentMarcaWithFlags(
+      { ...marca, current_time: marca.current_time ?? data.current_time },
+      { is_late, is_salida_anticipada }
+    );
 
     const attendance_save = {
       estado: estado,
       is_late: is_late,
+      is_salida_anticipada,
       change_available: change_available,
       next_time: next_time.toISOString(),
       current_time: toZonedTime(new Date(data.current_time), "America/Costa_Rica").toISOString(),
-      marca: marca,
+      monitoring_post_minutes: postMinutes,
+      marca: marcaWithFlags as AttendanceSuccessResponse['marca'],
     } as AttendanceSuccessResponse;
     setAttendanceData(attendance_save);
   }
@@ -880,6 +1060,17 @@ export default function MarcarIngresoSalidaScreen() {
       attendanceData.marca?.hora_salida_digitada != null
     ) {
       Alert.alert('Información', 'Ya has marcado la salida.');
+      return;
+    }
+
+    if (
+      attendanceData.estado === 'No ingresado' &&
+      resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)
+    ) {
+      Alert.alert(
+        'No permitido',
+        'No puedes marcar ingreso porque esta marca tiene salida anticipada.'
+      );
       return;
     }
 
@@ -910,6 +1101,13 @@ export default function MarcarIngresoSalidaScreen() {
   ): Promise<{ ok: true } | { ok: false; message: string }> => {
     if (!attendanceData?.marca) {
       return { ok: false, message: 'No se encontró la marca.' };
+    }
+
+    if (type === 'entrada' && resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)) {
+      return {
+        ok: false,
+        message: 'No puedes marcar ingreso porque esta marca tiene salida anticipada.',
+      };
     }
 
     const nowMs = await getHoraAccion();
@@ -964,6 +1162,33 @@ export default function MarcarIngresoSalidaScreen() {
         message: validation.message || 'No puedes marcar salida en este momento.',
       };
     }
+
+    if (type === 'salida') {
+      const inicioMs = buildMarcaInicioMs(attendanceData.marca);
+      if (inicioMs != null && nowMs < inicioMs) {
+        return {
+          ok: false,
+          message:
+            'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.',
+        };
+      }
+
+      const isLateLocal = await resolveIsLateFromLocalMarca(
+        attendanceData.marca as Record<string, unknown>,
+        attendanceData.is_late
+      );
+      if (isLateLocal) {
+        const finMs = buildMarcaFinMs(attendanceData.marca);
+        if (finMs != null && nowMs < finMs) {
+          return {
+            ok: false,
+            message:
+              'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno.',
+          };
+        }
+      }
+    }
+
     return { ok: true };
   };
 
@@ -996,15 +1221,49 @@ export default function MarcarIngresoSalidaScreen() {
         }
         const now = horaAccion;
 
-        const fecha = attendanceData.marca.fecha.split('-');
-        fecha[2] = fecha[2].slice(0, 2);
-
-        let next_time = toZonedTime(new Date(attendanceData.marca.hora_fin), "America/Costa_Rica");
-        next_time.setFullYear(parseInt(fecha[0]), parseInt(fecha[1]) - 1, attendanceData.marca.hora_inicio > attendanceData.marca.hora_fin ? parseInt(fecha[2]) + 1 : parseInt(fecha[2]));
-
-        if (now < (next_time.getTime() - 15 * 60 * 1000)) {
-          setIsModalVisible(true);
+        const inicioMs = buildMarcaInicioMs(attendanceData.marca);
+        if (inicioMs != null && now < inicioMs) {
+          Alert.alert(
+            'Salida no permitida',
+            'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.'
+          );
           return;
+        }
+
+        const next_time_ms = buildMarcaFinMs(attendanceData.marca);
+        if (next_time_ms == null) {
+          throw new Error('No se pudo calcular la hora de salida del turno');
+        }
+
+        // Validación local de salida anticipada (no se valida en servidor).
+        if (now < next_time_ms) {
+          const isLateLocal = await resolveIsLateFromLocalMarca(
+            attendanceData.marca as Record<string, unknown>,
+            attendanceData.is_late
+          );
+
+          if (isLateLocal) {
+            Alert.alert(
+              'Salida anticipada no permitida',
+              'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno. No se abrirá el formulario de motivo.'
+            );
+            return;
+          }
+
+          if (now < next_time_ms - 15 * 60 * 1000) {
+            Alert.alert(
+              'Salida anticipada',
+              'Aún no llega la hora de salida. Si continúas, deberás indicar el motivo de la salida anticipada.',
+              [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                  text: 'Continuar',
+                  onPress: () => setIsModalVisible(true),
+                },
+              ]
+            );
+            return;
+          }
         }
       }
 
@@ -1019,6 +1278,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const hydrateAfterEntrada = async (marca: any, horaAccionValue: number, shouldRefreshStatus: boolean) => {
     try {
+      await resetLunchTimeCompleted();
       await cleanAsyncStorage();
 
       try {
@@ -1027,31 +1287,42 @@ export default function MarcarIngresoSalidaScreen() {
         console.warn('Error borrando archivos locales (expo-file-system) al ingresar:', fileErr);
       }
 
-      const updatedMarca = {
-        ...marca,
-        hora_entrada_digitada: new Date(horaAccionValue).toISOString(),
-      };
+      const postMinutes = await getMonitoringPostMinutesFromStorage();
+      let isLate = resolveMarcaIsLate(marca);
+      try {
+        const fecha = String(marca.fecha ?? '').split('-');
+        if (fecha.length >= 3 && marca.hora_inicio) {
+          const day = parseInt(String(fecha[2]).slice(0, 2), 10);
+          const inicioTurno = toZonedTime(new Date(marca.hora_inicio), 'America/Costa_Rica');
+          inicioTurno.setFullYear(parseInt(fecha[0], 10), parseInt(fecha[1], 10) - 1, day);
+          const lateThreshold = inicioTurno.getTime() + postMinutes * 60 * 1000;
+          isLate = horaAccionValue > lateThreshold;
+        }
+      } catch {
+        /* keep previous isLate */
+      }
 
-      await AsyncStorage.setItem('current_marca', JSON.stringify(updatedMarca));
+      const updatedMarca = await persistCurrentMarcaWithFlags(
+        {
+          ...marca,
+          hora_entrada_digitada: new Date(horaAccionValue).toISOString(),
+        },
+        {
+          is_late: isLate,
+          is_salida_anticipada: resolveMarcaIsSalidaAnticipada(marca),
+        }
+      );
 
       await AsyncStorage.multiRemove(['visitors_cache', 'vehicles_cache']);
-
-      const shouldUpdateMainStructure = await shouldUpdateMainStructureCache();
-      if (shouldUpdateMainStructure) {
-        await getMainStructure();
-      } else if (await evaluateInternetConnection()) {
-        const tree = await loadMainStructureTreeMerged();
-        if (!Array.isArray(tree) || tree.length === 0) {
-          await getMainStructure();
-        }
-      }
 
       setAttendanceData((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
           estado: 'Ingresado',
-          marca: updatedMarca,
+          is_late: isLate,
+          is_salida_anticipada: resolveMarcaIsSalidaAnticipada(updatedMarca),
+          marca: updatedMarca as AttendanceSuccessResponse['marca'],
         } as AttendanceSuccessResponse;
       });
 
@@ -1060,8 +1331,8 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       void Promise.all([
-        getLunchTimeConfig(updatedMarca.id),
-        getActivities(updatedMarca.id),
+        getLunchTimeConfig(Number(updatedMarca.id)),
+        getActivities(Number(updatedMarca.id)),
       ]);
     } catch (storageError) {
       console.error('Error hydrating entrada context:', storageError);
@@ -1114,11 +1385,13 @@ export default function MarcarIngresoSalidaScreen() {
       });
     } else {
       if (type === 'salida') {
+        const storedPlanillas = await readStoredPlanillasToken();
         await appendAttendanceAction({
           type: 'salida',
           marcaId: attendanceData.marca.id,
           reason: reason ?? '',
           horaAccion: horaAccion as number,
+          planillasToken: storedPlanillas?.token ?? undefined,
         });
         const rawMarca = await AsyncStorage.getItem('current_marca');
         if (rawMarca) {
@@ -1140,11 +1413,13 @@ export default function MarcarIngresoSalidaScreen() {
 
     if (data.status) {
       setRevertMarcaId(null);
+      let entradaMarca: any = null;
       try {
         if (type === 'entrada') {
           if (attendanceData) {
             let horaAccion = attendanceData.marca.hora_entrada_digitada ? new Date(attendanceData.marca.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
             await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
+            entradaMarca = attendanceData.marca;
           }
         } else {
           const raw = await AsyncStorage.getItem('current_marca');
@@ -1171,6 +1446,10 @@ export default function MarcarIngresoSalidaScreen() {
           ? 'Ingreso registrado correctamente'
           : 'Salida registrada correctamente'
       );
+
+      if (type === 'entrada' && entradaMarca) {
+        requestBackgroundMainStructureDownload({ refreshAccessToken, logout }, entradaMarca);
+      }
     } else {
       // Si el backend devuelve una marca específica para revertir, guardamos su ID
       if (data && typeof data.marca_id === 'number') {
@@ -1210,7 +1489,8 @@ export default function MarcarIngresoSalidaScreen() {
         'tipo_quejas_cache',
         'tipo_clientes_quejas_cache',
         'last_location',
-        'monitoring_previous_minutes'
+        'monitoring_previous_minutes',
+        'monitoring_post_minutes',
       ];
       const keys = await AsyncStorage.getAllKeys();
 
@@ -1287,87 +1567,6 @@ const getActivities = async (marcaId: number) => {
       await AsyncStorage.setItem('activities_cache', JSON.stringify(data.actividades));
     }
 }
-
-  const getMainStructure = async () => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
-    const response = await authedFetch({
-      url: `${apiUrl}/api/main-structure`,
-      init: {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      },
-      refreshAccessToken,
-      logout,
-    });
-    if (!response) return;
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status} getMainStructure`);
-    }
-    const data = await response.json();
-    if (!data.status) return;
-
-    if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
-      await persistMainStructureFragments(data.fragments as Record<string, unknown>);
-    } else {
-      let rawStructure = data.structure;
-      if (typeof rawStructure === 'string') {
-        try {
-          rawStructure = JSON.parse(rawStructure);
-        } catch {
-          rawStructure = null;
-        }
-      }
-      if (Array.isArray(rawStructure)) {
-        await persistMainStructureFragments({});
-        await writeMainStructureCacheString(JSON.stringify(rawStructure));
-      }
-    }
-
-    if (data.created_at !== undefined && data.created_at !== null) {
-      await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-    }
-  }
-
-  const shouldUpdateMainStructureCache = async (): Promise<boolean> => {
-    try {
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return false;
-
-      if (!(await evaluateInternetConnection())) return false;
-
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure/last?created_at=0`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!response || !response.ok) return false;
-
-      const data = await response.json();
-      const lastCreatedAt = Number(data?.created_at ?? 0);
-      if (!Number.isFinite(lastCreatedAt) || lastCreatedAt <= 0) return false;
-
-      const localCreatedAtStr = await AsyncStorage.getItem('main_structure_created_at');
-      const localCreatedAt = Number(localCreatedAtStr ?? 0);
-      const normalizedLocal = Number.isFinite(localCreatedAt) ? localCreatedAt : 0;
-
-      return lastCreatedAt !== normalizedLocal;
-    } catch (error) {
-      console.error('Error validating main structure cache update:', error);
-      return false;
-    }
-  };
 
   const handleMenuPress = () => {
     setIsMenuVisible(true);
@@ -1446,10 +1645,12 @@ const getActivities = async (marcaId: number) => {
             'Se canceló la salida pendiente de sincronización. No hace falta revertir en el servidor.'
           );
         } else {
+          const storedPlanillas = await readStoredPlanillasToken();
           await appendAttendanceAction({
             type: 'revert_leaving',
             marcaId,
             horaAccion: horaRev,
+            planillasToken: storedPlanillas?.token ?? undefined,
           });
           await patchCurrentMarcaHoraSalida(marcaId, null);
           Alert.alert(
@@ -1488,9 +1689,40 @@ const getActivities = async (marcaId: number) => {
     navigation.goBack();
   };
 
-  const handleModalConfirm = () => {
+  const handleModalConfirm = async () => {
     if (exitReason.trim() === '') {
       Alert.alert('Error', 'Por favor, ingresa una razón para la salida temprana.');
+      return;
+    }
+
+    if (!attendanceData?.marca) {
+      Alert.alert('Error', 'No se encontró la marca.');
+      return;
+    }
+
+    const nowMs = (horaAccion as number) || (await getHoraAccion()) || Date.now();
+    const inicioMs = buildMarcaInicioMs(attendanceData.marca);
+    if (inicioMs != null && nowMs < inicioMs) {
+      setIsModalVisible(false);
+      setExitReason('');
+      Alert.alert(
+        'Salida no permitida',
+        'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.'
+      );
+      return;
+    }
+
+    const isLateLocal = await resolveIsLateFromLocalMarca(
+      attendanceData.marca as Record<string, unknown>,
+      attendanceData.is_late
+    );
+    if (isLateLocal) {
+      setIsModalVisible(false);
+      setExitReason('');
+      Alert.alert(
+        'Salida anticipada no permitida',
+        'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno.'
+      );
       return;
     }
 
@@ -1524,7 +1756,6 @@ const getActivities = async (marcaId: number) => {
   };
 
   const submitAbsentReason = async (reason: string): Promise<boolean> => {
-    console.log("submitAbsentReason", reason, absentMarcaId);
     if (!employee?.id || !absentMarcaId) {
       Alert.alert('Error', 'No se encontró el ID del empleado o la marca de ausencia.');
       return false;
@@ -1627,6 +1858,7 @@ const getActivities = async (marcaId: number) => {
     }
 
     if (attendanceData.estado === 'No ingresado') {
+      if (resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)) return true;
       if (!localCanMarkEntrada || !attendanceData.change_available) return true;
     }
 
@@ -2281,11 +2513,34 @@ const getActivities = async (marcaId: number) => {
                 </ThemedView>
 
                 {/* Late Warning */}
-                {attendanceData.marca.hora_inicio != null && attendanceData.is_late && (
+                {(resolveMarcaIsLate(attendanceData.marca as Record<string, unknown>) ||
+                  attendanceData.is_late) &&
+                  attendanceData.marca.hora_inicio != null && (
                   <ThemedView style={styles.lateWarning}>
                     <ThemedText style={styles.lateWarningText}>
                       {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}
                     </ThemedText>
+                  </ThemedView>
+                )}
+
+                {(resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>) ||
+                  attendanceData.is_salida_anticipada) &&
+                  attendanceData.marca.hora_salida_anticipada != null && (
+                  <ThemedView style={styles.salidaAnticipadaWarning}>
+                    <ThemedText style={styles.salidaAnticipadaWarningText}>
+                      {getActionIcon('warning')} Salida anticipada a las{' '}
+                      {getNextTime(
+                        typeof attendanceData.marca.hora_salida_anticipada === 'string' &&
+                          attendanceData.marca.hora_salida_anticipada.includes('T')
+                          ? attendanceData.marca.hora_salida_anticipada
+                          : `1970-01-01T${String(attendanceData.marca.hora_salida_anticipada).slice(0, 8)}`
+                      )}
+                    </ThemedText>
+                    {attendanceData.estado === 'No ingresado' && (
+                      <ThemedText style={styles.salidaAnticipadaHintText}>
+                        No puedes marcar ingreso porque esta marca tiene salida anticipada.
+                      </ThemedText>
+                    )}
                   </ThemedView>
                 )}
               </ThemedView>
@@ -2848,6 +3103,25 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  salidaAnticipadaWarning: {
+    backgroundColor: '#FF9500',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 8,
+    gap: 6,
+  },
+  salidaAnticipadaWarningText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  salidaAnticipadaHintText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     textAlign: 'center',
   },
   actionContainer: {

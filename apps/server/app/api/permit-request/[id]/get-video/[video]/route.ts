@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 
 export const runtime = "nodejs";
@@ -70,11 +71,7 @@ export async function GET(
       return NextResponse.json({ status: false, message: "Video no encontrado" }, { status: 404 });
     }
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-      token: accessToken || undefined,
-    });
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = parseIntStrict(empleado?.supervisor_id);
     const isExecutive =
       Number(record.ejecutivo_cuenta) === currentEmployeeId ||

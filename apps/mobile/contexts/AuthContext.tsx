@@ -9,6 +9,8 @@ import {
   MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
   MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
 } from '@/hooks/mainStructureFragmentsStorage';
+import requestPlanillasToken from '@/hooks/requestPlanillasToken';
+import { readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
 
 interface Role {
   id: number;
@@ -184,8 +186,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const accessToken = responseData.accessToken;
       const refreshToken = responseData.refreshToken;
       const tokenCreatedAt = responseData.createdAt;
-      const planillasToken = responseData.planillasToken;
-      const planillasTokenExpiresAt = responseData.planillasTokenExpiresAt;
 
       if (!accessToken || !refreshToken) {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
@@ -195,32 +195,57 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const employeeData: Employee = {
         id: empleadoData.id,
         name: `${empleadoData.nombre} ${empleadoData.apellido} ${empleadoData.segundo_apellido || ''}`.trim(),
-        email: empleadoData.Email,
+        email: empleadoData.Email ?? empleadoData.email ?? '',
         cedula: empleadoData.cedula,
         telefono: empleadoData.telefono || '',
         tipoCedula: empleadoData.tipoCedula || '',
-        fechaContratacion: empleadoData.fechaContratacion || null, // Format YYYY-MM-DD
+        fechaContratacion: empleadoData.fechaContratacion || null,
         roles: empleadoData.roles || [],
         firmaManual: empleadoData.firmaManual || '',
         supervisor_id: empleadoData.supervisor_id || null,
       };
 
-      // Store tokens and employee data
       await Promise.all([
         AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
         AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
         AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData)),
         AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, tokenCreatedAt.toString()),
-        AsyncStorage.setItem(PLANILLAS_TOKEN_TOKEN_KEY, planillasToken),
-        AsyncStorage.setItem(PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY, JSON.stringify(planillasTokenExpiresAt)),
       ]);
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
       setTokenCreatedAt(tokenCreatedAt);
       setEmployee(employeeData);
-      setPlanillasToken(planillasToken);
-      setPlanillasTokenExpiresAt(planillasTokenExpiresAt);
+
+      const planillasResult = await requestPlanillasToken({
+        password,
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!planillasResult.success) {
+        await Promise.all([
+          AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
+          AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
+          AsyncStorage.removeItem(EMPLOYEE_KEY),
+          AsyncStorage.removeItem(TOKEN_CREATED_AT_KEY),
+        ]);
+        setAccessToken(null);
+        setRefreshToken(null);
+        setEmployee(null);
+        setTokenCreatedAt(null);
+        return {
+          success: false,
+          passwordExpired: false,
+          error: planillasResult.message || 'No se pudo obtener el token de Planillas',
+        };
+      }
+
+      const storedPlanillas = await readStoredPlanillasToken();
+      if (storedPlanillas) {
+        setPlanillasToken(storedPlanillas.token);
+        setPlanillasTokenExpiresAt(String(storedPlanillas.expiresAtMs));
+      }
 
       // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
       const connectivity = await resolveAppConnectivity();
@@ -252,7 +277,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'tipo_quejas_cache',
             'tipo_clientes_quejas_cache',
             'last_location',
-            'monitoring_previous_minutes'
+            'monitoring_previous_minutes',
+            'monitoring_post_minutes',
           ];
           const keys = await AsyncStorage.getAllKeys();
     
@@ -278,6 +304,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       let serverResponse = { status: true, message: 'Sesión cerrada correctamente' };
+
+      // Desregistrar token FCM mientras aún hay sesión válida
+      try {
+        const {
+          enqueueUnregisterPushDevice,
+          unregisterPushDeviceOnline,
+          PUSH_LOCAL_TOKEN_KEY,
+        } = await import('@/hooks/pushNotificationsService');
+        const fcmToken = await AsyncStorage.getItem(PUSH_LOCAL_TOKEN_KEY);
+        if (fcmToken && accessToken && apiUrl) {
+          const ok = await unregisterPushDeviceOnline({
+            apiUrl,
+            accessToken,
+            token: fcmToken,
+          });
+          if (!ok) await enqueueUnregisterPushDevice(fcmToken);
+        } else {
+          await enqueueUnregisterPushDevice(fcmToken);
+        }
+      } catch {
+        // no-op
+      }
 
       // Call logout API if we have a refresh token
       if (refreshToken && apiUrl) {
@@ -327,7 +375,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setTokenCreatedAt(null);
       setPlanillasToken(null);
       setPlanillasTokenExpiresAt(null);
-
       return serverResponse;
     } catch (error) {
       console.error('Logout error:', error);

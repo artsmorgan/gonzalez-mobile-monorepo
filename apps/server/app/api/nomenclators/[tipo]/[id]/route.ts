@@ -16,6 +16,7 @@ import {
 } from "../../../../../utils/nomenclatorsEjecutivoCoordinador";
 import {
     assignEmpleadoEjecutivo,
+    findEmpleadoEjecutivoById,
     mapEmpleadoEjecutivoRow,
     parseEmpleadoEjecutivoPayload,
     removeEmpleadoEjecutivo,
@@ -58,6 +59,17 @@ export async function GET(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
+        const kind = resolveNomenclatorKind(tipo);
+
+        if (kind === "empleado-ejecutivo") {
+            const row = await findEmpleadoEjecutivoById(req, idNum);
+            const mapped = await mapEmpleadoEjecutivoRow(req, row);
+            if (!mapped) {
+                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+            }
+            return NextResponse.json({ status: true, data: mapped }, { status: 200 });
+        }
+
         const row = await callDynamicPrisma({
             req,
             data: {
@@ -68,7 +80,7 @@ export async function GET(
             },
         });
 
-        if (resolveNomenclatorKind(tipo) === "ejecutivo-coordinador") {
+        if (kind === "ejecutivo-coordinador") {
             const mapped = await mapEjecutivoCoordinadorRow(req, row);
             if (!mapped) {
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
@@ -76,15 +88,7 @@ export async function GET(
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
         }
 
-        if (resolveNomenclatorKind(tipo) === "empleado-ejecutivo") {
-            const mapped = await mapEmpleadoEjecutivoRow(req, row);
-            if (!mapped) {
-                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
-            }
-            return NextResponse.json({ status: true, data: mapped }, { status: 200 });
-        }
-
-        if (resolveNomenclatorKind(tipo) === "mobile-variable") {
+        if (kind === "mobile-variable") {
             const mapped = mapMobileVariableRow(row);
             if (!mapped) {
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
@@ -92,7 +96,7 @@ export async function GET(
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
         }
 
-        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+        if (kind === "tipo-mantenimiento-articulo") {
             const mapped = await mapTipoMantenimientoArticuloRow(req, row);
             if (!mapped) {
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
@@ -140,6 +144,46 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
+        const kind = resolveNomenclatorKind(tipo);
+        const body = await req.json();
+
+        if (kind === "empleado-ejecutivo") {
+            const planillasToken =
+                decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
+                null;
+            if (!planillasToken) {
+                return NextResponse.json(
+                    { status: false, message: "Token de Planillas requerido" },
+                    { status: 401 }
+                );
+            }
+
+            const existing = await findEmpleadoEjecutivoById(req, idNum);
+            if (!existing) {
+                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+            }
+
+            const payload = parseEmpleadoEjecutivoPayload(body, idNum);
+            if (!payload) {
+                return NextResponse.json(
+                    { status: false, message: "Debe seleccionar un ejecutivo de cuenta válido" },
+                    { status: 400 }
+                );
+            }
+
+            const mapped = await assignEmpleadoEjecutivo(
+                req,
+                payload.empleado_id,
+                payload.ejecutivo_cuenta_id,
+                planillasToken
+            );
+
+            return NextResponse.json(
+                { status: true, message: "Relación actualizada correctamente", data: mapped },
+                { status: 200 }
+            );
+        }
+
         const existing = await callDynamicPrisma({
             req,
             data: {
@@ -153,9 +197,7 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
-        const body = await req.json();
-
-        if (resolveNomenclatorKind(tipo) === "ejecutivo-coordinador") {
+        if (kind === "ejecutivo-coordinador") {
             const payload = parseEjecutivoCoordinadorPayload(body);
             if (!payload) {
                 return NextResponse.json(
@@ -205,28 +247,7 @@ export async function PUT(
             );
         }
 
-        if (resolveNomenclatorKind(tipo) === "empleado-ejecutivo") {
-            const payload = parseEmpleadoEjecutivoPayload(body, idNum);
-            if (!payload) {
-                return NextResponse.json(
-                    { status: false, message: "Debe seleccionar un ejecutivo de cuenta válido" },
-                    { status: 400 }
-                );
-            }
-
-            const mapped = await assignEmpleadoEjecutivo(
-                req,
-                payload.empleado_id,
-                payload.ejecutivo_cuenta_id
-            );
-
-            return NextResponse.json(
-                { status: true, message: "Relación actualizada correctamente", data: mapped },
-                { status: 200 }
-            );
-        }
-
-        if (resolveNomenclatorKind(tipo) === "mobile-variable") {
+        if (kind === "mobile-variable") {
             const payload = parseMobileVariablePayload(body);
             if (!payload) {
                 return NextResponse.json(
@@ -247,7 +268,7 @@ export async function PUT(
             }
         }
 
-        if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
+        if (kind === "tipo-mantenimiento-articulo") {
             const payload = parseTipoMantenimientoArticuloPayload(body);
             if (!payload) {
                 return NextResponse.json(
@@ -357,6 +378,31 @@ export async function DELETE(
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
+        const kind = resolveNomenclatorKind(tipo);
+
+        if (kind === "empleado-ejecutivo") {
+            const planillasToken =
+                decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
+                null;
+            if (!planillasToken) {
+                return NextResponse.json(
+                    { status: false, message: "Token de Planillas requerido" },
+                    { status: 401 }
+                );
+            }
+
+            const existing = await findEmpleadoEjecutivoById(req, idNum);
+            if (!existing) {
+                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+            }
+
+            await removeEmpleadoEjecutivo(req, idNum, planillasToken);
+            return NextResponse.json(
+                { status: true, message: "Relación eliminada correctamente" },
+                { status: 200 }
+            );
+        }
+
         const existing = await callDynamicPrisma({
             req,
             data: {
@@ -370,15 +416,7 @@ export async function DELETE(
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
-        if (resolveNomenclatorKind(tipo) === "empleado-ejecutivo") {
-            await removeEmpleadoEjecutivo(req, idNum);
-            return NextResponse.json(
-                { status: true, message: "Relación eliminada correctamente" },
-                { status: 200 }
-            );
-        }
-
-        if (resolveNomenclatorKind(tipo) === "mobile-variable") {
+        if (kind === "mobile-variable") {
             return NextResponse.json(
                 { status: false, message: "No se pueden eliminar variables del sistema desde esta pantalla" },
                 { status: 405 }

@@ -12,16 +12,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import Constants from 'expo-constants';
 
-import authedFetch from '@/hooks/authedFetch';
-import { eventBus } from '@/hooks/eventBus';
 import { useAuth } from '@/contexts/AuthContext';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
-import { mergeMainStructureFragments } from '@/hooks/mergeMainStructureFragments';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import { persistMainStructureFragments } from '@/hooks/mainStructureFragmentsStorage';
-import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import {
+  regenerateAndDownloadMainStructure,
+  type MainStructureModules,
+  type MainStructureScope,
+} from '@/hooks/mainStructureApi';
 import HierarchySearchModal, { type HierarchySearchLevel } from '@/components/HierarchySearchModal';
 import type { HierarchySelectionPath } from '@/hooks/hierarchySearch';
 
@@ -43,12 +42,14 @@ interface JerarquiaModuleProps {
 const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) => {
   const { refreshAccessToken, logout } = useAuth();
 
+  /** Referencias estables: `logout`/`refreshAccessToken` del contexto cambian en cada render. */
+  const authHandlersRef = useRef({ refreshAccessToken, logout });
+  authHandlersRef.current = { refreshAccessToken, logout };
+
   const [structure, setStructure] = useState<AnyNode[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
-  /** Evita intentar restaurar desde red antes de haber leído al menos una vez el árbol local. */
   const [cacheHydrated, setCacheHydrated] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const autoRestoreAttemptedRef = useRef(false);
+  const [isGenerating, setIsGenerating] = useState(false);
 
   const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
   const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
@@ -59,21 +60,26 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
   const [selectedPlazaId, setSelectedPlazaId] = useState<number | null>(null);
   const [selectedEmpleadoId, setSelectedEmpleadoId] = useState<number | null>(null);
   const [createdAt, setCreatedAt] = useState<number | null>(null);
-  const [lastCreatedAt, setLastCreatedAt] = useState<number | null>(null);
-  const [isLastCreatedAtLoaded, setIsLastCreatedAtLoaded] = useState(false);
+  const [showGenerateOptions, setShowGenerateOptions] = useState(false);
+  const [fragmentModules, setFragmentModules] = useState<MainStructureModules>({
+    estructura: true,
+    vehiculos: true,
+    llaves: true,
+    mantenimientos: true,
+  });
   const [activeSummary, setActiveSummary] = useState<
     'empresa' | 'cliente' | 'division' | 'contrato' | 'sucursal' | 'puesto' | 'plaza' | 'empleado' | null
   >(null);
   const [hierarchySearchLevel, setHierarchySearchLevel] = useState<HierarchySearchLevel | null>(null);
 
-  const getConnectionStatus = async (): Promise<boolean> => {
+  const getConnectionStatus = useCallback(async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
 
     return (
       networkState.isConnected === true &&
       networkState.isInternetReachable === true
     );
-  };
+  }, []);
 
   const resetSelection = () => {
     setSelectedEmpresaId(null);
@@ -125,11 +131,12 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     ],
   );
 
+  /** Solo lectura local (AsyncStorage / fragmentos), como el proyecto original al abrir el módulo. */
   const loadFromCache = useCallback(async () => {
     setIsStructureLoading(true);
     try {
-      const tree = await loadMainStructureTreeMerged();
-      setStructure(Array.isArray(tree) ? tree : []);
+      const mergedTree = await loadMainStructureTreeMerged();
+      setStructure(Array.isArray(mergedTree) ? mergedTree : []);
     } catch {
       setStructure([]);
     } finally {
@@ -138,58 +145,48 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     }
   }, []);
 
-  /** Descarga completa desde `/api/main-structure` (misma lógica que el botón manual). */
-  const downloadHierarchyFromServer = useCallback(async (): Promise<void> => {
-    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-    if (!apiUrl) {
-      throw new Error('Server URL not configured');
-    }
+  const buildFragmentScope = useCallback((): MainStructureScope => {
+    return {
+      empresaId: selectedEmpresaId,
+      clienteId: selectedClienteId,
+      divisionId: selectedDivisionId,
+      contratoId: selectedContratoId,
+      sucursalId: selectedSucursalId,
+      puestoId: selectedPuestoId,
+    };
+  }, [
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
 
-    const response = await authedFetch({
-      url: `${apiUrl}/api/main-structure`,
-      init: {
-        method: 'GET',
-      },
-      refreshAccessToken,
-      logout,
+  const scopeSummaryLabel = useMemo(() => {
+    if (selectedPuestoId) return `Puesto #${selectedPuestoId}`;
+    if (selectedSucursalId) return `Sucursal #${selectedSucursalId}`;
+    if (selectedContratoId) return `Contrato #${selectedContratoId}`;
+    if (selectedDivisionId) return `División #${selectedDivisionId}`;
+    if (selectedClienteId) return `Cliente #${selectedClienteId}`;
+    if (selectedEmpresaId) return `Empresa #${selectedEmpresaId}`;
+    return 'Toda la organización';
+  }, [
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedSucursalId,
+    selectedPuestoId,
+  ]);
+
+  const toggleFragmentModule = useCallback((key: keyof MainStructureModules) => {
+    setFragmentModules((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      const anyOn = next.estructura || next.vehiculos || next.llaves || next.mantenimientos;
+      return anyOn ? next : prev;
     });
-
-    if (!response) {
-      throw new Error('Sesión expirada');
-    }
-
-    const data = await response.json();
-
-    if (!response.ok || !data?.status) {
-      throw new Error(data?.message || 'Error al actualizar la jerarquía');
-    }
-
-    let structureTree: AnyNode[] = [];
-
-    if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
-      await persistMainStructureFragments(data.fragments as Record<string, unknown>);
-      structureTree = mergeMainStructureFragments(data.fragments as Record<string, any>);
-    } else {
-      let rawStructure = data.structure;
-      if (typeof rawStructure === 'string') {
-        try {
-          rawStructure = JSON.parse(rawStructure);
-        } catch {
-          rawStructure = null;
-        }
-      }
-      if (!Array.isArray(rawStructure)) {
-        throw new Error(data?.message || 'Error al actualizar la jerarquía');
-      }
-      structureTree = rawStructure;
-      await persistMainStructureFragments({});
-      await writeMainStructureCacheString(JSON.stringify(structureTree));
-    }
-
-    setStructure(structureTree);
-    setCreatedAt(data.created_at);
-    await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const loadCreatedAt = useCallback(async () => {
     const createdAtStr = await AsyncStorage.getItem('main_structure_created_at');
@@ -198,46 +195,6 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     }
   }, []);
 
-  // Al ingresar al módulo, consultamos la última actualización disponible.
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchLastCreatedAt = async () => {
-      try {
-        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-        if (!apiUrl) return;
-
-        const isConnected = await getConnectionStatus();
-        if (!isConnected) return;
-
-        const res = await authedFetch({
-          url: `${apiUrl}/api/main-structure/last?created_at=0`,
-          init: {
-            method: 'GET',
-          },
-          refreshAccessToken,
-          logout,
-        });
-
-        if (!res) return;
-        const data = await res.json();
-        const incoming = Number(data?.created_at);
-        if (Number.isFinite(incoming) && incoming > 0 && isMounted) {
-          setLastCreatedAt(incoming);
-          setIsLastCreatedAtLoaded(true);
-        }
-      } catch {
-        // Best-effort: no bloquea el módulo si falla
-      }
-    };
-
-    fetchLastCreatedAt();
-    return () => {
-      isMounted = false;
-    };
-  }, [refreshAccessToken, logout]);
-
-  /** Jerarquía vacía en memoria tras leer caché (p. ej. datos borrados en AsyncStorage). */
   const isLocalHierarchyEmpty = useMemo(
     () =>
       cacheHydrated &&
@@ -246,108 +203,75 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     [cacheHydrated, isStructureLoading, structure],
   );
 
-  const shouldEnableRefresh = useMemo(() => {
-    if (isRefreshing || isStructureLoading) return false;
+  const canGenerateHierarchy = !isGenerating && !isStructureLoading;
 
-    if (isLocalHierarchyEmpty) {
-      return true;
-    }
-
-    if (!isLastCreatedAtLoaded || lastCreatedAt == null || !Number.isFinite(lastCreatedAt) || lastCreatedAt <= 0) {
-      return false;
-    }
-
-    const currentCreatedAt = Number(createdAt ?? 0);
-    if (!Number.isFinite(currentCreatedAt)) return false;
-
-    return lastCreatedAt > currentCreatedAt;
-  }, [
-    isRefreshing,
-    isStructureLoading,
-    isLocalHierarchyEmpty,
-    isLastCreatedAtLoaded,
-    lastCreatedAt,
-    createdAt,
-  ]);
-
-  const refreshHierarchy = useCallback(async () => {
+  /** Genera en servidor (POST) y guarda fragmentos locales (formato main-structure.json). */
+  const generateAndDownloadHierarchy = useCallback(async () => {
     const isConnected = await getConnectionStatus();
     if (!isConnected) {
-      Alert.alert('Sin conexión', 'No hay conexión a internet. No es posible actualizar la jerarquía.');
+      Alert.alert('Sin conexión', 'No hay conexión a internet. No es posible generar la jerarquía.');
       return;
     }
 
-    const runDownload = async () => {
+    const runGenerate = async () => {
+      const scopeSnapshot = buildFragmentScope();
+      const modulesSnapshot = { ...fragmentModules };
       try {
-        Alert.alert('Actualizando jerarquía', 'Actualizando jerarquía, por favor no cierre la ventana');
-        setIsRefreshing(true);
+        Alert.alert('Generando jerarquía', 'Generando fragmentos en el servidor, por favor no cierre la ventana');
+        setIsGenerating(true);
         resetSelection();
-        await downloadHierarchyFromServer();
-        Alert.alert('Éxito', 'Se ha actualizado la jerarquía');
+        const { structureTree, createdAt: incomingCreatedAt } = await regenerateAndDownloadMainStructure(
+          authHandlersRef.current,
+          {
+            scope: scopeSnapshot,
+            modules: modulesSnapshot,
+            mergeWithExisting: true,
+          },
+        );
+        setStructure(Array.isArray(structureTree) ? structureTree : []);
+        if (incomingCreatedAt != null) {
+          setCreatedAt(incomingCreatedAt);
+        }
+        Alert.alert('Éxito', 'Se ha generado y descargado la jerarquía');
       } catch (e) {
         Alert.alert(
           'Error',
-          e instanceof Error ? e.message : 'No se pudo actualizar la jerarquía. Intente nuevamente.',
+          e instanceof Error ? e.message : 'No se pudo generar la jerarquía. Intente nuevamente.',
         );
       } finally {
-        setIsRefreshing(false);
+        setIsGenerating(false);
       }
     };
 
     if (isLocalHierarchyEmpty) {
-      await runDownload();
+      await runGenerate();
       return;
     }
 
     Alert.alert(
-      'Actualizar jerarquía',
-      'Esto descargará nuevamente la estructura completa y reiniciará las selecciones actuales. ¿Desea continuar?',
+      'Generar y descargar jerarquía',
+      `Alcance: ${scopeSummaryLabel}.\n\nEsto generará una nueva estructura en el servidor, reemplazará la cache local y reiniciará las selecciones actuales. ¿Desea continuar?`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Actualizar',
+          text: 'Generar',
           style: 'destructive',
-          onPress: () => void runDownload(),
+          onPress: () => void runGenerate(),
         },
       ],
     );
-  }, [getConnectionStatus, downloadHierarchyFromServer, isLocalHierarchyEmpty]);
+  }, [
+    getConnectionStatus,
+    buildFragmentScope,
+    fragmentModules,
+    isLocalHierarchyEmpty,
+    scopeSummaryLabel,
+  ]);
 
   useEffect(() => {
-    loadFromCache();
-    loadCreatedAt();
+    void loadFromCache();
+    void loadCreatedAt();
   }, [loadFromCache, loadCreatedAt]);
-
-  /** Si la jerarquía local fue borrada, restaurar desde red sin depender de last vs created_at. */
-  const attemptAutoRestoreIfNeeded = useCallback(async () => {
-    if (!cacheHydrated || isStructureLoading) return;
-    if (!Array.isArray(structure) || structure.length > 0) return;
-    if (autoRestoreAttemptedRef.current) return;
-    const online = await getConnectionStatus();
-    if (!online) return;
-    autoRestoreAttemptedRef.current = true;
-    try {
-      setIsRefreshing(true);
-      resetSelection();
-      await downloadHierarchyFromServer();
-    } catch {
-      autoRestoreAttemptedRef.current = false;
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [cacheHydrated, isStructureLoading, structure, downloadHierarchyFromServer]);
-
-  useEffect(() => {
-    void attemptAutoRestoreIfNeeded();
-  }, [attemptAutoRestoreIfNeeded]);
-
-  useEffect(() => {
-    const onConn = () => void attemptAutoRestoreIfNeeded();
-    eventBus.on('connectionRestored', onConn);
-    return () => {
-      eventBus.off('connectionRestored', onConn);
-    };
-  }, [attemptAutoRestoreIfNeeded]);
 
   const empresas = useMemo(() => (Array.isArray(structure) ? structure : []), [structure]);
 
@@ -590,23 +514,69 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
     );
   };
 
+  const renderModuleToggle = (key: keyof MainStructureModules, label: string) => {
+    const active = fragmentModules[key];
+    return (
+      <TouchableOpacity
+        key={key}
+        style={styles.moduleToggleRow}
+        onPress={() => toggleFragmentModule(key)}
+        activeOpacity={0.85}
+      >
+        <Ionicons
+          name={active ? 'checkbox' : 'square-outline'}
+          size={22}
+          color={active ? '#007AFF' : '#9CA3AF'}
+        />
+        <Text style={styles.moduleToggleLabel}>{label}</Text>
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <Text style={styles.title}>Jerarquía</Text>
         <TouchableOpacity
-          style={[styles.refreshButton, (!shouldEnableRefresh || isRefreshing || isStructureLoading) && { opacity: 0.6 }]}
-          onPress={refreshHierarchy}
-          disabled={!shouldEnableRefresh || isRefreshing || isStructureLoading}
+          style={[styles.refreshButton, (!canGenerateHierarchy || isGenerating) && { opacity: 0.6 }]}
+          onPress={generateAndDownloadHierarchy}
+          disabled={!canGenerateHierarchy || isGenerating}
         >
-          {isRefreshing ? (
+          {isGenerating ? (
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
-            <Ionicons name="refresh" size={18} color="#FFFFFF" />
+            <Ionicons name="cloud-download-outline" size={18} color="#FFFFFF" />
           )}
-          <Text style={styles.refreshButtonText}>Actualizar jerarquía</Text>
+          <Text style={styles.refreshButtonText}>Generar y descargar</Text>
         </TouchableOpacity>
       </View>
+
+      {createdAt != null && Number.isFinite(createdAt) && (
+        <Text style={styles.metaText}>
+          Última generación local: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}
+        </Text>
+      )}
+
+      <TouchableOpacity
+        style={styles.optionsToggleRow}
+        onPress={() => setShowGenerateOptions((v) => !v)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.optionsToggleText}>Fragmentos a generar</Text>
+        <Ionicons name={showGenerateOptions ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+      </TouchableOpacity>
+
+      {showGenerateOptions && (
+        <View style={styles.optionsPanel}>
+          <Text style={styles.optionsHint}>
+            Alcance según selección actual: {scopeSummaryLabel}
+          </Text>
+          {renderModuleToggle('estructura', 'Jerarquía base (empresas, puestos, plazas, empleados)')}
+          {renderModuleToggle('vehiculos', 'Vehículos corporativos y bitácora')}
+          {renderModuleToggle('llaves', 'Llaves y llaveros')}
+          {renderModuleToggle('mantenimientos', 'Artículos: mantenimientos y movimientos')}
+        </View>
+      )}
 
       {isStructureLoading && (
         <View style={styles.loadingRow}>
@@ -617,7 +587,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
 
       {!isStructureLoading && empresas.length === 0 && (
         <Text style={styles.emptyText}>
-          No hay datos de jerarquía en cache. Usa "Actualizar jerarquía" para descargarlos cuando tengas conexión.
+          No hay jerarquía en cache local. Usa "Generar y descargar" cuando tengas conexión.
         </Text>
       )}
 
@@ -823,11 +793,10 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
             )}
         </View>
 
-        {createdAt && (
-            <Text style={[styles.label, { marginBottom: 0 }]}>Tú actualización: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}</Text>
-        )}
-        {lastCreatedAt && (
-            <Text style={[styles.label, { marginBottom: 0 }]}>Última actualización: {convertDateTimestampToLocalString(new Date(lastCreatedAt).toISOString())}</Text>
+        {createdAt != null && Number.isFinite(createdAt) && (
+            <Text style={[styles.label, { marginBottom: 0 }]}>
+              Última descarga local: {convertDateTimestampToLocalString(new Date(createdAt).toISOString())}
+            </Text>
         )}
       </ScrollView>
 
@@ -860,6 +829,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 8,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
   title: {
     fontSize: 16,
     fontWeight: '700',
@@ -874,10 +848,55 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: '#007AFF',
   },
+  refreshButtonSecondary: {
+    backgroundColor: '#5856D6',
+  },
   refreshButtonText: {
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
+  },
+  metaText: {
+    fontSize: 11,
+    color: '#666',
+    marginBottom: 4,
+  },
+  optionsToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  optionsToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  optionsPanel: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    padding: 10,
+    gap: 6,
+    marginBottom: 4,
+  },
+  optionsHint: {
+    fontSize: 11,
+    color: '#555',
+    marginBottom: 4,
+  },
+  moduleToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 4,
+  },
+  moduleToggleLabel: {
+    flex: 1,
+    fontSize: 12,
+    color: '#333',
   },
   loadingRow: {
     flexDirection: 'row',

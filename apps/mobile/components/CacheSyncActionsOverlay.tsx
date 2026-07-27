@@ -9,10 +9,16 @@ export type CacheSyncActionsOverlayProps = {
   visible: boolean;
   fadeAnim: Animated.Value;
   onRequestClose: () => void;
+  message?: string;
 };
 
 /** Ventana flotante de sincronización de acciones en caché (estilo modal de CorporateVehicles). */
-export function CacheSyncActionsOverlay({ visible, fadeAnim, onRequestClose }: CacheSyncActionsOverlayProps) {
+export function CacheSyncActionsOverlay({
+  visible,
+  fadeAnim,
+  onRequestClose,
+  message = 'Sincronizando datos en caché, no cierre la aplicación',
+}: CacheSyncActionsOverlayProps) {
   return (
     <Modal transparent visible={visible} animationType="none" onRequestClose={onRequestClose}>
       <Animated.View style={[styles.modalBackdrop, { opacity: fadeAnim }]}>
@@ -21,7 +27,7 @@ export function CacheSyncActionsOverlay({ visible, fadeAnim, onRequestClose }: C
             <Ionicons name="close" size={22} color="#000" />
           </TouchableOpacity>
           <ThemedView style={styles.modalBody} lightColor="#FFFFFF" darkColor="#FFFFFF">
-            <ThemedText style={styles.message}>Sincronizando datos en caché, no cierre la aplicación</ThemedText>
+            <ThemedText style={styles.message}>{message}</ThemedText>
             <ActivityIndicator size="large" color="#007AFF" style={styles.spinner} />
           </ThemedView>
         </ThemedView>

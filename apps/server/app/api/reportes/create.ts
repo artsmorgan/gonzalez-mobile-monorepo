@@ -21,6 +21,8 @@ import {
 } from "../../../utils/reports-functions/userLogin";
 import { purgeOldMobileReports } from "../../../utils/purgeOldMobileReports";
 import { DEFAULT_REPORT_MAX_ATTEMPTS } from "../../../utils/reportJobQueue";
+import { drainPendingReportJobs } from "../../../utils/runReportJobCycle";
+import { signalReportWorkerActivity } from "../../../utils/reportWorkerSchedule";
 import {
     normalizeMobileReportTipo,
     resolveMobileReportTipoFromModuleFilters,
@@ -597,7 +599,7 @@ export async function executeReportesOperation(
         const op = String(payload.operation || "").trim();
 
         if (op === "purgeOldReports") {
-            const result = await purgeOldMobileReports(prisma);
+            const result = await purgeOldMobileReports(reportDb);
             return { status: true, data: result };
         }
 
@@ -1725,6 +1727,9 @@ export async function executeReportesOperation(
                 },
             };
 
+            const drainWorkerId = `api-create-${auth.empleadoId}-${Date.now()}`;
+            await drainPendingReportJobs(reportDb, drainWorkerId);
+
             const created = await reportDb.e_reportes_mobile.create({
                 data: {
                     nombre,
@@ -1744,6 +1749,8 @@ export async function executeReportesOperation(
                     progress: 0,
                 },
             });
+
+            signalReportWorkerActivity("createReportJob");
 
             return {
                 status: true,

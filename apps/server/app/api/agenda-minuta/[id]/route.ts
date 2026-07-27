@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 import { toZonedTime } from "date-fns-tz";
+
+const AGENDA_MINUTA_ESTRUCTURA_INCLUDE = {
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+  e_estructura_puesto: { select: { nombre: true, codigo: true } },
+};
 
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
@@ -186,6 +193,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       }
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(AGENDA_MINUTA_ESTRUCTURA_INCLUDE);
+
     const updatedRecord = await callDynamicPrisma({
       req,
       data: {
@@ -193,13 +202,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         table: "c_agenda_minuta",
         where: { id: idNum },
         data,
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-          e_estructura_puesto: { select: { nombre: true, codigo: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(updatedRecord, preexistentSpecs);
 
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {

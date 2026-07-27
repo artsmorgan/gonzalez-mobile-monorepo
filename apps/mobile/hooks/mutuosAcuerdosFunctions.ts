@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { readStoredPlanillasToken } from './planillasTokenStorage';
 import type {
   BasicResponse,
   ListMarcasMutuoResponse,
@@ -168,6 +169,7 @@ export const signMutuoAcuerdoEjecutivo = async ({
   firma_ejecutivo_cuenta_manual,
   firma_ejecutivo_cuenta_digital,
   hora_accion,
+  planillasToken: planillasTokenOverride,
   refreshAccessToken,
   logout,
 }: {
@@ -175,11 +177,16 @@ export const signMutuoAcuerdoEjecutivo = async ({
   firma_ejecutivo_cuenta_manual: string;
   firma_ejecutivo_cuenta_digital: string;
   hora_accion?: string;
+  planillasToken?: string | null;
 } & CommonAuth): Promise<BasicResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const storedPlanillas = await readStoredPlanillasToken();
+    const planillasToken =
+      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
 
     const payload = {
       firma_ejecutivo_cuenta_manual: normalizeBase64(String(firma_ejecutivo_cuenta_manual || '')),
@@ -193,6 +200,7 @@ export const signMutuoAcuerdoEjecutivo = async ({
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
+          'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
         },
         body: JSON.stringify(payload),
       },

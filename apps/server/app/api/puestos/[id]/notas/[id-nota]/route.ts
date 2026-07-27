@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../../utils/prismaClient";
 import { sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { uploadDynamicFiles } from "../../../../../../utils/callDynamicFilesApi";
@@ -16,15 +17,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
         const nota = await callDynamicPrisma({
@@ -72,26 +65,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             imagenes
         } = await req.json();
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: empleado_id }
-            }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
 
         const categoriaData = await callDynamicPrisma({
@@ -189,15 +166,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (updatedNota) {
-            const all_plazas_puesto = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_plazas",
-                    operation: "findMany",
-                    where: { puesto_id: puesto.id }
-                }
-            });
+            const all_plazas_puesto = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
             if (all_plazas_puesto.length > 0) {
                 await sendNotificationByPlaza(req, marca_id, "Bitácora actualizada", `${empleado.nombre} ${empleado.primer_apellido} ha actualizado la nota ${previous_titulo} de tipo ${previous_categoria}`, all_plazas_puesto.map((plaza: { id: number }) => plaza.id));
             }
@@ -254,15 +223,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const id = parseInt(resolvedParams.id);
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
         if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
 
         const nota = await callDynamicPrisma({

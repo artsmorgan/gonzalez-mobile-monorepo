@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { fetchActivePlazaIdsForPuestos, sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 
@@ -42,15 +43,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             return NextResponse.json({ status: false, message: "No hay identificadores de puesto válidos" }, { status: 200 });
         }
 
-        const marcaRow = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: marcaId },
-                select: { id: true },
-            },
+        const marcaRow = await prisma.c_marca_dia.findUnique({
+            where: { id: marcaId },
+            select: { id: true },
         });
         if (!marcaRow) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
@@ -86,15 +81,9 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
                 .filter((v: number) => Number.isFinite(v) && v > 0)
         );
 
-        const existingPuestos = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findMany",
-                where: { id: { in: requestedUnique } },
-                select: { id: true },
-            },
+        const existingPuestos = await prisma.e_estructura_puesto.findMany({
+            where: { id: { in: requestedUnique } },
+            select: { id: true },
         });
         const confirmedIds = new Set(
             (Array.isArray(existingPuestos) ? existingPuestos : [])

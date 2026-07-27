@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
-import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
 import { sendNotificationByEmployee } from "../../../../utils/sendNotification";
+import axios from "axios";
 
 const parseDateInputToDate = (input: unknown): Date | null => {
     if (!input) return null;
@@ -21,6 +22,11 @@ export async function PUT(
     try {
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+        const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
+        if (!planillasToken) {
+            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+        }
 
         const resolvedParams = await context.params;
         const idNum = parseInt(String(resolvedParams.id), 10);
@@ -46,10 +52,7 @@ export async function PUT(
             return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
         const myEjecutivoCuentaId = empleado?.supervisor_id ? Number(empleado.supervisor_id) : null;
         const isExecutive =
             Number(existing.ejecutivo_cuenta) === currentEmployeeId ||
@@ -110,94 +113,25 @@ export async function PUT(
         
         const nowIso = horaAccion ? horaAccion.toISOString() : toZonedTime(new Date(), "America/Costa_Rica").toISOString();
 
-        for (const turno of turnosUpdated) {
-            if (!turno.id) continue;
+        // Función para definir si las propiedades "reemplazo_id" son todas iguales o hay diferencias entre sí
+        const areAllReplacementsEqual = (turnos: any[]) => {
+            return turnos.every(turno => turno.reemplazo_id === turnos[0].reemplazo_id);
+        };
 
-            if (turno.reemplazo_id) {
-                const reemplazo = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: turno.reemplazo_id } },
-                });
-                if (!reemplazo) continue;
-                await callDynamicPrisma({
-                    req,
-                    data: { action: "UPDATE", table: "c_marca_dia", operation: "update", where: { id: turno.id }, data: { empleadoReemplaza_id: turno.reemplazo_id } },
-                });
+        const allReplacementsEqual = areAllReplacementsEqual(turnosUpdated);
+
+        if (allReplacementsEqual) {
+            const firstTurno = turnosUpdated[0];
+            const result = await createPermisoInPlanillas(req, planillasToken, firstTurno, existing, allReplacementsEqual);
+            if (!result) {
+                return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 200 });
             }
-
-            // Crear un permiso con goce o sin goce dependiendo del tipo de permiso
-
-            let tipoAccionId = 6;
-            let permisoId = null;
-            switch (existing.tipo) {
-                case "Con goce":
-                    tipoAccionId = 6;
-                    // Crear un registro con la tabla c_permiso_con_goce
-                    const permisoConGoce = await callDynamicPrisma({
-                        req,
-                        data: { action: "POST", table: "c_permiso_con_goce", operation: "create", data: {} },
-                    });
-                    if (permisoConGoce) {
-                        permisoId = permisoConGoce.id;
-                    }
-                    break;
-                case "Sin goce":
-                    tipoAccionId = 7;
-                    // Crear un registro con la tabla c_permiso_sin_goce
-                    const permisoSinGoce = await callDynamicPrisma({
-                        req,
-                        data: { action: "POST", table: "c_permiso_sin_goce", operation: "create", data: {} },
-                    });
-                    if (permisoSinGoce) {
-                        permisoId = permisoSinGoce.id;
-                    }
-                    break;
-            }
-
-            let usuario_insercion = empleado.cedula ? (empleado.cedula + " - MonitoreApp") : "MonitoreApp";
-            let empleado_ausente = "Desconocido";
-            if (existing.empleado_id) {
-                const ausente = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: existing.empleado_id } },
-                });
-                if (ausente) {
-                    empleado_ausente = (ausente.nombre ?? "") + " " + (ausente.primer_apellido ?? "") + " " + (ausente.segundo_apellido ?? "");
-                }
-            }
-            let ejecutivo_nombre = "Desconocido";
-            if (currentEmployeeId) {
-                const ejecutivo = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "c_empleado", operation: "findUnique", where: { id: currentEmployeeId } },
-                });
-                if (ejecutivo) {
-                    ejecutivo_nombre = (ejecutivo.nombre ?? "") + " " + (ejecutivo.primer_apellido ?? "") + " " + (ejecutivo.segundo_apellido ?? "");
-                }
-            }
-
-            let dateTime_comments = (nowIso.split("T")[0]) + " a las " + (nowIso.split("T")[1].split(".")[0]);
-            
-            let comentarios = `Permiso solicitado por ${empleado_ausente} y aprobado por ${ejecutivo_nombre} el día ${dateTime_comments} en el sistema MonitoreApp`;
-            
-            const corpo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_sucursal",
-                    operation: "findUnique",
-                    where: { id: existing.corpo_id }
-                }
-            });
-            if (corpo) {
-                if (corpo.ejecutivoCuenta_id) {
-                    const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
-                      req,
-                      data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: corpo.ejecutivoCuenta_id } },
-                    });
-                    if (ejecutivo_cuenta_coordinador) {
-                        await createAccionPersonal(req, turno.id, tipoAccionId, permisoId, 0, 0, comentarios, 3, ejecutivo_cuenta_coordinador.coordinador_id, usuario_insercion);
-                    }
+        }
+        else {
+            for (const turno of turnosUpdated) {
+                const result = await createPermisoInPlanillas(req, planillasToken, turno, existing, allReplacementsEqual);
+                if (!result) {
+                    return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 200 });
                 }
             }
         }
@@ -245,24 +179,8 @@ export async function PUT(
 
         const empleadoIdSolicitud = Number((existing as any)?.empleado_id || 0);
         if (empleadoIdSolicitud) {
-            const empleadoSolicitante = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: empleadoIdSolicitud },
-                },
-            });
-            const ejecutivo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: currentEmployeeId },
-                },
-            });
+            const empleadoSolicitante = await prisma.c_empleado.findUnique({ where: { id: empleadoIdSolicitud } });
+            const ejecutivo = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
 
             const ejecutivoNombre = ejecutivo
                 ? `${ejecutivo.nombre ?? ""} ${ejecutivo.primer_apellido ?? ""} ${ejecutivo.segundo_apellido ?? ""}`.trim()
@@ -277,47 +195,22 @@ export async function PUT(
             const fecha_desde = new Date(existing.fecha_inicio).toISOString().split("T")[0];
             const fecha_hasta = new Date(existing.fecha_fin).toISOString().split("T")[0];
 
-            const plaza = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_plazas",
-                    operation: "findUnique",
-                    where: { id: existing.plaza_id },
-                },
-            });
+            const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: existing.plaza_id } });
 
             let puestoNombre = "Desconocido";
             let sucursalNombre = "Desconocida";
             let clienteNombre = "Desconocido";
 
             if (plaza) {
-                const puesto = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findUnique",
-                        where: { id: plaza.puesto_id },
-                    },
-                });
+                const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: Number(plaza.puesto_id) } });
                 if (puesto) {
                     puestoNombre = puesto.nombre;
-                    const sucursal = await callDynamicPrisma({
-                        req,
-                        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: puesto.sucursal_id } },
-                    });
+                    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: Number(puesto.sucursal_id) } });
                     if (sucursal) {
                         sucursalNombre = sucursal.nombre;
-                        const contrato = await callDynamicPrisma({
-                            req,
-                            data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: sucursal.contrato_id } },
-                        });
+                        const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: Number(sucursal.contrato_id) } });
                         if (contrato) {
-                            const cliente = await callDynamicPrisma({
-                                req,
-                                data: { action: "GET", table: "e_estructura_cliente", operation: "findUnique", where: { id: contrato.cliente_id } },
-                            });
+                            const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: Number(contrato.cliente_id) } });
                             if (cliente) {
                                 clienteNombre = cliente.nombre;
                             }
@@ -350,6 +243,71 @@ export async function PUT(
         console.error(errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
+}
+
+const createPermisoInPlanillas = async (req: NextRequest, planillasToken: string, turno: any, existing: any, allReplacementsEqual: boolean) => {
+    if (!turno.id) return;
+
+    if (turno.reemplazo_id) {
+        const reemplazo = await prisma.c_empleado.findUnique({ where: { id: turno.reemplazo_id } });
+        if (!reemplazo) return;
+    }
+
+    // Crear un permiso con goce o sin goce dependiendo del tipo de permiso
+
+    let tipoPermiso = existing.tipo == "Con goce" ? "PCG" : "PSG";
+
+    let ejecutivoCuentaCoordinadorId = 0;
+
+    const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: existing.corpo_id } });
+    if (corpo) {
+        if (corpo.ejecutivoCuenta_id) {
+            const ejecutivo_cuenta_coordinador = await callDynamicPrisma({
+              req,
+              data: { action: "GET", table: "n_ejecutivo_cuenta_coordinador", operation: "findFirst", where: { ejecutivo_cuenta_id: corpo.ejecutivoCuenta_id } },
+            });
+            if (ejecutivo_cuenta_coordinador) {
+                ejecutivoCuentaCoordinadorId = ejecutivo_cuenta_coordinador.coordinador_id;
+            }
+        }
+    }
+
+    let fechaInicio = existing.fecha_inicio.split("T")[0];
+    let fechaFin = existing.fecha_fin.split("T")[0];
+
+    if (!allReplacementsEqual) {
+        const marca = await prisma.c_marca_dia.findFirst({ where: { id: turno.id } });
+        if (marca) {
+            fechaInicio = marca.fecha.toISOString().split("T")[0];
+            fechaFin = marca.fecha.toISOString().split("T")[0];
+        }
+    }
+
+    const body = {
+        tipo: tipoPermiso,
+        empleado_id: existing.empleado_id,
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin,
+        comentarios: existing.observaciones,
+        reemplazo_id: turno.reemplazo_id,
+        coordinado_por_id: 3,
+        coordinador_id: ejecutivoCuentaCoordinadorId,
+      };
+
+      console.log(body);
+              
+      const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/acciones/permisos`, body, { 
+          headers: {
+              "Authorization": `Bearer ${planillasToken}`,
+              "Content-Type": "application/json"
+          }
+      });
+
+      if (!planillasResponse.data.success) {
+        return false;
+      }
+
+      return true;
 }
 
 export async function DELETE(

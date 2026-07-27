@@ -176,6 +176,16 @@ export async function POST(
         }
 
         if (resolveNomenclatorKind(tipo) === "empleado-ejecutivo") {
+            const planillasToken =
+                decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
+                null;
+            if (!planillasToken) {
+                return NextResponse.json(
+                    { status: false, message: "Token de Planillas requerido" },
+                    { status: 401 }
+                );
+            }
+
             const payload = parseEmpleadoEjecutivoPayload(body);
             if (!payload) {
                 return NextResponse.json(
@@ -187,7 +197,8 @@ export async function POST(
             const mapped = await assignEmpleadoEjecutivo(
                 req,
                 payload.empleado_id,
-                payload.ejecutivo_cuenta_id
+                payload.ejecutivo_cuenta_id,
+                planillasToken
             );
 
             return NextResponse.json(

@@ -1,53 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { visitorsResolveHierarchyFromPuestoId } from "../../../../utils/visitorsResolveHierarchyFromPuesto";
 
-async function getClienteIdForSucursalPut(req: NextRequest, sucursalId: number): Promise<number | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: sucursalId } }
-    });
+async function getClienteIdForSucursalPut(_req: NextRequest, sucursalId: number): Promise<number | null> {
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
     if (!sucursal?.contrato_id) {
         return null;
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
+    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: Number(sucursal.contrato_id) } });
     const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
     return Number.isFinite(cliente_id) && cliente_id > 0 ? cliente_id : null;
 }
 
 async function clienteAndPuestoForCorpoPut(
-    req: NextRequest,
+    _req: NextRequest,
     corpoId: number
 ): Promise<{ cliente_id: number; puesto_id: number } | null> {
-    const sucursal = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_sucursal", operation: "findUnique", where: { id: corpoId } }
-    });
+    const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoId } });
     if (!sucursal?.contrato_id) {
         return null;
     }
-    const contrato = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_contrato", operation: "findUnique", where: { id: Number(sucursal.contrato_id) } }
-    });
+    const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: Number(sucursal.contrato_id) } });
     const cliente_id = contrato?.cliente_id != null ? Number(contrato.cliente_id) : NaN;
     if (!Number.isFinite(cliente_id) || cliente_id <= 0) {
         return null;
     }
-    const puestos = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_puesto", operation: "findMany", where: { sucursal_id: corpoId } }
-    });
-    const list = Array.isArray(puestos) ? puestos : [];
-    const puesto_id = list[0]?.id != null ? Number(list[0].id) : NaN;
+    const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpoId } });
+    const puesto_id = puestos[0]?.id != null ? Number(puestos[0].id) : NaN;
     if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
         return null;
     }
@@ -139,10 +124,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             }
             updateData.corpo_id = bodyCorpoParsed;
             if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0) {
-                const puestoRow = await callDynamicPrisma({
-                    req,
-                    data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: bodyPuestoParsed } }
-                });
+                const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: bodyPuestoParsed } });
                 if (!puestoRow) {
                     return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
                 }
@@ -157,10 +139,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 updateData.puesto_id = cp.puesto_id;
             }
         } else if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0 && bodyPuestoParsed !== Number(visitor.puesto_id)) {
-            const puestoRow = await callDynamicPrisma({
-                req,
-                data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: bodyPuestoParsed } }
-            });
+            const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: bodyPuestoParsed } });
             if (!puestoRow) {
                 return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
             }

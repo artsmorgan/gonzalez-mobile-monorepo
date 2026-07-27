@@ -4,6 +4,7 @@ import { toZonedTime, format } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
 import {
@@ -28,15 +29,7 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marcaId) },
-            },
-        });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -52,21 +45,15 @@ export async function GET(req: NextRequest) {
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
 
-        const proximo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: marcaObj.empleadoFijo_id,
-                    OR: [
-                        { fecha: { gt: now } },
-                        { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
-                    ],
-                },
-                orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+        const proximo = await prisma.c_marca_dia.findFirst({
+            where: {
+                empleadoFijo_id: marcaObj.empleadoFijo_id,
+                OR: [
+                    { fecha: { gt: now } },
+                    { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
+                ],
             },
+            orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
         });
 
         let lastMarca: any = null;
@@ -79,21 +66,15 @@ export async function GET(req: NextRequest) {
         }
 
         if (!lastMarca) {
-            const ultimo = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findFirst",
-                    where: {
-                        empleadoFijo_id: marcaObj.empleadoFijo_id,
-                        OR: [
-                            { fecha: { lt: now } },
-                            { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
-                        ],
-                    },
-                    orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+            const ultimo = await prisma.c_marca_dia.findFirst({
+                where: {
+                    empleadoFijo_id: marcaObj.empleadoFijo_id,
+                    OR: [
+                        { fecha: { lt: now } },
+                        { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                    ],
                 },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
             });
             lastMarca = ultimo;
         }
@@ -110,15 +91,7 @@ export async function GET(req: NextRequest) {
                 ? parseInt(corpoIdParam, 10)
                 : marcaObj.corpo_id;
 
-        const corpo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_sucursal",
-                operation: "findUnique",
-                where: { id: effectiveCorpoId },
-            },
-        });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoId } });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
         }
@@ -173,43 +146,19 @@ export async function GET(req: NextRequest) {
 
         const loadEmpresa = async (id: number) => {
             if (empresaCache.has(id)) return empresaCache.get(id);
-            const row = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_empresa",
-                    operation: "findUnique",
-                    where: { id },
-                },
-            });
+            const row = await prisma.e_estructura_empresa.findUnique({ where: { id } });
             empresaCache.set(id, row);
             return row;
         };
         const loadCliente = async (id: number) => {
             if (clienteCache.has(id)) return clienteCache.get(id);
-            const row = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_cliente",
-                    operation: "findUnique",
-                    where: { id },
-                },
-            });
+            const row = await prisma.e_estructura_cliente.findUnique({ where: { id } });
             clienteCache.set(id, row);
             return row;
         };
         const loadCorpo = async (id: number) => {
             if (corpoCache.has(id)) return corpoCache.get(id);
-            const row = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_sucursal",
-                    operation: "findUnique",
-                    where: { id },
-                },
-            });
+            const row = await prisma.e_estructura_sucursal.findUnique({ where: { id } });
             corpoCache.set(id, row);
             return row;
         };
@@ -221,15 +170,7 @@ export async function GET(req: NextRequest) {
             }
             // Desconvertir de base64 a string
             const id_firma = atob(capacitacionObj.firma_responsable).split(":")[1];
-            const firma = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: parseInt(id_firma) },
-                },
-            });
+            const firma = await prisma.c_empleado.findUnique({ where: { id: parseInt(id_firma) } });
             let nombre_firma = "No disponible";
             if (firma) {
                 const firmaObj = firma as any;
@@ -252,15 +193,7 @@ export async function GET(req: NextRequest) {
             const all_empleados: { id: number, nombre: string, cedula: string }[] = [];
             for (const empleado of empleadosArray) {
                 const empleadoObj = empleado as any;
-                const empleado_data = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: empleadoObj.empleado_id },
-                    },
-                });
+                const empleado_data = await prisma.c_empleado.findUnique({ where: { id: empleadoObj.empleado_id } });
                 if (empleado_data) {
                     const empleadoDataObj = empleado_data as any;
                     all_empleados.push({
@@ -284,15 +217,7 @@ export async function GET(req: NextRequest) {
             const all_puestos: { id: number, nombre: string }[] = [];
             for (const puesto of puestosArray) {
                 const puestoObj = puesto as any;
-                const puesto_data = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findUnique",
-                        where: { id: puestoObj.puesto_id },
-                    },
-                });
+                const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoObj.puesto_id } });
                 if (puesto_data) {
                     const puestoDataObj = puesto_data as any;
                     all_puestos.push({
@@ -449,15 +374,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: parseInt(marca_id) },
-            },
-        });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -467,15 +384,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: marcaObj.empleadoFijo_id },
-            },
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaObj.empleadoFijo_id } });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
         }
@@ -493,41 +402,17 @@ export async function POST(req: NextRequest) {
                 ? parseInt(String(body_corpo_id), 10)
                 : marcaObj.corpo_id;
 
-        const empresa = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_empresa",
-                operation: "findUnique",
-                where: { id: effectiveEmpresaId },
-            },
-        });
+        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: effectiveEmpresaId } });
         if (!empresa) {
             return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
         }
 
-        const cliente = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_cliente",
-                operation: "findUnique",
-                where: { id: effectiveClienteId },
-            },
-        });
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: effectiveClienteId } });
         if (!cliente) {
             return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
         }
 
-        const corpo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_sucursal",
-                operation: "findUnique",
-                where: { id: effectiveCorpoIdPost },
-            },
-        });
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoIdPost } });
         if (!corpo) {
             return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
         }
@@ -571,15 +456,7 @@ export async function POST(req: NextRequest) {
         const hour = fechaValue.toISOString().split("T")[1].split(".")[0];
 
         for (const emp of empleados) {
-            const empleado_data = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findUnique",
-                    where: { id: parseInt(emp) },
-                },
-            });
+            const empleado_data = await prisma.c_empleado.findUnique({ where: { id: parseInt(emp) } });
             if (!empleado_data) {
                 continue;
             }
@@ -601,15 +478,7 @@ export async function POST(req: NextRequest) {
         }
 
         for (const puesto of puestos) {
-            const puesto_data = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_puesto",
-                    operation: "findUnique",
-                    where: { id: parseInt(puesto) },
-                },
-            });
+            const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(puesto) } });
             if (!puesto_data) {
                 continue;
             }

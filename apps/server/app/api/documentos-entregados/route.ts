@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 
@@ -155,43 +156,25 @@ export async function POST(req: NextRequest) {
       let empleadoNombre = "Desconocido";
       const empleadoId = payload?.id || payload?.empleadoId;
       if (empleadoId) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId)) },
-          },
+        const empleado = await prisma.c_empleado.findUnique({
+          where: { id: typeof empleadoId === 'number' ? empleadoId : parseInt(String(empleadoId)) },
         });
-        if (empleado && empleado.id) {
+        if (empleado) {
           empleadoNombre = (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || "");
         }
       }
       let sucursalNombre = "Desconocida";
       let clienteNombre = "Desconocido";
-      const cliente = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findUnique",
-          where: { id: clienteIdNum },
-        },
+      const cliente = await prisma.e_estructura_cliente.findUnique({
+        where: { id: clienteIdNum },
       });
-      if (cliente && cliente.id) {
+      if (cliente) {
         clienteNombre = cliente.nombre || "Desconocido";
       }
-      const sucursal = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_sucursal",
-          operation: "findUnique",
-          where: { id: corpoIdNum },
-        },
+      const sucursal = await prisma.e_estructura_sucursal.findUnique({
+        where: { id: corpoIdNum },
       });
-      if (sucursal && sucursal.id) {
+      if (sucursal) {
         sucursalNombre = sucursal.nombre || "Desconocida";
       }
       const fechaFormatted = fechaDate.toISOString().split("T")[0];

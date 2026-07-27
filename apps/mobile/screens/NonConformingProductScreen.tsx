@@ -54,7 +54,7 @@ import {
   getStablePncRowKey,
   mergeEvaluationsCachePncForCorpo,
 } from '@/hooks/nonConformingProductCacheHelpers';
-import { readMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
 
@@ -343,6 +343,7 @@ export default function NonConformingProductScreen() {
 
   // estructura
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [tiposProductoNoConforme, setTiposProductoNoConforme] = useState<TipoProductoNoConforme[]>([]);
 
@@ -614,53 +615,24 @@ export default function NonConformingProductScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      setStructure(structureRef.current);
+      return;
+    }
     setIsStructureLoading(true);
     try {
-      const cacheStr = await readMainStructureCacheString();
-      if (cacheStr) {
-        try {
-          const parsed = JSON.parse(cacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
-          else setStructure([]);
-        } catch {
-          setStructure([]);
-        }
-      }
-
-      /*
-      const isConnected = await getConnectionStatus();
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!response) return;
-      if (!response.ok) return;
-      const data = await response.json().catch(() => ({}));
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await AsyncStorage.setItem('main_structure_cache', JSON.stringify(incoming));
-      }
-      */
+      const merged = await loadMainStructureTreeMerged();
+      const next = Array.isArray(merged) ? merged : [];
+      structureRef.current = next;
+      setStructure(next);
     } catch (e) {
       console.error('Error fetching main structure (PNC):', e);
+      structureRef.current = [];
+      setStructure([]);
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const fetchTiposProductoNoConforme = useCallback(async () => {
     try {

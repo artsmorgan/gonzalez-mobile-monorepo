@@ -202,6 +202,19 @@ export function evaluateLocalMarcaRules(
     };
   }
 
+  const isSalidaAnticipada =
+    marca.is_salida_anticipada === true ||
+    (marca.is_salida_anticipada !== false && marca.hora_salida_anticipada != null);
+
+  if (isSalidaAnticipada && marca.hora_entrada_digitada == null) {
+    return {
+      markingBlocked: true,
+      canMarkEntrada: false,
+      canMarkSalida: false,
+      message: 'No puedes marcar ingreso porque esta marca tiene salida anticipada.',
+    };
+  }
+
   const { inicio, fin } = computeMarcaShiftBounds(marca);
   if (!inicio || !fin) {
     return {
@@ -216,13 +229,10 @@ export function evaluateLocalMarcaRules(
     const fecha_display = isoDatePart(marca.fecha).split('-').reverse().join('-');
     let should_response = true;
     let extra_reason = '';
-    const ausenciaTipo = marca.ausencia_tipo ?? marca.ausenciaTipo;
-    if (ausenciaTipo === 'JUS') {
+    const comment = marca.accion_personal_comentarios ?? marca.ausencia_comentario;
+    if (comment != null && String(comment).trim()) {
       should_response = false;
-      const comment = marca.accion_personal_comentarios ?? marca.ausencia_comentario;
-      if (comment != null && String(comment).trim()) {
-        extra_reason = ' Razon: ' + String(comment).trim();
-      }
+      extra_reason = ' Razon: ' + String(comment).trim();
     }
     if (opts?.pendingAbsentReason) {
       should_response = false;

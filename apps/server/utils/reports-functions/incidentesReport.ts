@@ -5,6 +5,25 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromFile } from "./imageDimensions";
+import {
+    hydratePreexistentChildRelations,
+    hydratePreexistentRelations,
+    splitIncludeByTableGroup,
+} from "../hydratePreexistentIncludes";
+
+const INCIDENTES_REPORT_INCLUDE = {
+    n_clasificacion_incidente: { select: { id: true, nombre: true } },
+    n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
+    c_contribucion_incidente: {
+        orderBy: { created_at: "desc" },
+    },
+};
+
+const CONTRIBUCION_EMPLEADO_SPEC = {
+    relation: "c_empleado",
+    fkField: "empleado_id",
+    select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+};
 
 export type IncidenteModuleFilters = ActaEntregaModuleFilters & {
     solucionadoDesde?: string | null;
@@ -200,19 +219,16 @@ export async function queryIncidenteRows(prisma: ReportDataAccess, filters: Inci
     if (filters.clasificacionId != null) where.clasificacion = filters.clasificacionId;
     if (filters.estado != null) where.estado = filters.estado;
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(INCIDENTES_REPORT_INCLUDE);
+
     const rows = await prisma.c_incidente.findMany({
         where,
-        include: {
-            n_clasificacion_incidente: { select: { id: true, nombre: true } },
-            n_ejecutivo_cuenta: { select: { id: true, nombre: true } },
-            c_contribucion_incidente: {
-                include: { c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } } },
-                orderBy: { created_at: "desc" },
-            },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
         orderBy: { id: "desc" },
         take: 50_000,
     });
+    await hydratePreexistentRelations(rows, preexistentSpecs);
+    await hydratePreexistentChildRelations(rows, "c_contribucion_incidente", [CONTRIBUCION_EMPLEADO_SPEC]);
 
     const empresaIds = parseIds(rows.map((x) => x.empresa_id));
     const clienteIds = parseIds(rows.map((x) => x.cliente_id));

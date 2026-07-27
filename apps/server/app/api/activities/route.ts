@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { sendNotificationByPlaza, fetchActivePlazaIdsForPuestos } from "../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 
 export async function GET(req: NextRequest) {
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
         }
 
-        const marca = await callDynamicPrisma({ req, data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marca_id } } });
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
         if (!marca) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
@@ -74,15 +75,9 @@ export async function POST(req: NextRequest) {
 
             // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
             const existingPuestos = uniquePuestoIds.length > 0
-                ? await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_puesto",
-                        operation: "findMany",
-                        where: { id: { in: uniquePuestoIds } },
-                        select: { id: true },
-                    },
+                ? await prisma.e_estructura_puesto.findMany({
+                    where: { id: { in: uniquePuestoIds as number[] } },
+                    select: { id: true },
                 })
                 : [];
 

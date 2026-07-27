@@ -2,8 +2,7 @@ import Constants from 'expo-constants';
 import authedFetch from '@/hooks/authedFetch';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { mergeJobManualsCacheForPuesto } from '@/hooks/jobManualsCacheHelpers';
-import { persistMainStructureFragments } from '@/hooks/mainStructureFragmentsStorage';
-import { writeMainStructureCacheString } from '@/hooks/mainStructureCacheStorage';
+import { persistMainStructurePayload } from '@/hooks/mainStructureApi';
 import { mergeLlaverosCacheForCorpo } from '@/hooks/llaverosCacheHelpers';
 import { mergeLlavesCacheForCorpo } from '@/hooks/llavesCacheHelpers';
 import * as Network from 'expo-network';
@@ -201,22 +200,7 @@ const getMainStructure = async (refreshAccessToken: any, logout: any) => {
     const data = await response.json();
     if (!data.status) return;
 
-    if (data.fragments && typeof data.fragments === 'object' && !Array.isArray(data.fragments)) {
-      await persistMainStructureFragments(data.fragments as Record<string, unknown>);
-    } else {
-      let rawStructure = data.structure;
-      if (typeof rawStructure === 'string') {
-        try {
-          rawStructure = JSON.parse(rawStructure);
-        } catch {
-          rawStructure = null;
-        }
-      }
-      if (Array.isArray(rawStructure)) {
-        await persistMainStructureFragments({});
-        await writeMainStructureCacheString(JSON.stringify(rawStructure));
-      }
-    }
+    await persistMainStructurePayload(data);
 
     if (data.created_at !== undefined && data.created_at !== null) {
       await AsyncStorage.setItem('main_structure_created_at', String(data.created_at));

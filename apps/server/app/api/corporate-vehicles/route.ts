@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import fs from "fs";
 import path from "path";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
@@ -39,15 +40,9 @@ export async function GET(req: NextRequest) {
     } else if (empresaIdStr) {
       // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findMany",
-          where: { empresa_id: empresaId },
-          select: { id: true },
-        },
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
       });
       const clientesArray = Array.isArray(clientes) ? clientes : [];
       const clienteIds = clientesArray.map((c: any) => c.id);
@@ -246,33 +241,19 @@ export async function POST(req: NextRequest) {
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
       if (newRecordObj.created_by) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: newRecordObj.created_by },
-          },
+        const empleado = await prisma.c_empleado.findUnique({
+          where: { id: newRecordObj.created_by },
         });
         if (empleado) {
-          const empleadoObj = empleado as any;
-          empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+          empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
         }
       }
       if (newRecordObj.sucursal_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: newRecordObj.sucursal_id },
-          },
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({
+          where: { id: newRecordObj.sucursal_id },
         });
         if (sucursal) {
-          const sucursalObj = sucursal as any;
-          sucursalNombre = sucursalObj.nombre;
+          sucursalNombre = sucursal.nombre;
         }
       }
       const descriptionNotificacion = "El empleado " + empNombre + " ha registrado un vehículo corporativo en la sucursal " + sucursalNombre + " el día " + fechaRegistro + " a las " + horaRegistro;

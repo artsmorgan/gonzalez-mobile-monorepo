@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 
 export async function GET(req: NextRequest) {
@@ -33,21 +34,14 @@ export async function GET(req: NextRequest) {
         } else if (clienteIdStr) {
             // Si hay cliente pero no contrato, buscar todos los contratos del cliente
             const clienteId = parseInt(clienteIdStr);
-            const contratos = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_contrato",
-                    operation: "findMany",
-                    where: {
-                        cliente_id: clienteId,
-                        deleted: null,
-                    },
-                    select: { id: true },
+            const contratos = await prisma.e_estructura_contrato.findMany({
+                where: {
+                    cliente_id: clienteId,
+                    deleted: null,
                 },
+                select: { id: true },
             });
-            const contratosArray = Array.isArray(contratos) ? contratos : [];
-            const contratoIds = contratosArray.map((c: any) => c.id);
+            const contratoIds = contratos.map((c) => c.id);
             if (contratoIds.length > 0) {
                 where.contrato_id = { in: contratoIds };
             } else {
@@ -56,35 +50,20 @@ export async function GET(req: NextRequest) {
         } else if (empresaIdStr) {
             // Si hay empresa pero no cliente, buscar todos los clientes de la empresa
             const empresaId = parseInt(empresaIdStr);
-            const clientes = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "e_estructura_cliente",
-                    operation: "findMany",
-                    where: { empresa_id: empresaId },
-                    select: { id: true },
-                },
+            const clientes = await prisma.e_estructura_cliente.findMany({
+                where: { empresa_id: empresaId },
+                select: { id: true },
             });
-            const clientesArray = Array.isArray(clientes) ? clientes : [];
-            const clienteIds = clientesArray.map((c: any) => c.id);
+            const clienteIds = clientes.map((c) => c.id);
             if (clienteIds.length > 0) {
-                // Obtener todos los contratos de estos clientes
-                const contratos = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_contrato",
-                        operation: "findMany",
-                        where: {
-                            cliente_id: { in: clienteIds },
-                            deleted: null,
-                        },
-                        select: { id: true },
+                const contratos = await prisma.e_estructura_contrato.findMany({
+                    where: {
+                        cliente_id: { in: clienteIds },
+                        deleted: null,
                     },
+                    select: { id: true },
                 });
-                const contratosArray2 = Array.isArray(contratos) ? contratos : [];
-                const contratoIds = contratosArray2.map((c: any) => c.id);
+                const contratoIds = contratos.map((c) => c.id);
                 if (contratoIds.length > 0) {
                     where.contrato_id = { in: contratoIds };
                 } else {
@@ -186,15 +165,7 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca inv?lida" }, { status: 400 });
         }
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: marcaIdNum },
-            },
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaIdNum } });
         if (!marcaDia) {
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
@@ -319,66 +290,38 @@ export async function POST(req: NextRequest) {
         if (newRecordObj) {
             let empNombre = "Desconocido";
             if (newRecordObj.created_by) {
-                const empleado = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_empleado",
-                        operation: "findUnique",
-                        where: { id: Number(newRecordObj.created_by) },
-                    },
+                const empleado = await prisma.c_empleado.findUnique({
+                    where: { id: Number(newRecordObj.created_by) },
                 });
                 if (empleado) {
-                    const empleadoObj = empleado as any;
-                    empNombre = empleadoObj.nombre + " " + empleadoObj.primer_apellido + " " + empleadoObj.segundo_apellido;
+                    empNombre = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
                 }
             }
             let sucursalNombre = "Desconocida";
             if (newRecordObj.corpo_id) {
-                const sucursal = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_sucursal",
-                        operation: "findUnique",
-                        where: { id: newRecordObj.corpo_id },
-                    },
+                const sucursal = await prisma.e_estructura_sucursal.findUnique({
+                    where: { id: newRecordObj.corpo_id },
                 });
                 if (sucursal) {
-                    const sucursalObj = sucursal as any;
-                    sucursalNombre = sucursalObj.nombre + " (" + sucursalObj.nro_sucursal + ")";
+                    sucursalNombre = sucursal.nombre + " (" + sucursal.nro_sucursal + ")";
                 }
             }
             let clienteNombre = "Desconocido";
             if (newRecordObj.cliente_id) {
-                const cliente = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_cliente",
-                        operation: "findUnique",
-                        where: { id: newRecordObj.cliente_id },
-                    },
+                const cliente = await prisma.e_estructura_cliente.findUnique({
+                    where: { id: newRecordObj.cliente_id },
                 });
                 if (cliente) {
-                    const clienteObj = cliente as any;
-                    clienteNombre = clienteObj.nombre;
+                    clienteNombre = cliente.nombre;
                 }
             }
             let plazaNombre = "Desconocida";
             if (newRecordObj.plaza_id) {
-                const plaza = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "e_estructura_plazas",
-                        operation: "findUnique",
-                        where: { id: newRecordObj.plaza_id },
-                    },
+                const plaza = await prisma.e_estructura_plazas.findUnique({
+                    where: { id: newRecordObj.plaza_id },
                 });
                 if (plaza) {
-                    const plazaObj = plaza as any;
-                    plazaNombre = plazaObj.nombre + " (" + plazaObj.codigo_plaza + ")";
+                    plazaNombre = plaza.nombre + " (" + plaza.codigo_plaza + ")";
                 }
             }
             const created_at_value = typeof newRecordObj.created_at === 'string' ? newRecordObj.created_at : (newRecordObj.created_at instanceof Date ? newRecordObj.created_at.toISOString() : createdAt.toISOString());

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -33,23 +34,17 @@ export async function GET(req: NextRequest) {
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
 
-    const marcas = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "c_marca_dia",
-        operation: "findMany",
-        where: {
-          empleadoFijo_id: empleadoId,
-          fecha: fecha,
-        },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true } },
-          e_estructura_puesto: { select: { nombre: true } },
-        },
-        orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
+    const marcas = await prisma.c_marca_dia.findMany({
+      where: {
+        empleadoFijo_id: empleadoId,
+        fecha: new Date(fecha),
       },
+      include: {
+        e_estructura_cliente: { select: { nombre: true } },
+        e_estructura_sucursal: { select: { nombre: true } },
+        e_estructura_puesto: { select: { nombre: true } },
+      },
+      orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     });
 
     console.log("marcas", marcas);
@@ -63,15 +58,9 @@ export async function GET(req: NextRequest) {
     );
     const contratos =
       contratoIds.length > 0
-        ? await callDynamicPrisma({
-            req,
-            data: {
-              action: "GET",
-              table: "e_estructura_contrato",
-              operation: "findMany",
-              where: { id: { in: contratoIds } },
-              select: { id: true, division_id: true },
-            },
+        ? await prisma.e_estructura_contrato.findMany({
+            where: { id: { in: contratoIds } },
+            select: { id: true, division_id: true },
           })
         : [];
     const divisionByContratoId = new Map<number, number | null>(

@@ -512,6 +512,7 @@ export default function ApreciacionVulnerabilidadScreen() {
 
   const [items, setItems] = useState<VulnUI[]>([]);
   const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
+  const structureRef = useRef<MainStructureEmpresa[]>([]);
 
   // filtros
   const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
@@ -767,14 +768,19 @@ export default function ApreciacionVulnerabilidadScreen() {
    * Devuelve el árbol para precarga de filtros sin depender del estado asíncrono de React.
    */
   const loadMainStructureCache = useCallback(async (): Promise<MainStructureEmpresa[]> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const parsed = await loadMainStructureTreeMerged();
       const empresas = Array.isArray(parsed) ? (parsed as MainStructureEmpresa[]) : [];
+      structureRef.current = empresas;
       setStructure(empresas);
       return empresas;
     } catch (e) {
       console.error('ApreciacionVulnerabilidad loadMainStructureCache:', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {
@@ -1130,11 +1136,17 @@ export default function ApreciacionVulnerabilidadScreen() {
     const currentMarcaStr = await AsyncStorage.getItem('current_marca');
     if (currentMarcaStr) {
       const current = JSON.parse(currentMarcaStr);
-      let tree: MainStructureEmpresa[] = structure;
+      let tree: MainStructureEmpresa[] = structureRef.current;
+      if (!Array.isArray(tree) || tree.length === 0) {
+        tree = Array.isArray(structure) && structure.length > 0 ? structure : [];
+      }
       if (!Array.isArray(tree) || tree.length === 0) {
         const loaded = await loadMainStructureTreeMerged().catch(() => []);
         tree = Array.isArray(loaded) ? (loaded as MainStructureEmpresa[]) : [];
-        if (tree.length > 0) setStructure(tree);
+        if (tree.length > 0) {
+          structureRef.current = tree;
+          setStructure(tree);
+        }
       }
       const marcaPuestoId = current?.puesto?.id != null ? Number(current.puesto.id) : null;
       const byPuesto = resolveByPuestoIdInTree(tree, marcaPuestoId);

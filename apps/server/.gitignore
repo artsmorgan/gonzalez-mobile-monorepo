@@ -45,3 +45,6 @@ next-env.d.ts
 
 # public
 /public/uploads
+
+# worker schedule (runtime signal file)
+.report-worker-schedule.json

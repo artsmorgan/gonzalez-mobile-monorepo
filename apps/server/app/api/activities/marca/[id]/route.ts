@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { getActivities } from "../../../../../utils/createActivities";
-import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -12,10 +12,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id } }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
 
         if (!marcaDia.hora_inicio || !marcaDia.hora_fin) {
@@ -26,18 +23,18 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "Hora de entrada del empleado no registrada" }, { status: 200 });
         }
 
-        const puesto = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: marcaDia.puesto_id } }
-        });
+        if (!marcaDia.puesto_id) {
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+        }
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
         if (!puesto) {
             return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
         }
 
-        const plaza = await callDynamicPrisma({
-            req,
-            data: { action: "GET", table: "e_estructura_plazas", operation: "findUnique", where: { id: marcaDia.plaza_id } }
-        });
+        if (!marcaDia.plaza_id) {
+            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+        }
+        const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
         if (!plaza) {
             return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
         }

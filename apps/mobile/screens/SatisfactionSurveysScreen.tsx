@@ -748,6 +748,7 @@ export default function SatisfactionSurveysScreen() {
   const [isCheckingMarca, setIsCheckingMarca] = useState<boolean>(true);
 
   // Estados para filtros jerárquicos
+  const structureRef = useRef<MainStructureTree>([]);
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -1140,14 +1141,19 @@ export default function SatisfactionSurveysScreen() {
   );
 
   const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const tree = await loadMainStructureTreeMerged();
       const arr = Array.isArray(tree) ? tree : [];
+      structureRef.current = arr;
       setStructure(arr);
       return arr;
     } catch (e) {
       console.error('Error fetching main structure for satisfaction surveys:', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {

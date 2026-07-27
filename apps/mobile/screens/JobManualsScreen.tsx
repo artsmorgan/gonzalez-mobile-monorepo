@@ -25,7 +25,7 @@ import {
   mergeJobManualsCacheForPuesto,
   patchJobManualPuestosVinculadosInCache,
 } from '../hooks/jobManualsCacheHelpers';
-import { readMainStructureCacheString, writeMainStructureCacheString } from '../hooks/mainStructureCacheStorage';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '../hooks/fileStorage';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { syncUnsyncedJobManualByLocalId } from '../hooks/jobManualsQueueUtils';
@@ -233,6 +233,7 @@ export default function JobManualsScreen() {
   const [selectedPuestos, setSelectedPuestos] = useState<number[]>([]);
 
   const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [assignToAllDivision, setAssignToAllDivision] = useState(false);
   const [selectedDivisionForAll, setSelectedDivisionForAll] = useState<number | null>(null);
@@ -445,52 +446,24 @@ export default function JobManualsScreen() {
   );
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      setStructure(structureRef.current);
+      return;
+    }
     try {
       setIsStructureLoading(true);
-
-      // 1) Cache primero (archivo o AsyncStorage, ver mainStructureCacheStorage)
-      const cacheStr = await readMainStructureCacheString();
-      if (cacheStr) {
-        try {
-          const cached = JSON.parse(cacheStr);
-          if (Array.isArray(cached)) setStructure(cached);
-          else setStructure([]);
-        } catch {
-          setStructure([]);
-        }
-      }
-
-      const isConnected = false; // No debemos actualizar el árbol aquí
-      if (!isConnected) return;
-
-      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-      if (!apiUrl) return;
-
-      const response = await authedFetch({
-        url: `${apiUrl}/api/main-structure`,
-        init: {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        },
-        refreshAccessToken,
-        logout,
-      });
-      if (!response?.ok) return;
-
-      const data = await response.json();
-      const incoming = data?.structure;
-      if (data?.status && Array.isArray(incoming)) {
-        setStructure(incoming);
-        await writeMainStructureCacheString(JSON.stringify(incoming));
-      }
+      const merged = await loadMainStructureTreeMerged();
+      const next = Array.isArray(merged) ? merged : [];
+      structureRef.current = next;
+      setStructure(next);
     } catch (error) {
       console.error('Error fetching main structure for job manuals:', error);
+      structureRef.current = [];
+      setStructure([]);
     } finally {
       setIsStructureLoading(false);
     }
-  }, [refreshAccessToken, logout]);
+  }, []);
 
   const syncMarcaContextFromStorage = useCallback(
     async (opts?: { applyFiltersFromMarca?: boolean }) => {

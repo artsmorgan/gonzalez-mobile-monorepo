@@ -371,6 +371,7 @@ export default function VisitorsScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
 
+  const structureRef = useRef<MainStructureTree>([]);
   const [structure, setStructure] = useState<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
@@ -749,17 +750,23 @@ export default function VisitorsScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const merged = await loadMainStructureTreeMerged();
       if (Array.isArray(merged) && merged.length > 0) {
+        structureRef.current = merged;
         setStructure(merged);
         return merged;
       }
+      structureRef.current = [];
       setStructure([]);
       return [];
     } catch (e) {
       console.error('Error loading main structure (Visitors):', e);
+      structureRef.current = [];
       setStructure([]);
       return [];
     } finally {

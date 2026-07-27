@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { enrichCambiosAppsModulesRows } from "../../../utils/enrichCambiosAppsModules";
+import { prisma } from "../../../utils/prismaClient";
 
 export async function GET(req: NextRequest) {
     try {
@@ -55,21 +56,15 @@ export async function GET(req: NextRequest) {
         const empleadosMap = new Map<number, { nombre: string; primer_apellido: string; segundo_apellido: string | null; cedula: string }>();
 
         if (empleadoIds.length > 0) {
-            const empleados = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_empleado",
-                    operation: "findMany",
-                    where: { id: { in: empleadoIds } },
-                    select: {
-                        id: true,
-                        nombre: true,
-                        primer_apellido: true,
-                        segundo_apellido: true,
-                        cedula: true,
-                    },
-                }
+            const empleados = await prisma.c_empleado.findMany({
+                where: { id: { in: empleadoIds } },
+                select: {
+                    id: true,
+                    nombre: true,
+                    primer_apellido: true,
+                    segundo_apellido: true,
+                    cedula: true,
+                },
             });
 
             const typedEmpleados: EmpleadoRow[] = Array.isArray(empleados) ? empleados : [];

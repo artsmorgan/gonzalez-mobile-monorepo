@@ -354,6 +354,7 @@ export default function InductionTourRecordScreen() {
 
   // Main structure y filtros jerárquicos
   const [structure, setStructure] = useState<MainStructureEmpresa[]>([]);
+  const structureRef = useRef<MainStructureEmpresa[]>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
@@ -852,11 +853,16 @@ export default function InductionTourRecordScreen() {
   };
 
   const fetchMainStructure = useCallback(async () => {
+    if (structureRef.current.length > 0) {
+      setStructure(structureRef.current);
+      return;
+    }
     setIsStructureLoading(true);
     setIsLoadingStructure(true);
     try {
       const merged = await loadMainStructureTreeMerged();
       if (Array.isArray(merged) && merged.length > 0) {
+        structureRef.current = merged as MainStructureEmpresa[];
         setStructure(merged as MainStructureEmpresa[]);
         return;
       }
@@ -864,11 +870,16 @@ export default function InductionTourRecordScreen() {
       if (structureCacheStr) {
         try {
           const parsed = JSON.parse(structureCacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
+          if (Array.isArray(parsed)) {
+            structureRef.current = parsed;
+            setStructure(parsed);
+          }
         } catch {
+          structureRef.current = [];
           setStructure([]);
         }
       } else {
+        structureRef.current = [];
         setStructure([]);
       }
     } catch (error) {
@@ -877,11 +888,16 @@ export default function InductionTourRecordScreen() {
       if (structureCacheStr) {
         try {
           const parsed = JSON.parse(structureCacheStr);
-          if (Array.isArray(parsed)) setStructure(parsed);
+          if (Array.isArray(parsed)) {
+            structureRef.current = parsed;
+            setStructure(parsed);
+          }
         } catch {
+          structureRef.current = [];
           setStructure([]);
         }
       } else {
+        structureRef.current = [];
         setStructure([]);
       }
     } finally {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
 
@@ -80,15 +81,7 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: empleadoIdToUse },
-            },
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoIdToUse } });
 
         if (!empleado) {
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
@@ -100,19 +93,15 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Fechas de inicio/fin inválidas" }, { status: 400 });
         }
 
-        // Calcular minutos totales entre inicio y fin
-        const minutosTotales = Math.max(0, (finDate.getTime() - inicioDate.getTime()) / 60000);
-
-        // Restar el tiempo transcurrido en pausas (si vienen)
         let minutosPausas = 0;
         try {
             const pausasParsed = JSON.parse(String(pausas || "[]"));
             const pausasArray = Array.isArray(pausasParsed) ? pausasParsed : [];
             for (const p of pausasArray) {
-                const startRaw = (p.startTime ?? p.inicio ?? p.start) as any;
-                const endRaw = (p.endTime ?? p.fin ?? p.end) as any;
-                const pInicio = new Date(startRaw);
-                const pFin = new Date(endRaw);
+                const startRaw = (p.startTime ?? p.inicio ?? p.start) as unknown;
+                const endRaw = (p.endTime ?? p.fin ?? p.end) as unknown;
+                const pInicio = new Date(startRaw as string | number | Date);
+                const pFin = new Date(endRaw as string | number | Date);
                 if (!isNaN(pInicio.getTime()) && !isNaN(pFin.getTime()) && pFin.getTime() > pInicio.getTime()) {
                     minutosPausas += (pFin.getTime() - pInicio.getTime()) / 60000;
                 }
@@ -121,9 +110,9 @@ export async function POST(req: NextRequest) {
             minutosPausas = 0;
         }
 
+        const minutosTotales = Math.max(0, (finDate.getTime() - inicioDate.getTime()) / 60000);
         let minutosAlmuerzo = minutosTotales - minutosPausas;
         if (!Number.isFinite(minutosAlmuerzo) || minutosAlmuerzo < 0) minutosAlmuerzo = 0;
-        // Limitar a 2 decimales
         minutosAlmuerzo = Number(minutosAlmuerzo.toFixed(2));
         const empleadoNombre = `${empleado.nombre || ""} ${empleado.primer_apellido || ""} ${empleado.segundo_apellido || ""}`.trim();
         const cedulaEmpleado = String(empleado.cedula || "");

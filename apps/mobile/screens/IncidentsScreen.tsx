@@ -320,6 +320,7 @@ export default function IncidentsScreen() {
   const filterSucursalIdRef = useRef<number | null>(null);
 
   const [mainStructure, setMainStructure] = useState<MainStructureTree>([]);
+  const mainStructureRef = useRef<MainStructureTree>([]);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
@@ -408,17 +409,19 @@ export default function IncidentsScreen() {
   }, []);
 
   const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (mainStructureRef.current.length > 0) {
+      return mainStructureRef.current;
+    }
     setIsStructureLoading(true);
     try {
       const parsed = await loadMainStructureTreeMerged();
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        setMainStructure(parsed);
-        return parsed;
-      }
-      setMainStructure([]);
-      return [];
+      const tree = Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
+      mainStructureRef.current = tree;
+      setMainStructure(tree);
+      return tree;
     } catch (e) {
       console.error('Error loading main structure (Incidents):', e);
+      mainStructureRef.current = [];
       setMainStructure([]);
       return [];
     } finally {

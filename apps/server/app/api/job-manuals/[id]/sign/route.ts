@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../../../utils/sendNotification";
 import fs from "fs";
@@ -99,14 +100,8 @@ export async function POST(
             }
         }
 
-        const marca = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id: marca_id },
-            },
+        const marca = await prisma.c_marca_dia.findUnique({
+            where: { id: marca_id },
         });
         if (!marca) {
             return NextResponse.json(
@@ -124,14 +119,8 @@ export async function POST(
             );
         }
 
-        const empleado = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: empleadoId },
-            },
+        const empleado = await prisma.c_empleado.findUnique({
+            where: { id: empleadoId },
         });
 
         if (!empleado) {
@@ -142,14 +131,8 @@ export async function POST(
         }
 
         const empleadoObj = empleado as any;
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id: manualObj.puesto_id },
-            },
+        const puesto = await prisma.e_estructura_puesto.findUnique({
+            where: { id: manualObj.puesto_id },
         });
         if (!puesto) {
             return NextResponse.json(
@@ -159,14 +142,8 @@ export async function POST(
         }
 
         const puestoObj = puesto as any;
-        const corpo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_sucursal",
-                operation: "findUnique",
-                where: { id: marcaObj.corpo_id },
-            },
+        const corpo = await prisma.e_estructura_sucursal.findUnique({
+            where: { id: marcaObj.corpo_id },
         });
         if (!corpo) {
             return NextResponse.json(
@@ -294,14 +271,8 @@ export async function POST(
             console.warn("Fallo enviando notificación por rol (no bloquea la firma):", err);
         }
 
-        const creator = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: parseInt(manualObj.created_by) },
-            },
+        const creator = await prisma.c_empleado.findUnique({
+            where: { id: parseInt(manualObj.created_by) },
         });
 
         if (creator) {

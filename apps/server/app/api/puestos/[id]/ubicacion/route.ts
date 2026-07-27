@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
+import axios from "axios";
 
 export async function PUT(
     req: NextRequest,
@@ -13,6 +15,14 @@ export async function PUT(
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired: expired, message: message },
+                { status: 401 }
+            );
+        }
+
+        const planillasToken = await req.headers.get("planillas-token");
+        if (!planillasToken) {
+            return NextResponse.json(
+                { status: false, message: "Token de Planillas requerido" },
                 { status: 401 }
             );
         }
@@ -52,16 +62,7 @@ export async function PUT(
             );
         }
 
-        // Verificar que el puesto existe
-        const puesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_puesto",
-                operation: "findUnique",
-                where: { id: puestoId }
-            },
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
 
         if (!puesto) {
             return NextResponse.json(
@@ -70,28 +71,19 @@ export async function PUT(
             );
         }
 
-        let latitud_anterior = puesto.coordenadas_gpslat;
-        let longitud_anterior = puesto.coordenadas_gpslng;
+        const bodyUpdatePuesto = clearing ? { lat: null, lng: null } : { lat: String(latitud), lng: String(longitud), }
 
-        const puestoObj = puesto as any;
-
-        const updatedPuesto = await callDynamicPrisma({
-            req,
-            data: {
-                action: "UPDATE",
-                table: "e_estructura_puesto",
-                operation: "update",
-                where: { id: puestoId },
-                data: clearing
-                    ? { coordenadas_gpslat: null, coordenadas_gpslng: null }
-                    : {
-                        coordenadas_gpslat: String(latitud),
-                        coordenadas_gpslng: String(longitud),
-                    },
-            },
+        const latitud_anterior = puesto.coordenadas_gpslat;
+        const longitud_anterior = puesto.coordenadas_gpslng;
+        
+        const planillasResponse = await axios.put(`${process.env.PLANILLAS_URL}/puestos/${puestoId}/coordenadas`, bodyUpdatePuesto, { 
+            headers: {
+                "Authorization": `Bearer ${planillasToken}`,
+                "Content-Type": "application/json"
+            }
         });
 
-        if (!updatedPuesto) {
+        if (!planillasResponse.data.success) {
             return NextResponse.json(
                 { status: false, message: "Error al actualizar la ubicación del puesto" },
                 { status: 500 }
@@ -111,60 +103,54 @@ export async function PUT(
                     longitud_nueva: longitud ? String(longitud) : null,
                     created_at: createdAt.toISOString(),
                     created_by: payload?.id,
-                }
-            }
-        });
-
-        const plazas = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_estructura_plazas",
-                operation: "findMany",
-                where: { puesto_id: puestoId }
+                },
             },
         });
 
-        // Enviar notificación a las plazas vinculadas
+        const plazas = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puestoId } });
+
         if (plazas.length > 0) {
-            // Obtener el marca_dia actual del empleado si existe
             const empleadoId = payload?.id;
-            let marcaDiaId = puestoId; // Fallback al puestoId (aunque no sea semánticamente correcto)
+            let marcaDiaId = puestoId;
 
             if (empleadoId) {
-                const marcaDia = await callDynamicPrisma({
-                    req,
-                    data: {
-                        action: "GET",
-                        table: "c_marca_dia",
-                        operation: "findFirst",
-                        where: {
-                            empleadoCDG_id: empleadoId,
-                        },
-                        orderBy: {
-                            id: "desc",
-                        },
-                    },
+                const marcaDia = await prisma.c_marca_dia.findFirst({
+                    where: { empleadoCDG_id: empleadoId },
+                    orderBy: { id: "desc" },
                 });
 
                 if (marcaDia) {
-                    const marcaDiaObj = marcaDia as any;
-                    marcaDiaId = marcaDiaObj.id;
+                    marcaDiaId = marcaDia.id;
                 }
             }
 
             const notifBody = clearing
-                ? `Se ha eliminado la ubicación GPS del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'}`
-                : `Se ha actualizado la ubicación del puesto ${puestoObj.nombre || puestoObj.codigo || 'N/A'} a la latitud ${latitud} y longitud ${longitud}`;
+                ? `Se ha eliminado la ubicación GPS del puesto ${puesto.nombre || puesto.codigo || "N/A"}`
+                : `Se ha actualizado la ubicación del puesto ${puesto.nombre || puesto.codigo || "N/A"} a la latitud ${latitud} y longitud ${longitud}`;
             await sendNotificationByPlaza(
                 req,
                 marcaDiaId,
                 clearing ? "Ubicación del puesto eliminada" : "Ubicación del puesto actualizada",
                 notifBody,
-                plazas.map((plaza: any) => plaza.id)
+                plazas.map((plaza) => plaza.id),
             );
         }
 
+        const updatedPuesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
+        if (!updatedPuesto) {
+            return NextResponse.json(
+                { status: false, message: "Puesto no encontrado" },
+                { status: 404 }
+            );
+        }
+
+        const updatedPuestoData = {
+            id: updatedPuesto.id,
+            nombre: updatedPuesto.nombre,
+            codigo: updatedPuesto.codigo,
+            coordenadas_gpslat: updatedPuesto.coordenadas_gpslat,
+            coordenadas_gpslng: updatedPuesto.coordenadas_gpslng,
+        };
         return NextResponse.json(
             {
                 status: true,
@@ -173,15 +159,11 @@ export async function PUT(
                     : "Ubicación del puesto actualizada correctamente",
                 data: updatedPuesto,
             },
-            { status: 200 }
+            { status: 200 },
         );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error updating puesto ubicacion:", errorMessage);
-        return NextResponse.json(
-            { status: false, message: errorMessage },
-            { status: 500 }
-        );
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
-

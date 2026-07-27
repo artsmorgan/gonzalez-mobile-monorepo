@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "./reportDynamicPrisma";
 import {
     inferOutputFileNameFromFiltersJson,
     safeReportMobileBaseName,
@@ -68,9 +68,9 @@ async function deleteReportFileIfExists(fileName: string): Promise<boolean> {
  * Elimina reportes móviles con más de 6 meses de antigüedad (`created_at` &lt; ahora − 6 meses)
  * y sus archivos en `public/uploads/reportes_mobile` (cualquier módulo / extensión).
  */
-export async function purgeOldMobileReports(prisma: PrismaClient): Promise<PurgeOldMobileReportsResult> {
+export async function purgeOldMobileReports(reportDb: ReportDataAccess): Promise<PurgeOldMobileReportsResult> {
     const cutoff = getMobileReportsRetentionCutoff();
-    const rows = await prisma.e_reportes_mobile.findMany({
+    const rows = await reportDb.e_reportes_mobile.findMany({
         where: { created_at: { lt: cutoff } },
         select: { id: true, filters: true },
     });
@@ -89,14 +89,16 @@ export async function purgeOldMobileReports(prisma: PrismaClient): Promise<Purge
         }
     }
 
-    const deleted = await prisma.e_reportes_mobile.deleteMany({
-        where: { created_at: { lt: cutoff } },
-    });
+    let recordsDeleted = 0;
+    for (const row of rows) {
+        await reportDb.e_reportes_mobile.delete({ where: { id: row.id } });
+        recordsDeleted += 1;
+    }
 
     return {
         cutoff: cutoff.toISOString(),
         recordsFound: rows.length,
-        recordsDeleted: deleted.count,
+        recordsDeleted,
         filesDeleted,
         fileDeleteErrors,
     };

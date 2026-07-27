@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
-import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -13,15 +13,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const id = parseInt(resolvedParams.id);
 
-        const marcaDia = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findUnique",
-                where: { id }
-            }
-        });
+        const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
 
         if (!marcaDia) return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
 
@@ -37,35 +29,15 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
 
-        const proximo = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_marca_dia",
-                operation: "findFirst",
-                where: {
-                    empleadoFijo_id: marcaDia.empleadoFijo_id,
-                    OR: [
-                        {
-                            fecha: {
-                                gt: now,
-                            },
-                        },
-                        {
-                            fecha: {
-                                equals: currentDate,
-                            },
-                            hora_inicio: {
-                                gte: currentTime,
-                            },
-                        },
-                    ],
-                },
-                orderBy: [
-                    { fecha: "asc" },
-                    { hora_inicio: "asc" },
+        const proximo = await prisma.c_marca_dia.findFirst({
+            where: {
+                empleadoFijo_id: marcaDia.empleadoFijo_id,
+                OR: [
+                    { fecha: { gt: now } },
+                    { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
                 ],
-            }
+            },
+            orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
         });
 
         let last_marca = null;
@@ -77,51 +49,21 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (!last_marca) {
-            last_marca = await callDynamicPrisma({
-                req,
-                data: {
-                    action: "GET",
-                    table: "c_marca_dia",
-                    operation: "findFirst",
-                    where: {
-                        empleadoFijo_id: marcaDia.empleadoFijo_id,
-                        OR: [
-                            {
-                                fecha: {
-                                    lt: now,
-                                },
-                            },
-                            {
-                                fecha: {
-                                    equals: currentDate,
-                                },
-                                hora_inicio: {
-                                    lt: currentTime,
-                                },
-                            },
-                        ],
-                    },
-                    orderBy: [
-                        { fecha: "desc" },
-                        { hora_inicio: "desc" },
+            last_marca = await prisma.c_marca_dia.findFirst({
+                where: {
+                    empleadoFijo_id: marcaDia.empleadoFijo_id,
+                    OR: [
+                        { fecha: { lt: now } },
+                        { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
                     ],
-                }
+                },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
             });
         }
 
         if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
 
-        const horario = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "c_horario",
-                operation: "findUnique",
-                where: {
-                    id: marcaDia.horario_id
-                }
-            }
-        });
+        const horario = await prisma.c_horario.findUnique({ where: { id: marcaDia.horario_id ?? 0 } });
 
         if (!horario) return NextResponse.json({ message: "Horario no encontrado" }, { status: 404 });
 

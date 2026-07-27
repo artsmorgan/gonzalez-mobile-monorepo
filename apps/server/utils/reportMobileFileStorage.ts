@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { NextRequest } from "next/server";
-import type { PrismaClient } from "@prisma/client";
+import type { ReportDataAccess } from "./reportDynamicPrisma";
 import { uploadDynamicFiles } from "./callDynamicFilesApi";
 import { resolveUserAccessToken } from "./resolveUserAccessToken";
 
@@ -79,7 +79,7 @@ export async function saveReportMobileFile(params: {
 /** Marca el job como completado y guarda metadatos del archivo en `filters`. */
 export async function completeReportJob(params: {
     req: NextRequest;
-    prisma: PrismaClient;
+    reportDb: ReportDataAccess;
     reportId: number;
     row: { filters: string | null; nomenclatura: string };
     buffer: Buffer;
@@ -93,7 +93,7 @@ export async function completeReportJob(params: {
         extension: params.extension,
     });
 
-    await params.prisma.e_reportes_mobile.update({
+    await params.reportDb.e_reportes_mobile.update({
         where: { id: params.reportId },
         data: {
             estado: "completado",

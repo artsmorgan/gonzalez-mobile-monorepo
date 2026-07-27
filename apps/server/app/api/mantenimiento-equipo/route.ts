@@ -3,14 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
 
 async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
-  const marcaDia = await callDynamicPrisma({
-    req,
-    data: { action: "GET", table: "c_marca_dia", operation: "findUnique", where: { id: marcaId } }
-  });
+  const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaId } });
   if (!marcaDia) return { ok: false as const, marcaDia: null, message: "Marca no encontrada" };
   if (!marcaDia.empleadoFijo_id) return { ok: false as const, marcaDia: null, message: "Empleado no encontrado" };
 
@@ -22,14 +20,11 @@ async function getMarcaDiaOrFail(req: NextRequest, marcaId: number) {
 export async function GET(req: NextRequest) {
   console.log('Entramos a la ruta de mantenimiento de equipo');
   try {
-    const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+    const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 });
     }
 
-    // Nuevo contrato: este endpoint puede consultarse por puesto directamente.
-    // - `p` / `puesto_id` (requerido para filtrar por jerarquía)
-    // - `m` (opcional) se usa solo para validar marca actual si el cliente lo envía
     const puestoParam = req.nextUrl.searchParams.get("p") ?? req.nextUrl.searchParams.get("puesto_id");
     const puestoId = puestoParam ? parseInt(puestoParam) : NaN;
     if (!Number.isFinite(puestoId)) {
@@ -47,50 +42,46 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Obtener artículos del puesto replicando la lógica de `main-structure`:
-    // - Incluir comboArticulosCP (si existe)
-    // - Incluir plan directo del puesto evitando duplicados
-    // - Incluir asignados (entrega) del puesto
-    const puesto = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_puesto", operation: "findUnique", where: { id: puestoId } }
-    });
+    const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
     if (!puesto) return NextResponse.json({ status: true, data: [] }, { status: 200 });
+    const corpoId = puesto.sucursal_id;
 
     const planRows: any[] = [];
 
-    // 1) Artículos del combo del puesto (si existe)
-    if ((puesto as any).comboArticulosCP_id) {
-      const combo = await callDynamicPrisma({
-        req,
-        data: { action: "GET", table: "e_estructura_combo_articulo_cp", operation: "findUnique", where: { id: (puesto as any).comboArticulosCP_id } }
+    if (puesto.comboArticulosCP_id) {
+      const combo = await prisma.e_estructura_combo_articulo_cp.findUnique({
+        where: { id: puesto.comboArticulosCP_id },
       });
       if (combo) {
-        const comboPlan = await callDynamicPrisma({
-          req,
-          data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { combo_id: combo.id }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
+        const comboPlan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+          where: { combo_id: combo.id },
+          include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+          orderBy: { id: "asc" },
         });
         planRows.push(...comboPlan);
       }
     }
 
-    // 2) Plan directo del puesto (evitar duplicados por id)
-    const directPlan = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_plan", operation: "findMany", where: { OR: [
-        { puesto_id: puestoId },
-        { corpo_id: puesto.corpo_id }
-      ], id: { notIn: planRows.map((p) => p.id) } }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
+    const planOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+    if (corpoId != null) planOr.push({ corpo_id: corpoId });
+    const directPlan = await prisma.e_estructura_articulo_corpo_puesto_plan.findMany({
+      where: {
+        OR: planOr,
+        id: { notIn: planRows.map((p: any) => p.id) },
+      },
+      include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+      orderBy: { id: "asc" },
     });
     planRows.push(...directPlan);
 
-    // 3) Asignados del puesto (entrega)
-    const asignadosRows = await callDynamicPrisma({
-      req,
-      data: { action: "GET", table: "e_estructura_articulo_corpo_puesto_entrega", operation: "findMany", where: { OR: [{ puesto_id: puestoId }, { corpo_id: puesto.corpo_id }] }, include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } }, orderBy: { id: "asc" } }
+    const entregaOr: { puesto_id?: number; corpo_id?: number }[] = [{ puesto_id: puestoId }];
+    if (corpoId != null) entregaOr.push({ corpo_id: corpoId });
+    const asignadosRows = await prisma.e_estructura_articulo_corpo_puesto_entrega.findMany({
+      where: { OR: entregaOr },
+      include: { n_articulo_corpo_puesto: { select: { id: true, nombre: true } } },
+      orderBy: { id: "asc" },
     });
 
-    // Cargar tipos de mantenimiento por nomenclador (en bulk)
     const articuloIds = Array.from(
       new Set(
         [...planRows.map((p: any) => p.articuloCP_id), ...asignadosRows.map((a: any) => a.nomencladorArticuloCP_id)]
@@ -111,7 +102,6 @@ export async function GET(req: NextRequest) {
       tiposByArticuloId.set(t.articulo_id, list);
     }
 
-    // Para mantenimientos y movimientos, preferimos exactitud (últimos 8 por item), aunque sea N+1.
     const planItems = await Promise.all(
       planRows.map(async (p) => {
         const articuloNomencladorId = p.articuloCP_id ?? null;
@@ -135,8 +125,7 @@ export async function GET(req: NextRequest) {
           puesto_id: p.puesto_id ?? null,
           articulo_nomenclador_id: articuloNomencladorId,
           articulo_nombre: articuloNombre,
-          tipo: ultimo?.articulo_plan_id ? "Plan de puesto" : "Plan de puesto",
-          // Nota: e_estructura_articulo_corpo_puesto_plan no tiene marca/serie. Las exponemos desde el último mantenimiento si existe.
+          tipo: "Plan de puesto",
           marca: ultimo?.marca ?? null,
           modelo: ultimo?.modelo ?? null,
           serie: ultimo?.serie_placa ?? null,
@@ -180,8 +169,7 @@ export async function GET(req: NextRequest) {
           puesto_id: a.puesto_id ?? null,
           articulo_nomenclador_id: articuloNomencladorId,
           articulo_nombre: articuloNombre,
-          tipo: ultimo?.articulo_asignado_id ? "Asignado al puesto" : "Asignado al puesto",
-          // Marca/serie/modelo provienen de `e_estructura_articulo_corpo_puesto_entrega`.
+          tipo: "Asignado al puesto",
           marca: a.marca ?? null,
           modelo: a.modelo ?? null,
           serie: a.serie ?? null,
@@ -208,5 +196,3 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
-
-

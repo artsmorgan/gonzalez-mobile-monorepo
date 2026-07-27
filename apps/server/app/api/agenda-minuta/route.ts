@@ -1,8 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+
+const AGENDA_MINUTA_ESTRUCTURA_INCLUDE = {
+  e_estructura_cliente: { select: { nombre: true } },
+  e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
+  e_estructura_puesto: { select: { nombre: true, codigo: true } },
+};
 
 function parseFechaInput(fecha: any): Date | undefined {
   if (!fecha) return undefined;
@@ -76,17 +84,11 @@ export async function GET(req: NextRequest) {
     // Solo se aplica si no hay filtro más específico de cliente
     if (empresaIdStr && !clienteIdStr) {
       const empresaId = parseInt(empresaIdStr);
-      const clientes = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_cliente",
-          operation: "findMany",
-          where: { empresa_id: empresaId },
-          select: { id: true },
-        },
+      const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: empresaId },
+        select: { id: true },
       });
-      const clienteIds = Array.isArray(clientes) ? clientes.map((c: any) => c.id) : [];
+      const clienteIds = clientes.map((c) => c.id);
       if (clienteIds.length > 0) {
         where.cliente_id = { in: clienteIds };
       } else {
@@ -108,17 +110,11 @@ export async function GET(req: NextRequest) {
     // Solo se aplica si no hay filtro más específico de corpo
     if (contratoIdStr && !corpoIdStr) {
       const contratoId = parseInt(contratoIdStr);
-      const sucursales = await callDynamicPrisma({
-        req,
-        data: {
-          action: "GET",
-          table: "e_estructura_sucursal",
-          operation: "findMany",
-          where: { contrato_id: contratoId },
-          select: { id: true },
-        },
+      const sucursales = await prisma.e_estructura_sucursal.findMany({
+        where: { contrato_id: contratoId },
+        select: { id: true },
       });
-      const sucursalIds = Array.isArray(sucursales) ? sucursales.map((s: any) => s.id) : [];
+      const sucursalIds = sucursales.map((s) => s.id);
       if (sucursalIds.length > 0) {
         where.corpo_id = { in: sucursalIds };
       } else {
@@ -137,6 +133,8 @@ export async function GET(req: NextRequest) {
       where.puesto_id = parseInt(puestoIdStr);
     }
 
+    const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(AGENDA_MINUTA_ESTRUCTURA_INCLUDE);
+
     const records = await callDynamicPrisma({
       req,
       data: {
@@ -145,13 +143,10 @@ export async function GET(req: NextRequest) {
         operation: "findMany",
         where,
         orderBy: { created_at: "desc" },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-          e_estructura_puesto: { select: { nombre: true, codigo: true } },
-        },
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
       },
     });
+    await hydratePreexistentRelations(records, preexistentSpecs);
 
     const recordsArray = Array.isArray(records) ? records : [];
     const recordsWithNames = recordsArray.map((r: any) => ({
@@ -245,6 +240,7 @@ export async function POST(req: NextRequest) {
     if (!horaFinParsed) return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
+    const { preexistentSpecs } = splitIncludeByTableGroup(AGENDA_MINUTA_ESTRUCTURA_INCLUDE);
     const record = await callDynamicPrisma({
       req,
       data: {
@@ -272,13 +268,9 @@ export async function POST(req: NextRequest) {
           created_at: createdAt.toISOString(),
           created_by: payload.id?.toString?.() || "",
         },
-        include: {
-          e_estructura_cliente: { select: { nombre: true } },
-          e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
-          e_estructura_puesto: { select: { nombre: true, codigo: true } },
-        },
       },
     });
+    await hydratePreexistentRelations(record, preexistentSpecs);
 
     if (record) {
       let empNombre = "Desconocido";
@@ -287,43 +279,21 @@ export async function POST(req: NextRequest) {
       let fechaRegistro = createdAt.toISOString().split("T")[0];
       let horaRegistro = createdAt.toISOString().split("T")[1].split(".")[0];
       if (record.created_by) {
-        const empleado = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "c_empleado",
-            operation: "findUnique",
-            where: { id: parseInt(String(record.created_by), 10) },
-          },
+        const empleado = await prisma.c_empleado.findUnique({
+          where: { id: parseInt(String(record.created_by), 10) },
         });
         if (empleado && empleado.id) {
           empNombre = (empleado.nombre || "") + " " + (empleado.primer_apellido || "") + " " + (empleado.segundo_apellido || "");
         }
       }
       if (record.corpo_id) {
-        const sucursal = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_sucursal",
-            operation: "findUnique",
-            where: { id: record.corpo_id },
-          },
-        });
+        const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: record.corpo_id } });
         if (sucursal && sucursal.id) {
           sucursalNombre = sucursal.nombre || "Desconocida";
         }
       }
       if (record.puesto_id) {
-        const puesto = await callDynamicPrisma({
-          req,
-          data: {
-            action: "GET",
-            table: "e_estructura_puesto",
-            operation: "findUnique",
-            where: { id: record.puesto_id },
-          },
-        });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: record.puesto_id } });
         if (puesto && puesto.id) {
           puestoNombre = (puesto.nombre || "") + " (" + (puesto.codigo || "") + ")";
         }

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { prisma } from "../../../../../utils/prismaClient";
 const bcrypt = require('bcrypt');
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
@@ -20,16 +21,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
             }
         });
         if (!token_recovery) return NextResponse.json({ status: false, message: "Token de recuperación de contraseña no encontrado" });
-        const empleado = await callDynamicPrisma({
-            req,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "GET",
-                table: "c_empleado",
-                operation: "findUnique",
-                where: { id: token_recovery.empleadoId }
-            }
-        });
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId ?? 0 } });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
         const password_expires_at = empleado.password_expires_at;
         
@@ -37,18 +29,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
         const newDateExpiresAt = toZonedTime(new Date(now.getTime() + 2 * 30 * 24 * 60 * 60 * 1000), "America/Costa_Rica");
 
         const hashedPassword = await bcrypt.hash(password, 10);
-        await callDynamicPrisma({
-            req,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "UPDATE",
-                table: "c_empleado",
-                where: { id: token_recovery.empleadoId },
-                data: { password: hashedPassword, password_expires_at: newDateExpiresAt },
-                returning: false
-            }
-        });
-
+        await prisma.c_empleado.update({ where: { id: token_recovery.empleadoId ?? 0 }, data: { password: hashedPassword, password_expires_at: newDateExpiresAt } });
         await callDynamicPrisma({
             req,
             shouldVerifyAccessToken: false,
