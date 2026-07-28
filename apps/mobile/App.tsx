@@ -5,12 +5,12 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import { NavigationContainer, DarkTheme, DefaultTheme, CommonActions, useFocusEffect } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useFonts } from 'expo-font';
-import { StatusBar } from 'expo-status-bar';
 import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
-import { Alert, Animated } from 'react-native';
+import { Alert, Animated, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from './contexts/AuthContext';
+import TrialVersionBanner from './components/TrialVersionBanner';
 import { useColorScheme } from './hooks/useColorScheme';
 import saveLunchTime from './hooks/saveLunchTime';
 import {
@@ -8464,82 +8464,84 @@ function AppContent() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <NavigationContainer
-        ref={navigationRef}
-        linking={linking}
-        theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
-        onReady={() => {
-          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-          console.log('Pantalla inicial:', routeNameRef.current);
-        }}
-        onStateChange={() => {
-          const state = navigationRef.current?.getRootState();
-          const routes = state?.routes ?? [];
-          if (!routes.length) return;
+      <TrialVersionBanner />
+      <View style={{ flex: 1 }}>
+        <NavigationContainer
+          ref={navigationRef}
+          linking={linking}
+          theme={colorScheme === 'dark' ? DarkTheme : DefaultTheme}
+          onReady={() => {
+            routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+            console.log('Pantalla inicial:', routeNameRef.current);
+          }}
+          onStateChange={() => {
+            const state = navigationRef.current?.getRootState();
+            const routes = state?.routes ?? [];
+            if (!routes.length) return;
 
-          const currentIndex = (state as any).index ?? routes.length - 1;
-          const currentRoute = routes[currentIndex];
+            const currentIndex = (state as any).index ?? routes.length - 1;
+            const currentRoute = routes[currentIndex];
 
-          // Mantener siempre exactamente una referencia a Home (si existe)
-          // y eliminar del stack cualquier pantalla que no esté enfocada.
-          const homeRouteIndex = routes.findIndex((r: typeof routes[number]) => r.name === 'Home');
-          const hasHome = homeRouteIndex !== -1;
+            // Mantener siempre exactamente una referencia a Home (si existe)
+            // y eliminar del stack cualquier pantalla que no esté enfocada.
+            const homeRouteIndex = routes.findIndex((r: typeof routes[number]) => r.name === 'Home');
+            const hasHome = homeRouteIndex !== -1;
 
-          const newRoutes: typeof routes = [];
+            const newRoutes: typeof routes = [];
 
-          if (hasHome) {
-            // Conservar la primera aparición de Home como base del stack
-            newRoutes.push(routes[homeRouteIndex]);
-          }
+            if (hasHome) {
+              // Conservar la primera aparición de Home como base del stack
+              newRoutes.push(routes[homeRouteIndex]);
+            }
 
-          if (!hasHome) {
-            // Si no hay Home en el stack (por ejemplo, en flujo de login),
-            // solo conservamos la ruta actual.
-            newRoutes.push(currentRoute);
-          } else if (currentRoute.name !== 'Home') {
-            // Si estamos en otra pantalla distinta de Home, la agregamos
-            // encima de Home, quedando como máximo [Home, PantallaActual].
-            newRoutes.push(currentRoute);
-          }
+            if (!hasHome) {
+              // Si no hay Home en el stack (por ejemplo, en flujo de login),
+              // solo conservamos la ruta actual.
+              newRoutes.push(currentRoute);
+            } else if (currentRoute.name !== 'Home') {
+              // Si estamos en otra pantalla distinta de Home, la agregamos
+              // encima de Home, quedando como máximo [Home, PantallaActual].
+              newRoutes.push(currentRoute);
+            }
 
-          // Solo hacemos reset si el stack resultante cambia
-          const routesChanged =
-            newRoutes.length !== routes.length ||
-            newRoutes.some((r: typeof routes[number], idx: number) => r.key !== routes[idx]?.key);
+            // Solo hacemos reset si el stack resultante cambia
+            const routesChanged =
+              newRoutes.length !== routes.length ||
+              newRoutes.some((r: typeof routes[number], idx: number) => r.key !== routes[idx]?.key);
 
-          if (routesChanged) {
-            navigationRef.current?.dispatch(
-              CommonActions.reset({
-                index: newRoutes.length - 1,
-                routes: newRoutes,
-              })
-            );
-          }
+            if (routesChanged) {
+              navigationRef.current?.dispatch(
+                CommonActions.reset({
+                  index: newRoutes.length - 1,
+                  routes: newRoutes,
+                })
+              );
+            }
 
-          routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
-        }}
-      >
-        <RootNavigator />
-        <StatusBar style="auto" />
-      </NavigationContainer>
-      <CacheSyncActionsOverlay
-        visible={cacheSyncModalVisible}
-        fadeAnim={cacheSyncFadeAnim.current}
-        onRequestClose={dismissCacheSyncOverlayOnly}
-      />
-      <CacheSyncActionsOverlay
-        visible={hierarchyUpdateModalVisible}
-        fadeAnim={hierarchyUpdateFadeAnim.current}
-        onRequestClose={dismissHierarchyUpdateOverlayOnly}
-        message="Actualizando jerarquía, no cierre la aplicación"
-      />
-      <PlanillasPasswordRevalidationModal
-        visible={showPlanillasRevalidationModal}
-        refreshAccessToken={refreshAccessToken}
-        logout={logout}
-        onSuccess={() => void handlePlanillasRevalidationSuccess()}
-        onDismiss={handlePlanillasRevalidationDismiss}
-      />
+            routeNameRef.current = navigationRef.current?.getCurrentRoute()?.name;
+          }}
+        >
+          <RootNavigator />
+        </NavigationContainer>
+        <CacheSyncActionsOverlay
+          visible={cacheSyncModalVisible}
+          fadeAnim={cacheSyncFadeAnim.current}
+          onRequestClose={dismissCacheSyncOverlayOnly}
+        />
+        <CacheSyncActionsOverlay
+          visible={hierarchyUpdateModalVisible}
+          fadeAnim={hierarchyUpdateFadeAnim.current}
+          onRequestClose={dismissHierarchyUpdateOverlayOnly}
+          message="Actualizando jerarquía, no cierre la aplicación"
+        />
+        <PlanillasPasswordRevalidationModal
+          visible={showPlanillasRevalidationModal}
+          refreshAccessToken={refreshAccessToken}
+          logout={logout}
+          onSuccess={() => void handlePlanillasRevalidationSuccess()}
+          onDismiss={handlePlanillasRevalidationDismiss}
+        />
+      </View>
     </GestureHandlerRootView>
   );
 }

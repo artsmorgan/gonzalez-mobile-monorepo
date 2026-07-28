@@ -475,11 +475,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     const modules = [
       { name: 'acta-entrega-productos', release: false },
-      { name: 'activities', release: false },
+      { name: 'activities', release: true },
       { name: 'apreciacion-vulnerabilidad', release: false },
       { name: 'attendance-control', release: false },
       { name: 'bitacora-vehiculos-detenidos', release: false },
-      { name: 'checklist-supervision', release: false },
+      { name: 'checklist-supervision', release: true },
       { name: 'complaints-master', release: false },
       { name: 'corporate-vehicles', release: false },
       { name: 'digital-signature', release: true },
@@ -490,17 +490,17 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       { name: 'incidents', release: false },
       { name: 'induction-tour-record', release: false },
       { name: 'jerarquia', release: true },
-      { name: 'job-manuals', release: true },
+      { name: 'job-manuals', release: false },
       { name: 'llaves', release: false },
       { name: 'lunch-time', release: true },
-      { name: 'mantenimiento-equipo', release: false },
+      { name: 'mantenimiento-equipo', release: true },
       { name: 'marcar-ingreso-salida', release: true },
-      { name: 'mutuos-acuerdos', release: false },
+      { name: 'mutuos-acuerdos', release: true },
       { name: 'nomencladores', release: false },
       { name: 'non-conforming-product', release: false },
       { name: 'notes', release: false },
       { name: 'opening-closing-position', release: false },
-      { name: 'permit-request', release: false },
+      { name: 'permit-request', release: true },
       { name: 'physical-minute-agenda', release: false },
       { name: 'profile', release: true },
       { name: 'puesto-ubicacion', release: true },
@@ -508,7 +508,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       { name: 'staffEvaluations', release: false },
       { name: 'surveys', release: false },
       { name: 'trainings', release: false },
-      { name: 'traslado-plazas', release: false },
+      { name: 'traslado-plazas', release: true },
       { name: 'vehicles', release: false },
       { name: 'visitors', release: false },
       { name: 'voice-notes', release: false },
@@ -516,8 +516,8 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     const moduleFind = modules.find((m) => m.name === module);
     if (moduleFind) {
-       return true;
-      //return moduleFind.release;
+      //return true;
+      return moduleFind.release;
     }
     return false;
   }

@@ -1,7 +1,25 @@
+const { execSync } = require("child_process");
+
+/** Últimos 4 caracteres del commit actual (o EXPO_PUBLIC_GIT_COMMIT en CI). */
+function getGitCommitLast4() {
+  try {
+    const fromEnv = String(process.env.EXPO_PUBLIC_GIT_COMMIT || process.env.GIT_COMMIT || "").trim();
+    if (fromEnv) return fromEnv.slice(-4).toLowerCase();
+    const hash = execSync("git rev-parse HEAD", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return hash.slice(-4).toLowerCase();
+  } catch {
+    return "----";
+  }
+}
+
 module.exports = ({ config }) => {
 
   const variant = process.env.APP_VARIANT;
   const isLite = variant === "lite";
+  const gitCommitLast4 = getGitCommitLast4();
 
   return {
       expo: {
@@ -89,7 +107,7 @@ module.exports = ({ config }) => {
           process.env.API_SERVER ||
           process.env.NEXT_PUBLIC_API_SERVER ||
           // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+          "https://nonresonantly-captivative-shizue.ngrok-free.dev",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||
@@ -183,6 +201,7 @@ module.exports = ({ config }) => {
         },
         MINUTES_LIFE_TIME_TOKEN: 24 * 60, // 24 hours (default)
         APP_MODE: process.env.APP_MODE || process.env.NODE_ENV || "dev",
+        GIT_COMMIT_LAST4: gitCommitLast4,
         router: {},
         eas: {
           projectId: "0e68d6d2-7653-4d13-a407-3823ff43722a"

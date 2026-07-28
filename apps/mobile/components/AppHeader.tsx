@@ -95,7 +95,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    paddingTop: 50, // Account for status bar
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
   },
