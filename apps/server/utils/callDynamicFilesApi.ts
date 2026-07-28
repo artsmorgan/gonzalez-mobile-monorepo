@@ -126,6 +126,53 @@ export async function fetchDynamicFile(params: {
             contentType: String(response.headers["content-type"] ?? "application/octet-stream"),
             contentDisposition: String(response.headers["content-disposition"] ?? ""),
             cacheControl: String(response.headers["cache-control"] ?? "public, max-age=31536000"),
+            contentLength: String(response.headers["content-length"] ?? "")
+        },
+    };
+}
+
+export async function fetchDynamicReportsDownload(params: {
+    req: NextRequest;
+    ids: number[];
+    shouldVerifyAccessToken?: boolean;
+}) {
+    const { req, ids, shouldVerifyAccessToken = true } = params;
+    const baseUrl = resolveBaseUrl(req);
+    const endpoint = `${baseUrl}/api/dynamic-prisma/files/reports-download`;
+    const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
+    const accessToken = resolveUserAccessToken(req);
+
+    const response = await axios.get(endpoint, {
+        params: {
+            ids: ids.join(","),
+            token: accessToken || undefined,
+            mobileAccessToken,
+            shouldVerifyAccessToken,
+        },
+        headers: buildAuthHeaders(req),
+        responseType: "arraybuffer",
+        validateStatus: () => true,
+    });
+
+    if (response.status < 200 || response.status >= 300) {
+        let payloadMessage = "";
+        try {
+            const text = Buffer.from(response.data).toString("utf8");
+            const parsed = JSON.parse(text);
+            payloadMessage = parsed?.message || parsed?.error || "";
+        } catch {
+            payloadMessage = "";
+        }
+        throw new Error(payloadMessage || `Error en ${endpoint} (HTTP ${response.status})`);
+    }
+
+    return {
+        buffer: Buffer.from(response.data),
+        headers: {
+            contentType: String(response.headers["content-type"] ?? "application/zip"),
+            contentDisposition: String(response.headers["content-disposition"] ?? ""),
+            cacheControl: String(response.headers["cache-control"] ?? "no-store"),
+            contentLength: String(response.headers["content-length"] ?? ""),
         },
     };
 }

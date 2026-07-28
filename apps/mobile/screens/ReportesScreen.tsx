@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -32,7 +31,7 @@ import { useAuth } from '../contexts/AuthContext';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { convertDateTimestampToLocalString } from '../hooks/convertDateTimestampToLocalString';
 import { useQRScanner } from '../hooks/useQRScanner';
-import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
+import { downloadReportFileToDevice, downloadReportsBundleToDevice } from '../hooks/downloadReportFileToDevice';
 import {
   createReportJob,
   fetchReportesList,
@@ -934,20 +933,7 @@ type IncidentClassificationLite = { id: number; nombre: string };
 
 export default function ReportesScreen() {
   const navigation = useNavigation();
-  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
-  const [queryAccessToken, setQueryAccessToken] = useState('');
-  const refreshQueryAccessToken = useCallback(async () => {
-    try {
-      const t = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
-      setQueryAccessToken(t != null && String(t).trim() !== '' ? String(t).trim() : '');
-    } catch {
-      setQueryAccessToken('');
-    }
-  }, [refreshAccessToken, logout]);
-
-  useEffect(() => {
-    void refreshQueryAccessToken();
-  }, [accessToken, refreshQueryAccessToken]);
+  const { employee, refreshAccessToken, logout } = useAuth();
 
   useEffect(() => {
     const loadDocumentTypesCache = async () => {
@@ -1004,20 +990,6 @@ export default function ReportesScreen() {
     void loadIncidentsClassificationsCache();
   }, []);
 
-  /** Igual que ChecklistSupervisionScreen: token en query para abrir archivos bajo `/uploads`. */
-  const appendTokenToUrl = useCallback(
-    (url: string) => {
-      if (!url) return '';
-      const fromContext = accessToken != null ? String(accessToken).trim() : '';
-      const fromRefresh = queryAccessToken.trim();
-      const token = fromContext || fromRefresh;
-      if (!token) return url;
-      if (/[?&]token=/.test(url)) return url;
-      const sep = url.includes('?') ? '&' : '?';
-      return `${url}${sep}token=${encodeURIComponent(token)}`;
-    },
-    [accessToken, queryAccessToken],
-  );
 
   /** Fecha ancla para selectores (hora servidor vía `getHoraAccion`, como ActaEntregaProductosScreen). */
   const [horaAccionPickerBase, setHoraAccionPickerBase] = useState(() => new Date());
@@ -1361,6 +1333,8 @@ export default function ReportesScreen() {
 
   const [loadingList, setLoadingList] = useState(false);
   const [reportes, setReportes] = useState<ReportRow[]>([]);
+  const [downloadingReportId, setDownloadingReportId] = useState<number | null>(null);
+  const [downloadingShownReports, setDownloadingShownReports] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -3098,22 +3072,83 @@ export default function ReportesScreen() {
     setExpandedRows((p) => ({ ...p, [id]: !p[id] }));
   };
 
-  const openDownload = async (row: ReportRow) => {
-    if (row.estado !== 'completado') {
-      Alert.alert('Archivo', 'El archivo se genera en el servidor; espere a que el estado sea «completado».');
+  const openDownloadShownReports = async () => {
+    if (downloadingShownReports || downloadingReportId != null) return;
+
+    const completados = reportes.filter((row) => row.estado === 'completado');
+    if (completados.length === 0) {
+      Alert.alert('Descarga', 'No hay reportes completados en la lista.');
       return;
     }
+
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       Alert.alert('Error', 'Server URL not configured');
       return;
     }
-    const base = apiUrl.replace(/\/+$/, '');
-    const resourceUrl = `${base}/api/reportes/mobile/${row.id}/get-file`;
-    const uri = appendTokenToUrl(`${resourceUrl}?t=${Date.now()}`);
-    const can = await Linking.canOpenURL(uri);
-    if (can) await Linking.openURL(uri);
-    else Alert.alert('Descarga', uri);
+
+    setDownloadingShownReports(true);
+    try {
+      const result = await downloadReportsBundleToDevice({
+        reportIds: completados.map((row) => row.id),
+        fallbackFileName: 'reportes_mobile.zip',
+        apiUrl,
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.ok) {
+        Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+        return;
+      }
+
+      if (result.cancelled) {
+        return;
+      }
+
+      Alert.alert('Error', result.message || 'No se pudo descargar los reportes');
+    } finally {
+      setDownloadingShownReports(false);
+    }
+  };
+
+  const openDownload = async (row: ReportRow) => {
+    if (downloadingReportId != null) return;
+
+    if (row.estado !== 'completado') {
+      Alert.alert('Archivo', 'El archivo se genera en el servidor; espere a que el estado sea «completado».');
+      return;
+    }
+
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      Alert.alert('Error', 'Server URL not configured');
+      return;
+    }
+
+    setDownloadingReportId(row.id);
+    try {
+      const result = await downloadReportFileToDevice({
+        reportId: row.id,
+        fallbackFileName: row.nombre || `reporte_${row.id}`,
+        apiUrl,
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.ok) {
+        Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+        return;
+      }
+
+      if (result.cancelled) {
+        return;
+      }
+
+      Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+    } finally {
+      setDownloadingReportId(null);
+    }
   };
 
   const getModalEpPickerValue = (): Date => {
@@ -4237,9 +4272,16 @@ export default function ReportesScreen() {
             style={[styles.downloadBtn, styles.downloadBtnCard]}
             onPress={() => void openDownload(item)}
             activeOpacity={0.85}
+            disabled={downloadingReportId === item.id}
           >
-            <Ionicons name="download-outline" size={20} color="#fff" />
-            <ThemedText style={styles.downloadBtnText}>Descargar archivo</ThemedText>
+            {downloadingReportId === item.id ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="download-outline" size={20} color="#fff" />
+            )}
+            <ThemedText style={styles.downloadBtnText}>
+              {downloadingReportId === item.id ? 'Descargando…' : 'Descargar archivo'}
+            </ThemedText>
           </TouchableOpacity>
         ) : item.estado === 'procesando' ? (
           <ThemedView style={[styles.reportStatusBadge, styles.reportStatusProcesando]}>
@@ -7016,6 +7058,23 @@ export default function ReportesScreen() {
           </TouchableOpacity>
 
           <ThemedText style={styles.sectionTitle}>Resultados</ThemedText>
+          {reportes.length > 1 ? (
+            <TouchableOpacity
+              style={[styles.downloadBtn, styles.downloadShownBtn]}
+              onPress={() => void openDownloadShownReports()}
+              activeOpacity={0.85}
+              disabled={downloadingShownReports || downloadingReportId != null}
+            >
+              {downloadingShownReports ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="archive-outline" size={20} color="#fff" />
+              )}
+              <ThemedText style={styles.downloadBtnText}>
+                {downloadingShownReports ? 'Descargando…' : 'Descargar reportes mostrados'}
+              </ThemedText>
+            </TouchableOpacity>
+          ) : null}
           <ThemedView style={styles.listContainer}>
             {reportes.length === 0 ? (
               <ThemedText style={styles.emptyText}>
@@ -10669,6 +10728,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    gap: 8,
+    alignSelf: 'stretch',
+  },
+  downloadShownBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 8,

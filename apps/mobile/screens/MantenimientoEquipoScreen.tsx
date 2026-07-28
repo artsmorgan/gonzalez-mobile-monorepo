@@ -19,6 +19,7 @@ import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import { useAuth } from '../contexts/AuthContext';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import { eventBus } from '../hooks/eventBus';
 import { useQRScanner } from '../hooks/useQRScanner';
 import {
@@ -240,11 +241,15 @@ function ActivoFilesViewer({
     activoId,
     files,
     accessToken,
+    refreshAccessToken,
+    logout,
     onRequestDeleteFile,
 }: {
     activoId: number;
     files: ActivoFileRemote[];
     accessToken?: string | null;
+    refreshAccessToken: () => Promise<boolean>;
+    logout: () => Promise<unknown>;
     /** Si se pasa, muestra icono de eliminar (confirmación en el handler). */
     onRequestDeleteFile?: (file: ActivoFileRemote) => void;
 }) {
@@ -391,12 +396,36 @@ function ActivoFilesViewer({
                                     <TouchableOpacity
                                         style={styles.documentRow}
                                         onPress={() => {
-                                            const url = buildFileUrl(file);
-                                            if (url) {
-                                                Linking.openURL(url);
-                                            } else {
-                                                Alert.alert('Error', 'URL inválida para descargar el archivo');
-                                            }
+                                            void (async () => {
+                                                try {
+                                                    const url = buildFileUrl(file);
+                                                    if (!url) {
+                                                        Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                                        return;
+                                                    }
+
+                                                    const result = await downloadAuthedUrlToDevice({
+                                                        url,
+                                                        fallbackFileName: getFileDisplayName(file),
+                                                        tempPrefix: 'activo_mantenimiento_file',
+                                                        refreshAccessToken,
+                                                        logout,
+                                                    });
+
+                                                    if (result.ok) {
+                                                        Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                                                        return;
+                                                    }
+                                                    if (result.cancelled) {
+                                                        return;
+                                                    }
+                                                    Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                                                } catch (error) {
+                                                    const message =
+                                                        error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                                                    Alert.alert('Error', message);
+                                                }
+                                            })();
                                         }}
                                     >
                                         <Ionicons name="document-text-outline" size={20} color="#007AFF" />
@@ -1449,18 +1478,30 @@ export default function MantenimientoEquipoScreen() {
             if (!apiUrl) {
                 throw new Error('Server URL not configured');
             }
-            const resourceUrl = `${apiUrl.replace(/\/+$/, '')}/api/mantenimiento-equipo/plantilla/get-file`;
-            const url = appendTokenToUrl(`${resourceUrl}?t=${Date.now()}`);
-            const can = await Linking.canOpenURL(url);
-            if (can) await Linking.openURL(url);
-            else Alert.alert('Descarga', url);
+            const resourceUrl = `${apiUrl.replace(/\/+$/, '')}/api/mantenimiento-equipo/plantilla/get-file?t=${Date.now()}`;
+            const result = await downloadAuthedUrlToDevice({
+                url: resourceUrl,
+                fallbackFileName: 'plantilla_articulos_puesto.xlsx',
+                tempPrefix: 'mantenimiento_plantilla',
+                refreshAccessToken,
+                logout,
+            });
+
+            if (result.ok) {
+                Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                return;
+            }
+            if (result.cancelled) {
+                return;
+            }
+            Alert.alert('Error', result.message || 'No se pudo descargar la plantilla.');
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : 'No se pudo descargar la plantilla.';
             Alert.alert('Error', msg);
         } finally {
             setIsBulkDownloadingPlantilla(false);
         }
-    }, [appendTokenToUrl, getConnectionStatus]);
+    }, [getConnectionStatus, refreshAccessToken, logout]);
 
     const handleUploadBulkPlantilla = useCallback(async () => {
         if (!(await getConnectionStatus())) {
@@ -3540,6 +3581,8 @@ export default function MantenimientoEquipoScreen() {
                         activoId={activo.id}
                         files={archivos}
                         accessToken={accessToken}
+                        refreshAccessToken={refreshAccessToken}
+                        logout={logout}
                         onRequestDeleteFile={
                             !soloInformativo && Number(activo.id) > 0 && selectedReporte
                                 ? (f) => confirmDeleteArchivoAdjunto(activo, f, selectedReporte)

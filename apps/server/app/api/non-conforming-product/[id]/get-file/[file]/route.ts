@@ -16,7 +16,7 @@ export async function GET(
       req,
       type: "file",
       url: `non-conforming-product/${pncId}/${file}`,
-      download: false,
+      download: true,
     });
 
     return new NextResponse(fetched.buffer, {

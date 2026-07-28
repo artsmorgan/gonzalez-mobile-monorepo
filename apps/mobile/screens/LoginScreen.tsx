@@ -60,8 +60,13 @@ export default function LoginScreen() {
           console.error('Error saving/removing cedula:', storageError);
         }
         
-        // Login successful, navigate to home
-        navigation.replace('Home');
+        const currentMarcaRaw = await AsyncStorage.getItem('current_marca');
+        const hasCurrentMarca = Boolean(currentMarcaRaw && currentMarcaRaw.trim() !== '');
+        if (hasCurrentMarca) {
+          navigation.replace('Home');
+        } else {
+          navigation.replace('MarcarIngresoSalida');
+        }
       } else {
         Alert.alert('Error de autenticación', result.error || 'Credenciales incorrectas');
         if (result.passwordExpired) {

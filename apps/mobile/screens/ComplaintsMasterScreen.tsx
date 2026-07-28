@@ -10,7 +10,6 @@ import {
   Platform,
   Image,
   Dimensions,
-  Linking,
   Modal,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -65,6 +64,7 @@ import {
   downloadComplaintsMasterServerFileToLocal,
 } from '@/hooks/complaintsMasterFilesSync';
 import { deleteFile, saveFile, getLocalFileDisplayUri, type StoredFileType } from '@/hooks/fileStorage';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import * as DocumentPicker from 'expo-document-picker';
 
 const COMPLAINTS_MASTER_FILE_STORAGE_PREFIX = 'complaints_master';
@@ -3089,6 +3089,8 @@ export default function ComplaintsMasterScreen() {
                   complaintId={record.id || record.id_local}
                   files={record.files!}
                   accessToken={effectiveMediaToken}
+                  refreshAccessToken={refreshAccessToken}
+                  logout={logout}
                   onDeleteFile={deleteAttachedFileForListRecord(record)}
                 />
               )}
@@ -3999,12 +4001,16 @@ function ComplaintFilesViewer({
   complaintId,
   files,
   accessToken,
+  refreshAccessToken,
+  logout,
   onDeleteFile,
   variant = 'default',
 }: {
   complaintId: string | number;
   files: ComplaintFile[];
   accessToken?: string | null;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<unknown>;
   onDeleteFile?: (file: ComplaintFile) => void;
   /** `list`: encabezado de tarjeta en el listado; el contenido solo se monta al expandir (sin peticiones hasta entonces). */
   variant?: 'default' | 'list';
@@ -4071,9 +4077,36 @@ function ComplaintFilesViewer({
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                const url = resolveComplaintFileMediaUri(complaintId, file, accessToken);
-                    if (url) Linking.openURL(url);
-                    else Alert.alert('Error', 'URL inválida para descargar el archivo');
+                    void (async () => {
+                      try {
+                        const url = resolveComplaintFileMediaUri(complaintId, file, accessToken);
+                        if (!url) {
+                          Alert.alert('Error', 'URL inválida para descargar el archivo');
+                          return;
+                        }
+
+                        const result = await downloadAuthedUrlToDevice({
+                          url,
+                          fallbackFileName: getComplaintFileDisplayName(file),
+                          tempPrefix: 'complaint_file',
+                          refreshAccessToken,
+                          logout,
+                        });
+
+                        if (result.ok) {
+                          Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                          return;
+                        }
+                        if (result.cancelled) {
+                          return;
+                        }
+                        Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                      } catch (error) {
+                        const message =
+                          error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                        Alert.alert('Error', message);
+                      }
+                    })();
                   }}
                 >
                   <Ionicons name="document-text-outline" size={20} color="#007AFF" />

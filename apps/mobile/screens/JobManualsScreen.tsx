@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Image, Linking, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, Image, Modal, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import * as Network from 'expo-network';
@@ -31,6 +31,7 @@ import getHoraAccion from '../hooks/getHoraAccion';
 import { syncUnsyncedJobManualByLocalId } from '../hooks/jobManualsQueueUtils';
 import { useQRScanner } from '../hooks/useQRScanner';
 import authedFetch from '../hooks/authedFetch';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import getValidAccessTokenOrLogout from '../hooks/getValidAccessTokenOrLogout';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -3754,9 +3755,36 @@ export default function JobManualsScreen() {
                                           key={`vis_${firma.id}_${file.id}`}
                                           style={styles.documentRow}
                                           onPress={() => {
-                                            const url = buildVisualizationFileUrl(selectedManual.id, firma.id, file);
-                                            if (url) Linking.openURL(url);
-                                            else Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                            void (async () => {
+                                              try {
+                                                const url = buildVisualizationFileUrl(selectedManual.id, firma.id, file);
+                                                if (!url) {
+                                                  Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                                  return;
+                                                }
+
+                                                const result = await downloadAuthedUrlToDevice({
+                                                  url,
+                                                  fallbackFileName: getRemoteFileDisplayName(file),
+                                                  tempPrefix: 'job_manual_visualization_file',
+                                                  refreshAccessToken,
+                                                  logout,
+                                                });
+
+                                                if (result.ok) {
+                                                  Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                                                  return;
+                                                }
+                                                if (result.cancelled) {
+                                                  return;
+                                                }
+                                                Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                                              } catch (error) {
+                                                const message =
+                                                  error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                                                Alert.alert('Error', message);
+                                              }
+                                            })();
                                           }}
                                         >
                                           <Ionicons name="document-text-outline" size={20} color="#007AFF" />
@@ -4051,12 +4079,36 @@ export default function JobManualsScreen() {
                         key={file.id}
                         style={styles.documentRow}
                         onPress={() => {
-                          const url = buildFileUrl(selectedManual.id, file);
-                          if (url) {
-                            Linking.openURL(url);
-                          } else {
-                            Alert.alert('Error', 'URL inválida para descargar el archivo');
-                          }
+                          void (async () => {
+                            try {
+                              const url = buildFileUrl(selectedManual.id, file);
+                              if (!url) {
+                                Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                return;
+                              }
+
+                              const result = await downloadAuthedUrlToDevice({
+                                url,
+                                fallbackFileName: getRemoteFileDisplayName(file),
+                                tempPrefix: 'job_manual_file',
+                                refreshAccessToken,
+                                logout,
+                              });
+
+                              if (result.ok) {
+                                Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                                return;
+                              }
+                              if (result.cancelled) {
+                                return;
+                              }
+                              Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                            } catch (error) {
+                              const message =
+                                error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                              Alert.alert('Error', message);
+                            }
+                          })();
                         }}
                       >
                         <Ionicons name="document-text-outline" size={20} color="#007AFF" />

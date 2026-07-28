@@ -9,8 +9,10 @@ import {
   MAIN_STRUCTURE_FRAG_ASYNC_PREFIX,
   MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS,
 } from '@/hooks/mainStructureFragmentsStorage';
-import requestPlanillasToken from '@/hooks/requestPlanillasToken';
-import { readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
+import {
+  extractPlanillasTokenFromResponse,
+  persistStoredPlanillasToken,
+} from '@/hooks/planillasTokenStorage';
 
 interface Role {
   id: number;
@@ -217,13 +219,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setTokenCreatedAt(tokenCreatedAt);
       setEmployee(employeeData);
 
-      const planillasResult = await requestPlanillasToken({
-        password,
-        refreshAccessToken,
-        logout,
-      });
-
-      if (!planillasResult.success) {
+      const planillasPayload = extractPlanillasTokenFromResponse(responseData);
+      if (!planillasPayload) {
         await Promise.all([
           AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
           AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
@@ -237,15 +234,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return {
           success: false,
           passwordExpired: false,
-          error: planillasResult.message || 'No se pudo obtener el token de Planillas',
+          error: 'No se recibió el token de Planillas en el login',
         };
       }
 
-      const storedPlanillas = await readStoredPlanillasToken();
-      if (storedPlanillas) {
-        setPlanillasToken(storedPlanillas.token);
-        setPlanillasTokenExpiresAt(String(storedPlanillas.expiresAtMs));
-      }
+      await persistStoredPlanillasToken(planillasPayload);
+      setPlanillasToken(planillasPayload.planillasToken);
+      setPlanillasTokenExpiresAt(String(planillasPayload.planillasTokenExpiresAt));
 
       // Tras login: sincronizar cachés pendientes (mismo flujo que reconexión / foco en App.tsx)
       const connectivity = await resolveAppConnectivity();
