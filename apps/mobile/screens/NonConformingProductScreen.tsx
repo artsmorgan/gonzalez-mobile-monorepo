@@ -4,7 +4,6 @@ import {
   Alert,
   Dimensions,
   Image,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -41,6 +40,7 @@ import type { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import {
   createNonConformingProduct,
@@ -2282,19 +2282,41 @@ export default function NonConformingProductScreen() {
                           <ThemedView key={`${recordKey}_doc_${idx}`} style={styles.fileRowDoc}>
                             <TouchableOpacity
                               style={styles.fileRowDocMain}
-                              onPress={async () => {
-                                if (!uri) return;
-                                try {
-                                  await Linking.openURL(uri);
-                                } catch {
-                                  Alert.alert('Error', 'No se pudo abrir el archivo');
-                                }
+                              onPress={() => {
+                                void (async () => {
+                                  if (!uri) {
+                                    Alert.alert('Error', 'URL inválida para descargar el archivo');
+                                    return;
+                                  }
+                                  try {
+                                    const result = await downloadAuthedUrlToDevice({
+                                      url: uri,
+                                      fallbackFileName: label,
+                                      tempPrefix: 'pnc_file',
+                                      refreshAccessToken,
+                                      logout,
+                                    });
+
+                                    if (result.ok) {
+                                      Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                                      return;
+                                    }
+                                    if (result.cancelled) {
+                                      return;
+                                    }
+                                    Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                                  } catch (error) {
+                                    const message =
+                                      error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                                    Alert.alert('Error', message);
+                                  }
+                                })();
                               }}
                             >
                               <ThemedText numberOfLines={1} style={styles.fileName}>
                                 {label}
                               </ThemedText>
-                              <Ionicons name="open-outline" size={18} color="#007AFF" />
+                              <Ionicons name="download-outline" size={18} color="#007AFF" />
                             </TouchableOpacity>
                             <TouchableOpacity
                               style={styles.attachmentTrashBtnInline}

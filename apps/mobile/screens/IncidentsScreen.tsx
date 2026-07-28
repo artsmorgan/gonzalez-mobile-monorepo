@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Dimensions, Linking, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
+import { ActivityIndicator, Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
@@ -22,6 +22,7 @@ import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/
 import { RootStackParamList } from '../App';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { eventBus } from '@/hooks/eventBus';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -2766,6 +2767,8 @@ export default function IncidentsScreen() {
                       <IncidentFilesViewer
                         incident={i}
                         accessToken={accessToken}
+                        refreshAccessToken={refreshAccessToken}
+                        logout={logout}
                         onRequestDeleteFile={
                           false && i.id > 0 && !i.id_local
                             ? (f) => handleRequestDeleteIncidentFile(i, f)
@@ -2959,7 +2962,13 @@ export default function IncidentsScreen() {
                       )}
 
                       {selectedIncidentForAportes && (
-                        <ContributionFilesViewer incidentId={selectedIncidentForAportes.id} contribution={a} accessToken={accessToken} />
+                        <ContributionFilesViewer
+                          incidentId={selectedIncidentForAportes.id}
+                          contribution={a}
+                          accessToken={accessToken}
+                          refreshAccessToken={refreshAccessToken}
+                          logout={logout}
+                        />
                       )}
                     </ThemedView>
                   );
@@ -3335,10 +3344,14 @@ const styles = StyleSheet.create({
 function IncidentFilesViewer({
   incident,
   accessToken,
+  refreshAccessToken,
+  logout,
   onRequestDeleteFile,
 }: {
   incident: Incident;
   accessToken?: string | null;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<unknown>;
   onRequestDeleteFile?: (file: any) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -3437,12 +3450,36 @@ function IncidentFilesViewer({
                   <TouchableOpacity
                     style={styles.documentRow}
                     onPress={() => {
-                      const url = buildIncidentFileUrl(incident.id, file, accessToken);
-                      if (url) {
-                        Linking.openURL(url);
-                      } else {
-                        Alert.alert('Error', 'URL inválida para descargar el archivo');
-                      }
+                      void (async () => {
+                        try {
+                          const url = buildIncidentFileUrl(incident.id, file, accessToken);
+                          if (!url) {
+                            Alert.alert('Error', 'URL inválida para descargar el archivo');
+                            return;
+                          }
+
+                          const result = await downloadAuthedUrlToDevice({
+                            url,
+                            fallbackFileName: getFileDisplayName(file),
+                            tempPrefix: 'incident_file',
+                            refreshAccessToken,
+                            logout,
+                          });
+
+                          if (result.ok) {
+                            Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                            return;
+                          }
+                          if (result.cancelled) {
+                            return;
+                          }
+                          Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                        } catch (error) {
+                          const message =
+                            error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                          Alert.alert('Error', message);
+                        }
+                      })();
                     }}
                   >
                     <Ionicons name="document-text-outline" size={20} color="#007AFF" />
@@ -3462,7 +3499,19 @@ function IncidentFilesViewer({
 }
 
 // Archivos de un aporte (contribución) en formato collapsable
-function ContributionFilesViewer({ incidentId, contribution, accessToken }: { incidentId: number; contribution: IncidentContribution; accessToken?: string | null }) {
+function ContributionFilesViewer({
+  incidentId,
+  contribution,
+  accessToken,
+  refreshAccessToken,
+  logout,
+}: {
+  incidentId: number;
+  contribution: IncidentContribution;
+  accessToken?: string | null;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<unknown>;
+}) {
   const [isExpanded, setIsExpanded] = useState(false);
   const files = (Array.isArray(contribution.files) ? contribution.files : []).filter((f: any) => {
     const originalName = String(f?.original_name || '').trim().toLowerCase();
@@ -3539,12 +3588,36 @@ function ContributionFilesViewer({ incidentId, contribution, accessToken }: { in
                   key={file.id}
                   style={styles.documentRow}
                   onPress={() => {
-                    const url = buildContributionFileUrl(incidentId, contribution.id, file, accessToken);
-                    if (url) {
-                      Linking.openURL(url);
-                    } else {
-                      Alert.alert('Error', 'URL inválida para descargar el archivo');
-                    }
+                    void (async () => {
+                      try {
+                        const url = buildContributionFileUrl(incidentId, contribution.id, file, accessToken);
+                        if (!url) {
+                          Alert.alert('Error', 'URL inválida para descargar el archivo');
+                          return;
+                        }
+
+                        const result = await downloadAuthedUrlToDevice({
+                          url,
+                          fallbackFileName: getFileDisplayName(file),
+                          tempPrefix: 'incident_contribution_file',
+                          refreshAccessToken,
+                          logout,
+                        });
+
+                        if (result.ok) {
+                          Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+                          return;
+                        }
+                        if (result.cancelled) {
+                          return;
+                        }
+                        Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+                      } catch (error) {
+                        const message =
+                          error instanceof Error ? error.message : 'No se pudo descargar el archivo';
+                        Alert.alert('Error', message);
+                      }
+                    })();
                   }}
                 >
                   <Ionicons name="document-text-outline" size={20} color="#007AFF" />

@@ -4,7 +4,6 @@ import {
   Alert,
   Dimensions,
   Image,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -37,6 +36,7 @@ import { ThemedView } from '@/components/ThemedView';
 import { Collapsible } from '@/components/Collapsible';
 import { useAuth } from '@/contexts/AuthContext';
 import authedFetch from '@/hooks/authedFetch';
+import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
@@ -611,8 +611,9 @@ export default function PermitRequestScreenV2() {
 
   const handlePickDocuments = async () => {
     try {
+      // '*/*' evita el selector solo-media de Android al mezclar image/audio/video con PDFs/docs.
       const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/*', 'audio/*', 'video/*', 'text/plain', 'text/csv', 'application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+        type: '*/*',
         multiple: true,
         copyToCacheDirectory: true,
       });
@@ -1160,15 +1161,32 @@ export default function PermitRequestScreenV2() {
   const openAttachment = async (record: PermitRecord, file: PermitAttachment) => {
     try {
       if (!file?.name) return;
-      const token = accessToken?.trim() || (await AsyncStorage.getItem('access_token'))?.trim() || '';
-      const url = buildPermitRequestMediaUrl(record.id, file.name, file.type, token);
+      const url = buildPermitRequestMediaUrl(record.id, file.name, file.type, accessToken);
       if (!url) {
         Alert.alert('Error', 'No se pudo generar el enlace. Verifica tu sesión o la configuración del servidor.');
         return;
       }
-      await Linking.openURL(url);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message || 'No se pudo acceder al archivo');
+
+      const displayName = String(file.original_name || file.name || 'archivo').trim();
+      const result = await downloadAuthedUrlToDevice({
+        url,
+        fallbackFileName: displayName,
+        tempPrefix: 'permit_request_file',
+        refreshAccessToken,
+        logout,
+      });
+
+      if (result.ok) {
+        Alert.alert('Descarga', `Archivo guardado: ${result.fileName}`);
+        return;
+      }
+      if (result.cancelled) {
+        return;
+      }
+      Alert.alert('Error', result.message || 'No se pudo descargar el archivo');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'No se pudo descargar el archivo';
+      Alert.alert('Error', message);
     }
   };
 

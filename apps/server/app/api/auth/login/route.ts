@@ -5,6 +5,7 @@ import { v4 as uuidv4 } from "uuid";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../utils/prismaClient";
 import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
+import { createTokenPlanillas } from "../../../../utils/createTokenPlanillas";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const jwt = require("jsonwebtoken");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -177,6 +178,31 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        let planillasToken: string | undefined;
+        let planillasTokenExpiresAt: number | undefined;
+        try {
+            const planillas = await createTokenPlanillas(
+                request,
+                { id: empleado.id, cedula: empleado.cedula },
+                password,
+                { accessToken },
+            );
+            planillasToken = planillas.planillasToken;
+            planillasTokenExpiresAt = planillas.planillasTokenExpiresAt;
+        } catch (planillasError) {
+            console.error("Error obteniendo token Planillas en login:", planillasError);
+            return NextResponse.json(
+                {
+                    status: false,
+                    message:
+                        planillasError instanceof Error
+                            ? planillasError.message
+                            : "No se pudo obtener el token de Planillas",
+                },
+                { status: 502 },
+            );
+        }
+
         return NextResponse.json(
             {
                 status: true,
@@ -184,6 +210,8 @@ export async function POST(request: NextRequest) {
                 accessToken,
                 refreshToken,
                 createdAt: now.getTime(),
+                planillasToken,
+                planillasTokenExpiresAt,
                 empleado: {
                     id: empleado.id,
                     cedula: empleado.cedula,

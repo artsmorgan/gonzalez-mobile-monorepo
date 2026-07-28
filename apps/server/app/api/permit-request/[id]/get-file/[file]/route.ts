@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAccessTokenByApi } from '../../../../../../utils/verifyAccessTokenByApi';
 import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
 import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
+import { prisma } from '../../../../../../utils/prismaClient';
 
 export const runtime = 'nodejs';
 
@@ -84,15 +85,9 @@ export async function GET(
       );
     }
 
-    const empleado = await callDynamicPrisma({
-      req,
-      data: {
-        action: 'GET',
-        table: 'c_empleado',
-        operation: 'findUnique',
-        where: { id: currentEmployeeId },
-      },
-      token: accessToken || undefined,
+    // con prisma directamente
+    const empleado = await prisma.c_empleado.findUnique({
+      where: { id: currentEmployeeId },
     });
     const myEjecutivoCuentaId = parseIntStrict(empleado?.supervisor_id);
     const isExecutive =

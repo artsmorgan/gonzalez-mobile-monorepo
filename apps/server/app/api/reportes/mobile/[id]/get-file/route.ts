@@ -52,9 +52,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return new NextResponse(fetched.buffer, {
             headers: {
                 "Content-Type": fetched.headers.contentType,
-                ...(fetched.headers.contentDisposition
-                    ? { "Content-Disposition": fetched.headers.contentDisposition }
-                    : {}),
+                "Content-Disposition":
+                    fetched.headers.contentDisposition || "attachment",
+                "Content-Length": String(fetched.buffer.length),
                 "Cache-Control": fetched.headers.cacheControl,
             },
         });

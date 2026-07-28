@@ -12,6 +12,7 @@ export async function createTokenPlanillas(
     request: NextRequest,
     empleado: EmpleadoPlanillasRef,
     password: string,
+    options?: { accessToken?: string },
 ) {
     const planillasUrl = process.env.PLANILLAS_URL;
     if (!planillasUrl) {
@@ -42,8 +43,16 @@ export async function createTokenPlanillas(
     }
 
     const now = toZonedTime(new Date(), "America/Costa_Rica");
-    const expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
+    const expiresInSec = Number(response.data.data.expires_in);
+    const expiresInMs = Number.isFinite(expiresInSec) && expiresInSec > 0 ? expiresInSec * 1000 : 3600_000;
+    const planillasTokenExpiresAt = Date.now() + expiresInMs;
+    const expires_at = new Date(planillasTokenExpiresAt);
     const planillasToken = String(response.data.data.token ?? "");
+
+    const prismaOpts = {
+        token: options?.accessToken,
+        shouldVerifyAccessToken: Boolean(options?.accessToken),
+    };
 
     const mobile_token = await callDynamicPrisma({
         req: request,
@@ -53,6 +62,7 @@ export async function createTokenPlanillas(
             operation: "findFirst",
             where: { empleado_id: empleado.id },
         },
+        ...prismaOpts,
     });
 
     if (mobile_token?.id) {
@@ -69,6 +79,7 @@ export async function createTokenPlanillas(
                     expires_at,
                 },
             },
+            ...prismaOpts,
         });
     } else {
         await callDynamicPrisma({
@@ -84,8 +95,9 @@ export async function createTokenPlanillas(
                     expires_at,
                 },
             },
+            ...prismaOpts,
         });
     }
 
-    return { planillasToken, planillasTokenExpiresAt: expires_at.getTime() };
+    return { planillasToken, planillasTokenExpiresAt };
 }

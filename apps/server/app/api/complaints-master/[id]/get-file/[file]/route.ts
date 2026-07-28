@@ -16,7 +16,7 @@ export async function GET(
       req,
       type: "file",
       url: `complaints-master/${complaintId}/${file}`,
-      download: false,
+      download: true,
     });
 
     return new NextResponse(fetched.buffer, {
