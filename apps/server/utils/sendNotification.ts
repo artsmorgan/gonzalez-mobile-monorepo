@@ -134,9 +134,7 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
         }
 
         // Push FCM a dispositivos registrados en las plazas receptoras
-        const allOfThem = receiver.concat(plazaSenders);
-        //const fcmPlazaIds = receiver.filter((plazaId) => !plazaSenders.includes(plazaId));
-        const fcmPlazaIds = allOfThem;
+        const fcmPlazaIds = receiver.filter((plazaId) => !plazaSenders.includes(plazaId));
         if (fcmPlazaIds.length > 0) {
             void sendPushToPlazas(req, fcmPlazaIds, {
                 title,
@@ -256,9 +254,7 @@ export async function sendNotificationByEmployee(req: NextRequest, corpoId: numb
             }
         }
 
-        const allOfThem = employeeIds.concat(empleadoSenderIds);
-        //const fcmEmployeeIds = employeeIds.filter((id) => !empleadoSenderIds.includes(id));
-        const fcmEmployeeIds = allOfThem;
+        const fcmEmployeeIds = employeeIds.filter((id) => !empleadoSenderIds.includes(id));
         if (fcmEmployeeIds.length > 0) {
             void sendPushToEmpleados(req, fcmEmployeeIds, {
                 title,
