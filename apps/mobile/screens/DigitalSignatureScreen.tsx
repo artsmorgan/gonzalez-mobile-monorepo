@@ -14,7 +14,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import SignatureScreen from "react-native-signature-canvas";
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
+import { jwtDecode } from 'jwt-decode';
 import saveManualSignature from '@/hooks/saveManualSignature';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { readLastLocationFromStorage } from '@/hooks/updateLastLocation';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import getCurrentUserDigitalSignature, {
   SIGNATURE_POLL_SILENT_SCREEN,
   SIGNATURE_USER_ACTION_SCREEN,
@@ -28,12 +32,102 @@ type DigitalSignatureScreenNavigationProp = NativeStackNavigationProp<RootStackP
 const LOCATION_QR_ERROR_MESSAGE =
   'No se pudo obtener la ubicación. Mantén el GPS encendido unos segundos y vuelve a intentar.';
 
-/** Firma con ubicación + fallback `last_location`. */
+const LOCATION_CACHE_ERROR_MESSAGE =
+  'No hay coordenadas guardadas. Conéctate a internet o activa el GPS para generar el código QR.';
+
+const getConnectionStatus = async (): Promise<boolean> => {
+  //return false;
+  const networkState = await Network.getNetworkStateAsync();
+  return (
+    networkState.isConnected === true &&
+    networkState.isInternetReachable === true
+  );
+};
+
+/** Misma composición de hash que getCurrentUserDigitalSignature (sin tocar ese hook). */
+async function buildSignatureHashFromCoords(
+  employee: unknown,
+  latitude: number,
+  longitude: number,
+  silent: boolean,
+): Promise<string | null> {
+  if (!employee || typeof employee !== 'object') {
+    if (!silent) {
+      Alert.alert('Error', 'No se pudo obtener la información del empleado');
+    }
+    return null;
+  }
+
+  const token = await AsyncStorage.getItem('access_token');
+  if (!token) {
+    if (!silent) {
+      Alert.alert('Error', 'No se pudo obtener el token de sesión');
+    }
+    return null;
+  }
+
+  let sessionId = 'unknown';
+  try {
+    const decoded: { sessionId?: string } = jwtDecode(token);
+    sessionId = decoded.sessionId || 'unknown';
+  } catch (error) {
+    console.error('Error decoding access token for signature:', error);
+    if (!silent) {
+      Alert.alert('Error', 'No se pudo leer la sesión. Vuelve a iniciar sesión e intenta de nuevo.');
+    }
+    return null;
+  }
+
+  // La hora se actualiza siempre (online/offline vía getHoraAccion).
+  let timestamp = Date.now();
+  try {
+    const t = await getHoraAccion();
+    if (typeof t === 'number' && Number.isFinite(t)) {
+      timestamp = t;
+    }
+  } catch (error) {
+    console.warn('getHoraAccion failed, using local time for signature:', error);
+  }
+
+  const empleadoId = String((employee as { id?: unknown }).id);
+  return btoa(`${sessionId}:${empleadoId}:${latitude}:${longitude}:${timestamp}`);
+}
+
+/**
+ * Online: coordenadas actualizadas (GPS vía getCurrentUserDigitalSignature).
+ * Offline: últimas coordenadas en `last_location`; la hora siempre se refresca con getHoraAccion.
+ */
 async function obtainFirmaWithDeviceLocation(
   employee: unknown,
   opts?: DigitalSignatureOptions,
 ): Promise<string | null> {
-  return getCurrentUserDigitalSignature(employee, opts);
+  const silent = opts?.silent === true;
+  const isOnline = await getConnectionStatus();
+
+  if (isOnline) {
+    return getCurrentUserDigitalSignature(employee, opts);
+  }
+
+  const stored = await readLastLocationFromStorage();
+  if (!stored) {
+    if (!silent) {
+      Alert.alert('Ubicación no disponible', LOCATION_CACHE_ERROR_MESSAGE);
+    }
+    return null;
+  }
+
+  if (!silent) {
+    const ms = parseInt(String(stored.updated_at), 10);
+    const when = Number.isFinite(ms)
+      ? convertDateTimestampToLocalString(new Date(ms).toISOString()).replace(/:\d{2}$/, '')
+      : 'fecha desconocida';
+    Alert.alert(
+      'Ubicación en caché',
+      `Sin conexión: se usarán las últimas coordenadas registradas (actualizadas el ${when}).`,
+    );
+  }
+
+  return buildSignatureHashFromCoords(employee, stored.latitude, stored.longitude, silent);
 }
 
 export default function DigitalSignatureScreen() {
@@ -84,7 +178,8 @@ export default function DigitalSignatureScreen() {
       );
       if (!hash) {
         if (!options?.silent) {
-          showQrLocationFailure(LOCATION_QR_ERROR_MESSAGE);
+          const online = await getConnectionStatus();
+          showQrLocationFailure(online ? LOCATION_QR_ERROR_MESSAGE : LOCATION_CACHE_ERROR_MESSAGE);
         }
         return;
       }

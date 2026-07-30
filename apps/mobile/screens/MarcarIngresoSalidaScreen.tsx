@@ -1985,12 +1985,23 @@ const getActivities = async (marcaId: number) => {
         throw new Error('Server URL not configured');
       }
 
+      const referenceMs = (await getHoraAccion()) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        setFutureMarks([]);
+        return;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       const response = await authedFetch({
         url: `${apiUrl}/api/attendance/user/${employee.id}/next`,
         init: {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
           },
         },
         refreshAccessToken,
@@ -2003,8 +2014,8 @@ const getActivities = async (marcaId: number) => {
       }
 
       const data = await response.json();
-      if (data.status && data.data) {
-        setFutureMarks(data.data);
+      if (data.status && Array.isArray(data.marcas)) {
+        setFutureMarks(data.marcas);
       } else {
         setFutureMarks([]);
         Alert.alert('Error', data.message || 'No se pudieron cargar las marcas futuras');

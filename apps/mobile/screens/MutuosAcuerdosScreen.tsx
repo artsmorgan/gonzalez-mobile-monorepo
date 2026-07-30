@@ -239,7 +239,11 @@ export default function MutuosAcuerdosScreen() {
 
   const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
   const planillasRevalidationModalShownRef = useRef(false);
-  const resumeExecutiveApprovalAfterPlanillasRef = useRef(false);
+  const pendingPlanillasActionRef = useRef<
+    | { type: 'approve' }
+    | { type: 'loadMarcas'; section: SectionKey; employeeId: number; fecha: Date }
+    | null
+  >(null);
 
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
@@ -412,12 +416,32 @@ export default function MutuosAcuerdosScreen() {
   const loadMarcas = async (section: SectionKey, employeeId: number, fecha: Date) => {
     updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [], selectedMarcaId: null }));
     try {
+      const referenceMs = (await getHoraAccion()) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'loadMarcas', section, employeeId, fecha };
+        updateSection(section, (prev) => ({
+          ...prev,
+          loadingMarcas: false,
+          marcas: [],
+          selectedMarcaId: null,
+          message: 'Se requiere revalidar el token de Planillas para consultar turnos.',
+        }));
+        return;
+      }
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       const res = await listMarcasParaMutuo({
         empleado_id: employeeId,
         fecha: dateToYmd(fecha),
+        planillasToken,
         refreshAccessToken,
         logout,
       });
+      if (!res.status) {
+        throw new Error(res.message || 'No se pudieron obtener las marcas');
+      }
       updateSection(section, (prev) => ({
         ...prev,
         loadingMarcas: false,
@@ -947,7 +971,7 @@ export default function MutuosAcuerdosScreen() {
       const referenceMs = Number(horaAccion) || Date.now();
       const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
       if (!hasValidPlanillasToken) {
-        resumeExecutiveApprovalAfterPlanillasRef.current = true;
+        pendingPlanillasActionRef.current = { type: 'approve' };
         return;
       }
 
@@ -981,15 +1005,18 @@ export default function MutuosAcuerdosScreen() {
   const handlePlanillasRevalidationSuccess = () => {
     setShowPlanillasRevalidationModal(false);
     planillasRevalidationModalShownRef.current = false;
-    if (resumeExecutiveApprovalAfterPlanillasRef.current) {
-      resumeExecutiveApprovalAfterPlanillasRef.current = false;
+    const pending = pendingPlanillasActionRef.current;
+    pendingPlanillasActionRef.current = null;
+    if (pending?.type === 'approve') {
       void finalizeExecutiveApproval();
+    } else if (pending?.type === 'loadMarcas') {
+      void loadMarcas(pending.section, pending.employeeId, pending.fecha);
     }
   };
 
   const handlePlanillasRevalidationDismiss = () => {
     planillasRevalidationModalShownRef.current = false;
-    resumeExecutiveApprovalAfterPlanillasRef.current = false;
+    pendingPlanillasActionRef.current = null;
     setShowPlanillasRevalidationModal(false);
   };
 

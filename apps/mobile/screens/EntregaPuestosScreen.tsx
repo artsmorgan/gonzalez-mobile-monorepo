@@ -15,6 +15,7 @@ import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
 import SignatureScreen from "react-native-signature-canvas";
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQRScanner } from '@/hooks/useQRScanner';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
@@ -161,6 +162,8 @@ interface EntregaPuestoRecord {
   firma_recibe: string;
   firma_entrega: string | null;
   firma_responsable: string;
+  image_delivery: string | null;
+  image_receives: string | null;
   created_at: string | Date;
   created_by: number;
 }
@@ -209,6 +212,82 @@ export default function EntregaPuestosScreen() {
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<EntregaPuestosScreenNavigationProp>();
   const { scanQR, QRScannerComponent } = useQRScanner();
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'front' | 'back'>('front');
+  const [cameraTarget, setCameraTarget] = useState<'receives' | 'delivery'>('receives');
+  const [photoRecibeBase64, setPhotoRecibeBase64] = useState<string>('');
+  const [photoEntregaBase64, setPhotoEntregaBase64] = useState<string>('');
+  const [photoRecibeUri, setPhotoRecibeUri] = useState<string>('');
+  const [photoEntregaUri, setPhotoEntregaUri] = useState<string>('');
+
+  const appendTokenToUrl = (url: string) => {
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+
+  const buildEntregaPuestoImageUrl = (
+    recordId: number | undefined,
+    fileName: string | null | undefined,
+  ): string => {
+    const name = String(fileName || '').trim();
+    if (!recordId || !name) return '';
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return appendTokenToUrl(
+      `${String(apiUrl).replace(/\/+$/, '')}/api/entrega-puestos/${recordId}/get-image/${encodeURIComponent(name)}`,
+    );
+  };
+
+  const openCameraForPhoto = async (target: 'receives' | 'delivery') => {
+    try {
+      if (!cameraPermission?.granted) {
+        const res = await requestCameraPermission();
+        if (!res.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setCameraTarget(target);
+      setCameraFacing('front');
+      setIsCameraVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo abrir la cámara');
+    }
+  };
+
+  const captureEntregaPhoto = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        base64: true,
+        skipProcessing: false,
+      });
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const rawB64 = String(photo.base64 || '').trim();
+      if (!rawB64) {
+        Alert.alert('Error', 'No se pudo obtener la foto en base64');
+        return;
+      }
+      if (cameraTarget === 'receives') {
+        setPhotoRecibeBase64(rawB64);
+        setPhotoRecibeUri(photo.uri);
+      } else {
+        setPhotoEntregaBase64(rawB64);
+        setPhotoEntregaUri(photo.uri);
+      }
+      setIsCameraVisible(false);
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
 
   const handleHomePress = () => {
     navigation.navigate('Home');
@@ -670,6 +749,8 @@ export default function EntregaPuestosScreen() {
         firma_recibe: r.firma_recibe,
         firma_entrega: r.firma_entrega ?? null,
         firma_responsable: r.firma_responsable,
+        image_delivery: r.image_delivery ? String(r.image_delivery) : null,
+        image_receives: r.image_receives ? String(r.image_receives) : null,
         created_at: r.created_at,
         created_by: r.created_by,
       }));
@@ -827,6 +908,11 @@ export default function EntregaPuestosScreen() {
       return;
     }
 
+    if (!photoRecibeBase64) {
+      Alert.alert('Error', 'Debe tomar la foto de quien recibe');
+      return;
+    }
+
     Alert.alert(
       'Confirmar',
       '¿Desea guardar el registro de entrega de puesto?',
@@ -920,6 +1006,8 @@ export default function EntregaPuestosScreen() {
                 firma_recibe: firmaRecibe,
                 firma_entrega: isSelfDelivery ? null : (firmaEntrega || null),
                 firma_responsable: firmaResponsable,
+                image_receives: photoRecibeBase64,
+                image_delivery: isSelfDelivery ? null : (photoEntregaBase64 || null),
                 marca_id: marcaRecibeId,
               };
 
@@ -1229,6 +1317,35 @@ export default function EntregaPuestosScreen() {
           <ThemedText style={styles.recordLabel}>Observaciones: </ThemedText>
           <ThemedText style={styles.recordValue}>{record.observaciones || 'Sin observaciones'}</ThemedText>
         </ThemedText>
+
+        <ThemedView style={styles.recordPhotosRow}>
+          <ThemedView style={styles.recordPhotoBlock}>
+            <ThemedText style={styles.recordLabel}>Foto quien recibe</ThemedText>
+            {buildEntregaPuestoImageUrl(record.id, record.image_receives) ? (
+              <Image
+                source={{ uri: buildEntregaPuestoImageUrl(record.id, record.image_receives) }}
+                style={styles.recordPhotoImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <ThemedText style={styles.recordValue}>Sin foto</ThemedText>
+            )}
+          </ThemedView>
+          {hasEntregaData ? (
+            <ThemedView style={styles.recordPhotoBlock}>
+              <ThemedText style={styles.recordLabel}>Foto quien entrega</ThemedText>
+              {buildEntregaPuestoImageUrl(record.id, record.image_delivery) ? (
+                <Image
+                  source={{ uri: buildEntregaPuestoImageUrl(record.id, record.image_delivery) }}
+                  style={styles.recordPhotoImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <ThemedText style={styles.recordValue}>Sin foto</ThemedText>
+              )}
+            </ThemedView>
+          ) : null}
+        </ThemedView>
 
         <Collapsible title="Firmas">
           <ThemedText style={styles.recordLine}>
@@ -1567,6 +1684,68 @@ export default function EntregaPuestosScreen() {
               multiline
               numberOfLines={4}
             />
+
+            {/* Foto quien recibe (obligatoria) */}
+            <ThemedText style={styles.sectionTitle}>Foto de quien recibe *</ThemedText>
+            <ThemedView style={styles.signatureButtons}>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={() => openCameraForPhoto('receives')}
+              >
+                <Ionicons name="camera" size={18} color="#FFFFFF" />
+                <ThemedText style={styles.signatureButtonText}>Abrir cámara</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+            {!photoRecibeUri ? (
+              <ThemedText style={styles.signatureHintMuted}>Aún no hay foto de quien recibe.</ThemedText>
+            ) : (
+              <ThemedView style={styles.photoPreviewContainer}>
+                <Image source={{ uri: photoRecibeUri }} style={styles.photoPreviewImage} resizeMode="cover" />
+                <TouchableOpacity
+                  style={styles.photoPreviewDeleteButton}
+                  onPress={() => {
+                    setPhotoRecibeUri('');
+                    setPhotoRecibeBase64('');
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="trash" size={16} color="#FFFFFF" />
+                </TouchableOpacity>
+              </ThemedView>
+            )}
+
+            {/* Foto quien entrega (opcional) */}
+            {!isSelfDelivery ? (
+              <>
+                <ThemedText style={styles.sectionTitle}>Foto de quien entrega (opcional)</ThemedText>
+                <ThemedView style={styles.signatureButtons}>
+                  <TouchableOpacity
+                    style={styles.signatureButton}
+                    onPress={() => openCameraForPhoto('delivery')}
+                  >
+                    <Ionicons name="camera" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.signatureButtonText}>Abrir cámara</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+                {!photoEntregaUri ? (
+                  <ThemedText style={styles.signatureHintMuted}>No se agregó foto de quien entrega.</ThemedText>
+                ) : (
+                  <ThemedView style={styles.photoPreviewContainer}>
+                    <Image source={{ uri: photoEntregaUri }} style={styles.photoPreviewImage} resizeMode="cover" />
+                    <TouchableOpacity
+                      style={styles.photoPreviewDeleteButton}
+                      onPress={() => {
+                        setPhotoEntregaUri('');
+                        setPhotoEntregaBase64('');
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="trash" size={16} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </>
+            ) : null}
 
             {/* Firma Recibe */}
             <ThemedText style={styles.sectionTitle}>Firma de quien recibe *</ThemedText>
@@ -1943,6 +2122,26 @@ export default function EntregaPuestosScreen() {
           accessToken={accessToken}
         />
       ) : null}
+
+      <Modal visible={isCameraVisible} animationType="slide" onRequestClose={() => setIsCameraVisible(false)}>
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          <CameraView
+            ref={cameraRef}
+            style={{ flex: 1 }}
+            facing={cameraFacing}
+            onMountError={() => {
+              setCameraFacing((prev) => (prev === 'front' ? 'back' : prev));
+            }}
+          >
+            <TouchableOpacity style={styles.cameraCloseButton} onPress={() => setIsCameraVisible(false)}>
+              <Ionicons name="close" size={30} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureEntregaPhoto}>
+              <ThemedView style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </CameraView>
+        </ThemedView>
+      </Modal>
 
       <AppFooter />
       <SlideMenu
@@ -2587,5 +2786,91 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   modalAcceptButtonText: { fontWeight: '800', color: '#000' },
+  photoPreviewContainer: {
+    marginTop: 8,
+    marginBottom: 12,
+    position: 'relative',
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 6,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  photoPreviewImage: {
+    width: 180,
+    height: 180,
+    borderRadius: 8,
+    backgroundColor: '#F0F0F0',
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+  },
+  photoPreviewDeleteButton: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    zIndex: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+  },
+  recordPhotosRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 10,
+    marginBottom: 8,
+    backgroundColor: 'transparent',
+  },
+  recordPhotoBlock: {
+    flexGrow: 1,
+    flexBasis: '40%',
+    minWidth: 140,
+    backgroundColor: 'transparent',
+  },
+  recordPhotoImage: {
+    marginTop: 6,
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: 10,
+    backgroundColor: '#F0F0F0',
+  },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    zIndex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 25,
+    padding: 10,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
 });
 

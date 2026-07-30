@@ -537,6 +537,133 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Una de las marcas seleccionadas ya está asociada a otro mutuo acuerdo" }, { status: 400 });
     }
 
+    // Conflicto con permisos / otros mutuos (ambas fechas, ambos empleados)
+    const empleadoAusenteId = Number(marcaAusente.empleadoFijo_id);
+    const empleadoReemplazaId = Number(marcaReemplaza.empleadoFijo_id);
+    const ymdFromFecha = (fecha: Date | string | null | undefined): string | null => {
+      if (!fecha) return null;
+      const d = fecha instanceof Date ? fecha : new Date(String(fecha));
+      if (Number.isNaN(d.getTime())) return null;
+      return d.toISOString().split("T")[0];
+    };
+    const dayAusente = ymdFromFecha(marcaAusente.fecha);
+    const dayReemplaza = ymdFromFecha(marcaReemplaza.fecha);
+    const conflictDays = Array.from(new Set([dayAusente, dayReemplaza].filter(Boolean) as string[]));
+    if (conflictDays.length === 0) {
+      return NextResponse.json(
+        { status: false, message: "No se pudieron determinar las fechas de las marcas seleccionadas" },
+        { status: 400 }
+      );
+    }
+
+    const conflictDayStart = `${conflictDays.reduce((a, b) => (a < b ? a : b))}T00:00:00.000Z`;
+    const conflictDayEnd = `${conflictDays.reduce((a, b) => (a > b ? a : b))}T00:00:00.000Z`;
+    const employeeChecks: Array<{ id: number; label: string }> = [
+      { id: empleadoAusenteId, label: "ausente" },
+      { id: empleadoReemplazaId, label: "reemplazo" },
+    ];
+
+    for (const emp of employeeChecks) {
+      const overlappingPermit = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "c_solicitud_permiso",
+          operation: "findFirst",
+          where: {
+            empleado_id: emp.id,
+            isActive: true,
+            estado: { in: ["pendiente", "aprobado"] },
+            fecha_inicio: { lte: conflictDayEnd },
+            fecha_fin: { gte: conflictDayStart },
+          },
+          orderBy: { fecha_inicio: "asc" },
+        },
+      });
+
+      if (overlappingPermit) {
+        // Confirmar que el permiso cubre al menos uno de los días del mutuo (no solo el hueco intermedio)
+        const pInicio = ymdFromFecha(overlappingPermit.fecha_inicio);
+        const pFin = ymdFromFecha(overlappingPermit.fecha_fin);
+        const coversDay =
+          pInicio &&
+          pFin &&
+          conflictDays.some((day) => day >= pInicio && day <= pFin);
+
+        if (coversDay) {
+          return NextResponse.json(
+            {
+              status: false,
+              message: `El empleado ${emp.label} tiene un permiso ${overlappingPermit.estado} del ${pInicio} al ${pFin} que entra en conflicto con las fechas del mutuo acuerdo.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+
+      const otherMutuos = await callDynamicPrisma({
+        req,
+        data: {
+          action: "GET",
+          table: "e_mutuos_acuerdos",
+          operation: "findMany",
+          where: {
+            isActive: true,
+            estado: { in: ["pendiente", "aprobado"] },
+            OR: [{ empleadoAusente_id: emp.id }, { empleadoReemplaza_id: emp.id }],
+          },
+        },
+      });
+
+      const otherMutuosRows = Array.isArray(otherMutuos) ? otherMutuos : otherMutuos ? [otherMutuos] : [];
+      if (otherMutuosRows.length > 0) {
+        const otherMarcaIds = Array.from(
+          new Set(
+            otherMutuosRows
+              .flatMap((m: any) => [parseIntStrict(m?.marcaDiaAusente_id), parseIntStrict(m?.marcaDiaReemplaza_id)])
+              .filter((id): id is number => id != null && id > 0)
+          )
+        );
+
+        const otherMarcas =
+          otherMarcaIds.length > 0
+            ? await prisma.c_marca_dia.findMany({
+                where: { id: { in: otherMarcaIds } },
+                select: { id: true, fecha: true },
+              })
+            : [];
+        const otherFechaById = new Map<number, string>(
+          otherMarcas
+            .map((m) => {
+              const ymd = ymdFromFecha(m.fecha);
+              return ymd ? ([m.id, ymd] as const) : null;
+            })
+            .filter((x): x is readonly [number, string] => x != null)
+        );
+
+        const conflictingOther = otherMutuosRows.find((mutuo: any) => {
+          const ids = [
+            parseIntStrict(mutuo?.marcaDiaAusente_id),
+            parseIntStrict(mutuo?.marcaDiaReemplaza_id),
+          ].filter((id): id is number => id != null && id > 0);
+          return ids.some((id) => {
+            const day = otherFechaById.get(id);
+            return day != null && conflictDays.includes(day);
+          });
+        });
+
+        if (conflictingOther) {
+          return NextResponse.json(
+            {
+              status: false,
+              message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(conflictingOther.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
+            },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     const createdBy = parseIntStrict((payload as any)?.id) || 0;
     const createdAt = horaAccion ? horaAccion : toZonedTime(new Date(), "America/Costa_Rica");
 

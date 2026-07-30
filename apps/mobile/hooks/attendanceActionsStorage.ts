@@ -130,7 +130,7 @@ export async function attachPlanillasTokenToPlanillasAttendanceActions(
       next.push(action);
       continue;
     }
-    if (action.planillasToken === token) {
+    if (String(action.planillasToken ?? '').trim() === token) {
       next.push(action);
       continue;
     }

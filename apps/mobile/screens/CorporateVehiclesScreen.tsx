@@ -906,6 +906,28 @@ export default function CorporateVehiclesScreen() {
   // imágenes
   const [imageFiles, setImageFiles] = useState<LocalImage[]>([]);
 
+  const [isBitacoraVehiculosVisible, setIsBitacoraVehiculosVisible] = useState<boolean>(false);
+
+  useEffect(() => {
+    const checkBitacoraVehiculosVisible = async () => {
+      try {
+        const modules_release = await AsyncStorage.getItem('modules_release');
+        if (!modules_release) {
+          setIsBitacoraVehiculosVisible(false);
+          return;
+        }
+        const modules_release_data = JSON.parse(modules_release);
+        const modules_release_data_find = Array.isArray(modules_release_data)
+          ? modules_release_data.find((m: any) => m.module_name === 'bitacora-vehiculos-detenidos')
+          : null;
+        setIsBitacoraVehiculosVisible(Boolean(modules_release_data_find?.is_visible));
+      } catch {
+        setIsBitacoraVehiculosVisible(false);
+      }
+    };
+    void checkBitacoraVehiculosVisible();
+  }, []);
+
   const closeCambiosModal = () => {
     setIsCambiosModalVisible(false);
     setCambiosItems([]);
@@ -5145,14 +5167,16 @@ export default function CorporateVehiclesScreen() {
                           </TouchableOpacity>
                         </ThemedView>
 
-                        <ThemedView style={styles.modalItemActions}>
-                          {((u as any)?.bitacora_id == null && !(u as any)?.bitacora) && (
-                            <TouchableOpacity style={[styles.actionBtn, styles.assignBtn]} onPress={() => handleAssignEstado(u)} activeOpacity={0.85}>
-                              <Ionicons name="clipboard-outline" size={18} color="#FFFFFF" />
-                              <ThemedText style={styles.actionBtnText}>Asignar estado</ThemedText>
-                            </TouchableOpacity>
-                          )}
-                        </ThemedView>
+                        {isBitacoraVehiculosVisible && (
+                          <ThemedView style={styles.modalItemActions}>
+                            {((u as any)?.bitacora_id == null && !(u as any)?.bitacora) && (
+                              <TouchableOpacity style={[styles.actionBtn, styles.assignBtn]} onPress={() => handleAssignEstado(u)} activeOpacity={0.85}>
+                                <Ionicons name="clipboard-outline" size={18} color="#FFFFFF" />
+                                <ThemedText style={styles.actionBtnText}>Asignar estado</ThemedText>
+                              </TouchableOpacity>
+                            )}
+                          </ThemedView>
+                        )}
 
                         {/* Bitácora colapsable */}
                         {((u as any)?.bitacora_id != null || (u as any)?.bitacora) && (() => {

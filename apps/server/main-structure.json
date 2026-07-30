@@ -1,5 +1,5 @@
 {
-  "created_at": 1785164448508,
+  "created_at": 1785425097589,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -4421,7 +4421,7 @@
             "numero_boleta_proveeduria": null,
             "tipo": null,
             "marca": "Colt",
-            "modelo": "2026",
+            "modelo": null,
             "serie_placa": "1110",
             "marca_nuevo": null,
             "modelo_nuevo": null,
@@ -4441,11 +4441,19 @@
             "iva": null,
             "costo_total": null,
             "fecha_fin": null,
-            "reincidencia_treinta_dias": null,
+            "reincidencia_treinta_dias": false,
             "tipo_mant_art_reincid": null,
             "created_at": "2026-07-20T12:02:42.000Z",
-            "updated_at": "2026-07-20T12:02:42.000Z",
-            "c_archivos_adjuntos_articulo_mantenimiento": []
+            "updated_at": "2026-07-28T15:53:20.000Z",
+            "c_archivos_adjuntos_articulo_mantenimiento": [
+              {
+                "id": 1,
+                "name": "84f4912e-bd1d-44cf-a5fd-a6b4bf19d030.xlsx",
+                "original_name": "13_Ingresos_de_usuario_Consolidado_270726160631 (1).xlsx",
+                "type": "document",
+                "extension": "xlsx"
+              }
+            ]
           },
           {
             "id": 1,
@@ -4502,7 +4510,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "Colt",
-          "modelo": "2026",
+          "modelo": null,
           "serie_placa": "1110",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4522,11 +4530,19 @@
           "iva": null,
           "costo_total": null,
           "fecha_fin": null,
-          "reincidencia_treinta_dias": null,
+          "reincidencia_treinta_dias": false,
           "tipo_mant_art_reincid": null,
           "created_at": "2026-07-20T12:02:42.000Z",
-          "updated_at": "2026-07-20T12:02:42.000Z",
-          "c_archivos_adjuntos_articulo_mantenimiento": []
+          "updated_at": "2026-07-28T15:53:20.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": [
+            {
+              "id": 1,
+              "name": "84f4912e-bd1d-44cf-a5fd-a6b4bf19d030.xlsx",
+              "original_name": "13_Ingresos_de_usuario_Consolidado_270726160631 (1).xlsx",
+              "type": "document",
+              "extension": "xlsx"
+            }
+          ]
         },
         "ultimo_registro_mantenimiento": {
           "id": 5,
@@ -4542,7 +4558,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "Colt",
-          "modelo": "2026",
+          "modelo": null,
           "serie_placa": "1110",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4562,11 +4578,19 @@
           "iva": null,
           "costo_total": null,
           "fecha_fin": null,
-          "reincidencia_treinta_dias": null,
+          "reincidencia_treinta_dias": false,
           "tipo_mant_art_reincid": null,
           "created_at": "2026-07-20T12:02:42.000Z",
-          "updated_at": "2026-07-20T12:02:42.000Z",
-          "c_archivos_adjuntos_articulo_mantenimiento": []
+          "updated_at": "2026-07-28T15:53:20.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": [
+            {
+              "id": 1,
+              "name": "84f4912e-bd1d-44cf-a5fd-a6b4bf19d030.xlsx",
+              "original_name": "13_Ingresos_de_usuario_Consolidado_270726160631 (1).xlsx",
+              "type": "document",
+              "extension": "xlsx"
+            }
+          ]
         },
         "movimientos": []
       },
@@ -4576,7 +4600,7 @@
         "tipo": "Plan",
         "marca": "",
         "serie": "",
-        "modelo": "",
+        "modelo": "2010",
         "cantidad": 3,
         "articulo_nomenclador_id": 10,
         "tipos_mantenimiento": [],
@@ -4600,7 +4624,7 @@
             "numero_boleta_proveeduria": null,
             "tipo": null,
             "marca": "",
-            "modelo": "",
+            "modelo": null,
             "serie_placa": "",
             "marca_nuevo": null,
             "modelo_nuevo": null,
@@ -4641,7 +4665,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "",
-          "modelo": "",
+          "modelo": null,
           "serie_placa": "",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4681,7 +4705,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "",
-          "modelo": "",
+          "modelo": null,
           "serie_placa": "",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4739,7 +4763,7 @@
             "numero_boleta_proveeduria": null,
             "tipo": null,
             "marca": "Chev",
-            "modelo": "2015",
+            "modelo": null,
             "serie_placa": "3000",
             "marca_nuevo": null,
             "modelo_nuevo": null,
@@ -4820,7 +4844,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "Chev",
-          "modelo": "2015",
+          "modelo": null,
           "serie_placa": "3000",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4860,7 +4884,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "Chev",
-          "modelo": "2015",
+          "modelo": null,
           "serie_placa": "3000",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4894,7 +4918,7 @@
         "tipo": "Plan",
         "marca": "",
         "serie": "",
-        "modelo": "",
+        "modelo": "2020",
         "cantidad": 3,
         "articulo_nomenclador_id": 14,
         "tipos_mantenimiento": [],
@@ -4918,7 +4942,7 @@
             "numero_boleta_proveeduria": null,
             "tipo": null,
             "marca": "",
-            "modelo": "",
+            "modelo": null,
             "serie_placa": "",
             "marca_nuevo": null,
             "modelo_nuevo": null,
@@ -4959,7 +4983,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "",
-          "modelo": "",
+          "modelo": null,
           "serie_placa": "",
           "marca_nuevo": null,
           "modelo_nuevo": null,
@@ -4999,7 +5023,7 @@
           "numero_boleta_proveeduria": null,
           "tipo": null,
           "marca": "",
-          "modelo": "",
+          "modelo": null,
           "serie_placa": "",
           "marca_nuevo": null,
           "modelo_nuevo": null,

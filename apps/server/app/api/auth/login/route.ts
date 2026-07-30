@@ -144,6 +144,7 @@ export async function POST(request: NextRequest) {
             `${baseUrl}/api/dynamic-prisma/auth/login`,
             {
                 empleadoId: empleado.id,
+                empleadoCedula: empleado.cedula,
                 sessionId,
                 refreshToken,
                 deviceName,
@@ -217,6 +218,7 @@ export async function POST(request: NextRequest) {
                     cedula: empleado.cedula,
                     nombre: empleado.nombre,
                     apellido: empleado.primer_apellido,
+                    codigo: empleado.codigo,
                     segundo_apellido: empleado.segundo_apellido,
                     email: empleado.Email,
                     Email: empleado.Email,
@@ -224,6 +226,7 @@ export async function POST(request: NextRequest) {
                     tipoCedula: empleado.tipoCedula,
                     fechaContratacion: empleado.fecha_contratacion,
                     firmaManual: dynamicLoginRes.data.firmaManual ?? empleado.firma_manual,
+                    isSuperAdmin: dynamicLoginRes.data.isSuperAdmin,
                     roles,
                     supervisor_id: empleado.supervisor_id,
                 },

@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { getPermitTurnosFromPlanillasRange } from "../../../utils/getPermitTurnosFromPlanillasRange";
 
 const parseIntStrict = (value: unknown): number | null => {
   const n = parseInt(String(value), 10);
@@ -34,61 +35,20 @@ const parseDateInputToDate = (input: unknown): Date | null => {
   return isNaN(parsed.getTime()) ? null : parsed;
 };
 
-const formatHoraLabel = (value?: string | null) => {
-  if (!value) return null;
-  const str = String(value).trim();
-  if (!str) return null;
-  if (str.includes("T")) {
-    const afterT = str.split("T")[1] || "";
-    return afterT.replace(/\.\d+Z?$/i, "").trim() || null;
-  }
-  return str.replace(/\.\d+Z?$/i, "").trim() || null;
-};
-
-const turnoTexto = (tipoTurno?: string | null) => {
-  const first = String(tipoTurno || "").trim().charAt(0).toUpperCase();
-  if (first === "D") return "Diurno";
-  if (first === "M") return "Mixto";
-  if (first === "N") return "Nocturno";
-  return "Sin definir";
-};
-
 const getTurnosFromRange = async (
-  req: NextRequest,
-  empleadoId: number,
+  planillasToken: string,
+  empleadoCedula: string,
   fechaInicio: Date,
   fechaFin: Date,
   plazaId: number | null
 ) => {
-  const where: any = {
-    empleadoFijo_id: empleadoId,
-    fecha: {
-      gte: fechaInicio.toISOString(),
-      lte: fechaFin.toISOString(),
-    },
-  };
-  if (plazaId != null) where.plaza_id = plazaId;
-
-  const marcaArray = await prisma.c_marca_dia.findMany({
-    where,
-    orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-    include: {
-      e_estructura_cliente: { select: { nombre: true } },
-      e_estructura_sucursal: { select: { nombre: true } },
-      e_estructura_puesto: { select: { nombre: true } },
-    },
+  return getPermitTurnosFromPlanillasRange({
+    planillasToken,
+    empleadoCedula,
+    fechaInicio,
+    fechaFin,
+    plazaId,
   });
-  return marcaArray.map((m: any) => ({
-    id: m.id,
-    cliente: m.e_estructura_cliente?.nombre || null,
-    sucursal: m.e_estructura_sucursal?.nombre || null,
-    puesto: m.e_estructura_puesto?.nombre || null,
-    hora_inicio: formatHoraLabel(m.hora_inicio ? new Date(m.hora_inicio).toISOString() : null),
-    hora_fin: formatHoraLabel(m.hora_fin ? new Date(m.hora_fin).toISOString() : null),
-    tipo_turno: turnoTexto(m.tipo_turno),
-    horas_duracion: m.horas_duracion !== null && m.horas_duracion !== undefined ? String(m.horas_duracion) : null,
-    reemplazo_id: null,
-  }));
 };
 
 const safeParseTurnos = (raw: unknown) => {
@@ -246,6 +206,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
     }
 
+    const planillasToken =
+      decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;
+    if (!planillasToken) {
+      return NextResponse.json(
+        { status: false, message: "Token de Planillas no encontrado" },
+        { status: 200 }
+      );
+    }
+
+    const empleadoForTurnos = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
+    if (!empleadoForTurnos) {
+      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+    }
+
     const body = await req.json();
     const tipo = String(body?.tipo || "").trim();
     const plazaId = parseIntStrict(body?.plaza_id);
@@ -304,6 +278,135 @@ export async function POST(req: NextRequest) {
     if (new Date(fechaInicio).getTime() > new Date(fechaFin).getTime()) {
       return NextResponse.json({ status: false, message: "fecha_inicio no puede ser mayor a fecha_fin" }, { status: 400 });
     }
+
+    // Conflicto si el nuevo rango se solapa con otro permiso pendiente o aprobado del mismo empleado
+    const overlappingPermit = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_solicitud_permiso",
+        operation: "findFirst",
+        where: {
+          empleado_id: currentEmployeeId,
+          isActive: true,
+          estado: { in: ["pendiente", "aprobado"] },
+          fecha_inicio: { lte: fechaFin },
+          fecha_fin: { gte: fechaInicio },
+        },
+        orderBy: { fecha_inicio: "asc" },
+      },
+    });
+
+    if (overlappingPermit) {
+      const overlapInicio = new Date(overlappingPermit.fecha_inicio).toISOString().split("T")[0];
+      const overlapFin = new Date(overlappingPermit.fecha_fin).toISOString().split("T")[0];
+      return NextResponse.json(
+        {
+          status: false,
+          message: `Ya tienes un permiso ${overlappingPermit.estado} del ${overlapInicio} al ${overlapFin} que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    // Conflicto si hay mutuo acuerdo pendiente/aprobado del empleado cuya marca cae en el rango
+    const overlappingMutuos = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "e_mutuos_acuerdos",
+        operation: "findMany",
+        where: {
+          isActive: true,
+          estado: { in: ["pendiente", "aprobado"] },
+          OR: [
+            { empleadoAusente_id: currentEmployeeId },
+            { empleadoReemplaza_id: currentEmployeeId },
+          ],
+        },
+      },
+    });
+
+    const mutuosRows = Array.isArray(overlappingMutuos)
+      ? overlappingMutuos
+      : overlappingMutuos
+        ? [overlappingMutuos]
+        : [];
+
+    if (mutuosRows.length > 0) {
+      const marcaIds = Array.from(
+        new Set(
+          mutuosRows
+            .flatMap((m: any) => [parseIntStrict(m?.marcaDiaAusente_id), parseIntStrict(m?.marcaDiaReemplaza_id)])
+            .filter((id): id is number => id != null && id > 0)
+        )
+      );
+
+      const marcasMutuo =
+        marcaIds.length > 0
+          ? await prisma.c_marca_dia.findMany({
+              where: { id: { in: marcaIds } },
+              select: { id: true, fecha: true },
+            })
+          : [];
+
+      const marcaFechaById = new Map<number, Date>(
+        marcasMutuo.map((m) => [m.id, new Date(m.fecha)])
+      );
+
+      const permitStartMs = new Date(fechaInicio).getTime();
+      const permitEndMs = new Date(fechaFin).getTime();
+
+      const conflictingMutuo = mutuosRows.find((mutuo: any) => {
+        const idsToCheck: number[] = [];
+        if (Number(mutuo.empleadoAusente_id) === currentEmployeeId) {
+          const idAusente = parseIntStrict(mutuo.marcaDiaAusente_id);
+          if (idAusente) idsToCheck.push(idAusente);
+        }
+        if (Number(mutuo.empleadoReemplaza_id) === currentEmployeeId) {
+          const idReemplaza = parseIntStrict(mutuo.marcaDiaReemplaza_id);
+          if (idReemplaza) idsToCheck.push(idReemplaza);
+        }
+        // Si por algún motivo no calza el rol, revisar ambas marcas del mutuo
+        if (idsToCheck.length === 0) {
+          const idAusente = parseIntStrict(mutuo.marcaDiaAusente_id);
+          const idReemplaza = parseIntStrict(mutuo.marcaDiaReemplaza_id);
+          if (idAusente) idsToCheck.push(idAusente);
+          if (idReemplaza) idsToCheck.push(idReemplaza);
+        }
+
+        return idsToCheck.some((marcaId) => {
+          const fecha = marcaFechaById.get(marcaId);
+          if (!fecha || Number.isNaN(fecha.getTime())) return false;
+          const dayMs = new Date(fecha.toISOString().split("T")[0] + "T00:00:00.000Z").getTime();
+          return dayMs >= permitStartMs && dayMs <= permitEndMs;
+        });
+      });
+
+      if (conflictingMutuo) {
+        const estadoMutuo = String(conflictingMutuo.estado || "pendiente").trim() || "pendiente";
+        const relatedMarcaIds = [
+          parseIntStrict(conflictingMutuo.marcaDiaAusente_id),
+          parseIntStrict(conflictingMutuo.marcaDiaReemplaza_id),
+        ].filter((id): id is number => id != null && id > 0);
+
+        const relatedDates = relatedMarcaIds
+          .map((id) => marcaFechaById.get(id))
+          .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
+          .map((d) => d.toISOString().split("T")[0]);
+
+        const fechasTxt = relatedDates.length ? relatedDates.join(" / ") : "fechas asociadas";
+
+        return NextResponse.json(
+          {
+            status: false,
+            message: `Ya tienes un mutuo acuerdo ${estadoMutuo} (${fechasTxt}) que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     if (!motivo) {
       return NextResponse.json({ status: false, message: "El motivo es obligatorio" }, { status: 400 });
     }
@@ -374,7 +477,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const turnos = await getTurnosFromRange(req, currentEmployeeId, new Date(fechaInicio), new Date(fechaFin), plazaId);
+    const turnos = await getTurnosFromRange(
+      planillasToken,
+      String(empleadoForTurnos.cedula || ""),
+      new Date(fechaInicio),
+      new Date(fechaFin),
+      plazaId
+    );
     if (!turnos.length) {
       return NextResponse.json(
         { status: false, message: "No hay turnos en el rango de fechas. El usuario está libre esos días." },

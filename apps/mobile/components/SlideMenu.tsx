@@ -42,6 +42,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [role, setRole] = React.useState<string | null>(null);
   const [division, setDivision] = React.useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
+  const [modulesRelease, setModulesRelease] = React.useState<any[]>([]);
   const [currentMarca, setCurrentMarca] = React.useState<any | null>(null);
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
   const [permissions, setPermissions] = React.useState<Permission[]>([{ nombre: 'Acciones', actions: [] }]);
@@ -79,7 +80,15 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
           setHasCurrentMarca(false);
         }
       };
+      const loadModulesRelease = async () => {
+        const modules_release = await AsyncStorage.getItem('modules_release');
+        if (modules_release) {
+          const modules_release_data = JSON.parse(modules_release);
+          setModulesRelease(modules_release_data);
+        }
+      };
       loadCurrentMarca();
+      loadModulesRelease();
       console.log('role', role);
       console.log('division', division);
       console.log('hasCurrentMarca', hasCurrentMarca);
@@ -473,51 +482,14 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
   const releaseAction = (module: string) => {
 
-    const modules = [
-      { name: 'acta-entrega-productos', release: false },
-      { name: 'activities', release: true },
-      { name: 'apreciacion-vulnerabilidad', release: false },
-      { name: 'attendance-control', release: false },
-      { name: 'bitacora-vehiculos-detenidos', release: false },
-      { name: 'checklist-supervision', release: true },
-      { name: 'complaints-master', release: false },
-      { name: 'corporate-vehicles', release: false },
-      { name: 'digital-signature', release: true },
-      { name: 'documentos-entregados', release: false },
-      { name: 'entrega-puestos', release: true },
-      { name: 'general-induction-register', release: false },
-      { name: 'home', release: true },
-      { name: 'incidents', release: false },
-      { name: 'induction-tour-record', release: false },
-      { name: 'jerarquia', release: true },
-      { name: 'job-manuals', release: false },
-      { name: 'llaves', release: false },
-      { name: 'lunch-time', release: true },
-      { name: 'mantenimiento-equipo', release: true },
-      { name: 'marcar-ingreso-salida', release: true },
-      { name: 'mutuos-acuerdos', release: true },
-      { name: 'nomencladores', release: false },
-      { name: 'non-conforming-product', release: false },
-      { name: 'notes', release: false },
-      { name: 'opening-closing-position', release: false },
-      { name: 'permit-request', release: true },
-      { name: 'physical-minute-agenda', release: false },
-      { name: 'profile', release: true },
-      { name: 'puesto-ubicacion', release: true },
-      { name: 'reportes', release: false },
-      { name: 'staffEvaluations', release: false },
-      { name: 'surveys', release: false },
-      { name: 'trainings', release: false },
-      { name: 'traslado-plazas', release: true },
-      { name: 'vehicles', release: false },
-      { name: 'visitors', release: false },
-      { name: 'voice-notes', release: false },
-    ];
+    if (employee && employee.isSuperAdmin) {
+      return true;
+    }
 
-    const moduleFind = modules.find((m) => m.name === module);
+    const moduleFind = modulesRelease.find((m: any) => m.module_name === module);
     if (moduleFind) {
       //return true;
-      return moduleFind.release;
+      return moduleFind.is_visible;
     }
     return false;
   }
