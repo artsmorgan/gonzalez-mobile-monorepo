@@ -1,4 +1,4 @@
-package com.abrjpo98.MonitoreApp.lite
+package com.abrjpo98.MonitoreApp.full
 
 import android.app.Application
 import android.content.res.Configuration
