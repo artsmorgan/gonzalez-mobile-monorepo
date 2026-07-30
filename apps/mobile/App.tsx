@@ -222,6 +222,7 @@ import ChecklistSupervisionScreen from './screens/ChecklistSupervisionScreen';
 import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
 import NomencladoresScreen from './screens/NomencladoresScreen';
+import ModuleVisibilityScreen from './screens/ModuleVisibilityScreen';
 import ReportesScreen from './screens/ReportesScreen';
 import {
   createStaffEvaluation,
@@ -366,6 +367,7 @@ export type RootStackParamList = {
   PuestoUbicacion: undefined;
   Jerarquia: undefined;
   Nomencladores: undefined;
+  ModuleVisibility: undefined;
   Reportes: undefined;
 };
 
@@ -457,6 +459,7 @@ function RootNavigator() {
       <Stack.Screen name="PuestoUbicacion" component={PuestoUbicacionScreen} />
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
       <Stack.Screen name="Nomencladores" component={NomencladoresScreen} />
+      <Stack.Screen name="ModuleVisibility" component={ModuleVisibilityScreen} />
       <Stack.Screen name="Reportes" component={ReportesScreen} />
     </Stack.Navigator>
   );
@@ -8428,6 +8431,43 @@ function AppContent() {
   useEffect(() => {
     if (!employee?.id) return;
 
+    const PUSH_HANDLED_RESPONSE_KEY = 'last_handled_push_response_id';
+    /** Ignorar respuestas antiguas al abrir/loguear (solo cold start real por tap reciente). */
+    const COLD_START_MAX_AGE_MS = 60_000;
+
+    const getPushResponseId = (response: Notifications.NotificationResponse): string =>
+      String(
+        response.notification.request.identifier ||
+          `${response.notification.date}-${response.actionIdentifier}`
+      );
+
+    const consumePushResponseIfNew = async (
+      response: Notifications.NotificationResponse
+    ): Promise<boolean> => {
+      try {
+        const id = getPushResponseId(response);
+        const prev = await AsyncStorage.getItem(PUSH_HANDLED_RESPONSE_KEY);
+        if (prev === id) return false;
+        await AsyncStorage.setItem(PUSH_HANDLED_RESPONSE_KEY, id);
+        return true;
+      } catch {
+        return true;
+      }
+    };
+
+    const navigateFromPushData = (data: ReturnType<typeof extractPushData>, delayMs: number) => {
+      const target = resolvePushNavigationTarget(data);
+      if (!target?.screen || !navigationRef.current) return;
+      setTimeout(() => {
+        try {
+          navigationRef.current?.navigate(target.screen as any, target.params as any);
+        } catch (navErr) {
+          console.warn('[push] No se pudo navegar a', target.screen, navErr);
+          navigationRef.current?.navigate('Notifications');
+        }
+      }, delayMs);
+    };
+
     const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
       try {
         const data = extractPushData(notification.request.content);
@@ -8447,44 +8487,41 @@ function AppContent() {
     });
 
     const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {
-      try {
-        const data = extractPushData(response.notification.request.content);
-        console.log('[push] Notificación abierta:', data);
-        eventBus.emit('pushNotificationOpened', data);
+      void (async () => {
+        try {
+          const isNew = await consumePushResponseIfNew(response);
+          if (!isNew) return;
 
-        const target = resolvePushNavigationTarget(data);
-        if (target?.screen && navigationRef.current) {
-          // Pequeño delay para cold start
-          setTimeout(() => {
-            try {
-              navigationRef.current?.navigate(target.screen as any, target.params as any);
-            } catch (navErr) {
-              console.warn('[push] No se pudo navegar a', target.screen, navErr);
-              navigationRef.current?.navigate('Notifications');
-            }
-          }, 400);
+          const data = extractPushData(response.notification.request.content);
+          console.log('[push] Notificación abierta:', data);
+          eventBus.emit('pushNotificationOpened', data);
+          navigateFromPushData(data, 400);
+        } catch (error) {
+          console.error('[push] Error procesando apertura de notificación:', error);
         }
-      } catch (error) {
-        console.error('[push] Error procesando apertura de notificación:', error);
-      }
+      })();
     });
 
-    // Cold start: notificación que abrió la app
+    // Cold start: solo si la app se abrió por un tap reciente (no en cada login).
     void (async () => {
       try {
         const last = await Notifications.getLastNotificationResponseAsync();
         if (!last) return;
-        const data = extractPushData(last.notification.request.content);
-        const target = resolvePushNavigationTarget(data);
-        if (target?.screen) {
-          setTimeout(() => {
-            try {
-              navigationRef.current?.navigate(target.screen as any, target.params as any);
-            } catch {
-              navigationRef.current?.navigate('Notifications');
-            }
-          }, 800);
+
+        const rawDate = Number(last.notification.date);
+        const respondedAtMs = rawDate < 1e12 ? rawDate * 1000 : rawDate;
+        const ageMs = Date.now() - respondedAtMs;
+        if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > COLD_START_MAX_AGE_MS) {
+          // Marcar como vista para no reintentar en logins posteriores
+          await consumePushResponseIfNew(last);
+          return;
         }
+
+        const isNew = await consumePushResponseIfNew(last);
+        if (!isNew) return;
+
+        const data = extractPushData(last.notification.request.content);
+        navigateFromPushData(data, 800);
       } catch (error) {
         console.error('[push] Error leyendo última notificación:', error);
       }

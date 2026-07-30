@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.gms.google-services"
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
@@ -87,9 +88,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.abrjpo98.MonitoreApp.lite'
+    namespace 'com.abrjpo98.MonitoreApp.full'
     defaultConfig {
-        applicationId 'com.abrjpo98.MonitoreApp.lite'
+        applicationId 'com.abrjpo98.MonitoreApp.full'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -154,6 +155,7 @@ android {
 
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
+    implementation(platform("com.google.firebase:firebase-bom:34.16.0"))
     implementation("com.facebook.react:react-android")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";

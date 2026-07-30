@@ -12,13 +12,16 @@ export async function GET(request: NextRequest) {
             data: {
               action: "GET",
               table: "n_app_module_visibility",
-              operation: "findMany", // OBtener todos los registros
+              operation: "findMany",
+              orderBy: { real_name: "asc" },
             },
           });
 
-        return NextResponse.json({ status: true, modules: records }, { status: 200 });
+        const modules = Array.isArray(records) ? records : records ? [records] : [];
+
+        return NextResponse.json({ status: true, modules }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-        return NextResponse.json({ message: errorMessage }, { status: 500 });
+        return NextResponse.json({ status: false, message: errorMessage, modules: [] }, { status: 500 });
     }
 }

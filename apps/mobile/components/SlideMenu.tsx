@@ -44,6 +44,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
   const [modulesRelease, setModulesRelease] = React.useState<any[]>([]);
   const [currentMarca, setCurrentMarca] = React.useState<any | null>(null);
+  const [isUserSuperAdmin, setIsUserSuperAdmin] = React.useState<boolean>(false);
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
   const [permissions, setPermissions] = React.useState<Permission[]>([{ nombre: 'Acciones', actions: [] }]);
   const [hasLunchTime, setHasLunchTime] = React.useState<boolean>(false);
@@ -89,6 +90,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       };
       loadCurrentMarca();
       loadModulesRelease();
+      setIsUserSuperAdmin(employee?.isSuperAdmin || false);
       console.log('role', role);
       console.log('division', division);
       console.log('hasCurrentMarca', hasCurrentMarca);
@@ -407,6 +409,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('Nomencladores');
   };
 
+  const handleModuleVisibilityPress = () => {
+    onClose();
+    navigation.navigate('ModuleVisibility');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -474,6 +481,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'nomencladores': return <Ionicons name="albums" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'module-visibility': return <Ionicons name="eye" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'reportes': return <Ionicons name="bar-chart" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
@@ -483,6 +491,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const releaseAction = (module: string) => {
 
     if (employee && employee.isSuperAdmin) {
+      //setIsUserSuperAdmin(true);
       return true;
     }
 
@@ -651,6 +660,35 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                 Jerarquía
               </ThemedText>
             </TouchableOpacity>
+
+            {/* AQUÍ DEBE IR EL ENLACE AL MÓDULO DE VISIBILIDAD DE MÓDULOS */}
+
+            {isUserSuperAdmin && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ModuleVisibility') && styles.activeMenuItem
+                ]}
+                onPress={handleModuleVisibilityPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ModuleVisibility') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('module-visibility', isActiveRoute('ModuleVisibility'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ModuleVisibility') && styles.activeMenuItemText
+                  ]}
+                >
+                  Visibilidad de módulos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
 
             <ThemedView style={styles.menuSeparator} />
 
