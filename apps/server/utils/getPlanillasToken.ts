@@ -16,6 +16,7 @@ export async function getPlanillasToken(req: NextRequest, empleado_id: number) {
         }
     });
     let now = toZonedTime(new Date(), "America/Costa_Rica");
+    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
     if (!mobile_token || new Date(mobile_token.expires_at) < now) {
         mobile_token = await createTokenPlanillas(req, empleado_id, mobile_token?.id ?? 0);
     }
@@ -39,7 +40,7 @@ async function createTokenPlanillas(req: NextRequest, empleado_id: number, mobil
         throw new Error("Error al iniciar sesión en Planillas");
     }
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
     let expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
 
     // Crear o actualizar el token en la base de datos

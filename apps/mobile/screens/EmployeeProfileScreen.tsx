@@ -126,6 +126,11 @@ export default function EmployeeProfileScreen() {
               <ThemedText style={styles.label}>Cédula:</ThemedText>
               <ThemedText style={styles.value}>{formatCedula(employee.cedula)}</ThemedText>
             </ThemedView>
+            
+            <ThemedView style={styles.dataItem}>
+              <ThemedText style={styles.label}>Código:</ThemedText>
+              <ThemedText style={styles.value}>{employee.codigo || 'No disponible'}</ThemedText>
+            </ThemedView>
 
             <ThemedView style={styles.dataItem}>
               <ThemedText style={styles.label}>Email:</ThemedText>

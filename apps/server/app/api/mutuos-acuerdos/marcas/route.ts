@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
+import { collectPlanillasMarcaIdsForDateRange } from "../../../../utils/getPermitTurnosFromPlanillasRange";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -21,6 +22,15 @@ export async function GET(req: NextRequest) {
     const { valid, expired, message } = await verifyAccessTokenByApi(req);
     if (!valid) return NextResponse.json({ status: false, expired, message, data: [] }, { status: expired ? 401 : 403 });
 
+    const planillasToken =
+      decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;
+    if (!planillasToken) {
+      return NextResponse.json(
+        { status: false, message: "Token de Planillas no encontrado", data: [] },
+        { status: 200 }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const empleadoId = parseIntStrict(searchParams.get("empleado_id"));
     const fecha = String(searchParams.get("fecha") || "").trim();
@@ -28,17 +38,25 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Parámetros inválidos", data: [] }, { status: 400 });
     }
 
-    console.log("fecha", fecha);
+    const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
+    if (!empleado) {
+      return NextResponse.json({ status: false, message: "Empleado no encontrado", data: [] }, { status: 200 });
+    }
 
-    const start = new Date(`${fecha}T00:00:00`);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
+    const dayDate = new Date(`${fecha}T00:00:00.000Z`);
+    const marcasIds = await collectPlanillasMarcaIdsForDateRange({
+      planillasToken,
+      empleadoCedula: String(empleado.cedula || ""),
+      fechaInicio: dayDate,
+      fechaFin: dayDate,
+    });
+
+    if (marcasIds.length === 0) {
+      return NextResponse.json({ status: true, message: "El empleado está libre ese día", data: [] }, { status: 200 });
+    }
 
     const marcas = await prisma.c_marca_dia.findMany({
-      where: {
-        empleadoFijo_id: empleadoId,
-        fecha: new Date(fecha),
-      },
+      where: { id: { in: marcasIds } },
       include: {
         e_estructura_cliente: { select: { nombre: true } },
         e_estructura_sucursal: { select: { nombre: true } },
@@ -46,8 +64,6 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ hora_inicio: "asc" }, { id: "asc" }],
     });
-
-    console.log("marcas", marcas);
 
     const contratoIds = Array.from(
       new Set(
@@ -106,22 +122,22 @@ export async function GET(req: NextRequest) {
         const divRaw = cId != null && cId > 0 ? divisionByContratoId.get(cId) : null;
         const divId = divRaw != null && Number.isFinite(Number(divRaw)) && Number(divRaw) > 0 ? Number(divRaw) : null;
         return {
-        id: m.id,
-        cliente_id: m.cliente_id ?? null,
-        corpo_id: m.corpo_id ?? null,
-        plaza_id: m.plaza_id ?? null,
-        empleadoFijo_id: m.empleadoFijo_id ?? null,
-        empresa_id: m.empresa_id != null ? Number(m.empresa_id) : null,
-        puesto_id: m.puesto_id != null ? Number(m.puesto_id) : null,
-        contrato_id: cId != null && cId > 0 ? cId : null,
-        division_id: divId,
-        cliente: m.e_estructura_cliente?.nombre || null,
-        sucursal: m.e_estructura_sucursal?.nombre || null,
-        puesto: m.e_estructura_puesto?.nombre || null,
-        hora_inicio: m.hora_inicio ? new Date(m.hora_inicio).toISOString() : null,
-        hora_fin: m.hora_fin ? new Date(m.hora_fin).toISOString() : null,
-        tipo_turno: m.tipo_turno || null,
-        tipo_turno_texto: turnoTexto(m.tipo_turno),
+          id: m.id,
+          cliente_id: m.cliente_id ?? null,
+          corpo_id: m.corpo_id ?? null,
+          plaza_id: m.plaza_id ?? null,
+          empleadoFijo_id: m.empleadoFijo_id ?? null,
+          empresa_id: m.empresa_id != null ? Number(m.empresa_id) : null,
+          puesto_id: m.puesto_id != null ? Number(m.puesto_id) : null,
+          contrato_id: cId != null && cId > 0 ? cId : null,
+          division_id: divId,
+          cliente: m.e_estructura_cliente?.nombre || null,
+          sucursal: m.e_estructura_sucursal?.nombre || null,
+          puesto: m.e_estructura_puesto?.nombre || null,
+          hora_inicio: m.hora_inicio ? new Date(m.hora_inicio).toISOString() : null,
+          hora_fin: m.hora_fin ? new Date(m.hora_fin).toISOString() : null,
+          tipo_turno: m.tipo_turno || null,
+          tipo_turno_texto: turnoTexto(m.tipo_turno),
         };
       });
 

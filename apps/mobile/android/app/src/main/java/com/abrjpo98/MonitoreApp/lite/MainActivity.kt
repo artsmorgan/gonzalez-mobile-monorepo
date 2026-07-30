@@ -1,4 +1,4 @@
-package com.abrjpo98.MonitoreApp
+package com.abrjpo98.MonitoreApp.lite
 import expo.modules.splashscreen.SplashScreenManager
 
 import android.os.Build

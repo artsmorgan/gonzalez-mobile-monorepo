@@ -34,7 +34,7 @@ export function computePlanillasTokenTimestamps(expires_in: number): {
     expires_at: Date;
 } {
     let now = toZonedTime(new Date(), COSTA_RICA_TZ);
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
     const expires_at = new Date(now.getTime() + expires_in * 1000);
     return { created_at: now, expires_at };
 }

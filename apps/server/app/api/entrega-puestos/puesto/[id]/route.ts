@@ -96,6 +96,8 @@ export async function GET(
         firma_recibe: reg.firma_recibe,
         firma_entrega: reg.firma_entrega,
         firma_responsable: reg.firma_responsable,
+        image_delivery: reg.image_delivery ?? null,
+        image_receives: reg.image_receives ?? null,
         created_at: reg.created_at,
         created_by: reg.created_by,
       };

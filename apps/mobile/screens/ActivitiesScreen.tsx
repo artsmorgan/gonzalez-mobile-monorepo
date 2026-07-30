@@ -89,6 +89,7 @@ interface ActivityItemProps {
   toggleActivity: (activity: Actividad) => void;
   onClearInventoryImage: (inventoryId: number) => void;
   onGoToEntregaPuestos: () => void;
+  isEntregaPuestosVisible: boolean;
   getArticleFormState: (activityId: number, inventory: Inventario) => ArticleFormState;
   setArticleFormState: (activityId: number, inventory: Inventario, partial: Partial<ArticleFormState>) => void;
   onOpenArchivos: (activityId: number, inventory: Inventario) => void;
@@ -108,6 +109,7 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
   toggleActivity,
   onClearInventoryImage,
   onGoToEntregaPuestos,
+  isEntregaPuestosVisible,
   getArticleFormState,
   setArticleFormState,
   onOpenArchivos,
@@ -262,10 +264,12 @@ const ActivityItemComponent: React.FC<ActivityItemProps> = ({
         {activity.is_revision_equipo && inventoryRows.length > 0 && (
           <ThemedView style={styles.inventoryContainer}>
             <ThemedText style={styles.inventoryTitle}>Artículos</ThemedText>
+            {isEntregaPuestosVisible && (
             <TouchableOpacity style={styles.goEntregaButton} onPress={onGoToEntregaPuestos} activeOpacity={0.85}>
               <Ionicons name="open-outline" size={16} color="#007AFF" />
               <ThemedText style={styles.goEntregaButtonText}>Revisa el equipo en la entrega de puestos</ThemedText>
             </TouchableOpacity>
+            )}
             <View style={styles.tableWrapper}>
               <View style={styles.tableFixedColumn}>
                 <View style={styles.tableHeaderFixed}>
@@ -898,6 +902,7 @@ export default function ActivitiesScreen() {
   const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
   const [moduleStep, setModuleStep] = useState<'assigned' | 'created' | 'form'>('assigned');
+  const [isEntregaPuestosVisible, setIsEntregaPuestosVisible] = useState<boolean>(false);
 
   // Bitacora modal state
   const [isBitacoraModalVisible, setIsBitacoraModalVisible] = useState(false);
@@ -1162,6 +1167,26 @@ export default function ActivitiesScreen() {
       fetchActivities();
     }, [loadMainStructureCache]),
   );
+
+  useEffect(() => {
+    const checkEntregaPuestosVisible = async () => {
+      try {
+        const modules_release = await AsyncStorage.getItem('modules_release');
+        if (!modules_release) {
+          setIsEntregaPuestosVisible(false);
+          return;
+        }
+        const modules_release_data = JSON.parse(modules_release);
+        const modules_release_data_find = Array.isArray(modules_release_data)
+          ? modules_release_data.find((m: any) => m.module_name === 'entrega-puestos')
+          : null;
+        setIsEntregaPuestosVisible(Boolean(modules_release_data_find?.is_visible));
+      } catch {
+        setIsEntregaPuestosVisible(false);
+      }
+    };
+    void checkEntregaPuestosVisible();
+  }, []);
 
   // Etiquetas de repetición según **Fecha inicio** (día de semana / ordinal / mes), no el día actual del dispositivo
   useEffect(() => {
@@ -2899,6 +2924,7 @@ export default function ActivitiesScreen() {
         inventoryImages={inventoryImages}
         toggleActivity={toggleActivity}
         onGoToEntregaPuestos={() => navigation.navigate('EntregaPuestos')}
+        isEntregaPuestosVisible={isEntregaPuestosVisible}
         onClearInventoryImage={(inventoryId) => {
           setInventoryImages((prev: { [key: number]: string }) => {
             const fn = prev[inventoryId];

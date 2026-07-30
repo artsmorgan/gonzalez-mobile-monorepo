@@ -115,87 +115,123 @@ module.exports = ({ config }) => {
           "",
         APP_VERSION_INFO: {
           "version": "1.0.0",
-          "id": "34cd939c-893f-4a98-9279-d76c82cbca3c",
+          "id": "a7e2c41f-6b8d-4f19-9e53-2c0d8f1a5b67",
           "name": "MonitoreApp",
-          "created_at": "2026-06-12T00:00:00Z",
-          "title": "Asistencia, manuales y ubicación de puesto",
-          "description": "Mejoras en marcación de ingreso/salida, tiempo de almuerzo, manuales de trabajo y actualización de coordenadas del puesto.",
+          "created_at": "2026-07-30T00:00:00Z",
+          "title": "Planillas, permisos, mutuos y sincronización",
+          "description": "Integración con Planillas para turnos y marcas, validación de conflictos en permisos y mutuos acuerdos, mejoras en actividades, entrega de puestos y archivos de acciones.",
           "notas": [
             {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Marcar entrada y salida con validación de horario (mínimo 15 minutos antes del inicio o durante el turno)."
+              "title": "Actividades",
+              "description": "Marcar y gestionar actividades del turno con foto, frecuencia/horario y sincronización offline."
+            },
+            {
+              "title": "Actividades",
+              "description": "Revisión de equipo/inventario por actividad y acceso a entrega de puestos cuando el módulo está visible."
+            },
+            {
+              "title": "Checklist de Supervisión",
+              "description": "Evaluación por división/puesto con ítems dinámicos, fotos y firmas de supervisor/responsable."
+            },
+            {
+              "title": "Checklist de Supervisión",
+              "description": "Uso offline con cola local y actualización de estado de artículos y cachés relacionadas."
+            },
+            {
+              "title": "Mi Firma Digital",
+              "description": "QR de firma con ubicación GPS y firma manual dibujada/guardada en el perfil."
+            },
+            {
+              "title": "Mi Firma Digital",
+              "description": "Escaneo de firma QR desde Inicio para validar identidad en otros módulos."
+            },
+            {
+              "title": "Entrega de Puestos",
+              "description": "Acta de entrega/recibo del turno con firmas, fotos de entrega y recepción, e inventario del puesto."
+            },
+            {
+              "title": "Entrega de Puestos",
+              "description": "Al confirmar, actualiza la revisión de equipo en actividades y el último mantenimiento en jerarquía."
+            },
+            {
+              "title": "Inicio",
+              "description": "Accesos rápidos (marca, escanear firma, jerarquía), hora de acción y ubicación del dispositivo."
+            },
+            {
+              "title": "Inicio",
+              "description": "Modal de sincronizaciones pendientes, notas de versión y aviso cuando hay actualización disponible."
+            },
+            {
+              "title": "Jerarquía",
+              "description": "Navegación de la estructura empresa → cliente → división → contrato → sucursal → puesto → plaza → empleado."
+            },
+            {
+              "title": "Jerarquía",
+              "description": "Descarga de fragmentos de main-structure con conexión y consulta offline."
+            },
+            {
+              "title": "Tiempo de alimentación",
+              "description": "Temporizador con pausas, firma del empleado y registro offline (continúa en segundo plano)."
+            },
+            {
+              "title": "Tiempo de alimentación",
+              "description": "Configuración de minutos del almuerzo en el horario de la marca con token de Planillas y cola de sincronización."
+            },
+            {
+              "title": "Equipo del puesto",
+              "description": "Consulta de artículos del puesto, mantenimientos, adjuntos y movimientos, con sync offline."
+            },
+            {
+              "title": "Equipo del puesto",
+              "description": "Descarga unificada de documentos adjuntos y carga masiva/plantilla para perfiles administrativos."
             },
             {
               "title": "Marcar Ingreso/Salida",
-              "description": "Validación de ubicación GPS en radio de 50 m del puesto para marcar entrada, con reintento manual y sondeo automático cada 30 s."
+              "description": "Entrada/salida con validación de horario, GPS (radio 50 m) y token de Planillas; cola offline de asistencia."
             },
             {
               "title": "Marcar Ingreso/Salida",
-              "description": "Uso de última ubicación conocida como respaldo; aviso al usuario solo al marcar entrada o al reintentar la comprobación GPS."
+              "description": "Consulta de turnos futuros vía Planillas (30 días) y enriquecimiento desde c_marca_dia."
             },
             {
               "title": "Marcar Ingreso/Salida",
-              "description": "Consulta de turnos futuros (próximos 30 días) con empresa, cliente, contrato, corpo, puesto y tipo de turno."
+              "description": "Ausencia, salida temprana, reversión de salida y sincronización al recuperar conexión con renovación del token si expiró."
             },
             {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Información laboral de la marca actual, motivo de ausencia, salida temprana con razón y reversión de salida."
+              "title": "Mutuos acuerdos",
+              "description": "Intercambio de turnos: marcas por empleado/fecha vía Planillas, firmas, adjuntos y renovación del token con contraseña."
             },
             {
-              "title": "Marcar Ingreso/Salida",
-              "description": "Registro offline de marcas y sincronización al recuperar conexión; configuración del tiempo de almuerzo al marcar entrada."
+              "title": "Mutuos acuerdos",
+              "description": "Bloqueo al crear si hay conflicto de fechas con permisos u otros mutuos pendientes/aprobados (ausente y reemplazo)."
             },
             {
-              "title": "Tiempo de almuerzo",
-              "description": "Temporizador con cuenta regresiva, registro de pausas con motivo y finalización automática al terminar el tiempo."
+              "title": "Solicitud de permiso",
+              "description": "Solicitud por plaza y rango de fechas con turnos obtenidos vía Planillas, firmas y archivos adjuntos."
             },
             {
-              "title": "Tiempo de almuerzo",
-              "description": "Registro manual de almuerzo: hora de inicio, pausas y validación del tiempo efectivo frente a los minutos disponibles."
+              "title": "Solicitud de permiso",
+              "description": "Validación de solape con otros permisos o mutuos acuerdos pendientes/aprobados del mismo empleado."
             },
             {
-              "title": "Tiempo de almuerzo",
-              "description": "Configuración manual de minutos cuando no existe una duración válida en la marca."
-            },
-            {
-              "title": "Tiempo de almuerzo",
-              "description": "Firma digital del empleado al iniciar el temporizador, con aviso si se usa ubicación en caché."
-            },
-            {
-              "title": "Tiempo de almuerzo",
-              "description": "El temporizador continúa en segundo plano y el registro se sincroniza al volver a tener conexión."
-            },
-            {
-              "title": "Manuales de trabajo",
-              "description": "Consulta y registro de manuales asociados al puesto, con archivos adjuntos (documento, imagen, audio y video)."
-            },
-            {
-              "title": "Manuales de trabajo",
-              "description": "Filtros por jerarquía (cliente, contrato, sucursal y puesto) para supervisores y administrativos; el operativo ve los manuales de su marca activa."
-            },
-            {
-              "title": "Manuales de trabajo",
-              "description": "Firma digital del responsable al crear manuales y registro de lectura con firma del empleado y cuestionario de comprensión."
-            },
-            {
-              "title": "Manuales de trabajo",
-              "description": "Creación y consulta offline con sincronización al recuperar conexión; escaneo QR para vincular manuales a puestos."
+              "title": "Perfil de Usuario",
+              "description": "Consulta de datos personales y laborales (nombre, cédula, código, email, teléfono y fecha de contratación)."
             },
             {
               "title": "Ubicación del puesto",
-              "description": "Selección del puesto por jerarquía (cliente, contrato, sucursal y puesto), con precarga desde la marca activa."
+              "description": "Selección por jerarquía (precarga desde marca) y comparación de coordenadas del puesto vs GPS del dispositivo."
             },
             {
               "title": "Ubicación del puesto",
-              "description": "Visualización de las coordenadas actuales del puesto y de la ubicación del dispositivo, con actualización automática cada 15 segundos."
+              "description": "Actualización de coordenadas (GPS o manual) con persistencia y sincronización offline."
             },
             {
-              "title": "Ubicación del puesto",
-              "description": "Actualización de coordenadas GPS del puesto desde la ubicación del dispositivo o ingreso manual de latitud y longitud."
+              "title": "Archivos de acciones",
+              "description": "Listado de acciones personales pendientes de adjunto (cliente, sucursal, puesto, tipo y vencimiento)."
             },
             {
-              "title": "Ubicación del puesto",
-              "description": "Reintento manual de obtención de GPS y persistencia local de ubicaciones para uso sin conexión."
+              "title": "Archivos de acciones",
+              "description": "Subida de imagen, audio, video o documento con caché local y cola offline de archivos de acciones."
             }
           ]
         },

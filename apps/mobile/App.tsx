@@ -196,6 +196,7 @@ import {
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
+import getModulesRelease from './hooks/getModulesRelease';
 import updateLastLocation from './hooks/updateLastLocation';
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from './hooks/planillasTokenStorage';
@@ -693,9 +694,11 @@ function AppContent() {
     }
 
     const tokenCheck = await isStoredPlanillasTokenValid(referenceMs);
-    if (tokenCheck.valid) {
+    if (tokenCheck.valid && tokenCheck.token) {
       planillasRevalidationModalShownRef.current = false;
       setShowPlanillasRevalidationModal(false);
+      // Siempre sellar el último token válido en las actions que lo requieren.
+      await attachPlanillasTokenToAllPendingActions(tokenCheck.token);
       return true;
     }
 
@@ -722,6 +725,50 @@ function AppContent() {
   const handlePlanillasRevalidationDismiss = useCallback(() => {
     planillasRevalidationModalShownRef.current = false;
     setShowPlanillasRevalidationModal(false);
+  }, []);
+
+  /** Migra colas legacy de asistencia antes de adjuntar el token de Planillas. */
+  const migrateLegacyAttendanceCachesForSync = useCallback(async () => {
+    const legacyMarca = await AsyncStorage.getItem('marca_cache');
+    if (legacyMarca) {
+      try {
+        const p = JSON.parse(legacyMarca);
+        const list = await readAttendanceActions();
+        const storedPlanillas = await readStoredPlanillasToken();
+        list.push({
+          id: `mig_marca_${Date.now()}`,
+          type: 'salida',
+          marcaId: Number(p.marcaId),
+          reason: String(p.reason ?? ''),
+          horaAccion: Number(p.horaAccion),
+          ...(storedPlanillas?.token ? { planillasToken: storedPlanillas.token } : {}),
+        });
+        await writeAttendanceActions(list);
+      } catch (e) {
+        console.error('Migración marca_cache', e);
+      }
+      await AsyncStorage.removeItem('marca_cache');
+    }
+
+    const legacyAbsent = await AsyncStorage.getItem('absent_reason_cache');
+    if (legacyAbsent) {
+      try {
+        const p = JSON.parse(legacyAbsent);
+        const hora = await getHoraAccion();
+        const list = await readAttendanceActions();
+        list.push({
+          id: `mig_abs_${Date.now()}`,
+          type: 'absent_reason',
+          marcaId: Number(p.marcaId),
+          reason: String(p.reason ?? ''),
+          horaAccion: hora && Number.isFinite(Number(hora)) ? Number(hora) : Date.now(),
+        });
+        await writeAttendanceActions(list);
+      } catch (e) {
+        console.error('Migración absent_reason_cache', e);
+      }
+      await AsyncStorage.removeItem('absent_reason_cache');
+    }
   }, []);
 
   /**
@@ -765,12 +812,16 @@ function AppContent() {
         return;
       }
 
+      // Migrar legacy primero para que el sellado del token de Planillas las incluya.
+      await migrateLegacyAttendanceCachesForSync();
+
       const hasValidPlanillasToken = await requestPlanillasTokenForSyncIfNeeded();
       if (!hasValidPlanillasToken) {
         console.log('[syncCaches] Sincronización en espera: token de Planillas requerido');
         return;
       }
 
+      // Reafirmar: todas las actions que requieren Planillas llevan el último token almacenado.
       const storedPlanillas = await readStoredPlanillasToken();
       if (storedPlanillas?.token) {
         await attachPlanillasTokenToAllPendingActions(storedPlanillas.token);
@@ -852,7 +903,15 @@ function AppContent() {
         slot.inFlight = null;
       }
     })();
-  }, [requestPlanillasTokenForSyncIfNeeded, checkMobileVersionAvailability, employee, hasPendingActionsInStorage, logout, refreshAccessToken]);
+  }, [
+    requestPlanillasTokenForSyncIfNeeded,
+    migrateLegacyAttendanceCachesForSync,
+    checkMobileVersionAvailability,
+    employee,
+    hasPendingActionsInStorage,
+    logout,
+    refreshAccessToken,
+  ]);
 
   // eventBus + foco de app + reconexión → intentar sincronizar cachés (con comprobación de red dentro)
   useEffect(() => {
@@ -921,44 +980,8 @@ function AppContent() {
   const checkAttendanceActionsCache = async () => {
     if (!employee) return;
 
-    const legacyMarca = await AsyncStorage.getItem('marca_cache');
-    if (legacyMarca) {
-      try {
-        const p = JSON.parse(legacyMarca);
-        const list = await readAttendanceActions();
-        list.push({
-          id: `mig_marca_${Date.now()}`,
-          type: 'salida',
-          marcaId: Number(p.marcaId),
-          reason: String(p.reason ?? ''),
-          horaAccion: Number(p.horaAccion),
-        });
-        await writeAttendanceActions(list);
-      } catch (e) {
-        console.error('Migración marca_cache', e);
-      }
-      await AsyncStorage.removeItem('marca_cache');
-    }
-
-    const legacyAbsent = await AsyncStorage.getItem('absent_reason_cache');
-    if (legacyAbsent) {
-      try {
-        const p = JSON.parse(legacyAbsent);
-        const hora = await getHoraAccion();
-        const list = await readAttendanceActions();
-        list.push({
-          id: `mig_abs_${Date.now()}`,
-          type: 'absent_reason',
-          marcaId: Number(p.marcaId),
-          reason: String(p.reason ?? ''),
-          horaAccion: hora && Number.isFinite(Number(hora)) ? Number(hora) : Date.now(),
-        });
-        await writeAttendanceActions(list);
-      } catch (e) {
-        console.error('Migración absent_reason_cache', e);
-      }
-      await AsyncStorage.removeItem('absent_reason_cache');
-    }
+    // La migración de marca_cache / absent_reason_cache se hace antes en
+    // migrateLegacyAttendanceCachesForSync (para poder sellar el token de Planillas).
 
     const actions = await readAttendanceActions();
     if (actions.length === 0) return;
@@ -8153,6 +8176,27 @@ function AppContent() {
     }
   }
 
+  const checkReleaseModule = useCallback(async () => {
+    if (!employee?.id || !accessToken) return;
+
+    const connectivity = await resolveAppConnectivity();
+    if (!connectivity.ok) return;
+
+    const modules_release = await getModulesRelease({
+      refreshAccessToken,
+      logout,
+    });
+    if (modules_release.status) {
+      await AsyncStorage.setItem('modules_release', JSON.stringify(modules_release.modules || []));
+    }
+  }, [employee?.id, accessToken, refreshAccessToken, logout]);
+
+  /** Al abrir la app (sesión restaurada) y al iniciar sesión. */
+  useEffect(() => {
+    if (!employee?.id || !accessToken) return;
+    void checkReleaseModule();
+  }, [employee?.id, accessToken, checkReleaseModule]);
+
   const alert_lunch_time = async () => {
     try {
       const current_marca = await AsyncStorage.getItem('current_marca');
@@ -8216,7 +8260,6 @@ function AppContent() {
   const get_notifications = async () => {
     console.log('+++++++++++++++++++++++++++++++++++++++++ Getting notifications...');
     const planillas_token = await AsyncStorage.getItem('planillas_token');
-    console.log('planillas_token:', planillas_token);
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) {
       console.log('[notifications] Omitido: sin conexión', connectivity.reason);
@@ -8317,21 +8360,31 @@ function AppContent() {
 
   useEffect(() => {
     let timeoutId: NodeJS.Timeout;
+    let timeoutIdReleaseModules: NodeJS.Timeout;
 
     const poll = async () => {
       await check_conection_time();
       await alert_lunch_time();
       timeoutId = setTimeout(poll, 30000) as unknown as NodeJS.Timeout;
     };
+    
+    const pollReleaseModules = async () => {
+      await checkReleaseModule();
+      timeoutIdReleaseModules = setTimeout(pollReleaseModules, 30000 * 60) as unknown as NodeJS.Timeout; // 30 minutos
+    };
 
     if (isConnected) {
       poll(); // ejecuta inmediato
+      if (employee?.id && accessToken) {
+        pollReleaseModules(); // ejecuta inmediato si hay sesión
+      }
     }
 
     return () => {
       clearTimeout(timeoutId);
+      clearTimeout(timeoutIdReleaseModules);
     };
-  }, [isConnected]);
+  }, [isConnected, employee?.id, accessToken, checkReleaseModule]);
 
   /** Sondeo GPS silencioso cada 30 s → AsyncStorage `last_location` (sin depender de internet). */
   useEffect(() => {

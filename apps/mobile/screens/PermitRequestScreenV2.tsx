@@ -314,6 +314,8 @@ export default function PermitRequestScreenV2() {
   const pendingPlanillasActionRef = useRef<
     | { type: 'approve' }
     | { type: 'reject'; record: PermitRecord }
+    | { type: 'create' }
+    | { type: 'fetchTurnos' }
     | null
   >(null);
 
@@ -543,11 +545,28 @@ export default function PermitRequestScreenV2() {
     try {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
+
+      const referenceMs = (await getHoraAccion()) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'fetchTurnos' };
+        setTurnosMessage('Se requiere revalidar el token de Planillas para consultar turnos.');
+        return;
+      }
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       const fi = formatDateYMD(fechaInicio);
       const ff = formatDateYMD(fechaFin);
       const resp = await authedFetch({
         url: `${apiUrl}/api/permit-request/turnos?fecha_inicio=${encodeURIComponent(fi)}&fecha_fin=${encodeURIComponent(ff)}&plaza_id=${encodeURIComponent(String(selectedPlazaId))}`,
-        init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
+          },
+        },
         refreshAccessToken,
         logout,
       });
@@ -727,6 +746,15 @@ export default function PermitRequestScreenV2() {
       const horaAccion = await getHoraAccion();
       if (!horaAccion) throw new Error('No se pudo obtener la hora de la acción');
 
+      const referenceMs = Number(horaAccion) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasActionRef.current = { type: 'create' };
+        return;
+      }
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) throw new Error('Server URL not configured');
 
@@ -794,7 +822,10 @@ export default function PermitRequestScreenV2() {
         url: `${apiUrl}/api/permit-request`,
         init: {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
+          },
           body: JSON.stringify(payload),
         },
         refreshAccessToken,
@@ -1132,6 +1163,10 @@ export default function PermitRequestScreenV2() {
       void executeSaveCompletion();
     } else if (pending?.type === 'reject') {
       void executeRejectRecord(pending.record);
+    } else if (pending?.type === 'create') {
+      void executeCreate();
+    } else if (pending?.type === 'fetchTurnos') {
+      void fetchTurnosPreview();
     }
   };
 

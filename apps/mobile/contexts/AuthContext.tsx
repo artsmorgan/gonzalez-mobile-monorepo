@@ -40,6 +40,8 @@ interface ServerEmpleado {
   tipoCedula?: string;
   fechaContratacion?: string;
   roles?: EmployeeRole[];
+  codigo?: string;
+  isSuperAdmin?: boolean;
 }
 
 interface Employee {
@@ -50,6 +52,8 @@ interface Employee {
   telefono: string;
   tipoCedula?: string;
   fechaContratacion: string;
+  codigo: string;
+  isSuperAdmin?: boolean;
   roles: EmployeeRole[];
   firmaManual: string;
   supervisor_id: number | null;
@@ -196,12 +200,14 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Create employee object from server empleado data
       const employeeData: Employee = {
         id: empleadoData.id,
+        codigo: empleadoData.codigo,
         name: `${empleadoData.nombre} ${empleadoData.apellido} ${empleadoData.segundo_apellido || ''}`.trim(),
         email: empleadoData.Email ?? empleadoData.email ?? '',
         cedula: empleadoData.cedula,
         telefono: empleadoData.telefono || '',
         tipoCedula: empleadoData.tipoCedula || '',
         fechaContratacion: empleadoData.fechaContratacion || null,
+        isSuperAdmin: empleadoData.isSuperAdmin || false,
         roles: empleadoData.roles || [],
         firmaManual: empleadoData.firmaManual || '',
         supervisor_id: empleadoData.supervisor_id || null,

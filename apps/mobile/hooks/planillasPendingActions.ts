@@ -63,7 +63,7 @@ export async function attachPlanillasTokenToAllPendingActions(planillasToken: st
         let changed = false;
         const next = actions.map((a: any) => {
           if (a?.type !== 'puesto_ubicacion' || a?.synced !== false) return a;
-          if (a.planillasToken === token) return a;
+          if (String(a.planillasToken ?? '').trim() === token) return a;
           changed = true;
           return { ...a, planillasToken: token };
         });
@@ -78,9 +78,14 @@ export async function attachPlanillasTokenToAllPendingActions(planillasToken: st
 
   const lunchActions = await readHorarioMinutosActions();
   if (lunchActions.length > 0) {
-    const next = lunchActions.map((a) =>
-      a.planillasToken === token ? a : { ...a, planillasToken: token },
-    );
-    await AsyncStorage.setItem(LUNCH_TIME_HORARIO_ACTIONS_KEY, JSON.stringify(next));
+    let changed = false;
+    const next = lunchActions.map((a) => {
+      if (String(a.planillasToken ?? '').trim() === token) return a;
+      changed = true;
+      return { ...a, planillasToken: token };
+    });
+    if (changed) {
+      await AsyncStorage.setItem(LUNCH_TIME_HORARIO_ACTIONS_KEY, JSON.stringify(next));
+    }
   }
 }

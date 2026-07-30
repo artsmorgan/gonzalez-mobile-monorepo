@@ -66,13 +66,18 @@ export const listMutuosAcuerdosMine = async ({
 export const listMarcasParaMutuo = async ({
   empleado_id,
   fecha,
+  planillasToken: planillasTokenOverride,
   refreshAccessToken,
   logout,
-}: { empleado_id: number; fecha: string } & CommonAuth): Promise<ListMarcasMutuoResponse> => {
+}: { empleado_id: number; fecha: string; planillasToken?: string | null } & CommonAuth): Promise<ListMarcasMutuoResponse> => {
   try {
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) throw new Error('Server URL not configured');
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
+
+    const storedPlanillas = await readStoredPlanillasToken();
+    const planillasToken =
+      String(planillasTokenOverride ?? '').trim() || storedPlanillas?.token || null;
 
     const response = await authedFetch({
       url: `${apiUrl}/api/mutuos-acuerdos/marcas?empleado_id=${encodeURIComponent(String(empleado_id))}&fecha=${encodeURIComponent(fecha)}`,
@@ -80,6 +85,7 @@ export const listMarcasParaMutuo = async ({
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',
+          'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
         },
       },
       refreshAccessToken: refresh,

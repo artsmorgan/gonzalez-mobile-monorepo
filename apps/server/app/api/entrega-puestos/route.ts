@@ -6,8 +6,41 @@ import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { sanitizeArticulosPuestoForPersistence } from "../../../utils/sanitizeArticulosPuestoForPersistence";
 import { processEntregaPuestosArticulosMantenimiento } from "./articulosMantenimiento";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { v4 as uuidv4 } from "uuid";
 
-// Función auxiliar para convertir hora a formato Time
+export const runtime = "nodejs";
+
+function stripBase64Payload(raw: unknown): string {
+    const s = String(raw ?? "").trim();
+    if (!s) return "";
+    return s.replace(/^data:[^;]+;base64,/i, "");
+}
+
+function buildEntregaImageFileName(): string {
+    return `${uuidv4()}.jpg`;
+}
+
+async function uploadEntregaPuestosIdentityImages(params: {
+    req: NextRequest;
+    registroId: number;
+    files: { name: string; file_base64: string }[];
+}): Promise<void> {
+    const { req, registroId, files } = params;
+    if (!files.length) return;
+
+    await uploadDynamicFiles({
+        req,
+        folderPath: `entrega-puestos/${registroId}`,
+        files: files.map((f) => ({
+            name: f.name,
+            type: "image",
+            extension: "jpg",
+            original_name: f.name,
+            file_base64: f.file_base64,
+        })),
+    });
+}
 function parseTimeValue(timeValue: any): Date | null {
     if (!timeValue) return null;
     if (timeValue instanceof Date) return timeValue;
@@ -649,6 +682,8 @@ export async function POST(req: NextRequest) {
             marca_id,
             marca_entrega_id,
             marca_recibe_id,
+            image_delivery,
+            image_receives,
         } = body;
 
         const firmaRecibeFinal = typeof firma_recibe === "string" && firma_recibe.trim().length > 0
@@ -667,6 +702,14 @@ export async function POST(req: NextRequest) {
 
         if (!cliente_id || !corpo_id || !puesto_id || !oficial_recibe || !firmaRecibeFinal) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
+        }
+
+        const imageReceivesRaw = stripBase64Payload(image_receives);
+        if (!imageReceivesRaw) {
+            return NextResponse.json({
+                status: false,
+                message: "La foto de quien recibe es obligatoria",
+            }, { status: 400 });
         }
 
         if (!isSelfDelivery && !oficial_entrega) {
@@ -796,7 +839,11 @@ export async function POST(req: NextRequest) {
         const horaEntradaRecibeISO = new Date(horaEntradaRecibeParsed).toISOString();
         const horaSalidaRecibeISO = new Date(horaSalidaRecibeParsed).toISOString();
 
-        // Crear el registro
+        const imageReceivesFileName = buildEntregaImageFileName();
+        const imageDeliveryRaw = !isSelfDelivery ? stripBase64Payload(image_delivery) : "";
+        const imageDeliveryFileName = imageDeliveryRaw ? buildEntregaImageFileName() : null;
+
+        // Crear el registro (incluye nombres UUID de las imágenes)
         const nuevoRegistro = await callDynamicPrisma({
             req,
             data: {
@@ -825,6 +872,8 @@ export async function POST(req: NextRequest) {
                     firma_recibe: firmaRecibeFinal,
                     firma_entrega: isSelfDelivery ? null : firmaEntregaFinal,
                     firma_responsable: firmaResponsableFinal,
+                    image_receives: imageReceivesFileName,
+                    image_delivery: imageDeliveryFileName,
                     created_at: now.toISOString(),
                     created_by: empleadoId,
                 },
@@ -832,6 +881,37 @@ export async function POST(req: NextRequest) {
         });
 
         if (nuevoRegistro) {
+            const registroId = Number((nuevoRegistro as { id?: number })?.id || 0);
+            if (registroId > 0) {
+                try {
+                    const filesToUpload: { name: string; file_base64: string }[] = [
+                        { name: imageReceivesFileName, file_base64: imageReceivesRaw },
+                    ];
+                    if (imageDeliveryFileName && imageDeliveryRaw) {
+                        filesToUpload.push({
+                            name: imageDeliveryFileName,
+                            file_base64: imageDeliveryRaw,
+                        });
+                    }
+                    await uploadEntregaPuestosIdentityImages({
+                        req,
+                        registroId,
+                        files: filesToUpload,
+                    });
+                } catch (imageError: unknown) {
+                    const imageMsg =
+                        imageError instanceof Error ? imageError.message : "Error al subir imágenes";
+                    console.error("Error uploading entrega-puestos images:", imageMsg);
+                    return NextResponse.json(
+                        {
+                            status: false,
+                            message: `El registro se creó (id ${registroId}) pero falló la carga de imágenes: ${imageMsg}`,
+                        },
+                        { status: 500 },
+                    );
+                }
+            }
+
             const marcaIdForActivities = marcaRecibeId ?? parseOptionalId(marca_id);
             if (marcaIdForActivities) {
                 const marca = await prisma.c_marca_dia.findUnique({
