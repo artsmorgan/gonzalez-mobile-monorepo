@@ -16,11 +16,17 @@
     "start": "cd apps/server && npm start",
     "start:web": "cd apps/server && npm run start:web",
     "worker:reports": "cd apps/server && npm run worker:reports",
-    "lint": "turbo run lint"
+    "lint": "turbo run lint",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@react-native-picker/picker": "^2.11.4",
     "is-arrayish": "^0.3.4",
-    "semver": "^7.7.2"
-  }
+    "semver": "^7.7.2",
+    "expo": "~54.0.23",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "version": "1.0.0"
 }

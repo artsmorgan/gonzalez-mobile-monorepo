@@ -43,7 +43,7 @@ module.exports = ({ config }) => {
           : "com.abrjpo98.MonitoreApp.full"
       },
       android: {
-        googleServicesFile: isLite ? "./google-services-lite.json" : "./google-services-full.json",
+        googleServicesFile: "./google-services.json",
         adaptiveIcon: {
           foregroundImage: "./assets/images/adaptive-icon.png",
           backgroundColor: "#ffffff"
