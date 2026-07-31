@@ -22,6 +22,7 @@ import { applyNomenclatorsFromAttendanceMarca } from '@/hooks/updateNomenclator'
 import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
 import {
   appendAttendanceAction,
+  ATTENDANCE_ACTIONS_KEY,
   readAttendanceActions,
   removePendingSalidaActionsForMarca,
 } from '@/hooks/attendanceActionsStorage';
@@ -1098,7 +1099,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const validateBeforeMarkAction = async (
     type: 'entrada' | 'salida'
-  ): Promise<{ ok: true } | { ok: false; message: string }> => {
+  ): Promise<{ ok: true; horaAccionMs: number } | { ok: false; message: string }> => {
     if (!attendanceData?.marca) {
       return { ok: false, message: 'No se encontró la marca.' };
     }
@@ -1189,7 +1190,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
     }
 
-    return { ok: true };
+    return { ok: true, horaAccionMs: nowMs };
   };
 
   const executeToggleAttendance = async () => {
@@ -1282,7 +1283,9 @@ export default function MarcarIngresoSalidaScreen() {
       await cleanAsyncStorage();
 
       try {
-        await deleteAllFiles();
+        const { collectPendingSyncLocalFileNames } = await import('@/hooks/collectPendingSyncLocalFileNames');
+        const preserveFiles = await collectPendingSyncLocalFileNames();
+        await deleteAllFiles(preserveFiles);
       } catch (fileErr) {
         console.warn('Error borrando archivos locales (expo-file-system) al ingresar:', fileErr);
       }
@@ -1352,10 +1355,6 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('No se encontró la marca');
     }
 
-    if (!horaAccion) {
-      throw new Error('Hora de acción not found');
-    }
-
     let data = null;
     const markType = type === 'salida' ? 'salida' : 'entrada';
     const preCheck = await validateBeforeMarkAction(markType);
@@ -1368,9 +1367,10 @@ export default function MarcarIngresoSalidaScreen() {
       return;
     }
 
+    const actionHoraAccion = preCheck.horaAccionMs;
+
     if (await evaluateInternetConnection()) {
-      const referenceMs = (horaAccion as number) || (await getHoraAccion()) || Date.now();
-      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(actionHoraAccion);
       if (!hasValidPlanillasToken) {
         setIsProcessingMark(false);
         setProcessingType(null);
@@ -1378,7 +1378,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       data = await saveMarca({
-        data_params: { type, reason, horaAccion: horaAccion },
+        data_params: { type, reason, horaAccion: actionHoraAccion },
         marcaId: attendanceData.marca.id,
         refreshAccessToken,
         logout,
@@ -1390,7 +1390,7 @@ export default function MarcarIngresoSalidaScreen() {
           type: 'salida',
           marcaId: attendanceData.marca.id,
           reason: reason ?? '',
-          horaAccion: horaAccion as number,
+          horaAccion: actionHoraAccion,
           planillasToken: storedPlanillas?.token ?? undefined,
         });
         const rawMarca = await AsyncStorage.getItem('current_marca');
@@ -1398,7 +1398,7 @@ export default function MarcarIngresoSalidaScreen() {
           try {
             const m = JSON.parse(rawMarca);
             if (Number(m.id) === Number(attendanceData.marca.id)) {
-              m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+              m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
               await AsyncStorage.setItem('current_marca', JSON.stringify(m));
             }
           } catch {
@@ -1417,8 +1417,7 @@ export default function MarcarIngresoSalidaScreen() {
       try {
         if (type === 'entrada') {
           if (attendanceData) {
-            let horaAccion = attendanceData.marca.hora_entrada_digitada ? new Date(attendanceData.marca.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
-            await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
+            await hydrateAfterEntrada(attendanceData.marca, actionHoraAccion, true);
             entradaMarca = attendanceData.marca;
           }
         } else {
@@ -1427,7 +1426,7 @@ export default function MarcarIngresoSalidaScreen() {
             try {
               const m = JSON.parse(raw);
               if (Number(m.id) === Number(attendanceData.marca.id)) {
-                m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+                m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
                 await AsyncStorage.setItem('current_marca', JSON.stringify(m));
               }
             } catch {
@@ -1491,11 +1490,13 @@ export default function MarcarIngresoSalidaScreen() {
         'last_location',
         'monitoring_previous_minutes',
         'monitoring_post_minutes',
+        ATTENDANCE_ACTIONS_KEY,
       ];
       const keys = await AsyncStorage.getAllKeys();
 
       const keysToDelete = keys.filter((key) => {
         if (exceptions.includes(key)) return false;
+        if (key.endsWith('_actions')) return false;
         if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
         if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
         return true;
@@ -1540,9 +1541,6 @@ export default function MarcarIngresoSalidaScreen() {
 }
 
 const getActivities = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('activities_actions');
-    await AsyncStorage.removeItem('activities_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');

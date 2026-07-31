@@ -40,6 +40,9 @@ import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, update
 import {
   filterAgendaFromEvaluationsCacheByCorpo,
   mergeEvaluationsCacheAgendaMinutaForCorpo,
+  isAgendaMinutaCacheType,
+  normalizeAgendaMinutaEvaluationsActions,
+  normalizeAgendaMinutaEvaluationsCache,
 } from '@/hooks/agendaMinutaCacheHelpers';
 import authedFetch from '@/hooks/authedFetch';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
@@ -102,10 +105,8 @@ type AcuerdosPayload = {
 
 const generateRandomId = (): string => `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-const AGENDA_EVAL_TYPES = new Set(['agenda_minuta', 'physical_minute_agenda']);
-
 function isAgendaEvalAction(a: any): boolean {
-  return !!(a && AGENDA_EVAL_TYPES.has(a.type));
+  return !!(a && isAgendaMinutaCacheType(a.type));
 }
 
 /** True si el registro ya tiene id de servidor (> 0). Borradores locales usan id '' / no numérico. */
@@ -124,6 +125,11 @@ async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, 
   const actionsStr = await AsyncStorage.getItem('evaluations_actions');
   let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
   if (!Array.isArray(actions)) actions = [];
+  const normalized = normalizeAgendaMinutaEvaluationsActions(actions) as any[];
+  if (normalized !== actions) {
+    actions = normalized;
+    await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+  }
   actions = actions.filter(
     (a: any) =>
       !(
@@ -1253,7 +1259,12 @@ export default function PhysicalMinuteAgendaScreen() {
         if (!cacheStr) return [];
         try {
           const p = JSON.parse(cacheStr);
-          return Array.isArray(p) ? p : [];
+          const arr = Array.isArray(p) ? p : [];
+          const normalized = normalizeAgendaMinutaEvaluationsCache(arr) as any[];
+          if (normalized !== arr) {
+            await AsyncStorage.setItem('evaluations_cache', JSON.stringify(normalized));
+          }
+          return normalized;
         } catch {
           return [];
         }

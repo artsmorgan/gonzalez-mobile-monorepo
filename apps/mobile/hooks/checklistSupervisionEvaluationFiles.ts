@@ -29,6 +29,7 @@ export async function hydrateChecklistEvaluationImagesForApi(evaluacionJson: str
         delete obj.localFileName;
       } catch (e) {
         console.warn('[checklistSupervisionEvaluationFiles] No se pudo leer foto local:', obj.localFileName, e);
+        throw new Error(`Archivo local de foto no encontrado: ${obj.localFileName}`);
       }
     }
     for (const k of Object.keys(obj)) {

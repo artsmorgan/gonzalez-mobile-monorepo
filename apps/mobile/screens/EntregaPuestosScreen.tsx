@@ -1085,16 +1085,11 @@ export default function EntregaPuestosScreen() {
 
   const getInvolucrados = (involucrados: string) => {
     const involucradosArray = JSON.parse(involucrados);
-    let involucradosText = "";
-    for (let i = 0; i < involucradosArray.length; i++) {
-      const involucrado = involucradosArray[i];
-      let coma = "";
-      if (i > 0) { // Si es el primero, debe incluir una coma
-        coma = ", ";
-      }
-      involucradosText = `${involucrado.nombre} (${involucrado.codigo || ""})${coma}`;
-    }
-    return involucradosText;
+    return involucradosArray
+      .map((involucrado: { nombre?: string; codigo?: string }) =>
+        `${involucrado.nombre} (${involucrado.codigo || ''})`.trim()
+      )
+      .join(', ');
   };
 
   if (isLoading) {

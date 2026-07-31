@@ -1,0 +1,16 @@
+id: F-001
+module_id: visitors
+severity: critical
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1393-1435"
+category: offline
+title: checkVisitorsActionsCache snapshot stale
+description: |
+  for (action of actions) sin reasignar array tras éxito.
+reproduction: |
+  1. 2+ creates en cola.
+  2. Sync.
+impact: Visitantes duplicados en servidor.
+suggested_fix: |
+  actions = updatedActions tras cada éxito.

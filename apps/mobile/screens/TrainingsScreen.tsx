@@ -30,7 +30,7 @@ import { Picker } from '@react-native-picker/picker';
 import { formatDateDMY } from '@/utils/formatDate';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import * as Network from 'expo-network';
+import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import {
   createTraining as createTrainingAPI,
   deleteTraining as deleteTrainingAPI,
@@ -629,13 +629,8 @@ export default function TrainingsScreen() {
   );
 
   const checkConnection = async (): Promise<boolean> => {
-    //return false;
-    const networkState = await Network.getNetworkStateAsync();
-
-    return (
-      networkState.isConnected === true &&
-      networkState.isInternetReachable === true
-    );
+    const connectivity = await resolveAppConnectivity();
+    return connectivity.ok;
   };
 
   const isProbablyNetworkError = (err: any) => {
@@ -1457,7 +1452,7 @@ export default function TrainingsScreen() {
   };
 
   const openEditTraining = (t: Training) => {
-    if (t.id === 0) {
+    if (t.id === 0 && !t.id_local) {
       Alert.alert('Aviso', 'No se puede editar un borrador pendiente de sincronización.');
       return;
     }

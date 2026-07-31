@@ -1,0 +1,19 @@
+id: F-003
+module_id: apreciacion-vulnerabilidad
+severity: high
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1285-1288"
+category: offline
+title: Marcar entrada borra imágenes locales de boletas pendientes
+description: |
+  apreciacionVulnerabilidadFilesSync lee adjuntos offline vía getFile(localFileName). hydrateAfterEntrada
+  llama deleteAllFiles() y borra esos archivos antes de que checkApreciacionVulnerabilidadActionsCache
+  pueda subirlos (especialmente si F-001 ya eliminó la cola).
+reproduction: |
+  1. Crear boleta offline con fotos (apreciacion_images_meta con localFileName).
+  2. Marcar entrada online antes de sync.
+  3. Archivos locales eliminados; buildApreciacionImagenesJsonForUpload falla o omite imágenes.
+impact: Boletas sin adjuntos en servidor; evidencia perdida.
+suggested_fix: |
+  Preservar archivos de colas pendientes o sync completo antes de deleteAllFiles en entrada.

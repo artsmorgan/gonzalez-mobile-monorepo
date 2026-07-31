@@ -244,7 +244,6 @@ const shouldUpdateMainStructureCache = async (refreshAccessToken: any, logout: a
   };
 
 const getBitacoraVehiculoDetenido = async (marcaId: number, refreshAccessToken: any, logout: any) => {
-    await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -286,8 +285,6 @@ const getBitacoraVehiculoDetenido = async (marcaId: number, refreshAccessToken: 
   };
 
 const getDocumentosEntregados = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('documentos_entregados_actions');
     await AsyncStorage.removeItem('documentos_entregados_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -315,7 +312,6 @@ const getDocumentosEntregados = async (corpoId: number, refreshAccessToken: any,
   }
 
 const getLlaves = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    await AsyncStorage.removeItem('llaves_actions');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -349,7 +345,6 @@ const getLlaves = async (corpoId: number, refreshAccessToken: any, logout: any) 
   };
   
 const getLlaveros = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    await AsyncStorage.removeItem('llaveros_actions');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -383,8 +378,6 @@ const getLlaveros = async (corpoId: number, refreshAccessToken: any, logout: any
   };
 
 const getTrainings = async (marcaId: number, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('trainings_actions');
     await AsyncStorage.removeItem('trainings_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -412,8 +405,6 @@ const getTrainings = async (marcaId: number, refreshAccessToken: any, logout: an
   }
 
 const getVoiceNotes = async (marca: { corpo?: { id?: number }; puesto?: { id?: number } }, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('voice_notes_actions');
     await AsyncStorage.removeItem('voice_notes_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -686,8 +677,6 @@ const getNotes = async (
   };
 
 const getEvaluations = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('evaluations_staff_actions');
     await AsyncStorage.removeItem('evaluations_staff_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -715,8 +704,6 @@ const getEvaluations = async (corpoId: number, refreshAccessToken: any, logout: 
   }
 
 const getEmployeesCorpo = async (corpoId: number, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('employees_corpo_actions');
     await AsyncStorage.removeItem('employees_corpo_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -862,8 +849,6 @@ const getExecutives = async (refreshAccessToken: any, logout: any) => {
   }
 
 const getSurveys = async (marcaId: number, refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('surveys_actions');
     await AsyncStorage.removeItem('surveys_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
@@ -921,8 +906,6 @@ const getPuestosCorpo = async (corpoId: number, refreshAccessToken: any, logout:
   }
 
 const getArticulos = async (refreshAccessToken: any, logout: any) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('articulos_actions');
     await AsyncStorage.removeItem('articulos_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {

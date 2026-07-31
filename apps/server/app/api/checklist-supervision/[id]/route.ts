@@ -404,7 +404,12 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
 
     await callDynamicPrisma({
       req,
-      data: { action: "DELETE", table: "c_checklist_supervision", where: { id } }
+      data: {
+        action: "UPDATE",
+        table: "c_checklist_supervision",
+        where: { id },
+        data: { isActive: false },
+      },
     });
     return NextResponse.json({ status: true, message: "Checklist eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {

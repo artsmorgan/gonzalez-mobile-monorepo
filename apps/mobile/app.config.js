@@ -38,7 +38,9 @@ module.exports = ({ config }) => {
       newArchEnabled: true,
       ios: {
         supportsTablet: true,
-        bundleIdentifier: "com.abrjpo98.MonitoreApp"
+        bundleIdentifier: isLite
+          ? "com.abrjpo98.MonitoreApp.lite"
+          : "com.abrjpo98.MonitoreApp.full"
       },
       android: {
         googleServicesFile: isLite ? "./google-services-lite.json" : "./google-services-full.json",
@@ -107,7 +109,7 @@ module.exports = ({ config }) => {
           process.env.API_SERVER ||
           process.env.NEXT_PUBLIC_API_SERVER ||
           // https://api-gonzalez-mobile-monorepo-production.up.railway.app
-          "https://api-gonzalez-mobile-monorepo-production.up.railway.app",
+          "https://nonresonantly-captivative-shizue.ngrok-free.dev",
         /** Debe coincidir con `MOBILE_ACCESS_TOKEN` del servidor (query en `/api/main-structure`). */
         MOBILE_ACCESS_TOKEN:
           process.env.EXPO_PUBLIC_MOBILE_ACCESS_TOKEN ||

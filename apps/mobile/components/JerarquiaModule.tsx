@@ -587,7 +587,7 @@ const JerarquiaModule: React.FC<JerarquiaModuleProps> = ({ onSelectionChange }) 
 
       {!isStructureLoading && empresas.length === 0 && (
         <Text style={styles.emptyText}>
-          No hay jerarquía en cache local. Usa "Generar y descargar" cuando tengas conexión.
+          No hay jerarquía en cache local. Usa «Generar y descargar» cuando tengas conexión.
         </Text>
       )}
 

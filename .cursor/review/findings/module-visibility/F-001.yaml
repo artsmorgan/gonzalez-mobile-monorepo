@@ -1,0 +1,15 @@
+id: F-001
+module_id: module-visibility
+severity: high
+status: fixed
+file: apps/server/app/api/modules-release/[id]/route.ts
+lines: "10-53"
+category: security
+title: PUT modules-release sin verificación super-admin
+description: |
+  Cualquier JWT válido puede cambiar is_visible globalmente.
+reproduction: |
+  1. Usuario no admin PUT /api/modules-release/{id}.
+impact: Escalación: ocultar/mostrar módulos globalmente.
+suggested_fix: |
+  Verificar isSuperAdmin o rol administrativo.

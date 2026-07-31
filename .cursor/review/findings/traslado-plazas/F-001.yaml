@@ -1,0 +1,16 @@
+id: F-001
+module_id: traslado-plazas
+severity: critical
+status: fixed
+file: apps/mobile/screens/TrasladoPlazasScreen.tsx
+lines: "435-449"
+category: offline
+title: Cola archivos_acciones_actions nunca sincronizada
+description: |
+  Offline push a archivos_acciones_actions; App.tsx no tiene handler.
+reproduction: |
+  1. Adjunto offline.
+  2. Reconectar.
+impact: Archivos nunca suben al servidor.
+suggested_fix: |
+  Implementar checkArchivosAccionesCache o migrar a cola existente.

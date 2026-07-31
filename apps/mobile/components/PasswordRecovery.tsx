@@ -206,7 +206,7 @@ export default function PasswordRecovery({ userId, userInfo }: PasswordRecoveryP
             <ThemedText style={styles.recommendationItem}>• Sin info nuestra <ThemedText style={styles.exampleText}>minadre miperro minacimiento</ThemedText></ThemedText>
             <ThemedText style={styles.recommendationItem}>• Combina mayúsculas y minúsculas <ThemedText style={styles.exampleText}>aDRnTi</ThemedText></ThemedText>
             <ThemedText style={styles.recommendationItem}>• Combina números y letras <ThemedText style={styles.exampleText}>a1DR4nT76i</ThemedText></ThemedText>
-            <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR"4nT7:6i</ThemedText></ThemedText>
+            <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR{'"'}4nT7:6i</ThemedText></ThemedText>
           </View>
         </ThemedView>
 

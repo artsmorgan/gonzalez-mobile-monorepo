@@ -579,6 +579,15 @@ export default function MutuosAcuerdosScreen() {
       return;
     }
 
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert(
+        'Sin conexión',
+        'Mutuos acuerdos requiere conexión a internet. Conéctate e intenta de nuevo.'
+      );
+      return;
+    }
+
     const marcaAusenteSel = ausente.marcas.find((m) => m.id === ausente.selectedMarcaId);
     const eid = marcaAusenteSel?.empresa_id != null ? Number(marcaAusenteSel.empresa_id) : 0;
     const did = marcaAusenteSel?.division_id != null ? Number(marcaAusenteSel.division_id) : 0;

@@ -2831,6 +2831,40 @@ export default function ActivitiesScreen() {
           (action: any) => action.activity_id === activity.id && action.type === 'update'
         );
 
+        const enqueueRevisionEquipoActions = () => {
+          if (estado !== 'marcar' || !activity.is_revision_equipo || inventoryRows.length === 0) return;
+          actions = actions.filter(
+            (a: any) => !(a.type === 'update-equipo' && a.activity_id === activity.id)
+          );
+          for (const inv of inventoryRows) {
+            const form = getArticleFormState(activity.id, inv);
+            const revisionEquipoId = inv.revision_equipo?.id;
+            if (!revisionEquipoId) continue;
+            const revisionReq: any = {
+              e: parseInt(employee.id),
+              articulo_id: inv.id,
+              es_correcto: form.estado === 'Bueno',
+              motivo_incorrecto: form.estado === 'Bueno' ? '-' : (form.observaciones.trim() || '-'),
+              estado: form.estado,
+              cantidad_real: form.cantidadReal,
+              hora_accion: horaAccionIso,
+            };
+            const imgLocal = invImgSnap[inv.id];
+            if (imgLocal) {
+              revisionReq.file_local_file_name = imgLocal;
+            } else {
+              revisionReq.file = null;
+            }
+            actions.push({
+              type: 'update-equipo',
+              revisionEquipo_id: revisionEquipoId,
+              activity_id: activity.id,
+              requestData: revisionReq,
+              timestamp: horaAccionNumber,
+            });
+          }
+        };
+
         if (existingActionIndex !== -1) {
           const prevFn = actions?.[existingActionIndex]?.requestData?.file_local_file_name;
           if (
@@ -2847,6 +2881,7 @@ export default function ActivitiesScreen() {
             requestData,
             timestamp: horaAccionNumber,
           };
+          enqueueRevisionEquipoActions();
           Alert.alert('Acción actualizada', 'La acción se sincronizará cuando recuperes la conexión.');
         } else {
           // Add new action
@@ -2856,6 +2891,7 @@ export default function ActivitiesScreen() {
             requestData,
             timestamp: horaAccionNumber,
           });
+          enqueueRevisionEquipoActions();
           Alert.alert('Guardado offline', 'La acción se sincronizará cuando recuperes la conexión.');
         }
 

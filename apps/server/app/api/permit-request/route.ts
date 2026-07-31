@@ -83,13 +83,16 @@ export async function GET(req: NextRequest) {
     const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const mySupervisorId = parseIntStrict(empleado?.supervisor_id);
 
-    // Siempre incluir:
-    // 1) Solicitudes propias del empleado autenticado.
-    // 2) Solicitudes donde el ejecutivo_cuenta coincide con supervisor_id del empleado.
-    // Esto garantiza visibilidad cuando ejecutivo_cuenta === supervisor_id.
-    const visibilityWhere: any = mySupervisorId
-      ? { OR: [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: mySupervisorId }] }
-      : { empleado_id: currentEmployeeId };
+    const mode = String(req.nextUrl.searchParams.get("mode") ?? "").trim().toLowerCase();
+
+    // mode=mine: solo solicitudes propias del empleado autenticado.
+    // Sin mode (ejecutivo): propias + solicitudes donde ejecutivo_cuenta === supervisor_id.
+    const visibilityWhere: any =
+      mode === "mine"
+        ? { empleado_id: currentEmployeeId }
+        : mySupervisorId
+          ? { OR: [{ empleado_id: currentEmployeeId }, { ejecutivo_cuenta: mySupervisorId }] }
+          : { empleado_id: currentEmployeeId };
 
     const where: any = { AND: [visibilityWhere, { isActive: true }] };
 

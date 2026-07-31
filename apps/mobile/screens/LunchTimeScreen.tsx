@@ -23,6 +23,7 @@ import {
   releaseLunchTimerCompletionLock,
   tryAcquireLunchTimerCompletionLock,
 } from '../hooks/lunchTimeMarcaHierarchy';
+import { fromZonedTime } from 'date-fns-tz';
 import {
   extractHorarioIdFromMarca,
   fetchLunchMinutesByMarcaId,
@@ -31,7 +32,6 @@ import {
   queueHorarioMinutosUpdateAction,
   updateHorarioMinutosAlmuerzo,
 } from '../hooks/lunchTimeHorarioApi';
-import { toZonedTime } from 'date-fns-tz';
 import * as Network from 'expo-network';
 import getHoraAccion from '../hooks/getHoraAccion';
 import {
@@ -139,6 +139,41 @@ export default function LunchTimeScreen() {
   const pendingPlanillasActionRef = useRef<{ minutos: number; marcaObj: Record<string, unknown> } | null>(null);
   const saveLunchMinutesRef = useRef<(parsed: number) => Promise<void>>(async () => {});
 
+  const parseCostaRicaLocalDateTime = (
+    year: string,
+    month: string,
+    day: string,
+    hours: string,
+    minutes: string
+  ): Date => {
+    const pad = (v: string) => v.padStart(2, '0');
+    const localIso = `${year}-${month}-${pad(day)}T${pad(hours)}:${pad(minutes)}:00`;
+    return fromZonedTime(localIso, 'America/Costa_Rica');
+  };
+
+  const restorePausedTimerFromTempState = async (temp_state_obj: any) => {
+    if (temp_state_obj.inactivities) {
+      setInactivities(temp_state_obj.inactivities.map((inactivity: any) => ({
+        ...inactivity,
+        startTime: new Date(inactivity.startTime),
+        endTime: new Date(inactivity.endTime),
+      })));
+    }
+    setFirmaEmpleado(temp_state_obj.firma_empleado || '');
+    const horaAccion = await getUpdatedHoraAccion();
+    const remaining_time = computeRemainingSecondsFromTempState(temp_state_obj, horaAccion);
+    setIsTimerActive(false);
+    setTimeRemaining(Math.max(0, remaining_time));
+    setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
+    setCurrentInactivityStart(
+      temp_state_obj.currentInactivityStart
+        ? new Date(temp_state_obj.currentInactivityStart)
+        : null
+    );
+    setEndTimeMode('calculated');
+    setEndTime(new Date(computeLunchEndTimeMs(temp_state_obj)));
+  };
+
   useFocusEffect(
     useCallback(() => {
       const syncTimerFromTempState = async () => {
@@ -147,7 +182,12 @@ export default function LunchTimeScreen() {
 
         try {
           const temp_state_obj = JSON.parse(temp_state);
-          if (!temp_state_obj?.running) return;
+          if (!temp_state_obj?.running) {
+            if (temp_state_obj?.startTime) {
+              await restorePausedTimerFromTempState(temp_state_obj);
+            }
+            return;
+          }
 
           if (temp_state_obj.inactivities) {
             setInactivities(temp_state_obj.inactivities.map((inactivity: any) => ({
@@ -361,6 +401,9 @@ export default function LunchTimeScreen() {
           }
         }
         else {
+          if (temp_state_obj.startTime) {
+            keepTempState = true;
+          }
           setIsTimerActive(false);
           setTimeRemaining(computeRemainingSecondsFromTempState(temp_state_obj, await getUpdatedHoraAccion()));
           setStartTime(temp_state_obj.startTime ? new Date(temp_state_obj.startTime) : null);
@@ -1294,7 +1337,13 @@ export default function LunchTimeScreen() {
       end_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
     }
 
-    const marca_end_time = new Date(`${year}-${month}-${end_day}T${marca_end_hours}:${marca_end_minutes}:00.000Z`);
+    const marca_end_time = parseCostaRicaLocalDateTime(
+      year,
+      month,
+      end_day,
+      marca_end_hours,
+      marca_end_minutes
+    );
 
     // Crear fecha de hoy con la hora especificada
     const startHours = manualStartHour;
@@ -1305,7 +1354,13 @@ export default function LunchTimeScreen() {
       final_day = (parseInt(day, 10) + 1).toString().padStart(2, '0');
     }
 
-    const startTime = new Date(`${year}-${month}-${final_day}T${startHours}:${startMinutes}:00.000Z`);
+    const startTime = parseCostaRicaLocalDateTime(
+      year,
+      month,
+      final_day,
+      startHours,
+      startMinutes
+    );
 
     const initial_string = `${year}-${month}-${final_day} ${startHours}:${startMinutes}:00`;
 
@@ -1324,8 +1379,20 @@ export default function LunchTimeScreen() {
         endDay = (parseInt(final_day, 10) + 1).toString().padStart(2, '0');
       }
 
-      const activityStartTime = new Date(`${year}-${month}-${startDay}T${inactivity.startHour}:${inactivity.startMinute}:00.000Z`);
-      const activityEndTime = new Date(`${year}-${month}-${endDay}T${inactivity.endHour}:${inactivity.endMinute}:00.000Z`);
+      const activityStartTime = parseCostaRicaLocalDateTime(
+        year,
+        month,
+        startDay,
+        inactivity.startHour,
+        inactivity.startMinute
+      );
+      const activityEndTime = parseCostaRicaLocalDateTime(
+        year,
+        month,
+        endDay,
+        inactivity.endHour,
+        inactivity.endMinute
+      );
       inactivitiesWithToday.push({
         startTime: activityStartTime,
         endTime: activityEndTime,

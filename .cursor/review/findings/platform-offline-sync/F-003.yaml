@@ -1,0 +1,14 @@
+id: F-003
+module_id: platform-offline-sync
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "1-8600"
+category: architecture
+title: God object App.tsx concentra sync de 27 colas
+description: |
+  Toda la lógica de sincronización offline vive en App.tsx (~8600 LOC).
+  Cualquier fix en un módulo puede afectar el motor global; difícil testear aisladamente.
+reproduction: Revisar tamaño y acoplamiento check*ActionsCache dentro App.tsx.
+impact: Alta probabilidad de regresiones durante correcciones por módulo; context window limitado para agentes.
+suggested_fix: Extraer sync por dominio a hooks (fuera de scope soft-release salvo finding explícito); mientras tanto, fixes mínimos y validación global estricta.

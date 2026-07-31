@@ -5,7 +5,8 @@
   "build": {
     "preview-full": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleFullRelease"
       },
       "env": {
         "APP_VARIANT": "full"
@@ -13,10 +14,29 @@
     },
     "preview-lite": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
       },
       "env": {
         "APP_VARIANT": "lite"
+      }
+    },
+    "production-lite": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "production-full": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleFullRelease"
+      },
+      "env": {
+        "APP_VARIANT": "full"
       }
     }
   }

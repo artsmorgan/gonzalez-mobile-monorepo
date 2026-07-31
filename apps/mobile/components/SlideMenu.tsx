@@ -43,6 +43,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [division, setDivision] = React.useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
   const [modulesRelease, setModulesRelease] = React.useState<any[]>([]);
+  const [modulesReleaseReady, setModulesReleaseReady] = React.useState(false);
   const [currentMarca, setCurrentMarca] = React.useState<any | null>(null);
   const [isUserSuperAdmin, setIsUserSuperAdmin] = React.useState<boolean>(false);
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
@@ -82,10 +83,14 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         }
       };
       const loadModulesRelease = async () => {
-        const modules_release = await AsyncStorage.getItem('modules_release');
-        if (modules_release) {
-          const modules_release_data = JSON.parse(modules_release);
-          setModulesRelease(modules_release_data);
+        try {
+          const modules_release = await AsyncStorage.getItem('modules_release');
+          if (modules_release) {
+            const modules_release_data = JSON.parse(modules_release);
+            setModulesRelease(modules_release_data);
+          }
+        } finally {
+          setModulesReleaseReady(true);
         }
       };
       loadCurrentMarca();
@@ -492,6 +497,10 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     if (employee && employee.isSuperAdmin) {
       //setIsUserSuperAdmin(true);
+      return true;
+    }
+
+    if (!modulesReleaseReady) {
       return true;
     }
 

@@ -30,7 +30,7 @@ import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Network from 'expo-network';
+import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import authedFetch from '@/hooks/authedFetch';
 import {
@@ -473,13 +473,8 @@ export default function InductionTourRecordScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    //return false;
-    const networkState = await Network.getNetworkStateAsync();
-
-    return (
-      networkState.isConnected === true &&
-      networkState.isInternetReachable === true
-    );
+    const connectivity = await resolveAppConnectivity();
+    return connectivity.ok;
   };
 
   const closeCambiosModal = () => {
@@ -1102,8 +1097,7 @@ export default function InductionTourRecordScreen() {
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
           setRecords(sliceForUi(merged));
         } else {
-          const unsynced = localRecordsForCorpo.filter((r) => r.synced === false);
-          setRecords(sortInductionTourRecordsDesc(unsynced));
+          setRecords(sortInductionTourRecordsDesc(localRecordsForCorpo));
         }
       } else {
         setRecords(sortInductionTourRecordsDesc(localRecordsForCorpo));

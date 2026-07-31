@@ -1,0 +1,15 @@
+id: F-003
+module_id: module-visibility
+severity: medium
+status: fixed
+file: apps/mobile/screens/ModuleVisibilityScreen.tsx
+lines: "38-40"
+category: navigation
+title: Pantalla sin guard de super-admin
+description: |
+  No valida employee.isSuperAdmin en screen.
+reproduction: |
+  1. Deep link a ModuleVisibility.
+impact: Usuario no admin ve pantalla (API PUT abierta).
+suggested_fix: |
+  Redirect si !isSuperAdmin.

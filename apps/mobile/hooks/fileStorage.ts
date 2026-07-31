@@ -101,12 +101,15 @@ export async function deleteFile(fileName: string): Promise<void> {
 /**
  * Eliminar todos los archivos en la raíz de `Paths.document` (no borra subdirectorios recursivamente).
  */
-export async function deleteAllFiles(): Promise<void> {
+export async function deleteAllFiles(preserveNames?: ReadonlySet<string>): Promise<void> {
   console.log('Deleting all files...');
   const entries = Paths.document.list();
   for (const entry of entries) {
     if (entry instanceof File) {
       if (entry.name === MAIN_STRUCTURE_CACHE_FILENAME) {
+        continue;
+      }
+      if (preserveNames?.has(entry.name)) {
         continue;
       }
       try {

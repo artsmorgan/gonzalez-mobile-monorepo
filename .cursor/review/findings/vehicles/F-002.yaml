@@ -1,0 +1,15 @@
+id: F-002
+module_id: vehicles
+severity: medium
+status: fixed
+file: apps/mobile/hooks/vehiclesFunctions.ts
+lines: "69-77"
+category: api
+title: Errores HTTP pierden mensaje servidor
+description: |
+  Generic Error on !response.ok.
+reproduction: |
+  1. Validación server falla.
+impact: Cola atascada sin causa visible.
+suggested_fix: |
+  Return server message in result.

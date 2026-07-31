@@ -15,6 +15,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -78,6 +79,24 @@ const EJECUTIVO_COORDINADOR_SLUG = 'coordinadores-ejecutivos';
 const EMPLEADO_EJECUTIVO_SLUG = 'empleados-ejecutivos';
 const MOBILE_VARIABLES_SLUG = 'variables-sistema';
 const TIPO_MANTENIMIENTO_ARTICULO_SLUG = 'tipos-mantenimiento-articulos';
+
+/** AsyncStorage keys used by other modules for nomenclador slugs edited here. */
+const NOMENCLATOR_SLUG_TO_CACHE_KEY: Record<string, string> = {
+  'categorias-mantenimiento': 'categoria_mantenimiento_cache',
+  'tipos-producto-no-conforme': 'tipos_producto_no_conforme_cache',
+  'tipo-documento': 'document_types_cache',
+  'clasificacion-incidentes': 'incidents_classifications_cache',
+  'categorias-novedades': 'categories_cache',
+  'tipo-activo-visitas': 'tipo_activos_cache',
+  'tipo-quejas-clientes': 'tipo_clientes_quejas_cache',
+  'tipo-quejas': 'tipo_quejas_cache',
+};
+
+async function syncNomenclatorDependentCache(slug: string, rows: unknown[]): Promise<void> {
+  const cacheKey = NOMENCLATOR_SLUG_TO_CACHE_KEY[slug];
+  if (!cacheKey || !Array.isArray(rows)) return;
+  await AsyncStorage.setItem(cacheKey, JSON.stringify(rows));
+}
 
 function normalizeBoolForPicker(value: string): string {
   const lower = value.trim().toLowerCase();
@@ -422,6 +441,7 @@ export default function NomencladoresScreen() {
 
         const rows = Array.isArray(data.data) ? data.data : [];
         setRecords(parseRecordsFromResponse(rows));
+        await syncNomenclatorDependentCache(type.slug, rows);
       } catch (error) {
         console.error('Error fetching nomenclators:', error);
         Alert.alert('Error', error instanceof Error ? error.message : 'No se pudieron cargar los registros');

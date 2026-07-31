@@ -27,8 +27,7 @@ export default function EmployeeProfileScreen() {
   const formatDate = (dateString: string) => {
     try {
       // Handle YYYY-MM-DD format
-      const date = new Date(dateString); // Add time to avoid timezone issues
-      console.log('date', date);
+      const date = new Date(dateString + 'T00:00:00');
       return date.getDate() + ' de ' + monthNames[date.getMonth()] + ' de ' + date.getFullYear();
     } catch (error) {
       console.log('error', error);

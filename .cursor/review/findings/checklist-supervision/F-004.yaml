@@ -1,0 +1,16 @@
+id: F-004
+module_id: checklist-supervision
+severity: medium
+status: fixed
+file: apps/server/app/api/checklist-supervision/[id]/route.ts
+lines: "405-408"
+category: api
+title: DELETE físico vs filtro isActive en cliente
+description: |
+  Servidor hard delete; cliente filtra isActive !== false.
+reproduction: |
+  1. Eliminar online.
+  2. Caché antigua en otro dispositivo.
+impact: Inconsistencia; delete offline puede fallar idempotentemente.
+suggested_fix: |
+  Soft delete o limpiar caché en DELETE.

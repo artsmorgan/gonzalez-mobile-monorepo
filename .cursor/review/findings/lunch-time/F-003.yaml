@@ -1,0 +1,17 @@
+id: F-003
+module_id: lunch-time
+severity: high
+status: fixed
+file: apps/mobile/screens/LunchTimeScreen.tsx
+lines: "142-151"
+category: offline
+title: useFocusEffect ignora temp_state pausado
+description: |
+  syncTimerFromTempState retorna si !running sin restaurar UI de timer pausado.
+reproduction: |
+  1. Pausar almuerzo.
+  2. Navegar fuera y volver.
+  3. UI no refleja pausa.
+impact: Estado inconsistente pantalla vs disco.
+suggested_fix: |
+  Restaurar branch running === false con tiempo restante y pausas.

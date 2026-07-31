@@ -92,7 +92,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: true, data: vehiculos_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-        return NextResponse.json({ message: errorMessage }, { status: 500 });
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -270,6 +270,6 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
-        return NextResponse.json({ message: errorMessage }, { status: 500 });
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

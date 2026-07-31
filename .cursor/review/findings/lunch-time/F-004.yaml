@@ -1,0 +1,16 @@
+id: F-004
+module_id: lunch-time
+severity: high
+status: fixed
+file: apps/mobile/screens/LunchTimeScreen.tsx
+lines: "1308-1328"
+category: validation
+title: Registro manual interpreta hora local como UTC
+description: |
+  Horas concatenadas con sufijo .000Z desplazan ~6h respecto a Costa Rica.
+reproduction: |
+  1. Registro manual 12:00.
+  2. Inspeccionar payload POST.
+impact: Tiempos incorrectos en Planillas.
+suggested_fix: |
+  Usar America/Costa_Rica sin Z o epoch de getHoraAccion.

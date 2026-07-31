@@ -71,7 +71,6 @@ import {
   previewRegistroVehiculosCorporativos,
   previewRevisionVehiculos,
   previewManualesPuesto,
-  purgeOldMobileReports,
   searchActaStructure,
   searchCorporateVehicles,
   searchAlmuerzoCedulas,
@@ -1936,17 +1935,6 @@ export default function ReportesScreen() {
       setIsOnline(ok);
     })();
   }, []);
-
-  useEffect(() => {
-    if (isOnline !== true) return;
-    void (async () => {
-      try {
-        await purgeOldMobileReports({ refreshAccessToken, logout });
-      } catch {
-        /* limpieza en segundo plano; no bloquear la pantalla */
-      }
-    })();
-  }, [isOnline, refreshAccessToken, logout]);
 
   const getOnline = useCallback(async () => {
     const s = await Network.getNetworkStateAsync();

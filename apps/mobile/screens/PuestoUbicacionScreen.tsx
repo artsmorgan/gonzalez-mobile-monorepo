@@ -931,7 +931,7 @@ export default function PuestoUbicacionScreen() {
                                                 <ThemedText style={styles.bitValue}>{deviceLocation.longitude.toFixed(6)}</ThemedText>
                                             </ThemedText>
                                             <ThemedText style={[styles.bitValue, { fontSize: 12, marginTop: 8, color: '#666' }]}>
-                                                Se actualiza automáticamente cada 15 segundos
+                                                Se actualiza automáticamente cada 30 segundos
                                             </ThemedText>
                                         </ThemedView>
                                     )}

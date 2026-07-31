@@ -1,0 +1,662 @@
+{
+  "version": 1,
+  "branch": "test-soft-001",
+  "baselineTag": "soft-001-baseline",
+  "variant": "lite",
+  "globalAllowedPaths": ["AGENTS.md"],
+  "modules": [
+    {
+      "id": "platform-auth",
+      "name": "Plataforma — Auth y sesión",
+      "priority": 0,
+      "menu": false,
+      "allowedPaths": [
+        "apps/mobile/contexts/AuthContext.tsx",
+        "apps/mobile/hooks/authedFetch.ts",
+        "apps/mobile/hooks/authedApiRequest.ts",
+        "apps/mobile/hooks/getValidAccessTokenOrLogout.ts",
+        "apps/mobile/hooks/getValidLegacyAccessTokenOrLogout.ts",
+        "apps/mobile/hooks/getValidPlanillasAccessTokenOrLogout.ts",
+        "apps/mobile/hooks/planillasTokenStorage.ts",
+        "apps/mobile/hooks/legacyAccessTokenRefresh.ts",
+        "apps/mobile/hooks/authMode.ts",
+        "apps/mobile/components/LoginForm.tsx",
+        "apps/mobile/components/PlanillasPasswordRevalidationModal.tsx",
+        "apps/mobile/screens/LoginScreen.tsx",
+        "apps/server/app/api/auth/**",
+        "apps/server/app/api/dynamic-prisma/auth/**",
+        "apps/server/utils/verifyAccessTokenByApi.ts",
+        "apps/server/utils/verifyMobileAccessToken.ts",
+        "apps/server/utils/planillasTokenService.ts",
+        "apps/server/utils/getPlanillasToken.ts",
+        "apps/server/utils/verifyPlanillasToken.ts"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "platform-offline-sync",
+      "name": "Plataforma — Sync offline",
+      "priority": 0,
+      "menu": false,
+      "allowedPaths": [
+        "apps/mobile/App.tsx",
+        "apps/mobile/constants/syncFlags.ts",
+        "apps/mobile/hooks/resolveAppConnectivity.ts",
+        "apps/mobile/hooks/getPendingSyncActions.ts",
+        "apps/mobile/hooks/eventBus.ts",
+        "apps/mobile/hooks/planillasPendingActions.ts",
+        "apps/mobile/hooks/updateServerTime.ts",
+        "apps/mobile/components/CacheSyncActionsOverlay.tsx"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "platform-lite-config",
+      "name": "Plataforma — Config Lite / EAS / Android",
+      "priority": 0,
+      "menu": false,
+      "allowedPaths": [
+        "apps/mobile/app.config.js",
+        "apps/mobile/eas.json",
+        "eas.json",
+        "apps/mobile/android/app/build.gradle",
+        "apps/mobile/android/app/src/main/AndroidManifest.xml",
+        "apps/mobile/android/app/src/main/java/**",
+        "apps/mobile/android/build.gradle",
+        "apps/mobile/android/settings.gradle"
+      ],
+      "dependsOn": []
+    },
+    {
+      "id": "employee-profile",
+      "name": "Perfil de Usuario",
+      "priority": 1,
+      "menu": true,
+      "screen": "EmployeeProfileScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/EmployeeProfileScreen.tsx",
+        "apps/mobile/components/EmployeeProfile.tsx",
+        "apps/server/app/api/empleados/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "marcar-ingreso-salida",
+      "name": "Marcar Ingreso/Salida",
+      "priority": 1,
+      "menu": true,
+      "screen": "MarcarIngresoSalidaScreen",
+      "storageKeys": ["attendance_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/MarcarIngresoSalidaScreen.tsx",
+        "apps/mobile/hooks/saveMarca.ts",
+        "apps/mobile/hooks/saveAbsentReason.ts",
+        "apps/mobile/hooks/attendanceActionsStorage.ts",
+        "apps/mobile/hooks/getHoraAccion.ts",
+        "apps/mobile/hooks/resolveDeviceCoordinates.ts",
+        "apps/server/app/api/attendance/**",
+        "apps/server/app/api/activities/marca/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "digital-signature",
+      "name": "Mi Firma Digital",
+      "priority": 1,
+      "menu": true,
+      "screen": "DigitalSignatureScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/DigitalSignatureScreen.tsx",
+        "apps/mobile/hooks/getCurrentUserDigitalSignature.ts",
+        "apps/mobile/hooks/saveManualSignature.ts",
+        "apps/server/app/api/digital-signature/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "jerarquia",
+      "name": "Jerarquía",
+      "priority": 1,
+      "menu": true,
+      "screen": "JerarquiaScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/JerarquiaScreen.tsx",
+        "apps/mobile/components/JerarquiaModule.tsx",
+        "apps/mobile/components/HierarchyPickerFields.tsx",
+        "apps/mobile/components/HierarchySearchModal.tsx",
+        "apps/mobile/hooks/mainStructureApi.ts",
+        "apps/mobile/hooks/mainStructureCacheStorage.ts",
+        "apps/mobile/hooks/mainStructureFragmentsStorage.ts",
+        "apps/mobile/hooks/mergeMainStructureFragments.ts",
+        "apps/mobile/hooks/useLocalMainStructureTree.ts",
+        "apps/mobile/hooks/hierarchySearch.ts",
+        "apps/server/app/api/main-structure/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "module-visibility",
+      "name": "Visibilidad de módulos",
+      "priority": 5,
+      "menu": true,
+      "screen": "ModuleVisibilityScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/ModuleVisibilityScreen.tsx",
+        "apps/mobile/hooks/getModulesRelease.ts",
+        "apps/mobile/components/SlideMenu.tsx",
+        "apps/server/app/api/modules-release/**",
+        "apps/server/app/api/cambios-apps-modules/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "lunch-time",
+      "name": "Tiempo de alimentación",
+      "priority": 1,
+      "menu": true,
+      "screen": "LunchTimeScreen",
+      "storageKeys": ["lunch_time_actions", "lunch_time_horario_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/LunchTimeScreen.tsx",
+        "apps/mobile/hooks/saveLunchTime.ts",
+        "apps/mobile/hooks/lunchTimeMarcaHierarchy.ts",
+        "apps/server/app/api/lunch-time/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "puesto-ubicacion",
+      "name": "Ubicación del puesto",
+      "priority": 1,
+      "menu": true,
+      "screen": "PuestoUbicacionScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/PuestoUbicacionScreen.tsx",
+        "apps/mobile/hooks/updateLastLocation.ts",
+        "apps/mobile/hooks/resolveDeviceCoordinates.ts",
+        "apps/server/app/api/puestos/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "permit-request",
+      "name": "Solicitud de permiso",
+      "priority": 1,
+      "menu": true,
+      "screen": "PermitRequestScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/PermitRequestScreen.tsx",
+        "apps/mobile/screens/PermitRequestScreenV2.tsx",
+        "apps/mobile/hooks/evaluationFunctions.ts",
+        "apps/server/app/api/permit-request/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "mutuos-acuerdos",
+      "name": "Mutuos acuerdos",
+      "priority": 1,
+      "menu": true,
+      "screen": "MutuosAcuerdosScreen",
+      "storageKeys": ["mutuos_acuerdos_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/MutuosAcuerdosScreen.tsx",
+        "apps/mobile/hooks/mutuosAcuerdosFunctions.ts",
+        "apps/mobile/hooks/mutuosAcuerdosStorage.ts",
+        "apps/mobile/hooks/mutuosAcuerdosTypes.ts",
+        "apps/server/app/api/mutuos-acuerdos/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "entrega-puestos",
+      "name": "Entrega de puestos",
+      "priority": 1,
+      "menu": true,
+      "screen": "EntregaPuestosScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/EntregaPuestosScreen.tsx",
+        "apps/server/app/api/entrega-puestos/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "nomencladores",
+      "name": "Nomencladores",
+      "priority": 1,
+      "menu": true,
+      "screen": "NomencladoresScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/NomencladoresScreen.tsx",
+        "apps/mobile/hooks/updateNomenclator.ts",
+        "apps/server/app/api/nomenclators/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "mantenimiento-equipo",
+      "name": "Mantenimiento de equipo",
+      "priority": 1,
+      "menu": true,
+      "screen": "MantenimientoEquipoScreen",
+      "storageKeys": [
+        "articulo_mantenimiento_actions",
+        "articulo_mantenimiento_delete_archivo_actions",
+        "movimientos_articulos_mantenimiento_actions"
+      ],
+      "allowedPaths": [
+        "apps/mobile/screens/MantenimientoEquipoScreen.tsx",
+        "apps/mobile/components/ArticuloMantenimientoArchivosModal.tsx",
+        "apps/mobile/hooks/mantenimientoEquipoMainStructureSync.ts",
+        "apps/mobile/hooks/mantenimientoEquipoPuestoArticulosCache.ts",
+        "apps/mobile/hooks/mantenimientoEquipoBulkArticulos.ts",
+        "apps/mobile/hooks/mantenimientoEquipoPlantillaLocal.ts",
+        "apps/mobile/hooks/movimientosArticulosMantenimientoFunctions.ts",
+        "apps/mobile/hooks/movimientosActivosMantenimientoFunctions.ts",
+        "apps/mobile/hooks/puestoArticulosSync.ts",
+        "apps/mobile/hooks/prioritizePlanByArticuloNomencladorId.ts",
+        "apps/server/app/api/mantenimiento-equipo/**",
+        "apps/server/app/api/articulo-mantenimiento/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "checklist-supervision",
+      "name": "Checklist supervisión",
+      "priority": 1,
+      "menu": true,
+      "screen": "ChecklistSupervisionScreen",
+      "storageKeys": ["checklist_supervision_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/ChecklistSupervisionScreen.tsx",
+        "apps/mobile/hooks/checklistSupervisionFunctions.ts",
+        "apps/mobile/hooks/checklistSupervisionCacheStorage.ts",
+        "apps/mobile/hooks/checklistSupervisionEvaluationFiles.ts",
+        "apps/server/app/api/checklist-supervision/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "activities",
+      "name": "Actividades",
+      "priority": 1,
+      "menu": true,
+      "screen": "ActivitiesScreen",
+      "storageKeys": ["activities_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/ActivitiesScreen.tsx",
+        "apps/mobile/hooks/activitiesFunctions.ts",
+        "apps/server/app/api/activities/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "traslado-plazas",
+      "name": "Traslado de plazas",
+      "priority": 1,
+      "menu": true,
+      "screen": "TrasladoPlazasScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/TrasladoPlazasScreen.tsx",
+        "apps/mobile/hooks/evaluationFunctions.ts",
+        "apps/server/app/api/traslado-plaza/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "attendance-control",
+      "name": "Control de asistencia",
+      "priority": 1,
+      "menu": true,
+      "screen": "AttendanceControlScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/AttendanceControlScreen.tsx",
+        "apps/server/app/api/attendance-control/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "acta-entrega-productos",
+      "name": "Acta entrega productos",
+      "priority": 2,
+      "menu": true,
+      "screen": "ActaEntregaProductosScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/ActaEntregaProductosScreen.tsx",
+        "apps/mobile/hooks/actaEntregaProductosCache.ts",
+        "apps/mobile/hooks/actaEntregaProductosImagesSync.ts",
+        "apps/mobile/hooks/evaluationFunctions.ts",
+        "apps/server/app/api/acta-entrega-productos/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "physical-minute-agenda",
+      "name": "Agenda / minuta física",
+      "priority": 2,
+      "menu": true,
+      "screen": "PhysicalMinuteAgendaScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/PhysicalMinuteAgendaScreen.tsx",
+        "apps/mobile/hooks/agendaMinutaCacheHelpers.ts",
+        "apps/server/app/api/physical-minute-agenda/**",
+        "apps/server/app/api/agenda-minuta/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "opening-closing-position",
+      "name": "Apertura / cierre de puesto",
+      "priority": 2,
+      "menu": true,
+      "screen": "OpeningClosingPositionScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/OpeningClosingPositionScreen.tsx",
+        "apps/mobile/hooks/openingClosingPositionCacheHelpers.ts",
+        "apps/mobile/hooks/openingClosingPositionFilesSync.ts",
+        "apps/server/app/api/opening-closing-position/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "apreciacion-vulnerabilidad",
+      "name": "Apreciación vulnerabilidad",
+      "priority": 2,
+      "menu": true,
+      "screen": "ApreciacionVulnerabilidadScreen",
+      "storageKeys": ["apreciacion_vulnerabilidad_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/ApreciacionVulnerabilidadScreen.tsx",
+        "apps/mobile/hooks/apreciacionVulnerabilidadFunctions.ts",
+        "apps/mobile/hooks/apreciacionVulnerabilidadFilesSync.ts",
+        "apps/server/app/api/apreciacion-vulnerabilidad/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "notes",
+      "name": "Notas",
+      "priority": 2,
+      "menu": true,
+      "screen": "NotesScreen",
+      "storageKeys": ["notes_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/NotesScreen.tsx",
+        "apps/mobile/hooks/notesFunctions.ts",
+        "apps/mobile/hooks/notesCacheHelpers.ts",
+        "apps/mobile/hooks/notesFilesSync.ts",
+        "apps/server/app/api/puestos/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "documentos-entregados",
+      "name": "Documentos entregados",
+      "priority": 2,
+      "menu": true,
+      "screen": "DocumentosEntregadosScreen",
+      "storageKeys": ["documentos_entregados_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/DocumentosEntregadosScreen.tsx",
+        "apps/mobile/hooks/documentosEntregadosFunctions.ts",
+        "apps/mobile/hooks/documentosEntregadosCacheHelpers.ts",
+        "apps/server/app/api/documentos-entregados/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "surveys",
+      "name": "Encuestas satisfacción",
+      "priority": 2,
+      "menu": true,
+      "screen": "SatisfactionSurveysScreen",
+      "storageKeys": ["surveys_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/SatisfactionSurveysScreen.tsx",
+        "apps/mobile/hooks/surveysFunctions.ts",
+        "apps/mobile/hooks/satisfactionSurveysCacheHelpers.ts",
+        "apps/server/app/api/encuesta-nps/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "staffEvaluations",
+      "name": "Evaluaciones personal",
+      "priority": 2,
+      "menu": true,
+      "screen": "StaffEvaluationsScreen",
+      "storageKeys": ["evaluations_staff_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/StaffEvaluationsScreen.tsx",
+        "apps/mobile/hooks/staffEvaluationsFunctions.ts",
+        "apps/mobile/hooks/staffEvaluationsCacheHelpers.ts",
+        "apps/mobile/hooks/staffEvaluationsMediaSync.ts",
+        "apps/server/app/api/evaluation/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "incidents",
+      "name": "Incidentes",
+      "priority": 2,
+      "menu": true,
+      "screen": "IncidentsScreen",
+      "storageKeys": ["incidents_actions", "incident_contributions_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/IncidentsScreen.tsx",
+        "apps/mobile/hooks/incidentsFunctions.ts",
+        "apps/mobile/hooks/incidentsStorage.ts",
+        "apps/mobile/hooks/incidentsTypes.ts",
+        "apps/mobile/hooks/incidentsArchivosSync.ts",
+        "apps/server/app/api/incidents/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "llaves",
+      "name": "Llaves",
+      "priority": 3,
+      "menu": true,
+      "screen": "LlavesScreen",
+      "storageKeys": [
+        "llaves_actions",
+        "movimientos_llaves_actions",
+        "llaveros_actions",
+        "movimientos_llaveros_actions"
+      ],
+      "allowedPaths": [
+        "apps/mobile/screens/LlavesScreen.tsx",
+        "apps/mobile/hooks/llavesFunctions.ts",
+        "apps/mobile/hooks/llavesCacheHelpers.ts",
+        "apps/mobile/hooks/llavesMainStructureHelpers.ts",
+        "apps/mobile/hooks/llaverosFunctions.ts",
+        "apps/mobile/hooks/llaverosCacheHelpers.ts",
+        "apps/mobile/hooks/movimientosLlavesFunctions.ts",
+        "apps/mobile/hooks/movimientosLlaverosFunctions.ts",
+        "apps/server/app/api/llaves/**",
+        "apps/server/app/api/llaveros/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "complaints-master",
+      "name": "Maestro de quejas",
+      "priority": 2,
+      "menu": true,
+      "screen": "ComplaintsMasterScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/ComplaintsMasterScreen.tsx",
+        "apps/mobile/hooks/complaintsMasterCacheStorage.ts",
+        "apps/mobile/hooks/complaintsMasterFilesSync.ts",
+        "apps/server/app/api/complaints-master/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "job-manuals",
+      "name": "Manuales de trabajo",
+      "priority": 2,
+      "menu": true,
+      "screen": "JobManualsScreen",
+      "storageKeys": ["job_manuals_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/JobManualsScreen.tsx",
+        "apps/mobile/hooks/jobManualsFunctions.ts",
+        "apps/mobile/hooks/jobManualsCacheHelpers.ts",
+        "apps/mobile/hooks/jobManualsQueueUtils.ts",
+        "apps/server/app/api/job-manuals/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "voice-notes",
+      "name": "Notas de voz",
+      "priority": 2,
+      "menu": true,
+      "screen": "VoiceNotesScreen",
+      "storageKeys": ["voice_notes_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/VoiceNotesScreen.tsx",
+        "apps/mobile/hooks/voiceNotesFunctions.ts",
+        "apps/mobile/hooks/voiceNotesCacheHelpers.ts",
+        "apps/server/app/api/voice-notes/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "non-conforming-product",
+      "name": "Producto no conforme",
+      "priority": 2,
+      "menu": true,
+      "screen": "NonConformingProductScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/NonConformingProductScreen.tsx",
+        "apps/mobile/hooks/nonConformingProductCacheHelpers.ts",
+        "apps/server/app/api/non-conforming-product/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "trainings",
+      "name": "Capacitaciones",
+      "priority": 2,
+      "menu": true,
+      "screen": "TrainingsScreen",
+      "storageKeys": ["trainings_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/TrainingsScreen.tsx",
+        "apps/mobile/hooks/trainingFunctions.ts",
+        "apps/mobile/hooks/trainingsCacheHelpers.ts",
+        "apps/mobile/hooks/trainingAttachmentsSync.ts",
+        "apps/server/app/api/training/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "induction-tour-record",
+      "name": "Inducción recorrido",
+      "priority": 2,
+      "menu": true,
+      "screen": "InductionTourRecordScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/InductionTourRecordScreen.tsx",
+        "apps/server/app/api/induction-tour-record/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "visitors",
+      "name": "Visitantes",
+      "priority": 2,
+      "menu": true,
+      "screen": "VisitorsScreen",
+      "storageKeys": ["visitors_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/VisitorsScreen.tsx",
+        "apps/mobile/hooks/visitorsFunctions.ts",
+        "apps/mobile/hooks/visitorsCacheHelpers.ts",
+        "apps/server/app/api/visitors/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "corporate-vehicles",
+      "name": "Vehículos corporativos",
+      "priority": 3,
+      "menu": true,
+      "screen": "CorporateVehiclesScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/CorporateVehiclesScreen.tsx",
+        "apps/mobile/hooks/corporateVehiclesMainStructure.ts",
+        "apps/mobile/hooks/corporateVehiclesCorpoCache.ts",
+        "apps/mobile/hooks/corporateEvaluationsSync.ts",
+        "apps/mobile/hooks/evaluationFunctions.ts",
+        "apps/server/app/api/corporate-vehicles/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "general-induction-register",
+      "name": "Registro inducción general",
+      "priority": 3,
+      "menu": true,
+      "screen": "GeneralInductionRegisterScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/GeneralInductionRegisterScreen.tsx",
+        "apps/mobile/hooks/generalInductionRegisterCache.ts",
+        "apps/server/app/api/general-induction-register/**"
+      ],
+      "dependsOn": ["platform-auth"]
+    },
+    {
+      "id": "bitacora-vehiculos-detenidos",
+      "name": "Bitácora vehículos detenidos",
+      "priority": 3,
+      "menu": true,
+      "screen": "BitacoraVehiculosDetenidosScreen",
+      "storageKeys": ["bitacora_vehiculo_detenido_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/BitacoraVehiculosDetenidosScreen.tsx",
+        "apps/mobile/hooks/bitacoraVehiculoDetenidoFunctions.ts",
+        "apps/mobile/hooks/bitacoraVehiculoDetenidoCacheStorage.ts",
+        "apps/mobile/hooks/bitacoraMainStructureCache.ts",
+        "apps/mobile/hooks/bitacoraRevisionMediaSync.ts",
+        "apps/server/app/api/bitacora-vehiculo-detenido/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "vehicles",
+      "name": "Visitas de vehículos",
+      "priority": 2,
+      "menu": true,
+      "screen": "VehiclesScreen",
+      "storageKeys": ["vehicles_actions"],
+      "allowedPaths": [
+        "apps/mobile/screens/VehiclesScreen.tsx",
+        "apps/mobile/hooks/vehiclesFunctions.ts",
+        "apps/mobile/hooks/vehiclesVisitasCacheHelpers.ts",
+        "apps/server/app/api/vehicles/**"
+      ],
+      "dependsOn": ["platform-auth", "platform-offline-sync"]
+    },
+    {
+      "id": "reportes",
+      "name": "Reportes",
+      "priority": 4,
+      "menu": true,
+      "screen": "ReportesScreen",
+      "allowedPaths": [
+        "apps/mobile/screens/ReportesScreen.tsx",
+        "apps/mobile/hooks/reportesFunctions.ts",
+        "apps/server/app/api/reportes/**",
+        "apps/server/utils/reports-functions/**",
+        "apps/server/utils/reportWorkerSchedule.ts",
+        "apps/server/utils/runMobileReportJob.ts",
+        "apps/server/utils/runReportJobCycle.ts",
+        "apps/server/scripts/reportWorker.ts"
+      ],
+      "dependsOn": ["platform-auth"]
+    }
+  ]
+}
