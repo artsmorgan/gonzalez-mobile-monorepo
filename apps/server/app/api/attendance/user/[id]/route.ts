@@ -93,7 +93,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     "Authorization": `Bearer ${planillasToken}`
                 },
                 params: {
-                    empleado_codigo: empleado.cedula,
+                    empleado_codigo: empleado.codigo,
                     fecha: date_while.toISOString().split("T")[0],
                 }
             });
@@ -142,7 +142,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                         "Authorization": `Bearer ${planillasToken}`
                     },
                     params: {
-                        empleado_codigo: empleado.cedula,
+                        empleado_codigo: empleado.codigo,
                         fecha: date_while.toISOString().split("T")[0],
                     }
                 });
