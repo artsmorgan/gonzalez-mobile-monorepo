@@ -3,6 +3,25 @@
     "version": ">= 3.20.0"
   },
   "build": {
+    "preview": {
+      "extends": "preview-lite",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
+    "preview-lite": {
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleLiteRelease"
+      },
+      "env": {
+        "APP_VARIANT": "lite"
+      }
+    },
     "preview-full": {
       "android": {
         "buildType": "apk",
@@ -12,7 +31,8 @@
         "APP_VARIANT": "full"
       }
     },
-    "preview-lite": {
+    "production": {
+      "extends": "production-lite",
       "android": {
         "buildType": "apk",
         "gradleCommand": ":app:assembleLiteRelease"

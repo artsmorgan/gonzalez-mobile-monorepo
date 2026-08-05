@@ -8,6 +8,7 @@ import { sanitizeArticulosPuestoForPersistence } from "../../../utils/sanitizeAr
 import { processEntregaPuestosArticulosMantenimiento } from "./articulosMantenimiento";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { v4 as uuidv4 } from "uuid";
+import axios from "axios";
 
 export const runtime = "nodejs";
 
@@ -181,6 +182,16 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
+        const planillasToken =
+            decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "").trim() ||
+            null;
+        if (!planillasToken) {
+            return NextResponse.json(
+                { status: false, message: "Token de Planillas requerido" },
+                { status: 401 }
+            );
+        }
+
         const marca = await prisma.c_marca_dia.findUnique({
             where: { id: parseInt(marcaId) },
         });
@@ -269,7 +280,12 @@ export async function GET(req: NextRequest) {
             return NextResponse.json({ status: false, message: "No se encontró el registro anterior" }, { status: 200 });
         }
 
-        let previous_employee = { id: 0, nombre: "Desconocido" };
+        let previous_employee: {
+            id: number;
+            nombre: string;
+            codigo?: string | null;
+            foto?: string | null;
+        } = { id: 0, nombre: "Desconocido", codigo: null, foto: null };
         if (marcaAnterior.empleadoFijo_id) {
             const empleado_bd = await prisma.c_empleado.findUnique({
                 where: { id: marcaAnterior.empleadoFijo_id },
@@ -278,7 +294,26 @@ export async function GET(req: NextRequest) {
                 previous_employee = {
                     id: empleado_bd.id,
                     nombre: (empleado_bd.nombre || "") + " " + (empleado_bd.primer_apellido || "") + " " + (empleado_bd.segundo_apellido || ""),
+                    codigo: empleado_bd.codigo ?? null,
+                    foto: null,
                 };
+
+                try {
+                    const planillasUrl = process.env.PLANILLAS_URL;
+                    const codigo = String(empleado_bd.codigo ?? "").trim();
+                    if (planillasUrl && codigo) {
+                        const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${codigo}/foto`;
+                        const fotoRes = await axios.get(url, {
+                            headers: { Authorization: `Bearer ${planillasToken}` },
+                            validateStatus: () => true,
+                        });
+                        if (fotoRes.status === 200 && fotoRes.data?.success) {
+                            previous_employee.foto = fotoRes.data?.data?.imagen?.base64 ?? null;
+                        }
+                    }
+                } catch (fotoError) {
+                    console.error("Error obteniendo foto de quien entrega (Planillas):", fotoError);
+                }
             }
         }
 
@@ -705,12 +740,7 @@ export async function POST(req: NextRequest) {
         }
 
         const imageReceivesRaw = stripBase64Payload(image_receives);
-        if (!imageReceivesRaw) {
-            return NextResponse.json({
-                status: false,
-                message: "La foto de quien recibe es obligatoria",
-            }, { status: 400 });
-        }
+        const imageDeliveryRaw = !isSelfDelivery ? stripBase64Payload(image_delivery) : "";
 
         if (!isSelfDelivery && !oficial_entrega) {
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
@@ -839,11 +869,10 @@ export async function POST(req: NextRequest) {
         const horaEntradaRecibeISO = new Date(horaEntradaRecibeParsed).toISOString();
         const horaSalidaRecibeISO = new Date(horaSalidaRecibeParsed).toISOString();
 
-        const imageReceivesFileName = buildEntregaImageFileName();
-        const imageDeliveryRaw = !isSelfDelivery ? stripBase64Payload(image_delivery) : "";
+        const imageReceivesFileName = imageReceivesRaw ? buildEntregaImageFileName() : null;
         const imageDeliveryFileName = imageDeliveryRaw ? buildEntregaImageFileName() : null;
 
-        // Crear el registro (incluye nombres UUID de las imágenes)
+        // Crear el registro (incluye nombres UUID de las imágenes cuando existen)
         const nuevoRegistro = await callDynamicPrisma({
             req,
             data: {
@@ -884,20 +913,23 @@ export async function POST(req: NextRequest) {
             const registroId = Number((nuevoRegistro as { id?: number })?.id || 0);
             if (registroId > 0) {
                 try {
-                    const filesToUpload: { name: string; file_base64: string }[] = [
-                        { name: imageReceivesFileName, file_base64: imageReceivesRaw },
-                    ];
+                    const filesToUpload: { name: string; file_base64: string }[] = [];
+                    if (imageReceivesFileName && imageReceivesRaw) {
+                        filesToUpload.push({ name: imageReceivesFileName, file_base64: imageReceivesRaw });
+                    }
                     if (imageDeliveryFileName && imageDeliveryRaw) {
                         filesToUpload.push({
                             name: imageDeliveryFileName,
                             file_base64: imageDeliveryRaw,
                         });
                     }
-                    await uploadEntregaPuestosIdentityImages({
-                        req,
-                        registroId,
-                        files: filesToUpload,
-                    });
+                    if (filesToUpload.length > 0) {
+                        await uploadEntregaPuestosIdentityImages({
+                            req,
+                            registroId,
+                            files: filesToUpload,
+                        });
+                    }
                 } catch (imageError: unknown) {
                     const imageMsg =
                         imageError instanceof Error ? imageError.message : "Error al subir imágenes";

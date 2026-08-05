@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Modal, View, Platform, Image } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -30,6 +30,8 @@ import {
   serializeArticulosPuestoForStorage,
 } from '@/utils/articuloMantenimientoFiles';
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
+import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -80,6 +82,9 @@ interface EntregaPuestosInfo {
   previous_employee: {
     id: number;
     nombre: string;
+    codigo?: string | null;
+    /** Base64 (o data-URL) de la foto de Planillas del oficial que entrega. */
+    foto?: string | null;
   };
   incidentes: Array<{
     id: number;
@@ -341,6 +346,41 @@ export default function EntregaPuestosScreen() {
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
   const [isStructureLoading, setIsStructureLoading] = useState(false);
 
+  const planillasRevalidationModalShownRef = useRef(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const pendingPlanillasLoadRef = useRef(false);
+  const loadDataRef = useRef<() => Promise<void>>(async () => {});
+
+  const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+    return false;
+  }, []);
+
+  const handlePlanillasRevalidationSuccess = useCallback(() => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    if (pendingPlanillasLoadRef.current) {
+      pendingPlanillasLoadRef.current = false;
+      void loadDataRef.current();
+    }
+  }, []);
+
+  const handlePlanillasRevalidationDismiss = useCallback(() => {
+    planillasRevalidationModalShownRef.current = false;
+    pendingPlanillasLoadRef.current = false;
+    setShowPlanillasRevalidationModal(false);
+    setIsLoading(false);
+    setError('Se requiere un token de Planillas válido para cargar la entrega de puestos');
+  }, []);
+
   const getConnectionStatus = async (): Promise<boolean> => {
     const networkState = await Network.getNetworkStateAsync();
 
@@ -570,6 +610,18 @@ export default function EntregaPuestosScreen() {
         return;
       }
 
+      const horaAccion = await getHoraAccion();
+      const referenceMs = Number(horaAccion) || Date.now();
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasLoadRef.current = true;
+        // Mantener loading hasta que el usuario renueve el token o cancele
+        return;
+      }
+
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+      const planillasToken = planillasTokenCheck.token;
+
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (!apiUrl) {
         throw new Error('Server URL not configured');
@@ -580,6 +632,7 @@ export default function EntregaPuestosScreen() {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
+            'Planillas-Token': encodeURIComponent(planillasToken ?? ''),
           },
         },
         refreshAccessToken,
@@ -654,7 +707,11 @@ export default function EntregaPuestosScreen() {
   };
 
   useEffect(() => {
-    loadData();
+    loadDataRef.current = loadData;
+  });
+
+  useEffect(() => {
+    void loadData();
   }, []);
 
   const isTimeParsable = (value: string | Date | null | undefined): boolean => {
@@ -908,11 +965,6 @@ export default function EntregaPuestosScreen() {
       return;
     }
 
-    if (!photoRecibeBase64) {
-      Alert.alert('Error', 'Debe tomar la foto de quien recibe');
-      return;
-    }
-
     Alert.alert(
       'Confirmar',
       '¿Desea guardar el registro de entrega de puesto?',
@@ -1006,7 +1058,7 @@ export default function EntregaPuestosScreen() {
                 firma_recibe: firmaRecibe,
                 firma_entrega: isSelfDelivery ? null : (firmaEntrega || null),
                 firma_responsable: firmaResponsable,
-                image_receives: photoRecibeBase64,
+                image_receives: photoRecibeBase64 || null,
                 image_delivery: isSelfDelivery ? null : (photoEntregaBase64 || null),
                 marca_id: marcaRecibeId,
               };
@@ -1195,12 +1247,33 @@ export default function EntregaPuestosScreen() {
     { label: 'Turno', value: getTurnoLabel(currentMarca.tipo_turno) },
   ];
 
-  const renderLecturaCard = (title: string, iconName: 'arrow-up-circle-outline' | 'arrow-down-circle-outline', data: Array<{ label: string; value: string }>) => (
+  const entregaProfilePhotoUri = (() => {
+    const raw = String(info?.previous_employee?.foto ?? '').trim();
+    if (!raw) return '';
+    if (raw.startsWith('data:')) return raw;
+    return `data:image/jpeg;base64,${raw}`;
+  })();
+
+  const renderLecturaCard = (
+    title: string,
+    iconName: 'arrow-up-circle-outline' | 'arrow-down-circle-outline',
+    data: Array<{ label: string; value: string }>,
+    profilePhotoUri?: string,
+  ) => (
     <ThemedView style={styles.readingCard}>
       <ThemedView style={styles.readingCardHeader}>
         <Ionicons name={iconName} size={18} color="#007AFF" />
         <ThemedText style={styles.readingCardTitle}>{title}</ThemedText>
       </ThemedView>
+      {profilePhotoUri ? (
+        <View style={styles.entregaProfilePhotoWrap}>
+          <Image
+            source={{ uri: profilePhotoUri }}
+            style={styles.entregaProfilePhoto}
+            resizeMode="cover"
+          />
+        </View>
+      ) : null}
       <ThemedView style={styles.readingCardDetails}>
         {data.map((item) => (
           <ThemedView key={`${title}-${item.label}`} style={styles.readingCardRow}>
@@ -1480,7 +1553,14 @@ export default function EntregaPuestosScreen() {
                 </ThemedView>
               ) : null}
               <ThemedView style={styles.readingCardsContainer}>
-                {!isSelfDelivery ? renderLecturaCard('Entrega', 'arrow-up-circle-outline', dataLecturaEntrega) : null}
+                {!isSelfDelivery
+                  ? renderLecturaCard(
+                      'Entrega',
+                      'arrow-up-circle-outline',
+                      dataLecturaEntrega,
+                      entregaProfilePhotoUri || undefined,
+                    )
+                  : null}
                 {renderLecturaCard('Recibe', 'arrow-down-circle-outline', dataLecturaRecibe)}
               </ThemedView>
             </ThemedView>
@@ -1680,8 +1760,8 @@ export default function EntregaPuestosScreen() {
               numberOfLines={4}
             />
 
-            {/* Foto quien recibe (obligatoria) */}
-            <ThemedText style={styles.sectionTitle}>Foto de quien recibe *</ThemedText>
+            {/* Foto quien recibe (opcional) */}
+            <ThemedText style={styles.sectionTitle}>Foto de quien recibe (opcional)</ThemedText>
             <ThemedView style={styles.signatureButtons}>
               <TouchableOpacity
                 style={styles.signatureButton}
@@ -2145,6 +2225,13 @@ export default function EntregaPuestosScreen() {
         onHomePress={handleHomePress}
         currentRoute="EntregaPuestos"
       />
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
+      />
       {QRScannerComponent}
     </ThemedView >
   );
@@ -2216,6 +2303,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 8,
+  },
+  entregaProfilePhotoWrap: {
+    alignSelf: 'center',
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 3,
+    borderColor: '#007AFF',
+    overflow: 'hidden',
+    backgroundColor: '#F2F2F7',
+    marginBottom: 10,
+  },
+  entregaProfilePhoto: {
+    width: '100%',
+    height: '100%',
   },
   readingCardTitle: {
     fontSize: 16,

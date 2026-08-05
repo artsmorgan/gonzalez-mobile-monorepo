@@ -1191,3 +1191,49 @@ export async function createReportJob(params: {
   if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
   return { status: true, message: j.message, data: j.data };
 }
+
+export async function createReportePuesto(params: {
+  body: Record<string, unknown>;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; message?: string; data?: any }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'createReportePuesto', ...params.body }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, message: j.message, data: j.data };
+}
+
+export async function listReportesPuesto(params: {
+  body: Record<string, unknown>;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}): Promise<{ status: boolean; data?: any[]; message?: string }> {
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+  if (!apiUrl) return { status: false, message: 'Server URL not configured' };
+  const res = await authedFetch({
+    url: `${apiUrl}/api/reportes`,
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: 'listReportesPuesto', ...params.body }),
+    },
+    refreshAccessToken: params.refreshAccessToken,
+    logout: params.logout,
+  });
+  if (!res) return { status: false, message: 'Sesión expirada' };
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok || !j.status) return { status: false, message: j.message || `HTTP ${res.status}` };
+  return { status: true, data: j.data };
+}

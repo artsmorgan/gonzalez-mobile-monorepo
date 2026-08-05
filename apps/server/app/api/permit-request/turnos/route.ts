@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
 
     const data = await getPermitTurnosFromPlanillasRange({
       planillasToken,
-      empleadoCedula: String(empleado.cedula || ""),
+      empleadoCodigo: String(empleado.codigo || ""),
       fechaInicio: new Date(fechaInicio),
       fechaFin: new Date(fechaFin),
       plazaId: plazaId != null && !Number.isNaN(plazaId) ? plazaId : null,

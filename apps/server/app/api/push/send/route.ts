@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import {
+  type SendPushResult,
   sendPushToEmpleado,
   sendPushToEmpleados,
   sendPushToPlazas,
@@ -21,11 +22,16 @@ import {
  * }
  */
 export async function POST(req: NextRequest) {
+  console.log("[push/send] request received");
   try {
-    const { valid, expired, message } = await verifyAccessTokenByApi(req);
+    const {
+      valid,
+      expired,
+      message: authMessage,
+    } = await verifyAccessTokenByApi(req);
     if (!valid) {
       return NextResponse.json(
-        { status: false, expired, message },
+        { status: false, expired, message: authMessage },
         { status: expired ? 401 : 403 }
       );
     }
@@ -51,7 +57,12 @@ export async function POST(req: NextRequest) {
 
     const params = { title, body: pushBody, data, channelId: channelId as "general" | "procesos" };
 
-    let result = { sent: 0, failed: 0 };
+    let result: SendPushResult = {
+      sent: 0,
+      failed: 0,
+      tokensTargeted: 0,
+      firebaseConfigured: true,
+    };
 
     if (body?.empleado_id != null && body?.plaza_id != null) {
       result = await sendPushToEmpleado(req, Number(body.empleado_id), {
@@ -76,9 +87,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const ok =
+      result.firebaseConfigured &&
+      result.tokensTargeted > 0 &&
+      result.sent > 0 &&
+      result.failed === 0;
+
+    let responseMessage = "Push enviado";
+    if (!result.firebaseConfigured) {
+      responseMessage =
+        "Firebase Admin no configurado en este servidor (revisa FIREBASE_* en el entorno donde corre la API)";
+    } else if (result.tokensTargeted === 0) {
+      responseMessage = "No hay tokens FCM activos para el destinatario indicado";
+    } else if (result.sent === 0 && result.failed > 0) {
+      responseMessage =
+        "FCM rechazó todos los tokens (¿service account de otro proyecto Firebase que google-services.json?)";
+    } else if (result.failed > 0) {
+      responseMessage = "Push parcial: algunos tokens fallaron";
+    }
+
+    console.log("[push/send]", {
+      ok,
+      responseMessage,
+      ...result,
+    });
     return NextResponse.json({
-      status: true,
-      message: "Push enviado",
+      status: ok,
+      message: responseMessage,
       ...result,
     });
   } catch (error: unknown) {

@@ -25,6 +25,7 @@ import { useNavigation } from '@react-navigation/native';
 import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
+import ReportesPuestoModal from '../components/ReportesPuestoModal';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import { useAuth } from '../contexts/AuthContext';
@@ -1337,6 +1338,7 @@ export default function ReportesScreen() {
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
 
   const [modalVisible, setModalVisible] = useState(false);
+  const [puestoModalVisible, setPuestoModalVisible] = useState(false);
   const [formNombre, setFormNombre] = useState('');
   const [formNumero, setFormNumero] = useState('');
   const [formNomenclatura, setFormNomenclatura] = useState('');
@@ -7045,6 +7047,11 @@ export default function ReportesScreen() {
             <ThemedText style={styles.attachButtonText}>Nuevo reporte (formulario)</ThemedText>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.attachButton} onPress={() => setPuestoModalVisible(true)} activeOpacity={0.85}>
+            <Ionicons name="business-outline" size={22} color="#007AFF" />
+            <ThemedText style={styles.attachButtonText}>Reportes por puesto</ThemedText>
+          </TouchableOpacity>
+
           <ThemedText style={styles.sectionTitle}>Resultados</ThemedText>
           {reportes.length > 1 ? (
             <TouchableOpacity
@@ -10479,6 +10486,15 @@ export default function ReportesScreen() {
           </ThemedView>
         </View>
       </Modal>
+
+      <ReportesPuestoModal
+        visible={puestoModalVisible}
+        onClose={() => setPuestoModalVisible(false)}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        employee={employee}
+        onCreated={() => void loadLista()}
+      />
 
       {QRScannerComponent}
     </ThemedView>

@@ -1,5 +1,6 @@
 import { File, Paths } from 'expo-file-system';
 import { MAIN_STRUCTURE_CACHE_FILENAME } from './mainStructureCacheStorage';
+import { isEmployeeProfilePhotoFileName } from './employeeProfilePhotoStorage';
 
 /** Tipos soportados */
 export type StoredFileType = 'image' | 'video' | 'audio' | 'text';
@@ -107,6 +108,9 @@ export async function deleteAllFiles(preserveNames?: ReadonlySet<string>): Promi
   for (const entry of entries) {
     if (entry instanceof File) {
       if (entry.name === MAIN_STRUCTURE_CACHE_FILENAME) {
+        continue;
+      }
+      if (isEmployeeProfilePhotoFileName(entry.name)) {
         continue;
       }
       if (preserveNames?.has(entry.name)) {

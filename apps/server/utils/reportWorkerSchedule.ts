@@ -1,8 +1,8 @@
 import fs from "fs";
 import path from "path";
 
-/** Intervalo entre consultas de cola cuando no hay actividad (5 min por defecto). */
-export const DEFAULT_REPORT_WORKER_IDLE_POLL_MS = 5 * 60 * 1000;
+/** Intervalo entre consultas de cola cuando no hay actividad (3 segundos por defecto). */
+export const DEFAULT_REPORT_WORKER_IDLE_POLL_MS = 3 * 1000;
 
 const SCHEDULE_FILE = path.resolve(process.cwd(), ".report-worker-schedule.json");
 

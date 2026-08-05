@@ -60,7 +60,6 @@ type EmployeeSectionState = {
   employeeNombre: string;
   employeeCedula: string;
   marcas: MarcaDiaResumen[];
-  selectedMarcaId: number | null;
   loadingMarcas: boolean;
   message: string;
 };
@@ -73,7 +72,6 @@ const emptySection = ( horaAccion: number ): EmployeeSectionState => ({
   employeeNombre: '',
   employeeCedula: '',
   marcas: [],
-  selectedMarcaId: null,
   loadingMarcas: false,
   message: '',
 });
@@ -362,8 +360,8 @@ export default function MutuosAcuerdosScreen() {
 
       const matchesMotivo = !qMotivo || String(r.motivo || '').toLowerCase().includes(qMotivo);
 
-      const recordFechaAusente = normalizeDateToYMD(String(r.marca_ausente?.fecha || ''));
-      const recordFechaReemplaza = normalizeDateToYMD(String(r.marca_reemplaza?.fecha || ''));
+      const recordFechaAusente = normalizeDateToYMD(String(r.fecha_ausente || r.marca_ausente?.fecha || ''));
+      const recordFechaReemplaza = normalizeDateToYMD(String(r.fecha_reemplaza || r.marca_reemplaza?.fecha || ''));
       const matchesFechaAusente = !fechaAusenteYmd || recordFechaAusente === fechaAusenteYmd;
       const matchesFechaReemplaza = !fechaReemplazaYmd || recordFechaReemplaza === fechaReemplazaYmd;
 
@@ -414,7 +412,7 @@ export default function MutuosAcuerdosScreen() {
   };
 
   const loadMarcas = async (section: SectionKey, employeeId: number, fecha: Date) => {
-    updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [], selectedMarcaId: null }));
+    updateSection(section, (prev) => ({ ...prev, loadingMarcas: true, message: '', marcas: [] }));
     try {
       const referenceMs = (await getHoraAccion()) || Date.now();
       const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
@@ -424,7 +422,6 @@ export default function MutuosAcuerdosScreen() {
           ...prev,
           loadingMarcas: false,
           marcas: [],
-          selectedMarcaId: null,
           message: 'Se requiere revalidar el token de Planillas para consultar turnos.',
         }));
         return;
@@ -446,7 +443,6 @@ export default function MutuosAcuerdosScreen() {
         ...prev,
         loadingMarcas: false,
         marcas: Array.isArray(res.data) ? res.data : [],
-        selectedMarcaId: Array.isArray(res.data) && res.data.length > 0 ? res.data[0].id : null,
         message: Array.isArray(res.data) && res.data.length === 0 ? (res.message || 'El empleado está libre ese día') : '',
       }));
     } catch (e: any) {
@@ -454,7 +450,6 @@ export default function MutuosAcuerdosScreen() {
         ...prev,
         loadingMarcas: false,
         marcas: [],
-        selectedMarcaId: null,
         message: e?.message || 'No se pudieron obtener las marcas',
       }));
     }
@@ -574,8 +569,11 @@ export default function MutuosAcuerdosScreen() {
       Alert.alert('Error', 'La firma responsable es obligatoria');
       return;
     }
-    if (!ausente.selectedMarcaId || !reemplaza.selectedMarcaId) {
-      Alert.alert('Error', 'Debes seleccionar una marca para ausente y una para reemplaza');
+    if (ausente.marcas.length === 0 || reemplaza.marcas.length === 0) {
+      Alert.alert(
+        'Error',
+        'Ambas fechas deben tener al menos 1 marca/turno. Seleccione fechas en las que ambos empleados tengan turno.'
+      );
       return;
     }
 
@@ -588,7 +586,7 @@ export default function MutuosAcuerdosScreen() {
       return;
     }
 
-    const marcaAusenteSel = ausente.marcas.find((m) => m.id === ausente.selectedMarcaId);
+    const marcaAusenteSel = ausente.marcas[0];
     const eid = marcaAusenteSel?.empresa_id != null ? Number(marcaAusenteSel.empresa_id) : 0;
     const did = marcaAusenteSel?.division_id != null ? Number(marcaAusenteSel.division_id) : 0;
     const cid = marcaAusenteSel?.contrato_id != null ? Number(marcaAusenteSel.contrato_id) : 0;
@@ -628,8 +626,10 @@ export default function MutuosAcuerdosScreen() {
 
       const response = await createMutuoAcuerdo({
         requestData: {
-          marcaDiaAusente_id: ausente.selectedMarcaId,
-          marcaDiaReemplaza_id: reemplaza.selectedMarcaId,
+          marcas_ausente: ausente.marcas.map((m) => m.id),
+          marcas_reemplaza: reemplaza.marcas.map((m) => m.id),
+          fecha_ausente: dateToYmd(ausente.fecha),
+          fecha_reemplaza: dateToYmd(reemplaza.fecha),
           motivo: motivo.trim(),
           hora_accion: horaAccion,
           firma_responsable: firmaResponsable.trim(),
@@ -667,8 +667,11 @@ export default function MutuosAcuerdosScreen() {
       Alert.alert('Error', 'La firma responsable es obligatoria');
       return;
     }
-    if (!ausente.selectedMarcaId || !reemplaza.selectedMarcaId) {
-      Alert.alert('Error', 'Debes seleccionar una marca para ausente y una para reemplaza');
+    if (ausente.marcas.length === 0 || reemplaza.marcas.length === 0) {
+      Alert.alert(
+        'Error',
+        'Ambas fechas deben tener al menos 1 marca/turno. Seleccione fechas en las que ambos empleados tengan turno.'
+      );
       return;
     }
 
@@ -1040,30 +1043,29 @@ export default function MutuosAcuerdosScreen() {
       );
     }
     if (sectionState.marcas.length === 0) {
-      return <ThemedText style={styles.freeDayText}>{sectionState.message || 'El empleado está libre ese día'}</ThemedText>;
+      return (
+        <ThemedText style={styles.freeDayText}>
+          {sectionState.message || 'Sin marcas en esta fecha. Debe haber al menos 1 turno para continuar.'}
+        </ThemedText>
+      );
     }
     return (
       <View style={styles.marcaList}>
-        {sectionState.marcas.map((m) => {
-          const selected = sectionState.selectedMarcaId === m.id;
-          return (
-            <TouchableOpacity
-              key={`${section}-${m.id}`}
-              style={[styles.marcaItem, selected && styles.marcaItemSelected]}
-              onPress={() => updateSection(section, (prev) => ({ ...prev, selectedMarcaId: m.id }))}
-              activeOpacity={0.85}
-            >
-              <ThemedText style={styles.marcaItemTitle}>
-                {m.cliente || '—'} | {m.sucursal || '—'}
-              </ThemedText>
-              <ThemedText style={styles.marcaItemText}>Puesto: {m.puesto || '—'}</ThemedText>
-              <ThemedText style={styles.marcaItemText}>
-                Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)}
-              </ThemedText>
-              <ThemedText style={styles.marcaItemText}>Turno: {m.tipo_turno_texto}</ThemedText>
-            </TouchableOpacity>
-          );
-        })}
+        <ThemedText style={styles.helperText}>
+          Se incluirán todos los turnos de este día ({sectionState.marcas.length}).
+        </ThemedText>
+        {sectionState.marcas.map((m) => (
+          <ThemedView key={`${section}-${m.id}`} style={styles.marcaItem}>
+            <ThemedText style={styles.marcaItemTitle}>
+              {m.cliente || '—'} | {m.sucursal || '—'}
+            </ThemedText>
+            <ThemedText style={styles.marcaItemText}>Puesto: {m.puesto || '—'}</ThemedText>
+            <ThemedText style={styles.marcaItemText}>
+              Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)}
+            </ThemedText>
+            <ThemedText style={styles.marcaItemText}>Turno: {m.tipo_turno_texto}</ThemedText>
+          </ThemedView>
+        ))}
       </View>
     );
   };
@@ -1251,10 +1253,15 @@ export default function MutuosAcuerdosScreen() {
                   <ThemedText style={styles.cancelBtnText}>Cancelar</ThemedText>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.formActionBtn, styles.saveBtn, isSubmitting && styles.buttonDisabled]}
+                  style={[
+                    styles.formActionBtn,
+                    styles.saveBtn,
+                    (isSubmitting || ausente.marcas.length === 0 || reemplaza.marcas.length === 0) &&
+                      styles.buttonDisabled,
+                  ]}
                   onPress={handleSave}
                   activeOpacity={0.85}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || ausente.marcas.length === 0 || reemplaza.marcas.length === 0}
                 >
                   {isSubmitting ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -1438,10 +1445,17 @@ export default function MutuosAcuerdosScreen() {
 
                       <ThemedText style={styles.sectionTitle}>Empleado del primer turno</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_ausente_nombre || `ID ${r.empleadoAusente_id}`}</ThemedText>
-                      <ThemedText style={styles.cardLine}>Puesto: {r.marca_ausente?.puesto || r.puesto_ausente_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        Fecha/Horario: {formatDateFromIsoToDMY(r.marca_ausente?.fecha)} {formatTime(r.marca_ausente?.hora_inicio)} - {formatTime(r.marca_ausente?.hora_fin)} ({r.marca_ausente?.tipo_turno_texto || 'Sin definir'})
+                        Fecha: {formatDateFromIsoToDMY(r.fecha_ausente || r.marca_ausente?.fecha)}
                       </ThemedText>
+                      {(r.marcas_ausente_detalle?.length ? r.marcas_ausente_detalle : r.marca_ausente ? [r.marca_ausente] : []).map((m, idx) => (
+                        <ThemedView key={`ausente-${r.id}-${m.id || idx}`} style={{ marginBottom: 6 }}>
+                          <ThemedText style={styles.cardLine}>Puesto: {m.puesto || r.puesto_ausente_nombre || '-'}</ThemedText>
+                          <ThemedText style={styles.cardLine}>
+                            Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)} ({m.tipo_turno_texto || 'Sin definir'})
+                          </ThemedText>
+                        </ThemedView>
+                      ))}
                       <ThemedText style={styles.cardLine}>Acepta: {r.ausente_acepta ? 'Sí' : 'No'}</ThemedText>
                       {r.ausente_acepta_at ? (
                         <ThemedText style={styles.cardLine}>
@@ -1462,10 +1476,17 @@ export default function MutuosAcuerdosScreen() {
 
                       <ThemedText style={styles.sectionTitle}>Empleado del segundo turno</ThemedText>
                       <ThemedText style={styles.cardLine}>{r.empleado_reemplaza_nombre || `ID ${r.empleadoReemplaza_id}`}</ThemedText>
-                      <ThemedText style={styles.cardLine}>Puesto: {r.marca_reemplaza?.puesto || r.puesto_reemplaza_nombre || '-'}</ThemedText>
                       <ThemedText style={styles.cardLine}>
-                        Fecha/Horario: {formatDateFromIsoToDMY(r.marca_reemplaza?.fecha)} {formatTime(r.marca_reemplaza?.hora_inicio)} - {formatTime(r.marca_reemplaza?.hora_fin)} ({r.marca_reemplaza?.tipo_turno_texto || 'Sin definir'})
+                        Fecha: {formatDateFromIsoToDMY(r.fecha_reemplaza || r.marca_reemplaza?.fecha)}
                       </ThemedText>
+                      {(r.marcas_reemplaza_detalle?.length ? r.marcas_reemplaza_detalle : r.marca_reemplaza ? [r.marca_reemplaza] : []).map((m, idx) => (
+                        <ThemedView key={`reemplaza-${r.id}-${m.id || idx}`} style={{ marginBottom: 6 }}>
+                          <ThemedText style={styles.cardLine}>Puesto: {m.puesto || r.puesto_reemplaza_nombre || '-'}</ThemedText>
+                          <ThemedText style={styles.cardLine}>
+                            Horario: {formatTime(m.hora_inicio)} - {formatTime(m.hora_fin)} ({m.tipo_turno_texto || 'Sin definir'})
+                          </ThemedText>
+                        </ThemedView>
+                      ))}
                       <ThemedText style={styles.cardLine}>Acepta: {r.reemplaza_acepta ? 'Sí' : 'No'}</ThemedText>
                       {r.reemplaza_acepta_at ? (
                         <ThemedText style={styles.cardLine}>
@@ -1975,6 +1996,7 @@ const styles = StyleSheet.create({
   freeDayText: { marginTop: 8, color: '#666', fontStyle: 'italic' },
   marcaList: { marginTop: 10, gap: 8 },
   marcaItem: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10, backgroundColor: '#FFF' },
+  helperText: { fontSize: 13, color: '#666', marginBottom: 8 },
   marcaItemSelected: { borderColor: '#007AFF', backgroundColor: '#EAF3FF' },
   marcaItemTitle: { fontWeight: '800', color: '#1E1E1E', marginBottom: 4 },
   marcaItemText: { fontSize: 13, color: '#444', marginBottom: 2 },

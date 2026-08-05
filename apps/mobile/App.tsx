@@ -173,8 +173,10 @@ import { FORCE_OFFLINE } from './constants/syncFlags';
 import { resolveAppConnectivity } from './hooks/resolveAppConnectivity';
 import {
   CURRENT_MARCA_UPDATED_EVENT,
+  ensureAndroidNotificationChannels,
   extractPushData,
   flushPushDeviceActions,
+  presentPushAsLocalNotification,
   PUSH_DEVICE_ACTIONS_KEY,
   resolvePushNavigationTarget,
   syncPushDeviceRegistration,
@@ -3859,8 +3861,6 @@ function AppContent() {
       actions = normalizedActions;
       await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
     }
-
-    console.log('Sincronizando acciones de evaluaciones:', actions.length);
 
     // Procesar acciones una por una (vehículos corporativos al final vía runCorporateEvaluationsSync)
     for (const action of actions) {
@@ -8719,6 +8719,11 @@ function AppContent() {
     return () => clearInterval(locationIntervalId);
   }, []);
 
+  /** Canales Android listos antes del registro FCM / recepción en background. */
+  useEffect(() => {
+    void ensureAndroidNotificationChannels();
+  }, []);
+
   /** Registro FCM tras login / restauración de sesión; se actualiza si cambia current_marca. */
   useEffect(() => {
     if (!employee?.id || !accessToken) return;
@@ -8790,21 +8795,40 @@ function AppContent() {
     };
 
     const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
-      try {
-        const data = extractPushData(notification.request.content);
-        console.log('[push] Notificación en primer plano:', data);
-        eventBus.emit('pushNotificationReceived', {
-          title: notification.request.content.title,
-          body: notification.request.content.body,
-          data,
-        });
-        // Integración con inbox existente
-        eventBus.emit('notificationsUpdated');
-        eventBus.emit('notificationsUpdatedCounter');
-        eventBus.emit('syncCachesRequested');
-      } catch (error) {
-        console.error('[push] Error procesando notificación recibida:', error);
-      }
+      void (async () => {
+        try {
+          const data = extractPushData(notification.request.content);
+          console.log('[push] Notificación recibida:', {
+            title: notification.request.content.title,
+            body: notification.request.content.body,
+            data,
+          });
+
+          // En release Android el handler remoto a veces no pinta banner; reforzar en local.
+          if (data._presentedLocally !== '1') {
+            try {
+              await presentPushAsLocalNotification({
+                title: notification.request.content.title,
+                body: notification.request.content.body,
+                data,
+              });
+            } catch (presentErr) {
+              console.warn('[push] No se pudo presentar localmente:', presentErr);
+            }
+          }
+
+          eventBus.emit('pushNotificationReceived', {
+            title: notification.request.content.title,
+            body: notification.request.content.body,
+            data,
+          });
+          eventBus.emit('notificationsUpdated');
+          eventBus.emit('notificationsUpdatedCounter');
+          eventBus.emit('syncCachesRequested');
+        } catch (error) {
+          console.error('[push] Error procesando notificación recibida:', error);
+        }
+      })();
     });
 
     const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {

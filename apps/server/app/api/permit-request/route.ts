@@ -6,6 +6,7 @@ import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { getPermitTurnosFromPlanillasRange } from "../../../utils/getPermitTurnosFromPlanillasRange";
+import { parseMarcaIdsArray, ymdFromFecha } from "../../../utils/mutuosAcuerdosMarcas";
 
 const parseIntStrict = (value: unknown): number | null => {
   const n = parseInt(String(value), 10);
@@ -37,14 +38,14 @@ const parseDateInputToDate = (input: unknown): Date | null => {
 
 const getTurnosFromRange = async (
   planillasToken: string,
-  empleadoCedula: string,
+  empleadoCodigo: string,
   fechaInicio: Date,
   fechaFin: Date,
   plazaId: number | null
 ) => {
   return getPermitTurnosFromPlanillasRange({
     planillasToken,
-    empleadoCedula,
+    empleadoCodigo,
     fechaInicio,
     fechaFin,
     plazaId,
@@ -337,67 +338,77 @@ export async function POST(req: NextRequest) {
         : [];
 
     if (mutuosRows.length > 0) {
-      const marcaIds = Array.from(
-        new Set(
-          mutuosRows
-            .flatMap((m: any) => [parseIntStrict(m?.marcaDiaAusente_id), parseIntStrict(m?.marcaDiaReemplaza_id)])
-            .filter((id): id is number => id != null && id > 0)
-        )
-      );
+      const permitStartYmd = ymdFromFecha(fechaInicio);
+      const permitEndYmd = ymdFromFecha(fechaFin);
+      const permitStartMs = permitStartYmd ? new Date(`${permitStartYmd}T00:00:00.000Z`).getTime() : new Date(fechaInicio).getTime();
+      const permitEndMs = permitEndYmd ? new Date(`${permitEndYmd}T00:00:00.000Z`).getTime() : new Date(fechaFin).getTime();
 
+      const ymdInPermitRange = (ymd: string | null): boolean => {
+        if (!ymd) return false;
+        const dayMs = new Date(`${ymd}T00:00:00.000Z`).getTime();
+        return dayMs >= permitStartMs && dayMs <= permitEndMs;
+      };
+
+      // Legacy: mutuos sin fecha_ausente/fecha_reemplaza → resolver por marcas
+      const legacyWithoutFechas = mutuosRows.filter(
+        (m: any) => !ymdFromFecha(m?.fecha_ausente) && !ymdFromFecha(m?.fecha_reemplaza),
+      );
+      const legacyMarcaIds = Array.from(
+        new Set(
+          legacyWithoutFechas.flatMap((m: any) => [
+            ...parseMarcaIdsArray(m?.marcas_ausente ?? m?.marcaDiaAusente_id),
+            ...parseMarcaIdsArray(m?.marcas_reemplaza ?? m?.marcaDiaReemplaza_id),
+          ]),
+        ),
+      );
       const marcasMutuo =
-        marcaIds.length > 0
+        legacyMarcaIds.length > 0
           ? await prisma.c_marca_dia.findMany({
-              where: { id: { in: marcaIds } },
+              where: { id: { in: legacyMarcaIds } },
               select: { id: true, fecha: true },
             })
           : [];
-
-      const marcaFechaById = new Map<number, Date>(
-        marcasMutuo.map((m) => [m.id, new Date(m.fecha)])
+      const marcaFechaById = new Map<number, string>(
+        marcasMutuo
+          .map((m) => [m.id, ymdFromFecha(m.fecha)] as const)
+          .filter((entry): entry is [number, string] => !!entry[1]),
       );
 
-      const permitStartMs = new Date(fechaInicio).getTime();
-      const permitEndMs = new Date(fechaFin).getTime();
+      const mutuoDatesForEmployee = (mutuo: any): string[] => {
+        const dates: string[] = [];
+        const isAusente = Number(mutuo.empleadoAusente_id) === currentEmployeeId;
+        const isReemplaza = Number(mutuo.empleadoReemplaza_id) === currentEmployeeId;
 
-      const conflictingMutuo = mutuosRows.find((mutuo: any) => {
-        const idsToCheck: number[] = [];
-        if (Number(mutuo.empleadoAusente_id) === currentEmployeeId) {
-          const idAusente = parseIntStrict(mutuo.marcaDiaAusente_id);
-          if (idAusente) idsToCheck.push(idAusente);
+        if (isAusente || (!isAusente && !isReemplaza)) {
+          const fa = ymdFromFecha(mutuo?.fecha_ausente);
+          if (fa) dates.push(fa);
+          else {
+            for (const id of parseMarcaIdsArray(mutuo?.marcas_ausente ?? mutuo?.marcaDiaAusente_id)) {
+              const y = marcaFechaById.get(id);
+              if (y) dates.push(y);
+            }
+          }
         }
-        if (Number(mutuo.empleadoReemplaza_id) === currentEmployeeId) {
-          const idReemplaza = parseIntStrict(mutuo.marcaDiaReemplaza_id);
-          if (idReemplaza) idsToCheck.push(idReemplaza);
+        if (isReemplaza || (!isAusente && !isReemplaza)) {
+          const fr = ymdFromFecha(mutuo?.fecha_reemplaza);
+          if (fr) dates.push(fr);
+          else {
+            for (const id of parseMarcaIdsArray(mutuo?.marcas_reemplaza ?? mutuo?.marcaDiaReemplaza_id)) {
+              const y = marcaFechaById.get(id);
+              if (y) dates.push(y);
+            }
+          }
         }
-        // Si por algún motivo no calza el rol, revisar ambas marcas del mutuo
-        if (idsToCheck.length === 0) {
-          const idAusente = parseIntStrict(mutuo.marcaDiaAusente_id);
-          const idReemplaza = parseIntStrict(mutuo.marcaDiaReemplaza_id);
-          if (idAusente) idsToCheck.push(idAusente);
-          if (idReemplaza) idsToCheck.push(idReemplaza);
-        }
+        return [...new Set(dates)];
+      };
 
-        return idsToCheck.some((marcaId) => {
-          const fecha = marcaFechaById.get(marcaId);
-          if (!fecha || Number.isNaN(fecha.getTime())) return false;
-          const dayMs = new Date(fecha.toISOString().split("T")[0] + "T00:00:00.000Z").getTime();
-          return dayMs >= permitStartMs && dayMs <= permitEndMs;
-        });
-      });
+      const conflictingMutuo = mutuosRows.find((mutuo: any) =>
+        mutuoDatesForEmployee(mutuo).some((ymd) => ymdInPermitRange(ymd)),
+      );
 
       if (conflictingMutuo) {
         const estadoMutuo = String(conflictingMutuo.estado || "pendiente").trim() || "pendiente";
-        const relatedMarcaIds = [
-          parseIntStrict(conflictingMutuo.marcaDiaAusente_id),
-          parseIntStrict(conflictingMutuo.marcaDiaReemplaza_id),
-        ].filter((id): id is number => id != null && id > 0);
-
-        const relatedDates = relatedMarcaIds
-          .map((id) => marcaFechaById.get(id))
-          .filter((d): d is Date => !!d && !Number.isNaN(d.getTime()))
-          .map((d) => d.toISOString().split("T")[0]);
-
+        const relatedDates = mutuoDatesForEmployee(conflictingMutuo);
         const fechasTxt = relatedDates.length ? relatedDates.join(" / ") : "fechas asociadas";
 
         return NextResponse.json(
@@ -482,7 +493,7 @@ export async function POST(req: NextRequest) {
 
     const turnos = await getTurnosFromRange(
       planillasToken,
-      String(empleadoForTurnos.cedula || ""),
+      String(empleadoForTurnos.codigo || ""),
       new Date(fechaInicio),
       new Date(fechaFin),
       plazaId

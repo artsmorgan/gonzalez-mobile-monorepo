@@ -17,7 +17,7 @@
     "start:web": "cd apps/server && npm run start:web",
     "worker:reports": "cd apps/server && npm run worker:reports",
     "lint": "turbo run lint",
-    "android": "expo run:android",
+    "android": "cd apps/mobile && expo run:android --variant liteDebug",
     "ios": "expo run:ios"
   },
   "dependencies": {

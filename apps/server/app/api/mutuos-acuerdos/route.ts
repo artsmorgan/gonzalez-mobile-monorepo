@@ -6,6 +6,13 @@ import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import {
+  dateAtUtcMidnight,
+  parseIntStrict,
+  parseMarcaIdsArray,
+  stringifyMarcaIds,
+  ymdFromFecha,
+} from "../../../utils/mutuosAcuerdosMarcas";
 
 const MUTUOS_ACUERDOS_LIST_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
@@ -38,11 +45,6 @@ const marcaResumen = (marca: any) => {
     tipo_turno: marca.tipo_turno || null,
     tipo_turno_texto: turnoTexto(marca.tipo_turno),
   };
-};
-
-const parseIntStrict = (value: any) => {
-  const n = parseInt(String(value), 10);
-  return Number.isNaN(n) ? null : n;
 };
 
 const parseDateInputToDate = (input: unknown): Date | null => {
@@ -153,17 +155,20 @@ type OriginalShiftConflict = { marca: any; interval: ShiftInterval; marcaId: num
 
 /**
  * Evalúa conflictos del turno a cubrir contra todos los turnos originales del empleado.
- * Solo se permite 1 conflicto y únicamente si ese turno es el que cede en el acuerdo (lo tomará el otro).
- * Con 2+ conflictos se rechaza aunque uno sea el turno cedido al otro empleado.
+ * Solo se permiten conflictos con los turnos que el empleado cede en el acuerdo.
+ * Con 2+ conflictos fuera de los cedidos (o múltiples no cedidos) se rechaza.
  */
 const validateEmployeeTakingExchangedShift = (
   coveringTurnLabel: string,
   shiftToTake: any,
   shiftToTakeLabel: string,
-  /** Marca del turno que cede en el acuerdo (lo tomará el otro turno). */
-  marcaCedidaEnAcuerdoId: number,
+  /** Marcas del turno que cede en el acuerdo (las tomará el otro). */
+  marcaCedidaIds: number[],
   originalMarcas: any[]
 ): ExchangeConflictResult => {
+  const cedidas = new Set(
+    (marcaCedidaIds || []).map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0),
+  );
   const candidate = buildShiftIntervalFromMarca(shiftToTake);
   if (!candidate) {
     return {
@@ -190,79 +195,57 @@ const validateEmployeeTakingExchangedShift = (
 
   if (conflicts.length === 0) return { ok: true };
 
-  if (conflicts.length === 1 && conflicts[0]!.marcaId === marcaCedidaEnAcuerdoId) {
-    return { ok: true };
-  }
+  const nonCedidos = conflicts.filter((c) => !cedidas.has(c.marcaId));
+  if (nonCedidos.length === 0) return { ok: true };
 
   const conflictLabels = conflicts.map((c) => formatShiftIntervalLabel(c.marca, c.interval)).join("; ");
+  const cedidasLabel = [...cedidas].map((id) => `#${id}`).join(", ") || "(ninguna)";
 
-  if (conflicts.length >= 2) {
-    return {
-      ok: false,
-      message:
-        `El intercambio no es válido: ${coveringTurnLabel} al cubrir el ${shiftToTakeLabel} ` +
-        `choca con ${conflicts.length} turnos originales (${conflictLabels}). ` +
-        `No se permite el mutuo acuerdo cuando hay más de un conflicto horario, ` +
-        `aunque uno de esos turnos sea el que el otro turno asumirá en el acuerdo.`,
-    };
-  }
-
-  const only = conflicts[0]!;
   return {
     ok: false,
     message:
       `El intercambio no es válido: ${coveringTurnLabel} al cubrir el ${shiftToTakeLabel} ` +
-      `choca con un turno original ${formatShiftIntervalLabel(only.marca, only.interval)}, ` +
-      `que no es el turno que cede en este acuerdo (marca #${marcaCedidaEnAcuerdoId}).`,
+      `choca con turnos originales (${conflictLabels}) que no son los que cede en este acuerdo (${cedidasLabel}).`,
   };
 };
 
 const validateMutuoAcuerdoShiftExchange = async (
-  marcaAusente: any,
-  marcaReemplaza: any
+  marcasAusente: any[],
+  marcasReemplaza: any[]
 ): Promise<ExchangeConflictResult> => {
-  const intervalAusente = buildShiftIntervalFromMarca(marcaAusente);
-  const intervalReemplaza = buildShiftIntervalFromMarca(marcaReemplaza);
-  if (!intervalAusente || !intervalReemplaza) {
+  if (!marcasAusente.length || !marcasReemplaza.length) {
     return {
       ok: false,
-      message:
-        "No se pudo validar el intercambio: ambas marcas deben tener fecha y horarios de entrada/salida (o inicio/fin) definidos.",
+      message: "Ambos lados del mutuo acuerdo deben incluir al menos una marca/turno.",
     };
   }
 
-  const minStart = Math.min(intervalAusente.startMs, intervalReemplaza.startMs);
-  const maxEnd = Math.max(intervalAusente.endMs, intervalReemplaza.endMs);
+  const intervalsAusente = marcasAusente.map(buildShiftIntervalFromMarca).filter(Boolean) as ShiftInterval[];
+  const intervalsReemplaza = marcasReemplaza.map(buildShiftIntervalFromMarca).filter(Boolean) as ShiftInterval[];
+  if (intervalsAusente.length !== marcasAusente.length || intervalsReemplaza.length !== marcasReemplaza.length) {
+    return {
+      ok: false,
+      message:
+        "No se pudo validar el intercambio: todas las marcas deben tener fecha y horarios de entrada/salida (o inicio/fin) definidos.",
+    };
+  }
+
+  const allStarts = [...intervalsAusente, ...intervalsReemplaza].map((i) => i.startMs);
+  const allEnds = [...intervalsAusente, ...intervalsReemplaza].map((i) => i.endMs);
+  const minStart = Math.min(...allStarts);
+  const maxEnd = Math.max(...allEnds);
   const fechaGte = new Date(minStart - 24 * 60 * 60 * 1000);
   const fechaLte = new Date(maxEnd + 24 * 60 * 60 * 1000);
 
-  const empleadoAusenteId = Number(marcaAusente.empleadoFijo_id);
-  const empleadoReemplazaId = Number(marcaReemplaza.empleadoFijo_id);
-  const marcaDiaAusenteId = Number(marcaAusente.id);
-  const marcaDiaReemplazaId = Number(marcaReemplaza.id);
+  const empleadoAusenteId = Number(marcasAusente[0].empleadoFijo_id);
+  const empleadoReemplazaId = Number(marcasReemplaza[0].empleadoFijo_id);
+  const idsAusente = marcasAusente.map((m) => Number(m.id)).filter((n) => Number.isFinite(n) && n > 0);
+  const idsReemplaza = marcasReemplaza.map((m) => Number(m.id)).filter((n) => Number.isFinite(n) && n > 0);
 
-  const [marcasAusente, marcasReemplaza] = await Promise.all([
+  const [originalesAusente, originalesReemplaza] = await Promise.all([
     fetchMarcasOriginalesEmpleado(empleadoAusenteId, fechaGte, fechaLte),
     fetchMarcasOriginalesEmpleado(empleadoReemplazaId, fechaGte, fechaLte),
   ]);
-
-  const checkSegundoTurno = validateEmployeeTakingExchangedShift(
-    "el segundo turno",
-    marcaAusente,
-    "primer turno",
-    marcaDiaReemplazaId,
-    marcasReemplaza
-  );
-  if (!checkSegundoTurno.ok) return checkSegundoTurno;
-
-  const checkPrimerTurno = validateEmployeeTakingExchangedShift(
-    "el primer turno",
-    marcaReemplaza,
-    "segundo turno",
-    marcaDiaAusenteId,
-    marcasAusente
-  );
-  if (!checkPrimerTurno.ok) return checkPrimerTurno;
 
   return { ok: true };
 };
@@ -316,8 +299,10 @@ export async function GET(req: NextRequest) {
     const marcaIds = Array.from(
       new Set(
         (records || [])
-          .flatMap((r: any) => [r.marcaDiaAusente_id, r.marcaDiaReemplaza_id])
-          .map((x: any) => parseIntStrict(x))
+          .flatMap((r: any) => [
+            ...parseMarcaIdsArray(r.marcas_ausente ?? r.marcaDiaAusente_id),
+            ...parseMarcaIdsArray(r.marcas_reemplaza ?? r.marcaDiaReemplaza_id),
+          ])
           .filter(Boolean)
       )
     ) as number[];
@@ -376,13 +361,21 @@ export async function GET(req: NextRequest) {
     };
 
     const mapped = (records || []).map((r: any) => {
-      const marcaAusente = marcaById.get(r.marcaDiaAusente_id);
-      const marcaReemplaza = marcaById.get(r.marcaDiaReemplaza_id);
+      const idsAusente = parseMarcaIdsArray(r.marcas_ausente ?? r.marcaDiaAusente_id);
+      const idsReemplaza = parseMarcaIdsArray(r.marcas_reemplaza ?? r.marcaDiaReemplaza_id);
+      const marcasAusenteList = idsAusente.map((id) => marcaResumen(marcaById.get(id))).filter(Boolean);
+      const marcasReemplazaList = idsReemplaza.map((id) => marcaResumen(marcaById.get(id))).filter(Boolean);
+      const marcaAusente = marcasAusenteList[0] || null;
+      const marcaReemplaza = marcasReemplazaList[0] || null;
       const estado = String(r?.estado || "").trim().toLowerCase() || "pendiente";
       const pending = estado === "pendiente";
 
       return {
         ...r,
+        marcas_ausente: stringifyMarcaIds(idsAusente),
+        marcas_reemplaza: stringifyMarcaIds(idsReemplaza),
+        fecha_ausente: ymdFromFecha(r.fecha_ausente) || ymdFromFecha((marcaAusente as any)?.fecha) || null,
+        fecha_reemplaza: ymdFromFecha(r.fecha_reemplaza) || ymdFromFecha((marcaReemplaza as any)?.fecha) || null,
         cliente_nombre: r.e_estructura_cliente?.nombre || null,
         corpo_nombre: r.e_estructura_sucursal
           ? `${r.e_estructura_sucursal.nro_sucursal ? `${r.e_estructura_sucursal.nro_sucursal} - ` : ""}${r.e_estructura_sucursal.nombre}`
@@ -392,8 +385,10 @@ export async function GET(req: NextRequest) {
         empleado_reemplaza_nombre: getEmpleadoNombre(r.empleadoReemplaza_id),
         puesto_ausente_nombre: plazaById.get(r.plazaAusente_id)?.nombre || null,
         puesto_reemplaza_nombre: plazaById.get(r.plazaReemplaza_id)?.nombre || null,
-        marca_ausente: marcaResumen(marcaAusente),
-        marca_reemplaza: marcaResumen(marcaReemplaza),
+        marcas_ausente_detalle: marcasAusenteList,
+        marcas_reemplaza_detalle: marcasReemplazaList,
+        marca_ausente: marcaAusente,
+        marca_reemplaza: marcaReemplaza,
         can_accept_ausente: Number(r.empleadoAusente_id) === currentEmployeeId && !r.ausente_acepta,
         can_accept_reemplaza: Number(r.empleadoReemplaza_id) === currentEmployeeId && !r.reemplaza_acepta,
         can_sign_ejecutivo:
@@ -428,8 +423,14 @@ export async function POST(req: NextRequest) {
     if (!valid) return NextResponse.json({ status: false, expired, message }, { status: expired ? 401 : 403 });
 
     const body = await req.json();
-    const marcaDiaAusente_id = parseIntStrict(body?.marcaDiaAusente_id);
-    const marcaDiaReemplaza_id = parseIntStrict(body?.marcaDiaReemplaza_id);
+    const marcasAusenteIds = parseMarcaIdsArray(
+      body?.marcas_ausente ?? body?.marcaDiaAusente_id ?? body?.marcaDiaAusenteIds,
+    );
+    const marcasReemplazaIds = parseMarcaIdsArray(
+      body?.marcas_reemplaza ?? body?.marcaDiaReemplaza_id ?? body?.marcaDiaReemplazaIds,
+    );
+    const fechaAusenteYmd = ymdFromFecha(body?.fecha_ausente);
+    const fechaReemplazaYmd = ymdFromFecha(body?.fecha_reemplaza);
     const motivo = String(body?.motivo || "").trim();
     const horaAccion = parseDateInputToDate(body?.hora_accion);
     const firma_responsable = String(body?.firma_responsable || "").trim();
@@ -439,21 +440,92 @@ export async function POST(req: NextRequest) {
     const file_type = String(body?.type || "").trim().toLowerCase();
     const mime_type = String(body?.mimeType || "").trim();
 
-    if (!marcaDiaAusente_id || !marcaDiaReemplaza_id || !motivo || !firma_responsable) {
-      return NextResponse.json({ status: false, message: "Datos incompletos para crear el mutuo acuerdo" }, { status: 400 });
+    if (!fechaAusenteYmd || !fechaReemplazaYmd || !motivo || !firma_responsable) {
+      return NextResponse.json(
+        {
+          status: false,
+          message:
+            "Datos incompletos: se requieren fecha_ausente, fecha_reemplaza, motivo y firma_responsable",
+        },
+        { status: 400 },
+      );
     }
 
-    if (marcaDiaAusente_id === marcaDiaReemplaza_id) {
-      return NextResponse.json({ status: false, message: "Las marcas de primer y segundo turno deben ser diferentes" }, { status: 400 });
+    if (marcasAusenteIds.length === 0 || marcasReemplazaIds.length === 0) {
+      return NextResponse.json(
+        {
+          status: false,
+          message:
+            "Ambas fechas deben tener al menos 1 marca/turno (marcas_ausente y marcas_reemplaza no pueden estar vacíos)",
+        },
+        { status: 400 },
+      );
     }
 
-    const [marcaAusente, marcaReemplaza] = await Promise.all([
-      prisma.c_marca_dia.findUnique({ where: { id: marcaDiaAusente_id } }),
-      prisma.c_marca_dia.findUnique({ where: { id: marcaDiaReemplaza_id } }),
+    const overlapIds = marcasAusenteIds.filter((id) => marcasReemplazaIds.includes(id));
+    if (overlapIds.length > 0) {
+      return NextResponse.json(
+        { status: false, message: "Las marcas del primer y segundo turno no pueden solaparse" },
+        { status: 400 },
+      );
+    }
+
+    const [marcasAusenteRows, marcasReemplazaRows] = await Promise.all([
+      prisma.c_marca_dia.findMany({ where: { id: { in: marcasAusenteIds } } }),
+      prisma.c_marca_dia.findMany({ where: { id: { in: marcasReemplazaIds } } }),
     ]);
 
+    if (marcasAusenteRows.length !== marcasAusenteIds.length || marcasReemplazaRows.length !== marcasReemplazaIds.length) {
+      return NextResponse.json({ status: false, message: "No se encontraron todas las marcas indicadas" }, { status: 404 });
+    }
+
+    const marcaByIdLocal = new Map<number, any>(
+      [...marcasAusenteRows, ...marcasReemplazaRows].map((m: any) => [Number(m.id), m]),
+    );
+    const marcasAusente = marcasAusenteIds.map((id) => marcaByIdLocal.get(id)).filter(Boolean);
+    const marcasReemplaza = marcasReemplazaIds.map((id) => marcaByIdLocal.get(id)).filter(Boolean);
+    const marcaAusente = marcasAusente[0];
+    const marcaReemplaza = marcasReemplaza[0];
     if (!marcaAusente || !marcaReemplaza) {
       return NextResponse.json({ status: false, message: "No se encontraron las marcas seleccionadas" }, { status: 404 });
+    }
+
+    for (const m of marcasAusente) {
+      const day = ymdFromFecha(m.fecha);
+      if (day !== fechaAusenteYmd) {
+        return NextResponse.json(
+          { status: false, message: `La marca #${m.id} no corresponde a fecha_ausente (${fechaAusenteYmd})` },
+          { status: 400 },
+        );
+      }
+      if (Number(m.empleadoFijo_id) !== Number(marcaAusente.empleadoFijo_id)) {
+        return NextResponse.json(
+          { status: false, message: "Todas las marcas del primer turno deben pertenecer al mismo empleado" },
+          { status: 400 },
+        );
+      }
+    }
+    for (const m of marcasReemplaza) {
+      const day = ymdFromFecha(m.fecha);
+      if (day !== fechaReemplazaYmd) {
+        return NextResponse.json(
+          { status: false, message: `La marca #${m.id} no corresponde a fecha_reemplaza (${fechaReemplazaYmd})` },
+          { status: 400 },
+        );
+      }
+      if (Number(m.empleadoFijo_id) !== Number(marcaReemplaza.empleadoFijo_id)) {
+        return NextResponse.json(
+          { status: false, message: "Todas las marcas del segundo turno deben pertenecer al mismo empleado" },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (Number(marcaAusente.empleadoFijo_id) === Number(marcaReemplaza.empleadoFijo_id)) {
+      return NextResponse.json(
+        { status: false, message: "El primer y segundo turno deben corresponder a empleados distintos" },
+        { status: 400 },
+      );
     }
 
     const bodyEmpresa = parseIntStrict((body as any)?.empresa_id);
@@ -496,12 +568,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen cliente/sucursal válidos" }, { status: 400 });
     }
 
-    const exchangeValidation = await validateMutuoAcuerdoShiftExchange(marcaAusente, marcaReemplaza);
-    if (!exchangeValidation.ok) {
-      return NextResponse.json({ status: false, message: exchangeValidation.message }, { status: 400 });
-    }
-
-    // Obtener ejecutivo_cuenta desde la sucursal (corpo_id) asociada a las marcas
     const sucursal = await prisma.e_estructura_sucursal.findUnique({
       where: { id: Number(marcaAusente.corpo_id) },
       select: { ejecutivoCuenta_id: true },
@@ -514,53 +580,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const alreadyUsed = await callDynamicPrisma({
-      req,
-      data: {
-        action: "GET",
-        table: "e_mutuos_acuerdos",
-        operation: "findFirst",
-        where: {
-          AND: [
-            { isActive: true },
-            {
-              OR: [
-                { marcaDiaAusente_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
-                { marcaDiaReemplaza_id: { in: [marcaDiaAusente_id, marcaDiaReemplaza_id] } },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    if (alreadyUsed) {
-      return NextResponse.json({ status: false, message: "Una de las marcas seleccionadas ya está asociada a otro mutuo acuerdo" }, { status: 400 });
+    const shiftValidation = await validateMutuoAcuerdoShiftExchange(marcasAusente, marcasReemplaza);
+    if (!shiftValidation.ok) {
+      return NextResponse.json({ status: false, message: shiftValidation.message }, { status: 400 });
     }
 
-    // Conflicto con permisos / otros mutuos (ambas fechas, ambos empleados)
     const empleadoAusenteId = Number(marcaAusente.empleadoFijo_id);
     const empleadoReemplazaId = Number(marcaReemplaza.empleadoFijo_id);
-    const ymdFromFecha = (fecha: Date | string | null | undefined): string | null => {
-      if (!fecha) return null;
-      const d = fecha instanceof Date ? fecha : new Date(String(fecha));
-      if (Number.isNaN(d.getTime())) return null;
-      return d.toISOString().split("T")[0];
-    };
-    const dayAusente = ymdFromFecha(marcaAusente.fecha);
-    const dayReemplaza = ymdFromFecha(marcaReemplaza.fecha);
-    const conflictDays = Array.from(new Set([dayAusente, dayReemplaza].filter(Boolean) as string[]));
-    if (conflictDays.length === 0) {
-      return NextResponse.json(
-        { status: false, message: "No se pudieron determinar las fechas de las marcas seleccionadas" },
-        { status: 400 }
-      );
-    }
-
-    const conflictDayStart = `${conflictDays.reduce((a, b) => (a < b ? a : b))}T00:00:00.000Z`;
-    const conflictDayEnd = `${conflictDays.reduce((a, b) => (a > b ? a : b))}T00:00:00.000Z`;
+    const conflictDays = Array.from(new Set([fechaAusenteYmd, fechaReemplazaYmd]));
+    const conflictDayStart = dateAtUtcMidnight(conflictDays.reduce((a, b) => (a < b ? a : b)));
+    const conflictDayEnd = dateAtUtcMidnight(conflictDays.reduce((a, b) => (a > b ? a : b)));
     const employeeChecks: Array<{ id: number; label: string }> = [
-      { id: empleadoAusenteId, label: "ausente" },
-      { id: empleadoReemplazaId, label: "reemplazo" },
+      { id: empleadoAusenteId, label: "del primer turno" },
+      { id: empleadoReemplazaId, label: "del segundo turno" },
     ];
 
     for (const emp of employeeChecks) {
@@ -574,15 +606,14 @@ export async function POST(req: NextRequest) {
             empleado_id: emp.id,
             isActive: true,
             estado: { in: ["pendiente", "aprobado"] },
-            fecha_inicio: { lte: conflictDayEnd },
-            fecha_fin: { gte: conflictDayStart },
+            fecha_inicio: { lte: conflictDayEnd.toISOString() },
+            fecha_fin: { gte: conflictDayStart.toISOString() },
           },
           orderBy: { fecha_inicio: "asc" },
         },
       });
 
       if (overlappingPermit) {
-        // Confirmar que el permiso cubre al menos uno de los días del mutuo (no solo el hueco intermedio)
         const pInicio = ymdFromFecha(overlappingPermit.fecha_inicio);
         const pFin = ymdFromFecha(overlappingPermit.fecha_fin);
         const coversDay =
@@ -616,15 +647,46 @@ export async function POST(req: NextRequest) {
       });
 
       const otherMutuosRows = Array.isArray(otherMutuos) ? otherMutuos : otherMutuos ? [otherMutuos] : [];
-      if (otherMutuosRows.length > 0) {
+      const conflictingOther = otherMutuosRows.find((mutuo: any) => {
+        const days = [
+          ymdFromFecha(mutuo?.fecha_ausente),
+          ymdFromFecha(mutuo?.fecha_reemplaza),
+        ].filter((d): d is string => Boolean(d));
+
+        // Compatibilidad con registros legacy (sin fecha_*): inferir desde marcas
+        if (days.length === 0) {
+          const legacyIds = [
+            ...parseMarcaIdsArray(mutuo?.marcas_ausente ?? mutuo?.marcaDiaAusente_id),
+            ...parseMarcaIdsArray(mutuo?.marcas_reemplaza ?? mutuo?.marcaDiaReemplaza_id),
+          ];
+          return false; // se resuelve abajo con carga de marcas si hace falta
+        }
+        return days.some((day) => conflictDays.includes(day));
+      });
+
+      if (conflictingOther) {
+        return NextResponse.json(
+          {
+            status: false,
+            message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(conflictingOther.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
+          },
+          { status: 400 }
+        );
+      }
+
+      // Legacy: mutuos sin fecha_ausente/fecha_reemplaza → comparar por fechas de marcas
+      const legacyWithoutFechas = otherMutuosRows.filter(
+        (m: any) => !ymdFromFecha(m?.fecha_ausente) && !ymdFromFecha(m?.fecha_reemplaza),
+      );
+      if (legacyWithoutFechas.length > 0) {
         const otherMarcaIds = Array.from(
           new Set(
-            otherMutuosRows
-              .flatMap((m: any) => [parseIntStrict(m?.marcaDiaAusente_id), parseIntStrict(m?.marcaDiaReemplaza_id)])
-              .filter((id): id is number => id != null && id > 0)
-          )
+            legacyWithoutFechas.flatMap((m: any) => [
+              ...parseMarcaIdsArray(m?.marcas_ausente ?? m?.marcaDiaAusente_id),
+              ...parseMarcaIdsArray(m?.marcas_reemplaza ?? m?.marcaDiaReemplaza_id),
+            ]),
+          ),
         );
-
         const otherMarcas =
           otherMarcaIds.length > 0
             ? await prisma.c_marca_dia.findMany({
@@ -638,25 +700,23 @@ export async function POST(req: NextRequest) {
               const ymd = ymdFromFecha(m.fecha);
               return ymd ? ([m.id, ymd] as const) : null;
             })
-            .filter((x): x is readonly [number, string] => x != null)
+            .filter((x): x is readonly [number, string] => x != null),
         );
-
-        const conflictingOther = otherMutuosRows.find((mutuo: any) => {
+        const legacyConflict = legacyWithoutFechas.find((mutuo: any) => {
           const ids = [
-            parseIntStrict(mutuo?.marcaDiaAusente_id),
-            parseIntStrict(mutuo?.marcaDiaReemplaza_id),
-          ].filter((id): id is number => id != null && id > 0);
+            ...parseMarcaIdsArray(mutuo?.marcas_ausente ?? mutuo?.marcaDiaAusente_id),
+            ...parseMarcaIdsArray(mutuo?.marcas_reemplaza ?? mutuo?.marcaDiaReemplaza_id),
+          ];
           return ids.some((id) => {
             const day = otherFechaById.get(id);
             return day != null && conflictDays.includes(day);
           });
         });
-
-        if (conflictingOther) {
+        if (legacyConflict) {
           return NextResponse.json(
             {
               status: false,
-              message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(conflictingOther.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
+              message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(legacyConflict.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
             },
             { status: 400 }
           );
@@ -666,6 +726,8 @@ export async function POST(req: NextRequest) {
 
     const createdBy = parseIntStrict((payload as any)?.id) || 0;
     const createdAt = horaAccion ? horaAccion : toZonedTime(new Date(), "America/Costa_Rica");
+    const marcasAusenteStr = stringifyMarcaIds(marcasAusenteIds);
+    const marcasReemplazaStr = stringifyMarcaIds(marcasReemplazaIds);
 
     const record = await callDynamicPrisma({
       req,
@@ -684,12 +746,14 @@ export async function POST(req: NextRequest) {
           ejecutivo_cuenta,
           empleadoReemplaza_id: Number(marcaReemplaza.empleadoFijo_id),
           plazaReemplaza_id: Number(marcaReemplaza.plaza_id),
-          marcaDiaReemplaza_id,
+          marcas_reemplaza: marcasReemplazaStr,
+          fecha_reemplaza: dateAtUtcMidnight(fechaReemplazaYmd).toISOString(),
           reemplaza_acepta: false,
           reemplaza_acepta_at: null,
           empleadoAusente_id: Number(marcaAusente.empleadoFijo_id),
           plazaAusente_id: Number(marcaAusente.plaza_id),
-          marcaDiaAusente_id,
+          marcas_ausente: marcasAusenteStr,
+          fecha_ausente: dateAtUtcMidnight(fechaAusenteYmd).toISOString(),
           ausente_acepta: false,
           ausente_acepta_at: null,
           motivo,
@@ -834,8 +898,8 @@ export async function POST(req: NextRequest) {
       const fecha = createdAt.toISOString().split("T")[0];
       const hora = createdAt.toISOString().split("T")[1];
 
-      const fecha_ausente_cambio = marcaAusente.fecha ? new Date(marcaAusente.fecha).toISOString().split("T")[0] : '-Sin fecha-';
-      const fecha_reemplaza_cambio = marcaReemplaza.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : '-Sin fecha-';
+      const fecha_ausente_cambio = fechaAusenteYmd;
+      const fecha_reemplaza_cambio = fechaReemplazaYmd;
       const hora_inicio_ausente = marcaAusente.hora_inicio ? new Date(marcaAusente.hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
       const hora_inicio_reemplaza = marcaReemplaza.hora_inicio ? new Date(marcaReemplaza.hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
 

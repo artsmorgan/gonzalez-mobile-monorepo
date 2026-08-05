@@ -4,6 +4,7 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
+import { parseMarcaIdsArray, ymdFromFecha } from "../mutuosAcuerdosMarcas";
 
 /** Valores de `e_mutuos_acuerdos.estado` al filtrar (incl. «completado» agrupado con aprobado en consulta). */
 export type MutuoAcuerdoEstadoFiltro = "aprobado" | "rechazado" | "pendiente";
@@ -309,6 +310,11 @@ function fmtMarcaRol(m: any): string {
     return tt ? `${f} / ${tt}` : f;
 }
 
+function fmtMarcasRol(marcas: any[], fechaFallback: string | null): string {
+    if (marcas.length === 0) return fechaFallback || "";
+    return marcas.map((m) => fmtMarcaRol(m) || fechaFallback || "").filter(Boolean).join("; ");
+}
+
 function fmtDateTimeCol(d: Date | string | null | undefined): string {
     if (d == null) return "";
     if (d instanceof Date) return d.toISOString().replace("T", " ").slice(0, 19);
@@ -377,7 +383,14 @@ export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters:
         take: 50_000,
     });
 
-    const marcaIds = [...new Set(rows.flatMap((r) => [r.marcaDiaAusente_id, r.marcaDiaReemplaza_id]))];
+    const marcaIds = [
+        ...new Set(
+            rows.flatMap((r) => [
+                ...parseMarcaIdsArray((r as any).marcas_ausente ?? (r as any).marcaDiaAusente_id),
+                ...parseMarcaIdsArray((r as any).marcas_reemplaza ?? (r as any).marcaDiaReemplaza_id),
+            ]),
+        ),
+    ];
     const empIds = [...new Set(rows.flatMap((r) => [r.empleadoAusente_id, r.empleadoReemplaza_id, r.created_by]))];
     const ejeIds = [...new Set(rows.map((r) => r.ejecutivo_cuenta))];
     const plazaRowIds = [...new Set(rows.flatMap((r) => [Number(r.plazaAusente_id), Number(r.plazaReemplaza_id)]).filter((n) => Number.isFinite(n) && n > 0))];
@@ -436,8 +449,12 @@ export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters:
     const plazaById = new Map(plazasRows.map((p) => [p.id, p]));
 
     const enriched = rows.map((r) => {
-        const ma = marcaById.get(r.marcaDiaAusente_id);
-        const mr = marcaById.get(r.marcaDiaReemplaza_id);
+        const idsAusente = parseMarcaIdsArray((r as any).marcas_ausente ?? (r as any).marcaDiaAusente_id);
+        const idsReemplaza = parseMarcaIdsArray((r as any).marcas_reemplaza ?? (r as any).marcaDiaReemplaza_id);
+        const marcasAusente = idsAusente.map((id) => marcaById.get(id)).filter(Boolean);
+        const marcasReemplaza = idsReemplaza.map((id) => marcaById.get(id)).filter(Boolean);
+        const fechaAusenteYmd = ymdFromFecha((r as any).fecha_ausente) || (marcasAusente[0] ? ymdFromFecha((marcasAusente[0] as any).fecha) : null);
+        const fechaReemplazaYmd = ymdFromFecha((r as any).fecha_reemplaza) || (marcasReemplaza[0] ? ymdFromFecha((marcasReemplaza[0] as any).fecha) : null);
         const ea = empById.get(r.empleadoAusente_id);
         const er = empById.get(r.empleadoReemplaza_id);
         const creador = empById.get(r.created_by);
@@ -466,8 +483,8 @@ export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters:
             empleado_reemplaza_codigo: er?.codigo != null ? String(er.codigo).trim() : "",
             empleado_ausente_txt: fmtEmpleado(ea),
             empleado_reemplaza_txt: fmtEmpleado(er),
-            marca_ausente_txt: fmtMarcaRol(ma),
-            marca_reemplaza_txt: fmtMarcaRol(mr),
+            marca_ausente_txt: fmtMarcasRol(marcasAusente, fechaAusenteYmd),
+            marca_reemplaza_txt: fmtMarcasRol(marcasReemplaza, fechaReemplazaYmd),
             ausente_acepta_txt: fmtSiNo(r.ausente_acepta),
             reemplaza_acepta_txt: fmtSiNo(r.reemplaza_acepta),
             ausente_acepta_at_txt: fmtDateTimeCol(r.ausente_acepta_at as Date | null),

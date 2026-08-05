@@ -13,6 +13,10 @@ import {
   persistStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
 import { persistLegacySession } from '@/hooks/authTokenStorage';
+import {
+  deleteEmployeeProfilePhoto,
+  saveEmployeeProfilePhotoFromBase64,
+} from '@/hooks/employeeProfilePhotoStorage';
 
 interface Role {
   id: number;
@@ -57,6 +61,8 @@ interface Employee {
   roles: EmployeeRole[];
   firmaManual: string;
   supervisor_id: number | null;
+  /** Nombre bajo Paths.document (`employee_profile_photo_{id}.ext`). */
+  fotoLocalFileName?: string | null;
 }
 
 interface AuthContextType {
@@ -197,7 +203,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
       }
 
-      // Create employee object from server empleado data
+      let fotoLocalFileName: string | null = null;
+      try {
+        fotoLocalFileName = await saveEmployeeProfilePhotoFromBase64(
+          empleadoData.id,
+          empleadoData.foto,
+        );
+      } catch (fotoError) {
+        console.warn('No se pudo guardar la foto de perfil localmente:', fotoError);
+      }
+
+      // Create employee object from server empleado data (sin base64; solo referencia a disco)
       const employeeData: Employee = {
         id: empleadoData.id,
         codigo: empleadoData.codigo,
@@ -211,6 +227,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         roles: empleadoData.roles || [],
         firmaManual: empleadoData.firmaManual || '',
         supervisor_id: empleadoData.supervisor_id || null,
+        fotoLocalFileName,
       };
 
       await persistLegacySession({
@@ -227,6 +244,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const planillasPayload = extractPlanillasTokenFromResponse(responseData);
       if (!planillasPayload) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeData.id);
+        } catch {
+          /* noop */
+        }
         await Promise.all([
           AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
           AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
@@ -356,6 +378,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
           console.warn('Logout API call failed:', apiError);
           // Continue with local logout even if API call fails
           serverResponse = { status: true, message: 'Sesión cerrada localmente' };
+        }
+      }
+
+      const employeeIdForFoto = employee?.id;
+      if (employeeIdForFoto) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeIdForFoto);
+        } catch {
+          /* noop */
         }
       }
 

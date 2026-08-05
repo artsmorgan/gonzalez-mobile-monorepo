@@ -168,18 +168,24 @@ export async function attachContratoDivisionToSucursales(sucursales: any[]): Pro
     }
 }
 
+/** FK de puesto → sucursal (`sucursal_id`; algunos payloads legacy usan `corpo_id`). */
+function resolvePuestoSucursalId(puesto: any): number {
+    const n = Number(puesto?.sucursal_id ?? puesto?.corpo_id);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 /** Adjunta cadena sucursal → contrato → cliente sobre objetos `e_estructura_puesto`. */
 export async function attachLocationChainToPuestos(puestos: any[]): Promise<void> {
     const list = puestos.filter(Boolean);
     if (list.length === 0) return;
 
-    const corpoIds = [
-        ...new Set(list.map((p) => Number(p.corpo_id)).filter((n) => Number.isFinite(n) && n > 0)),
+    const sucursalIds = [
+        ...new Set(list.map((p) => resolvePuestoSucursalId(p)).filter((n) => n > 0)),
     ];
-    if (corpoIds.length === 0) return;
+    if (sucursalIds.length === 0) return;
 
     const sucursales = await prisma.e_estructura_sucursal.findMany({
-        where: { id: { in: corpoIds } },
+        where: { id: { in: sucursalIds } },
         select: { id: true, nombre: true, contrato_id: true },
     });
     const sucursalById = new Map(sucursales.map((s) => [s.id, { ...s }]));
@@ -221,7 +227,7 @@ export async function attachLocationChainToPuestos(puestos: any[]): Promise<void
     }
 
     for (const puesto of list) {
-        const corpoId = Number(puesto.corpo_id);
-        puesto.e_estructura_sucursal = Number.isFinite(corpoId) ? sucursalById.get(corpoId) ?? null : null;
+        const sucursalId = resolvePuestoSucursalId(puesto);
+        puesto.e_estructura_sucursal = sucursalId > 0 ? sucursalById.get(sucursalId) ?? null : null;
     }
 }

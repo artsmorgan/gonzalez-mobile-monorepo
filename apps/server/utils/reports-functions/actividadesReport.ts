@@ -389,7 +389,7 @@ export async function queryActividadesReportRows(prisma: ReportDataAccess, filte
         {
             relation: "e_estructura_puesto",
             fkField: "puesto_id",
-            select: { id: true, nombre: true, codigo: true, corpo_id: true },
+            select: { id: true, nombre: true, codigo: true, sucursal_id: true },
         },
     ]);
     await attachLocationChainToPuestos(
