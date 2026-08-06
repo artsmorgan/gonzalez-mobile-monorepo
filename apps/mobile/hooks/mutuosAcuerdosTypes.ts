@@ -27,12 +27,20 @@ export type MutuoAcuerdo = {
   ejecutivo_cuenta: number;
   empleadoReemplaza_id: number;
   plazaReemplaza_id: number;
-  marcaDiaReemplaza_id: number;
+  /** JSON string con array de ids de marcas del segundo turno. */
+  marcas_reemplaza?: string | null;
+  /** @deprecated Usar marcas_reemplaza */
+  marcaDiaReemplaza_id?: number | null;
+  fecha_reemplaza?: string | null;
   reemplaza_acepta: boolean;
   reemplaza_acepta_at?: string | null;
   empleadoAusente_id: number;
   plazaAusente_id: number;
-  marcaDiaAusente_id: number;
+  /** JSON string con array de ids de marcas del primer turno. */
+  marcas_ausente?: string | null;
+  /** @deprecated Usar marcas_ausente */
+  marcaDiaAusente_id?: number | null;
+  fecha_ausente?: string | null;
   ausente_acepta: boolean;
   ausente_acepta_at?: string | null;
   motivo: string;
@@ -53,6 +61,9 @@ export type MutuoAcuerdo = {
   empleado_ausente_nombre?: string | null;
   puesto_reemplaza_nombre?: string | null;
   puesto_ausente_nombre?: string | null;
+  marcas_reemplaza_detalle?: MarcaDiaResumen[] | null;
+  marcas_ausente_detalle?: MarcaDiaResumen[] | null;
+  /** Primera marca (compatibilidad UI). */
   marca_reemplaza?: MarcaDiaResumen | null;
   marca_ausente?: MarcaDiaResumen | null;
 

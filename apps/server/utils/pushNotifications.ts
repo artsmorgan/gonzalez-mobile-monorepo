@@ -19,6 +19,8 @@ const INVALID_TOKEN_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
   "messaging/invalid-argument",
+  "messaging/mismatched-credential",
+  "messaging/third-party-auth-error",
 ]);
 
 function nowCostaRica(): Date {
@@ -52,19 +54,45 @@ export async function deactivateFcmTokens(req: NextRequest, tokens: string[]): P
   });
 }
 
+export type SendPushResult = {
+  sent: number;
+  failed: number;
+  tokensTargeted: number;
+  firebaseConfigured: boolean;
+  /** Códigos/mensajes FCM agregados (máx. 10) para diagnóstico en builds release. */
+  errors?: Array<{ code: string; message: string; count: number }>;
+  /** Tokens marcados activo=false tras NotRegistered / mismatch / etc. */
+  invalidTokensDeactivated?: number;
+};
+
 async function sendToTokens(
   req: NextRequest,
   tokens: string[],
   params: SendPushParams
-): Promise<{ sent: number; failed: number }> {
+): Promise<SendPushResult> {
   const messaging = getFirebaseMessaging();
   if (!messaging) {
     console.warn("[pushNotifications] Firebase Messaging no disponible; omitiendo envío FCM");
-    return { sent: 0, failed: 0 };
+    return {
+      sent: 0,
+      failed: 0,
+      tokensTargeted: 0,
+      firebaseConfigured: false,
+      errors: [
+        {
+          code: "firebase/not-configured",
+          message:
+            "FIREBASE_SERVICE_ACCOUNT_JSON (o PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY) no configurado en el servidor",
+          count: 1,
+        },
+      ],
+    };
   }
 
   const unique = Array.from(new Set(tokens.map((t) => String(t || "").trim()).filter(Boolean)));
-  if (unique.length === 0) return { sent: 0, failed: 0 };
+  if (unique.length === 0) {
+    return { sent: 0, failed: 0, tokensTargeted: 0, firebaseConfigured: true };
+  }
 
   const data = normalizeData({
     ...(params.data || {}),
@@ -75,6 +103,7 @@ async function sendToTokens(
   let sent = 0;
   let failed = 0;
   const invalid: string[] = [];
+  const errorCounts = new Map<string, { code: string; message: string; count: number }>();
 
   // Envío en lotes de 500 (límite FCM multicast)
   const chunkSize = 500;
@@ -90,9 +119,17 @@ async function sendToTokens(
         data,
         android: {
           priority: "high",
+          ttl: 86400 * 1000, // 24h (ms)
           notification: {
             channelId,
             sound: "default",
+            priority: "max",
+            visibility: "public",
+            defaultSound: true,
+            defaultVibrateTimings: true,
+            // Nombre del recurso en res/drawable (sin @drawable/)
+            icon: "notification_icon",
+            color: "#007AFF",
           },
         },
       });
@@ -103,28 +140,53 @@ async function sendToTokens(
           return;
         }
         failed += 1;
-        const code = String(res.error?.code || "");
+        const code = String(res.error?.code || "unknown");
+        const message = String(res.error?.message || "");
+        const prev = errorCounts.get(code);
+        if (prev) prev.count += 1;
+        else errorCounts.set(code, { code, message, count: 1 });
+
         if (INVALID_TOKEN_CODES.has(code)) {
           invalid.push(chunk[idx]);
         } else {
-          console.warn("[pushNotifications] Error FCM:", code, res.error?.message);
+          console.warn("[pushNotifications] Error FCM:", code, message);
         }
       });
     } catch (error) {
       failed += chunk.length;
+      const message = error instanceof Error ? error.message : String(error);
       console.error("[pushNotifications] Error sendEachForMulticast:", error);
+      errorCounts.set("sendEachForMulticast", {
+        code: "sendEachForMulticast",
+        message,
+        count: chunk.length,
+      });
     }
   }
 
   if (invalid.length > 0) {
     await deactivateFcmTokens(req, invalid);
+    console.warn(
+      "[pushNotifications] Tokens FCM inválidos desactivados:",
+      invalid.length,
+      Array.from(errorCounts.values())
+        .map((e) => `${e.code}×${e.count}`)
+        .join(", ")
+    );
   }
 
-  return { sent, failed };
+  return {
+    sent,
+    failed,
+    tokensTargeted: unique.length,
+    firebaseConfigured: true,
+    errors: errorCounts.size > 0 ? Array.from(errorCounts.values()).slice(0, 10) : undefined,
+    invalidTokensDeactivated: invalid.length,
+  };
 }
 
 /** Dispositivos activos para empleado (+ plaza opcional). */
-export async function findActiveFcmTokens(
+export async function findActiveFcmDevices(
   req: NextRequest,
   params: {
     empleadoId?: number | number[];
@@ -132,7 +194,7 @@ export async function findActiveFcmTokens(
     /** Si true y hay plazaId, exige coincidencia exacta de plaza. */
     requirePlazaMatch?: boolean;
   }
-): Promise<string[]> {
+): Promise<Array<{ token: string; empleado_id: number | null; plaza_id: number | null }>> {
   const empleadoIds = Array.isArray(params.empleadoId)
     ? params.empleadoId.map(Number).filter((n) => Number.isFinite(n) && n > 0)
     : params.empleadoId != null
@@ -167,52 +229,112 @@ export async function findActiveFcmTokens(
       table: TABLE,
       operation: "findMany",
       where,
-      select: { token: true },
+      select: { token: true, empleado_id: true, plaza_id: true },
     },
   });
 
   const list = Array.isArray(rows) ? rows : [];
-  return list.map((r: { token?: string }) => String(r?.token || "")).filter(Boolean);
+  return list
+    .map((r: { token?: string; empleado_id?: number | null; plaza_id?: number | null }) => ({
+      token: String(r?.token || "").trim(),
+      empleado_id:
+        r?.empleado_id != null && Number.isFinite(Number(r.empleado_id))
+          ? Number(r.empleado_id)
+          : null,
+      plaza_id:
+        r?.plaza_id != null && Number.isFinite(Number(r.plaza_id)) ? Number(r.plaza_id) : null,
+    }))
+    .filter((r) => Boolean(r.token));
+}
+
+export async function findActiveFcmTokens(
+  req: NextRequest,
+  params: {
+    empleadoId?: number | number[];
+    plazaId?: number | number[] | null;
+    requirePlazaMatch?: boolean;
+  }
+): Promise<string[]> {
+  const devices = await findActiveFcmDevices(req, params);
+  return devices.map((d) => d.token);
 }
 
 export async function sendPushToEmpleado(
   req: NextRequest,
   empleadoId: number,
   params: SendPushParams & { plazaId?: number | null }
-): Promise<{ sent: number; failed: number }> {
+): Promise<SendPushResult> {
   const eid = Number(empleadoId);
-  if (!Number.isFinite(eid) || eid <= 0) return { sent: 0, failed: 0 };
+  if (!Number.isFinite(eid) || eid <= 0) {
+    return { sent: 0, failed: 0, tokensTargeted: 0, firebaseConfigured: true };
+  }
 
   const plazaId =
     params.plazaId != null && Number.isFinite(Number(params.plazaId)) && Number(params.plazaId) > 0
       ? Number(params.plazaId)
       : null;
 
-  const tokens = await findActiveFcmTokens(req, {
+  const devices = await findActiveFcmDevices(req, {
     empleadoId: eid,
     plazaId,
     requirePlazaMatch: plazaId != null,
   });
+  console.log(
+    "[pushNotifications] sendPushToEmpleado targets",
+    devices.map((d) => ({
+      empleado_id: d.empleado_id,
+      plaza_id: d.plaza_id,
+      tokenPrefix: d.token.slice(0, 12),
+    }))
+  );
 
-  return sendToTokens(req, tokens, params);
+  return sendToTokens(
+    req,
+    devices.map((d) => d.token),
+    params
+  );
 }
 
 export async function sendPushToEmpleados(
   req: NextRequest,
   empleadoIds: number[],
   params: SendPushParams
-): Promise<{ sent: number; failed: number }> {
-  const tokens = await findActiveFcmTokens(req, { empleadoId: empleadoIds });
-  return sendToTokens(req, tokens, params);
+): Promise<SendPushResult> {
+  const devices = await findActiveFcmDevices(req, { empleadoId: empleadoIds });
+  console.log(
+    "[pushNotifications] sendPushToEmpleados targets",
+    devices.map((d) => ({
+      empleado_id: d.empleado_id,
+      plaza_id: d.plaza_id,
+      tokenPrefix: d.token.slice(0, 12),
+    }))
+  );
+  return sendToTokens(
+    req,
+    devices.map((d) => d.token),
+    params
+  );
 }
 
 export async function sendPushToPlazas(
   req: NextRequest,
   plazaIds: number[],
   params: SendPushParams
-): Promise<{ sent: number; failed: number }> {
-  const tokens = await findActiveFcmTokens(req, { plazaId: plazaIds });
-  return sendToTokens(req, tokens, params);
+): Promise<SendPushResult> {
+  const devices = await findActiveFcmDevices(req, { plazaId: plazaIds });
+  console.log(
+    "[pushNotifications] sendPushToPlazas targets",
+    devices.map((d) => ({
+      empleado_id: d.empleado_id,
+      plaza_id: d.plaza_id,
+      tokenPrefix: d.token.slice(0, 12),
+    }))
+  );
+  return sendToTokens(
+    req,
+    devices.map((d) => d.token),
+    params
+  );
 }
 
 export type UpsertFcmDeviceInput = {

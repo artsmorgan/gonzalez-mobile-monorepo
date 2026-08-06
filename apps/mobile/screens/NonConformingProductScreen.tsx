@@ -16,7 +16,7 @@ import {
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import * as Network from 'expo-network';
+import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import * as DocumentPicker from 'expo-document-picker';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -54,6 +54,15 @@ import {
   getStablePncRowKey,
   mergeEvaluationsCachePncForCorpo,
 } from '@/hooks/nonConformingProductCacheHelpers';
+import {
+  buildArchivoStorageListFromPncLocalAttachments,
+  materializePncLocalFilesForOffline,
+  pncCacheFilesFromArchivoEntries,
+  resolvePncArchivosForApiRequest,
+  NON_CONFORMING_PRODUCT_FILE_STORAGE_PREFIX,
+  mapPncPickerTypeToStoredFileType,
+} from '@/hooks/nonConformingProductFilesSync';
+import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'NonConformingProduct'>;
@@ -71,7 +80,9 @@ type LocalFile = {
   type: 'image' | 'audio' | 'video' | 'document';
   name: string;
   extension: string;
-  base64: string;
+  base64?: string;
+  storedFileName?: string;
+  uri?: string;
   mimeType?: string;
 };
 
@@ -83,6 +94,8 @@ type PncFile = {
   name: string;
   original_name?: string;
   base64?: string;
+  stored_file_name?: string;
+  local_file_uri?: string;
   mimeType?: string;
 };
 
@@ -138,6 +151,18 @@ const guessMimeType = (file: { type?: string; extension?: string; mimeType?: str
     return `application/${ext || 'octet-stream'}`;
   }
   return 'application/octet-stream';
+};
+
+const localFilePreviewUri = (file: LocalFile): string => {
+  if (file.uri && String(file.uri).trim()) return String(file.uri).trim();
+  if (file.storedFileName) {
+    const u = getLocalFileDisplayUri(String(file.storedFileName).trim());
+    if (u) return u;
+  }
+  if (file.base64 && String(file.base64).trim()) {
+    return `data:${guessMimeType({ type: file.type, extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}`;
+  }
+  return '';
 };
 
 type FirmaData = {
@@ -412,13 +437,8 @@ export default function NonConformingProductScreen() {
   `;
 
   const getConnectionStatus = async (): Promise<boolean> => {
-    //return false;
-    const networkState = await Network.getNetworkStateAsync();
-
-    return (
-      networkState.isConnected === true &&
-      networkState.isInternetReachable === true
-    );
+    const connectivity = await resolveAppConnectivity();
+    return connectivity.ok;
   };
 
   const closeCambiosModal = () => {
@@ -1132,33 +1152,31 @@ export default function NonConformingProductScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
-
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const r = reader.result;
-          if (typeof r === 'string') {
-            const parts = r.split(',');
-            resolve(parts.length > 1 ? parts[1] : parts[0]);
-          } else reject(new Error('No se pudo leer el archivo'));
-        };
-        reader.onerror = () => reject(reader.error ?? new Error('Error al leer el archivo'));
-        reader.readAsDataURL(blob);
-      });
-
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const displayName = asset.name || `archivo.${extension || 'dat'}`;
+      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
+      const extNorm = String(extension || 'dat').replace(/^\./, '');
+
+      const storedFileName = await saveFile({
+        uri: asset.uri,
+        originalName: stem.trim() || 'archivo',
+        extension: extNorm,
+        type: mapPncPickerTypeToStoredFileType(type),
+        prefix: NON_CONFORMING_PRODUCT_FILE_STORAGE_PREFIX,
+      });
+      const savedUri = getLocalFileDisplayUri(storedFileName) || '';
 
       const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const newFile: LocalFile = {
         id: localId,
         type,
-        name: asset.name || `archivo.${extension || 'dat'}`,
-        extension: extension || 'dat',
-        base64,
+        name: displayName,
+        extension: extNorm,
+        storedFileName,
+        uri: savedUri,
         mimeType: asset.mimeType,
       };
 
@@ -1172,29 +1190,48 @@ export default function NonConformingProductScreen() {
     }
   };
 
-  const removeLocalFile = (type: LocalFile['type'], id: string) => {
+  const removeLocalFile = async (type: LocalFile['type'], id: string) => {
+    const pickList = (t: LocalFile['type']) => {
+      if (t === 'image') return imageFiles;
+      if (t === 'audio') return audioFiles;
+      if (t === 'video') return videoFiles;
+      return documentFiles;
+    };
+    const target = pickList(type).find((f) => f.id === id);
+    if (target?.storedFileName) {
+      try {
+        await deleteFile(String(target.storedFileName).trim());
+      } catch {
+        /* noop */
+      }
+    }
     if (type === 'image') setImageFiles((p) => p.filter((f) => f.id !== id));
     else if (type === 'audio') setAudioFiles((p) => p.filter((f) => f.id !== id));
     else if (type === 'video') setVideoFiles((p) => p.filter((f) => f.id !== id));
     else setDocumentFiles((p) => p.filter((f) => f.id !== id));
   };
 
+  const buildArchivosPersistList = (): Record<string, unknown>[] =>
+    buildArchivoStorageListFromPncLocalAttachments(imageFiles, audioFiles, videoFiles, documentFiles);
+
   const buildArchivosPayload = () => {
-    const files = [...imageFiles, ...audioFiles, ...videoFiles, ...documentFiles];
-    return files.map((f) => ({
-      type: f.type,
-      extension: f.extension,
-      original_name: f.name,
-      file_base64: f.base64,
-      mimeType: f.mimeType,
-    }));
+    return buildArchivosPersistList();
   };
 
   /** Sólo entradas con base64 (borrador local). Se usa para reenviar adjuntos viejos + nuevos al sincronizar. */
   const pncFilesToArchivoPayload = (pncFiles: PncFile[] | undefined) => {
-    if (!pncFiles?.length) return [] as { type: string; extension: string; original_name: string; file_base64: string; mimeType?: string }[];
+    if (!pncFiles?.length) return [] as Record<string, unknown>[];
     return pncFiles
       .map((f) => {
+        const sn = f.stored_file_name != null ? String(f.stored_file_name).trim() : '';
+        if (sn) {
+          return {
+            type: String(f.type),
+            extension: f.extension,
+            original_name: f.original_name || f.name,
+            stored_file_name: sn,
+          };
+        }
         const b = f.base64;
         if (!b || !String(b).trim()) return null;
         return {
@@ -1205,20 +1242,31 @@ export default function NonConformingProductScreen() {
           mimeType: f.mimeType,
         };
       })
-      .filter((x) => x != null) as { type: string; extension: string; original_name: string; file_base64: string; mimeType?: string }[];
+      .filter((x) => x != null) as Record<string, unknown>[];
   };
 
   const archivosPayloadToPncLocalFiles = (arch: any[]): PncFile[] => {
     const ts = Date.now();
-    return (arch || []).map((f: any, i) => ({
-      id_local: `local_file_${ts}_${i}_${Math.random().toString(36).substring(2, 9)}`,
-      type: f.type,
-      extension: f.extension,
-      name: f.original_name || `archivo.${f.extension || 'dat'}`,
-      original_name: f.original_name,
-      base64: f.file_base64,
-      mimeType: f.mimeType,
-    }));
+    return (arch || []).map((f: any, i) => {
+      const sn = f.stored_file_name != null ? String(f.stored_file_name).trim() : '';
+      const loc =
+        f.local_file_uri != null && String(f.local_file_uri).trim() !== ''
+          ? String(f.local_file_uri).trim()
+          : sn
+            ? getLocalFileDisplayUri(sn)
+            : '';
+      return {
+        id_local: `local_file_${ts}_${i}_${Math.random().toString(36).substring(2, 9)}`,
+        type: f.type,
+        extension: f.extension,
+        name: f.original_name || `archivo.${f.extension || 'dat'}`,
+        original_name: f.original_name,
+        base64: f.file_base64,
+        stored_file_name: sn || undefined,
+        local_file_uri: loc || undefined,
+        mimeType: f.mimeType,
+      };
+    });
   };
 
   const updatePncInEvaluationsCache = async (updater: (row: PncRecord) => PncRecord) => {
@@ -1519,7 +1567,20 @@ export default function NonConformingProductScreen() {
       // CREATE
       if (!editing) {
         if (isConnected) {
-          const res = await createNonConformingProduct({ requestData, refreshAccessToken, logout });
+          const archivosPersist = buildArchivosPersistList();
+          const resolvedArchivos = await resolvePncArchivosForApiRequest(archivosPersist);
+          if (!resolvedArchivos.diskHydrationComplete) {
+            Alert.alert(
+              'Error',
+              'No se pudieron leer uno o más archivos adjuntos en el dispositivo. Comprueba que existan y vuelve a intentar.'
+            );
+            return;
+          }
+          const res = await createNonConformingProduct({
+            requestData: { ...requestData, archivos: resolvedArchivos.archivos },
+            refreshAccessToken,
+            logout,
+          });
           if (res.status) {
             Alert.alert('Éxito', res.message || 'Registro creado correctamente');
             setTimeout(() => {
@@ -1541,15 +1602,16 @@ export default function NonConformingProductScreen() {
         const localId = `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const nowIso = horaAccionToCreatedAtIso(horaAccion);
 
-        const localFiles: PncFile[] = (requestData.archivos || []).map((f: any) => ({
-          id_local: `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-          type: f.type,
-          extension: f.extension,
-          name: f.original_name || `archivo.${f.extension || 'dat'}`,
-          original_name: f.original_name,
-          base64: f.file_base64,
-          mimeType: f.mimeType,
-        }));
+        const archivosPersist = buildArchivosPersistList();
+        const archivosForCache = await materializePncLocalFilesForOffline(
+          imageFiles,
+          audioFiles,
+          videoFiles,
+          documentFiles
+        );
+        const requestDataOffline = { ...requestData, archivos: archivosPersist };
+
+        const localFiles: PncFile[] = pncCacheFilesFromArchivoEntries(archivosForCache);
 
         const localItem: PncRecord = {
           id: '',
@@ -1577,7 +1639,7 @@ export default function NonConformingProductScreen() {
           synced: false,
         };
 
-        await mergeOrPushNonConformingProductCreateInQueue(localId, requestData);
+        await mergeOrPushNonConformingProductCreateInQueue(localId, requestDataOffline);
 
         const cacheStr = await AsyncStorage.getItem('evaluations_cache');
         const cache = cacheStr ? JSON.parse(cacheStr) : [];
@@ -1595,7 +1657,7 @@ export default function NonConformingProductScreen() {
       // UPDATE
       const recordId = editing.id || editing.id_local;
       const isLocal = String(editing.id).startsWith('local-') || (editing.id_local && String(editing.id_local).startsWith('local-'));
-      const newArchivosOnly = buildArchivosPayload();
+      const newArchivosOnly = buildArchivosPersistList();
       const hasNewLocalFiles = newArchivosOnly.length > 0;
 
       const requestDataUpdate: any = {
@@ -1609,7 +1671,19 @@ export default function NonConformingProductScreen() {
       }
 
       if (isConnected && !isLocal && editing.id && !String(editing.id).startsWith('local-')) {
-        const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataUpdate, refreshAccessToken, logout });
+        let requestDataApi = requestDataUpdate;
+        if (hasNewLocalFiles) {
+          const resolvedUpdate = await resolvePncArchivosForApiRequest(newArchivosOnly);
+          if (!resolvedUpdate.diskHydrationComplete) {
+            Alert.alert(
+              'Error',
+              'No se pudieron leer uno o más archivos adjuntos en el dispositivo. Comprueba que existan y vuelve a intentar.'
+            );
+            return;
+          }
+          requestDataApi = { ...requestDataUpdate, archivos: resolvedUpdate.archivos };
+        }
+        const res = await updateNonConformingProduct({ id: String(editing.id), requestData: requestDataApi, refreshAccessToken, logout });
         if (res.status) {
           Alert.alert('Éxito', res.message || 'Registro actualizado correctamente');
           setTimeout(() => {
@@ -1745,7 +1819,7 @@ export default function NonConformingProductScreen() {
         {imageFiles.map((file) => (
           <ThemedView key={file.id} style={styles.fileRow}>
             <Image
-              source={{ uri: `data:${guessMimeType({ type: 'image', extension: file.extension, mimeType: file.mimeType })};base64,${file.base64}` }}
+              source={{ uri: localFilePreviewUri(file) }}
               style={styles.filePreviewImage}
               resizeMode="cover"
             />

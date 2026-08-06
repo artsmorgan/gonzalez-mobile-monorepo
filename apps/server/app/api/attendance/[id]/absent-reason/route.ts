@@ -7,7 +7,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
@@ -29,7 +29,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
         }
 
-        const empleadoId = Number(marcaDia.empleadoFijo_id ?? 0);
+        const authEmpleadoId = Number(payload.id);
+        const reemplazaId = marcaDia.empleadoReemplaza_id != null ? Number(marcaDia.empleadoReemplaza_id) : 0;
+        const fijoId = marcaDia.empleadoFijo_id != null ? Number(marcaDia.empleadoFijo_id) : 0;
+        const empleadoId =
+            reemplazaId > 0 && reemplazaId === authEmpleadoId
+                ? authEmpleadoId
+                : fijoId > 0
+                  ? fijoId
+                  : authEmpleadoId;
         const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
         if (!empleado) {
             return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });

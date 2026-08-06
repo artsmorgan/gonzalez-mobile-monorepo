@@ -43,6 +43,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [division, setDivision] = React.useState<string | null>(null);
   const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
   const [modulesRelease, setModulesRelease] = React.useState<any[]>([]);
+  const [modulesReleaseReady, setModulesReleaseReady] = React.useState(false);
   const [currentMarca, setCurrentMarca] = React.useState<any | null>(null);
   const [isUserSuperAdmin, setIsUserSuperAdmin] = React.useState<boolean>(false);
   const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
@@ -82,10 +83,15 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         }
       };
       const loadModulesRelease = async () => {
-        const modules_release = await AsyncStorage.getItem('modules_release');
-        if (modules_release) {
-          const modules_release_data = JSON.parse(modules_release);
-          setModulesRelease(modules_release_data);
+        try {
+          const modules_release = await AsyncStorage.getItem('modules_release');
+          if (modules_release) {
+            console.log('+++++++++++++++++++++++++++++++++++++++++ Modules release: ' + modules_release);
+            const modules_release_data = JSON.parse(modules_release);
+            setModulesRelease(modules_release_data);
+          }
+        } finally {
+          setModulesReleaseReady(true);
         }
       };
       loadCurrentMarca();
@@ -414,6 +420,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     navigation.navigate('ModuleVisibility');
   };
 
+  const handleSuperAdminsPress = () => {
+    onClose();
+    navigation.navigate('SuperAdmins');
+  };
+
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
@@ -482,6 +493,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
       case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'nomencladores': return <Ionicons name="albums" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'module-visibility': return <Ionicons name="eye" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'super-admins': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'reportes': return <Ionicons name="bar-chart" size={20} color={isActive ? '#007AFF' : '#000000'} />;
       case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
@@ -492,6 +504,10 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
 
     if (employee && employee.isSuperAdmin) {
       //setIsUserSuperAdmin(true);
+      return true;
+    }
+
+    if (!modulesReleaseReady) {
       return true;
     }
 
@@ -686,6 +702,33 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   Visibilidad de módulos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {isUserSuperAdmin && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('SuperAdmins') && styles.activeMenuItem
+                ]}
+                onPress={handleSuperAdminsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SuperAdmins') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('super-admins', isActiveRoute('SuperAdmins'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SuperAdmins') && styles.activeMenuItemText
+                  ]}
+                >
+                  Super admins
                 </ThemedText>
               </TouchableOpacity>
             )}
@@ -1207,7 +1250,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {releaseAction('nomencladores') && hasCurrentMarca && hasPermissionRole(['ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos']) && (
+            {isUserSuperAdmin && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

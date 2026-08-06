@@ -35,7 +35,7 @@ export type PermitTurnoRow = {
 /** 1 GET a PLANILLAS_URL/marcas por día; retorna ids únicos. */
 export async function collectPlanillasMarcaIdsForDateRange(params: {
   planillasToken: string;
-  empleadoCedula: string;
+  empleadoCodigo: string;
   fechaInicio: Date;
   fechaFin: Date;
 }): Promise<number[]> {
@@ -61,7 +61,7 @@ export async function collectPlanillasMarcaIdsForDateRange(params: {
           Authorization: `Bearer ${params.planillasToken}`,
         },
         params: {
-          empleado_codigo: params.empleadoCedula,
+          empleado_codigo: params.empleadoCodigo,
           fecha: fechaParam,
         },
       });
@@ -92,7 +92,7 @@ export async function collectPlanillasMarcaIdsForDateRange(params: {
  */
 export async function getPermitTurnosFromPlanillasRange(params: {
   planillasToken: string;
-  empleadoCedula: string;
+  empleadoCodigo: string;
   fechaInicio: Date;
   fechaFin: Date;
   plazaId?: number | null;

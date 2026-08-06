@@ -14,6 +14,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import SignatureScreen from "react-native-signature-canvas";
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import * as Network from 'expo-network';
+import Constants from 'expo-constants';
+import authedFetch from '@/hooks/authedFetch';
 import { jwtDecode } from 'jwt-decode';
 import saveManualSignature from '@/hooks/saveManualSignature';
 import getHoraAccion from '@/hooks/getHoraAccion';
@@ -255,11 +257,57 @@ export default function DigitalSignatureScreen() {
     navigation.goBack();
   };
 
+  const persistEmployeeFirmaManual = async (signature: string) => {
+    if (!employee) return;
+    employee.firmaManual = signature;
+    try {
+      const empRaw = await AsyncStorage.getItem('employee_data');
+      if (empRaw) {
+        const emp = JSON.parse(empRaw);
+        emp.firmaManual = signature;
+        await AsyncStorage.setItem('employee_data', JSON.stringify(emp));
+      }
+    } catch (e) {
+      console.error('Error persisting firmaManual in employee_data:', e);
+    }
+  };
+
   const fetchManualSignature = async () => {
     if (!employee) return;
 
     setIsLoadingManualSignature(true);
     try {
+      const networkState = await Network.getNetworkStateAsync();
+      const online =
+        networkState.isConnected === true &&
+        (networkState.isInternetReachable === true || networkState.isInternetReachable === null);
+
+      if (online) {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (apiUrl) {
+          const response = await authedFetch({
+            url: `${apiUrl}/api/digital-signature/manual-signature/${employee.id}`,
+            init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+            refreshAccessToken,
+            logout,
+          });
+          if (response?.ok) {
+            const data = await response.json();
+            if (data?.status && data.manualSignature) {
+              setManualSignature(data.manualSignature);
+              await persistEmployeeFirmaManual(data.manualSignature);
+              return;
+            }
+          }
+        }
+      }
+
+      const cached = await AsyncStorage.getItem('manual_signature_cache');
+      if (cached) {
+        setManualSignature(cached);
+        return;
+      }
+
       setManualSignature(employee.firmaManual);
     } catch (error) {
       console.error('Error fetching manual signature:', error);
@@ -327,11 +375,12 @@ export default function DigitalSignatureScreen() {
       } else {
         status_result = true;
         await AsyncStorage.setItem('manual_signature_cache', signature);
+        await persistEmployeeFirmaManual(signature);
       }
 
       if (status_result) {
         Alert.alert('Éxito', 'Firma guardada correctamente');
-        employee.firmaManual = signature;
+        await persistEmployeeFirmaManual(signature);
         setManualSignature(signature);
         setIsDrawingMode(false);
       } else {

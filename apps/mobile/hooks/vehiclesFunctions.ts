@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Constants from "expo-constants";
 import authedFetch from "./authedFetch";
+import { parseApiErrorResponse } from "./parseApiErrorResponse";
 
 interface CreateVehicleParams {
     requestData: any;
@@ -67,14 +68,15 @@ export async function createVehicle({
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return parseApiErrorResponse(response, `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         return data;
     } catch (error) {
         console.error('Error creating vehicle:', error);
-        return { status: false, message: 'Error al crear el vehículo' };
+        const message = error instanceof Error ? error.message : 'Error al crear el vehículo';
+        return { status: false, message };
     }
 }
 
@@ -117,14 +119,15 @@ export async function updateVehicle({
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return parseApiErrorResponse(response, `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         return data;
     } catch (error) {
         console.error('Error updating vehicle:', error);
-        return { status: false, message: 'Error al actualizar el vehículo' };
+        const message = error instanceof Error ? error.message : 'Error al actualizar el vehículo';
+        return { status: false, message };
     }
 }
 
@@ -160,14 +163,15 @@ export async function deleteVehicleAttachment({
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return parseApiErrorResponse(response, `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         return data;
     } catch (error) {
         console.error('Error deleting vehicle attachment:', error);
-        return { status: false, message: 'Error al eliminar el adjunto' };
+        const message = error instanceof Error ? error.message : 'Error al eliminar el adjunto';
+        return { status: false, message };
     }
 }
 
@@ -203,13 +207,14 @@ export async function deleteVehicle({
         }
 
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            return parseApiErrorResponse(response, `HTTP error! status: ${response.status}`);
         }
 
         const data = await response.json();
         return data;
     } catch (error) {
         console.error('Error deleting vehicle:', error);
-        return { status: false, message: 'Error al eliminar el vehículo' };
+        const message = error instanceof Error ? error.message : 'Error al eliminar el vehículo';
+        return { status: false, message };
     }
 }

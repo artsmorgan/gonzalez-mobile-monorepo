@@ -1,0 +1,17 @@
+id: F-005
+module_id: lunch-time
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "3453-3468"
+category: async
+title: Sync lunchtime_actions puede reenviar acciones ya sincronizadas
+description: |
+  Bucle for sobre array inicial sin re-leer cola tras cada éxito.
+reproduction: |
+  1. 2+ entradas en cola.
+  2. Sync online.
+  3. POST duplicados posibles.
+impact: Duplicados en backend.
+suggested_fix: |
+  Re-leer cola tras cada éxito o mutar array en memoria.

@@ -1,0 +1,15 @@
+id: F-002
+module_id: reportes
+severity: informational
+status: fixed
+file: apps/mobile/screens/ReportesScreen.tsx
+lines: "4309"
+category: offline
+title: Módulo 100% online sin cola offline
+description: |
+  Sin storageKeys en manifiesto; UI bloqueada offline.
+reproduction: |
+  1. Lite offline → Reportes.
+impact: Esperado; operadores sin red no generan reportes.
+suggested_fix: |
+  Documentar limitación.

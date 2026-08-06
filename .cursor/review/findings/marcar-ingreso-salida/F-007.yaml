@@ -1,0 +1,19 @@
+id: F-007
+module_id: marcar-ingreso-salida
+severity: medium
+status: fixed
+file: apps/server/app/api/attendance/[id]/absent-reason/route.ts
+lines: "32-36"
+category: api
+title: Motivo de ausencia guardado bajo empleadoFijo_id ignorando reemplazo
+description: |
+  absent-reason siempre usa marcaDia.empleadoFijo_id para empleado_id del registro.
+  Un reemplazo activo puede tener marca propia (empleadoReemplaza_id) pero el motivo
+  se atribuye al empleado fijo del puesto.
+reproduction: |
+  1. Empleado reemplazo obtiene marca donde es empleadoReemplaza_id.
+  2. Envía motivo de ausencia (online o vía sync).
+  3. Registro c_empleado_razon_ausencia usa empleadoFijo_id, no el reemplazo autenticado.
+impact: Notificaciones y auditoría con empleado incorrecto en coberturas/reemplazos.
+suggested_fix: |
+  Resolver empleado desde JWT payload.id o preferir empleadoReemplaza_id si coincide con sesión.

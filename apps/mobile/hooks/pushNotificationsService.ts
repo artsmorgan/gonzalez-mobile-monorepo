@@ -16,7 +16,7 @@ export type PushDeviceAction = {
   created_at: number;
 };
 
-/** Handler en primer plano: no mostrar banner del SO por defecto (lo maneja la app). */
+/** Handler en primer plano: mostrar banner/lista/sonido (Android release a menudo no pinta el del SO solo). */
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -37,19 +37,23 @@ export function resolveAppVariant(): 'lite' | 'full' {
 
 export async function ensureAndroidNotificationChannels(): Promise<void> {
   if (Platform.OS !== 'android') return;
-  await Notifications.setNotificationChannelAsync('general', {
-    name: 'Notificaciones generales',
-    importance: Notifications.AndroidImportance.HIGH,
-    vibrationPattern: [0, 250, 250, 250],
+  const base = {
+    vibrationPattern: [0, 250, 250, 250] as number[],
     lightColor: '#007AFF',
-    sound: 'default',
+    sound: 'default' as const,
+    enableVibrate: true,
+    showBadge: true,
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+    importance: Notifications.AndroidImportance.MAX,
+  };
+  await Notifications.setNotificationChannelAsync('general', {
+    ...base,
+    name: 'Notificaciones generales',
   });
   await Notifications.setNotificationChannelAsync('procesos', {
+    ...base,
     name: 'Procesos del sistema',
-    importance: Notifications.AndroidImportance.HIGH,
-    vibrationPattern: [0, 250, 250, 250],
     lightColor: '#34C759',
-    sound: 'default',
   });
 }
 
@@ -78,6 +82,7 @@ export async function getNativePushToken(): Promise<string | null> {
 
     const deviceToken = await Notifications.getDevicePushTokenAsync();
     const token = String(deviceToken?.data || '').trim();
+    console.log('[push] Token FCM:', token);
     if (!token) return null;
     await AsyncStorage.setItem(PUSH_LOCAL_TOKEN_KEY, token);
     return token;
@@ -215,12 +220,23 @@ export async function syncPushDeviceRegistration(params: {
   });
 
   if (!ok) {
+    console.warn('[push] Registro online falló; encolando. tokenPrefix=', token.slice(0, 12));
     await enqueuePushAction({
       id: `push-register-${Date.now()}`,
       type: 'register',
       payload,
       created_at: Date.now(),
     });
+  } else {
+    console.log(
+      '[push] Dispositivo registrado',
+      'variant=',
+      resolveAppVariant(),
+      'tokenPrefix=',
+      token.slice(0, 12),
+      'plaza=',
+      marcaCtx.plaza_id
+    );
   }
 }
 
@@ -292,6 +308,26 @@ export type PushNotificationData = {
   channelId?: string;
   [key: string]: string | undefined;
 };
+
+/** Presenta en bandeja localmente (refuerzo cuando FCM entrega pero el SO no pinta heads-up). */
+export async function presentPushAsLocalNotification(params: {
+  title?: string | null;
+  body?: string | null;
+  data?: PushNotificationData;
+}): Promise<void> {
+  const channelId = params.data?.channelId === 'procesos' ? 'procesos' : 'general';
+  await ensureAndroidNotificationChannels();
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: String(params.title || 'MonitoreApp').trim() || 'MonitoreApp',
+      body: String(params.body || '').trim() || 'Nueva notificación',
+      data: { ...(params.data || {}), _presentedLocally: '1' },
+      sound: true,
+      ...(Platform.OS === 'android' ? { channelId } : {}),
+    },
+    trigger: null,
+  });
+}
 
 export function extractPushData(content: Notifications.NotificationContent): PushNotificationData {
   const data = (content?.data || {}) as Record<string, unknown>;

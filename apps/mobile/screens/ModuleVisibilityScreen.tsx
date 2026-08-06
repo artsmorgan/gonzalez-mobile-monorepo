@@ -37,13 +37,20 @@ type ModuleVisibilityRow = {
 
 export default function ModuleVisibilityScreen() {
   const navigation = useNavigation<ModuleVisibilityScreenNavigationProp>();
-  const { refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout } = useAuth();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
   const [rows, setRows] = useState<ModuleVisibilityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (employee && !employee.isSuperAdmin) {
+      Alert.alert('Acceso denegado', 'Esta pantalla requiere permisos de super administrador.');
+      navigation.goBack();
+    }
+  }, [employee, navigation]);
 
   const refreshOnlineStatus = useCallback(async () => {
     const networkState = await Network.getNetworkStateAsync();
@@ -78,7 +85,17 @@ export default function ModuleVisibilityScreen() {
   const fetchRows = useCallback(async () => {
     const online = await refreshOnlineStatus();
     if (!online) {
-      setRows([]);
+      try {
+        const cached = await AsyncStorage.getItem('modules_release');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          setRows(parseRows(Array.isArray(parsed) ? parsed : []));
+        } else {
+          setRows([]);
+        }
+      } catch {
+        setRows([]);
+      }
       setLoading(false);
       return;
     }

@@ -5,11 +5,15 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo run:android",
+    "android": "expo run:android --variant liteDebug",
+    "android:lite": "expo run:android --variant liteDebug",
+    "android:full": "expo run:android --variant fullDebug",
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "build": "eas build --platform all",
+    "build": "eas build --platform android --profile preview",
+    "build:lite": "eas build --platform android --profile preview-lite",
+    "build:full": "eas build --platform android --profile preview-full",
     "build:web": "expo export --platform web",
     "postinstall": "node patch-metro.js || true",
     "build:railway": "npx expo export --platform web --clear"

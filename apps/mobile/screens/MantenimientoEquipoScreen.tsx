@@ -1659,7 +1659,10 @@ export default function MantenimientoEquipoScreen() {
 
     const handleSubmitBulkArticulos = useCallback(async () => {
         if (!(await getConnectionStatus())) {
-            Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
+            Alert.alert(
+              'Sin conexión',
+              'La carga masiva de artículos requiere conexión a internet y no se puede encolar offline.'
+            );
             return;
         }
         if (bulkPlantillaArticulos.length === 0) {
@@ -3162,7 +3165,7 @@ export default function MantenimientoEquipoScreen() {
             const esSoloEvaluacionLocal = isMantenimientoSoloEvaluacionCache(selectedActivo);
 
             // Registros válidos (existentes en servidor): encolar PUT para sincronizar luego
-            if (!esSoloEvaluacionLocal && Number.isFinite(Number(selectedActivo.id)) && Number(selectedActivo.id) > 0) {
+            if (Number.isFinite(Number(selectedActivo.id)) && Number(selectedActivo.id) > 0) {
                 const horaAccion = await getHoraAccion();
                 if (horaAccion) {
                     requestData.hora_accion = new Date(horaAccion).toISOString();

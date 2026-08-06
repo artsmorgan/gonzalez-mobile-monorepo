@@ -1,0 +1,16 @@
+id: F-001
+module_id: corporate-vehicles
+severity: high
+status: fixed
+file: apps/mobile/hooks/corporateVehiclesMainStructure.ts
+lines: "488-489"
+category: offline
+title: Lista vacía si main-structure no hidratado
+description: |
+  mergeCorporateVehiclesForSucursalFromServer no-op si tree vacío; UI lee solo main-structure.
+reproduction: |
+  1. Lite sin main_structure.
+  2. Abrir módulo online API OK.
+impact: Pantalla vacía pese a datos servidor.
+suggested_fix: |
+  Fallback a corporate_vehicles_corpo_cache.

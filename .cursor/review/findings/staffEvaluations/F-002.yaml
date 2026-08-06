@@ -1,0 +1,15 @@
+id: F-002
+module_id: staffEvaluations
+severity: medium
+status: fixed
+file: apps/mobile/screens/StaffEvaluationsScreen.tsx
+lines: "1858-1862"
+category: offline
+title: Acción offline create omite marcaId top-level
+description: |
+  Cola { type, requestData } sin marcaId en action object.
+reproduction: |
+  1. Inspeccionar shape vs surveys/voice-notes.
+impact: Inconsistencia; depende de marca_id en body.
+suggested_fix: |
+  Añadir marcaId al action envelope.

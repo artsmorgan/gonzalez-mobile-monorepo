@@ -1065,6 +1065,7 @@ export default function AttendanceControlScreen() {
       }
 
       const isConnected = await getConnectionStatus();
+      // Lite: módulo online-only; handlers en App.tsx solo procesan cola legacy (p. ej. delete_image).
       if (!isConnected) {
         setError('Este módulo funciona exclusivamente con internet.');
         setControls([]);
@@ -1811,7 +1812,7 @@ export default function AttendanceControlScreen() {
         nombre_supervisor: nombreSupervisor.trim() || null,
         comentarios: comentarios.trim() || null,
         firma_manual_supervisor: getBase64Only(firmaManualSupervisor) || null,
-        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : {}),
+        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : { firmas_empleados: JSON.stringify([]) }),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
       };
 
@@ -1912,7 +1913,7 @@ export default function AttendanceControlScreen() {
         nombre_supervisor: nombreSupervisor.trim() || null,
         comentarios: comentarios.trim() || null,
         firma_manual_supervisor: getBase64Only(firmaManualSupervisor) || null,
-        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : {}),
+        ...(firmasEmpleadosArr.length ? { firmas_empleados: JSON.stringify(firmasEmpleadosArr) } : { firmas_empleados: JSON.stringify([]) }),
         ...(imagenesStr ? { imagenes: imagenesStr } : {}),
       };
 

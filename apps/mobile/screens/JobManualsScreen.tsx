@@ -3556,13 +3556,21 @@ export default function JobManualsScreen() {
                                     // Agendar acción de borrado
                                     const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
                                     let actions = actionsStr ? JSON.parse(actionsStr) : [];
+                                    const isLocalDraft =
+                                      selectedManual.id === 0 ||
+                                      (typeof selectedManual.id === 'string' &&
+                                        String(selectedManual.id).startsWith('local-'));
+                                    const deleteKey =
+                                      isLocalDraft && selectedManual.id_local
+                                        ? selectedManual.id_local
+                                        : selectedManual.id;
                                     const mid = Number(selectedManual.id);
                                     actions = actions.filter(
                                       (a: any) =>
                                         !(a.type === 'append_puestos' && Number(a.manualId) === mid)
                                     );
                                     actions.push({
-                                      id: selectedManual.id,
+                                      id: deleteKey,
                                       type: 'delete',
                                       marcaId,
                                     });
@@ -3572,7 +3580,11 @@ export default function JobManualsScreen() {
                                     const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
                                     if (cacheStr) {
                                       const cache = JSON.parse(cacheStr);
-                                      const updatedCache = cache.filter((m: any) => m.id !== selectedManual.id);
+                                      const updatedCache = cache.filter(
+                                        (m: any) =>
+                                          m.id !== selectedManual.id &&
+                                          String(m.id_local || '') !== String(deleteKey)
+                                      );
                                       await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
                                     }
 

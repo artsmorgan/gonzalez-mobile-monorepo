@@ -278,7 +278,23 @@ export async function POST(req: NextRequest) {
       console.log("Evaluación actualizada correctamente");
     } catch (error) {
       console.error("Error procesando imágenes en evaluación:", error);
-      // Continuar aunque falle el procesamiento de imágenes
+      try {
+        await callDynamicPrisma({
+          req,
+          data: {
+            action: "DELETE",
+            table: "c_checklist_supervision",
+            operation: "delete",
+            where: { id: created.id },
+          },
+        });
+      } catch (rollbackError) {
+        console.error("Error en rollback de checklist tras fallo de imágenes:", rollbackError);
+      }
+      return NextResponse.json(
+        { status: false, message: "Error al procesar imágenes de la evaluación" },
+        { status: 200 }
+      );
     }
 
     if (created) {

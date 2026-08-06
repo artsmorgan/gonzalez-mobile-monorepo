@@ -24,6 +24,12 @@ import { DEFAULT_REPORT_MAX_ATTEMPTS } from "../../../utils/reportJobQueue";
 import { drainPendingReportJobs } from "../../../utils/runReportJobCycle";
 import { signalReportWorkerActivity } from "../../../utils/reportWorkerSchedule";
 import {
+    createReportePuestoBatch,
+    listReportesPuesto,
+    resolveServiceAccessToken,
+    type ReportePuestoSelection,
+} from "../../../utils/reportesPuestoService";
+import {
     normalizeMobileReportTipo,
     resolveMobileReportTipoFromModuleFilters,
 } from "../../../utils/mobileReportTipo";
@@ -344,6 +350,14 @@ export type ReportesPayload = {
     filters_json?: string;
     /** mobileReportUploadsPath — reporte completado para resolver ruta en `uploads/` */
     reportId?: number;
+    /** createReportePuesto / listReportesPuesto */
+    puestoId?: number;
+    puesto_id?: number;
+    creadoDesde?: string;
+    creadoHasta?: string;
+    createdDesde?: string;
+    createdHasta?: string;
+    selections?: { modulo: string; tipo_reporte: string }[];
 };
 
 export type ReportesOperationResult = {
@@ -1757,6 +1771,62 @@ export async function executeReportesOperation(
                 message: "El reporte se encoló y se generará en segundo plano.",
                 data: { id: created.id, estado: created.estado },
             };
+        }
+
+        if (op === "createReportePuesto") {
+            const nombre = String(payload.nombre || "").trim();
+            const numero = String(payload.numero || "").trim();
+            const nomenclatura = String(payload.nomenclatura || "").trim();
+            const firma = String(payload.firma_responsable || "").trim();
+            const puestoId = Number(payload.puestoId ?? payload.puesto_id);
+            if (!nombre || !numero || !nomenclatura || !firma) {
+                return { status: false, message: "nombre, número, nomenclatura y firma_responsable son obligatorios" };
+            }
+            if (!Number.isFinite(puestoId) || puestoId <= 0) {
+                return { status: false, message: "puestoId es obligatorio" };
+            }
+
+            const rawSelections = Array.isArray(payload.selections) ? payload.selections : [];
+            const selections: ReportePuestoSelection[] = rawSelections
+                .map((s: { modulo?: string; tipo_reporte?: string }): ReportePuestoSelection => ({
+                    modulo: String(s?.modulo || "").trim(),
+                    tipo_reporte:
+                        String(s?.tipo_reporte || "Consolidado") === "Individual" ? "Individual" : "Consolidado",
+                }))
+                .filter((s) => s.modulo.length > 0);
+
+            if (selections.length === 0) {
+                return { status: false, message: "Seleccione al menos un módulo/tipo de reporte" };
+            }
+
+            const result = await createReportePuestoBatch(req, reportDb, {
+                nombre,
+                numero,
+                nomenclatura,
+                descripcion: payload.descripcion != null ? String(payload.descripcion) : undefined,
+                puestoId,
+                firma_responsable: firma,
+                creadoDesde: payload.creadoDesde != null ? String(payload.creadoDesde) : null,
+                creadoHasta: payload.creadoHasta != null ? String(payload.creadoHasta) : null,
+                selections,
+                empleadoId: auth.empleadoId,
+                serviceAccessToken: resolveServiceAccessToken(req, payload.token),
+            });
+
+            return {
+                status: true,
+                message: "Reporte por puesto encolado. Los reportes se generarán en segundo plano.",
+                data: result,
+            };
+        }
+
+        if (op === "listReportesPuesto") {
+            const data = await listReportesPuesto(req, reportDb, {
+                puestoId: payload.puestoId != null ? Number(payload.puestoId) : null,
+                createdDesde: payload.createdDesde != null ? String(payload.createdDesde) : null,
+                createdHasta: payload.createdHasta != null ? String(payload.createdHasta) : null,
+            });
+            return { status: true, data };
         }
 
         if (op === "mobileReportUploadsPath") {
