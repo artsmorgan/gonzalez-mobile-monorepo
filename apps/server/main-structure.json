@@ -1,5 +1,5 @@
 {
-  "created_at": 1785893747883,
+  "created_at": 1786043876847,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -3518,8 +3518,8 @@
         "nombre": "0-CG-AYL - ASEO Y LIMPIEZA",
         "codigo": "0-CG-AYL",
         "ubicacion": {
-          "lat": "10.0748596",
-          "lng": "-84.729073"
+          "lat": "10.0748696",
+          "lng": "-84.7291567"
         }
       }
     ],

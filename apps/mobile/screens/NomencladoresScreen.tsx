@@ -47,8 +47,7 @@ type NomenclatorFormKind =
   | 'ejecutivo-coordinador'
   | 'empleado-ejecutivo'
   | 'mobile-variable'
-  | 'tipo-mantenimiento-articulo'
-  | 'super-admin';
+  | 'tipo-mantenimiento-articulo';
 
 type NomenclatorRow = {
   id: number;
@@ -82,7 +81,6 @@ const EJECUTIVO_COORDINADOR_SLUG = 'coordinadores-ejecutivos';
 const EMPLEADO_EJECUTIVO_SLUG = 'empleados-ejecutivos';
 const MOBILE_VARIABLES_SLUG = 'variables-sistema';
 const TIPO_MANTENIMIENTO_ARTICULO_SLUG = 'tipos-mantenimiento-articulos';
-const SUPER_ADMINS_SLUG = 'super-admins';
 
 /** AsyncStorage keys used by other modules for nomenclador slugs edited here. */
 const NOMENCLATOR_SLUG_TO_CACHE_KEY: Record<string, string> = {
@@ -192,13 +190,6 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
     description: 'Administra las variables de configuración utilizadas en la aplicación.',
     formKind: 'mobile-variable',
   },
-  {
-    slug: SUPER_ADMINS_SLUG,
-    label: 'Super admins',
-    description:
-      'Lista de empleados autorizados como super administradores de la aplicación (visible solo para super admins).',
-    formKind: 'super-admin',
-  },
 ];
 
 function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
@@ -226,7 +217,7 @@ function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
 
 export default function NomencladoresScreen() {
   const navigation = useNavigation<NomencladoresScreenNavigationProp>();
-  const { refreshAccessToken, logout, employee } = useAuth();
+  const { refreshAccessToken, logout } = useAuth();
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isOnline, setIsOnline] = useState<boolean | null>(null);
@@ -541,10 +532,6 @@ export default function NomencladoresScreen() {
   };
 
   const openEditForm = (row: NomenclatorRow) => {
-    if (selectedType?.formKind === 'super-admin') {
-      Alert.alert('Información', 'Los super admins no se editan; elimine y cree de nuevo.');
-      return;
-    }
     setEditingId(row.id);
     if (selectedType?.formKind === 'ejecutivo-coordinador') {
       setFormEjecutivoId(row.ejecutivo_cuenta_id != null ? String(row.ejecutivo_cuenta_id) : '');
@@ -699,16 +686,6 @@ export default function NomencladoresScreen() {
         return;
       }
       body = { articulo_id, nombre };
-    } else if (selectedType.formKind === 'super-admin') {
-      if (editingId) {
-        Alert.alert('Validación', 'Los super admins no se editan; elimine y cree de nuevo.');
-        return;
-      }
-      if (!selectedEmpleado) {
-        Alert.alert('Validación', 'Debe buscar y seleccionar un empleado.');
-        return;
-      }
-      body = { empleado_id: selectedEmpleado.id };
     } else {
       const nombre = formNombre.trim();
       if (!nombre) {
@@ -875,25 +852,8 @@ export default function NomencladoresScreen() {
   const isEmpleadoEjecutivoForm = selectedType?.formKind === 'empleado-ejecutivo';
   const isMobileVariableForm = selectedType?.formKind === 'mobile-variable';
   const isTipoMantenimientoArticuloForm = selectedType?.formKind === 'tipo-mantenimiento-articulo';
-  const isSuperAdminForm = selectedType?.formKind === 'super-admin';
   const isEditOnlyForm = isMobileVariableForm;
-  const isCreateDeleteOnlyForm = isSuperAdminForm;
   const isOptionsForm = isCompositeForm || isEmpleadoEjecutivoForm || isTipoMantenimientoArticuloForm;
-
-  const visibleNomenclatorTypes = NOMENCLATOR_TYPES.filter(
-    (type) => type.formKind !== 'super-admin' || employee?.isSuperAdmin === true,
-  );
-
-  const formatCreatedAt = (value?: string) => {
-    if (!value) return '';
-    const d = new Date(value);
-    if (!Number.isFinite(d.getTime())) return value;
-    try {
-      return d.toLocaleString('es-CR');
-    } catch {
-      return value;
-    }
-  };
 
   const handleFilterArticuloChange = (value: string) => {
     setFilterArticuloId(value);
@@ -925,7 +885,7 @@ export default function NomencladoresScreen() {
         </ThemedView>
 
         <ThemedView style={styles.listContainer}>
-          {visibleNomenclatorTypes.map((type) => (
+          {NOMENCLATOR_TYPES.map((type) => (
             <TouchableOpacity
               key={type.slug}
               style={[styles.typeButton, isOnline === false && styles.typeButtonDisabled]}
@@ -1169,57 +1129,6 @@ export default function NomencladoresScreen() {
                         />
                       </>
                     )
-                  ) : isSuperAdminForm ? (
-                    <>
-                      <ThemedText style={styles.label}>Empleado</ThemedText>
-                      <View style={styles.row}>
-                        <TextInput
-                          style={[styles.input, styles.inputFlex]}
-                          value={formEmpleadoSearch}
-                          onChangeText={setFormEmpleadoSearch}
-                          placeholder="Código o nombre del empleado"
-                          placeholderTextColor="#999"
-                          onSubmitEditing={() => void runSearchEmpleado()}
-                        />
-                        <TouchableOpacity
-                          style={styles.searchIconBtn}
-                          onPress={() => void runSearchEmpleado()}
-                          activeOpacity={0.85}
-                          disabled={employeeSearchLoading}
-                        >
-                          {employeeSearchLoading ? (
-                            <ActivityIndicator size="small" color="#fff" />
-                          ) : (
-                            <Ionicons name="search" size={22} color="#fff" />
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                      {formEmpleadoResults.length ? (
-                        <ThemedView style={styles.resultList}>
-                          {formEmpleadoResults.map((e) => (
-                            <TouchableOpacity
-                              key={e.id}
-                              style={styles.resultItem}
-                              onPress={() => pickEmpleado(e)}
-                            >
-                              <ThemedText>
-                                {e.codigo} — {formatEmpleadoNombre(e)}
-                              </ThemedText>
-                            </TouchableOpacity>
-                          ))}
-                        </ThemedView>
-                      ) : null}
-                      {selectedEmpleado ? (
-                        <ThemedView style={styles.selectedEmpleadoBox}>
-                          <ThemedText style={styles.selectedEmpleadoText}>
-                            {selectedEmpleado.codigo} — {formatEmpleadoNombre(selectedEmpleado)}
-                          </ThemedText>
-                          <TouchableOpacity onPress={clearSelectedEmpleado} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                            <Ionicons name="close-circle" size={20} color="#FF3B30" />
-                          </TouchableOpacity>
-                        </ThemedView>
-                      ) : null}
-                    </>
                   ) : isMobileVariableForm ? (
                     <>
                       <ThemedText style={styles.label}>Variable</ThemedText>
@@ -1353,29 +1262,15 @@ export default function NomencladoresScreen() {
                       {isTipoMantenimientoArticuloForm && row.articulo_nombre ? (
                         <ThemedText style={styles.recordMeta}>Artículo: {row.articulo_nombre}</ThemedText>
                       ) : null}
-                      {isSuperAdminForm ? (
-                        <>
-                          {row.employee_cedula ? (
-                            <ThemedText style={styles.recordMeta}>Cédula: {row.employee_cedula}</ThemedText>
-                          ) : null}
-                          {row.created_at ? (
-                            <ThemedText style={styles.recordMeta}>
-                              Creado: {formatCreatedAt(row.created_at)}
-                            </ThemedText>
-                          ) : null}
-                        </>
-                      ) : null}
                     </View>
                     <View style={styles.recordActions}>
-                      {!isCreateDeleteOnlyForm ? (
-                        <TouchableOpacity
-                          style={styles.iconBtn}
-                          onPress={() => openEditForm(row)}
-                          disabled={saving}
-                        >
-                          <Ionicons name="create-outline" size={20} color="#007AFF" />
-                        </TouchableOpacity>
-                      ) : null}
+                      <TouchableOpacity
+                        style={styles.iconBtn}
+                        onPress={() => openEditForm(row)}
+                        disabled={saving}
+                      >
+                        <Ionicons name="create-outline" size={20} color="#007AFF" />
+                      </TouchableOpacity>
                       {!isEditOnlyForm ? (
                         <TouchableOpacity
                           style={styles.iconBtn}

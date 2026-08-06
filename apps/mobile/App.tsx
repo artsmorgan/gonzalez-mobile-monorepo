@@ -226,6 +226,7 @@ import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
 import NomencladoresScreen from './screens/NomencladoresScreen';
 import ModuleVisibilityScreen from './screens/ModuleVisibilityScreen';
+import SuperAdminsScreen from './screens/SuperAdminsScreen';
 import ReportesScreen from './screens/ReportesScreen';
 import {
   createStaffEvaluation,
@@ -371,6 +372,7 @@ export type RootStackParamList = {
   Jerarquia: undefined;
   Nomencladores: undefined;
   ModuleVisibility: undefined;
+  SuperAdmins: undefined;
   Reportes: undefined;
 };
 
@@ -463,6 +465,7 @@ function RootNavigator() {
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
       <Stack.Screen name="Nomencladores" component={NomencladoresScreen} />
       <Stack.Screen name="ModuleVisibility" component={ModuleVisibilityScreen} />
+      <Stack.Screen name="SuperAdmins" component={SuperAdminsScreen} />
       <Stack.Screen name="Reportes" component={ReportesScreen} />
     </Stack.Navigator>
   );

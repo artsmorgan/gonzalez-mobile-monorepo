@@ -77,7 +77,7 @@ module.exports = ({ config }) => {
         [
           "expo-notifications",
           {
-            icon: "./assets/images/icon.png",
+            icon: "./assets/images/notification-icon.png",
             defaultChannel: "general",
           },
         ],
