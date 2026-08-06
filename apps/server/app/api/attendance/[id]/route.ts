@@ -58,7 +58,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 });
 
                 if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
-                    const response = await marcar_salida(req, previousUserMarca.id, horaAccion, reason, payload, planillasToken);
+                    const closePrevious = await marcar_salida(req, previousUserMarca.id, horaAccion, reason, payload, planillasToken);
+                    if (!closePrevious.status) {
+                        return NextResponse.json(
+                            { status: false, message: `No se pudo cerrar el turno anterior: ${closePrevious.message}` },
+                            { status: 200 }
+                        );
+                    }
                 }
 
                 empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
@@ -144,7 +150,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 break;
             case "salida":
                 if (marcaDia.hora_salida_digitada != null) {
-                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id }, { status: 200 });
+                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 200 });
                 }
 
                 const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken);
@@ -271,9 +277,9 @@ try {
     
     await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, null, hora_salida_real, now, false);
 
-    const response = await check_unmarked_activities(req, marcaDia.id);
-    if (!response.status) {
-        return { status: false, message: response.message };
+    const activitiesCheck = await check_unmarked_activities(req, marcaDia.id);
+    if (!activitiesCheck.status) {
+        console.warn("Salida registrada en Planillas; check_unmarked_activities falló:", activitiesCheck.message);
     }
 
     return { status: true, message: "Salida marcada correctamente" };

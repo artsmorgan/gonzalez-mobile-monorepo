@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { StyleSheet, ScrollView, Image, View } from 'react-native';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { useAuth } from '@/contexts/AuthContext';
@@ -10,6 +10,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
+import { getEmployeeProfilePhotoDisplayUri } from '@/hooks/employeeProfilePhotoStorage';
 
 type EmployeeProfileScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EmployeeProfile'>;
 
@@ -18,17 +19,17 @@ export default function EmployeeProfileScreen() {
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const navigation = useNavigation<EmployeeProfileScreenNavigationProp>();
 
-  useEffect(() => {
-    console.log(employee);
-  }, [employee]);
+  const profilePhotoUri = useMemo(
+    () => getEmployeeProfilePhotoDisplayUri(employee?.fotoLocalFileName),
+    [employee?.fotoLocalFileName],
+  );
 
   const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 
   const formatDate = (dateString: string) => {
     try {
       // Handle YYYY-MM-DD format
-      const date = new Date(dateString); // Add time to avoid timezone issues
-      console.log('date', date);
+      const date = new Date(dateString);
       return date.getDate() + ' de ' + monthNames[date.getMonth()] + ' de ' + date.getFullYear();
     } catch (error) {
       console.log('error', error);
@@ -59,11 +60,6 @@ export default function EmployeeProfileScreen() {
   // Handle menu close
   const handleMenuClose = () => {
     setIsMenuVisible(false);
-  };
-
-  // Handle back navigation
-  const handleBack = () => {
-    navigation.goBack();
   };
 
   // Handle home navigation from slide menu
@@ -114,6 +110,20 @@ export default function EmployeeProfileScreen() {
               Información personal y laboral
             </ThemedText>
           </ThemedView>
+
+          <View style={styles.avatarWrap}>
+            {profilePhotoUri ? (
+              <Image
+                source={{ uri: profilePhotoUri }}
+                style={styles.avatarImage}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Ionicons name="person" size={48} color="#8E8E93" />
+              </View>
+            )}
+          </View>
 
           <ThemedView style={styles.tableContainer}>
 
@@ -191,11 +201,30 @@ const styles = StyleSheet.create({
   },
   titleContainer: {
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 10,
     paddingBottom: 20,
     borderBottomWidth: 1,
     borderBottomColor: '#E0E0E0',
     width: '100%',
+  },
+  avatarWrap: {
+    width: 180,
+    height: 180,
+    borderRadius: 100,
+    borderWidth: 3,
+    borderColor: '#007AFF',
+    overflow: 'hidden',
+    backgroundColor: '#F2F2F7',
+    marginBottom: 8,
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   errorContainer: {
     flex: 1,
@@ -215,15 +244,20 @@ const styles = StyleSheet.create({
   },
   tableContainer: {
     width: '100%',
-    gap: 16,
+    gap: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#B3D9F2',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
   },
   dataItem: {
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: '#A8D4F0',
     borderRadius: 8,
-    backgroundColor: '#F9F9F9',
+    backgroundColor: '#D6EEF9',
   },
   label: {
     fontSize: 16,
@@ -258,4 +292,3 @@ const styles = StyleSheet.create({
     color: '#007AFF',
   },
 });
-

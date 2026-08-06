@@ -136,6 +136,15 @@ export function computeChangeAvailable(
   return true;
 }
 
+/** True si el puesto de la marca tiene lat/lng usables para geocerca. */
+export function hasMarcaPuestoCoordinates(marca: Record<string, unknown>): boolean {
+  const puesto = marca.puesto as Record<string, unknown> | undefined;
+  const ubicacion = puesto?.ubicacion as { lat?: unknown; lng?: unknown } | undefined;
+  const pLat = ubicacion?.lat != null ? Number(ubicacion.lat) : NaN;
+  const pLng = ubicacion?.lng != null ? Number(ubicacion.lng) : NaN;
+  return Number.isFinite(pLat) && Number.isFinite(pLng) && pLat !== 0 && pLng !== 0;
+}
+
 export function validateMarcaLocation(
   marca: Record<string, unknown>,
   lat: number,
@@ -146,13 +155,8 @@ export function validateMarcaLocation(
   const pLat = ubicacion?.lat != null ? Number(ubicacion.lat) : NaN;
   const pLng = ubicacion?.lng != null ? Number(ubicacion.lng) : NaN;
 
-  if (
-    marca.hora_entrada_digitada != null ||
-    !Number.isFinite(pLat) ||
-    !Number.isFinite(pLng) ||
-    pLat === 0 ||
-    pLng === 0
-  ) {
+  // Sin coordenadas de puesto definidas: no se exige geocerca (ingreso ni salida).
+  if (!Number.isFinite(pLat) || !Number.isFinite(pLng) || pLat === 0 || pLng === 0) {
     return { ok: true };
   }
 
@@ -182,6 +186,8 @@ export function evaluateLocalMarcaRules(
     lng?: number | null;
     /** Si true, incluye validación de ubicación para marcar entrada. */
     validateLocationForEntrada?: boolean;
+    /** Si true, incluye validación de ubicación para marcar salida. */
+    validateLocationForSalida?: boolean;
     monitoringPreviousMinutes?: number;
   }
 ): LocalMarcaValidationResult {
@@ -284,6 +290,27 @@ export function evaluateLocalMarcaRules(
         markingBlocked: false,
         canMarkEntrada: false,
         canMarkSalida,
+        message: loc.message,
+      };
+    }
+  }
+
+  if (
+    opts?.validateLocationForSalida &&
+    marca.hora_entrada_digitada != null &&
+    marca.hora_salida_digitada == null &&
+    opts.lat != null &&
+    opts.lng != null &&
+    Number.isFinite(opts.lat) &&
+    Number.isFinite(opts.lng)
+  ) {
+    const loc = validateMarcaLocation(marca, opts.lat, opts.lng);
+    if (!loc.ok) {
+      canMarkSalida = false;
+      return {
+        markingBlocked: false,
+        canMarkEntrada,
+        canMarkSalida: false,
         message: loc.message,
       };
     }

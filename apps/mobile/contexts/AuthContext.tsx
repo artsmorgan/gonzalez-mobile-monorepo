@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { router } from 'expo-router';
 import React, { createContext, ReactNode, useContext, useEffect, useState, useRef } from 'react';
 import { eventBus } from '../hooks/eventBus';
 import { resolveAppConnectivity } from '../hooks/resolveAppConnectivity';
@@ -13,6 +12,11 @@ import {
   extractPlanillasTokenFromResponse,
   persistStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
+import { persistLegacySession } from '@/hooks/authTokenStorage';
+import {
+  deleteEmployeeProfilePhoto,
+  saveEmployeeProfilePhotoFromBase64,
+} from '@/hooks/employeeProfilePhotoStorage';
 
 interface Role {
   id: number;
@@ -57,6 +61,8 @@ interface Employee {
   roles: EmployeeRole[];
   firmaManual: string;
   supervisor_id: number | null;
+  /** Nombre bajo Paths.document (`employee_profile_photo_{id}.ext`). */
+  fotoLocalFileName?: string | null;
 }
 
 interface AuthContextType {
@@ -197,7 +203,17 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         return { success: false, passwordExpired: false, error: 'Tokens no recibidos del servidor' };
       }
 
-      // Create employee object from server empleado data
+      let fotoLocalFileName: string | null = null;
+      try {
+        fotoLocalFileName = await saveEmployeeProfilePhotoFromBase64(
+          empleadoData.id,
+          empleadoData.foto,
+        );
+      } catch (fotoError) {
+        console.warn('No se pudo guardar la foto de perfil localmente:', fotoError);
+      }
+
+      // Create employee object from server empleado data (sin base64; solo referencia a disco)
       const employeeData: Employee = {
         id: empleadoData.id,
         codigo: empleadoData.codigo,
@@ -211,14 +227,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         roles: empleadoData.roles || [],
         firmaManual: empleadoData.firmaManual || '',
         supervisor_id: empleadoData.supervisor_id || null,
+        fotoLocalFileName,
       };
 
-      await Promise.all([
-        AsyncStorage.setItem(ACCESS_TOKEN_KEY, accessToken),
-        AsyncStorage.setItem(REFRESH_TOKEN_KEY, refreshToken),
-        AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData)),
-        AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, tokenCreatedAt.toString()),
-      ]);
+      await persistLegacySession({
+        accessToken,
+        refreshToken,
+        createdAt: tokenCreatedAt,
+      });
+      await AsyncStorage.setItem(EMPLOYEE_KEY, JSON.stringify(employeeData));
 
       setAccessToken(accessToken);
       setRefreshToken(refreshToken);
@@ -227,6 +244,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
       const planillasPayload = extractPlanillasTokenFromResponse(responseData);
       if (!planillasPayload) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeData.id);
+        } catch {
+          /* noop */
+        }
         await Promise.all([
           AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
           AsyncStorage.removeItem(REFRESH_TOKEN_KEY),
@@ -359,6 +381,15 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         }
       }
 
+      const employeeIdForFoto = employee?.id;
+      if (employeeIdForFoto) {
+        try {
+          await deleteEmployeeProfilePhoto(employeeIdForFoto);
+        } catch {
+          /* noop */
+        }
+      }
+
       // Clear local storage and state
       await Promise.all([
         AsyncStorage.removeItem(ACCESS_TOKEN_KEY),
@@ -448,17 +479,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       const newRefreshToken = responseData.newRefreshToken;
       const newTokenCreatedAt = responseData.createdAt;
 
-      console.log('newAccessToken', newAccessToken);
-      console.log('newRefreshToken', newRefreshToken);
-      console.log('tokenCreatedAt', tokenCreatedAt);
-
-      const ops = [AsyncStorage.setItem(ACCESS_TOKEN_KEY, newAccessToken)];
-
-      ops.push(AsyncStorage.setItem(REFRESH_TOKEN_KEY, newRefreshToken));
-
-      ops.push(AsyncStorage.setItem(TOKEN_CREATED_AT_KEY, newTokenCreatedAt.toString()));
-
-      await Promise.all(ops);
+      await persistLegacySession({
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
+        createdAt: newTokenCreatedAt,
+      });
 
       setAccessToken(newAccessToken);
       if (newRefreshToken && newRefreshToken !== refreshToken) {

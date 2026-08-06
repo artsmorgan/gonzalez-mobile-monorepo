@@ -147,7 +147,6 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     }
                 });
     
-    
                 dias_transcurridos++;
                 date_while = new Date(date_while.getTime() - 1 * 24 * 60 * 60 * 1000); // Retroceder 1 día
                 marcas_planillas = planillasResponse.data.data.marcas;
@@ -412,7 +411,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 // Definimos si marcaDia.hora_inicio es mayor a marcaDia.hora_fin, si es así, entonces la hora_fin es el siguiente día
                 if (marcaDia.hora_inicio && marcaDia.hora_fin) {
                     if (new Date(marcaDia.hora_inicio) > new Date(marcaDia.hora_fin)) {
-                        fin_marca = new Date(marcaDia.fecha.setDate(marcaDia.fecha.getDate() + 1));
+                        const fechaFin = new Date(marcaDia.fecha);
+                        fechaFin.setDate(fechaFin.getDate() + 1);
+                        const fechaFinString = fechaFin.toISOString().split("T")[0];
+                        const hora_fin_string = marcaDia.hora_fin?.toISOString().split("T")[1].split(".")[0] ?? "00:00:00";
+                        fin_marca = new Date(fechaFinString + "T" + hora_fin_string);
                     }
                     else {
                         const hora_fin_string = marcaDia.hora_fin?.toISOString().split("T")[1].split(".")[0] ?? "00:00:00";
@@ -426,7 +429,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
             if (!marcaDia.hora_entrada_digitada && (now > fin_marca)) {
                 const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
-                const fecha_marca_string = marcaDia.fecha.toISOString().split("T")[0].split("-").reverse().join("-");
+                const fecha_marca_display = new Date(marcaDia.fecha).toISOString().split("T")[0].split("-").reverse().join("-");
 
                 let should_response = true;
                 let extra_reason = "";
@@ -437,7 +440,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
                 return blockedMarcaResponse(
                     "No has marcado la entrada para el turno del día " +
-                        fecha_marca_string +
+                        fecha_marca_display +
                         " a las " +
                         hora_inicio_string +
                         "." +

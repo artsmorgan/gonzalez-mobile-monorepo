@@ -141,7 +141,14 @@ export async function sendNotificationByRole(req: NextRequest, corpoId: number, 
                 body: description,
                 data: { type: "notification", action: "open", channelId: "general" },
                 channelId: "general",
-            }).catch((err) => console.error("[sendNotificationByRole] FCM:", err));
+            })
+                .then((r) =>
+                    console.log("[sendNotificationByRole] FCM result", {
+                        plazas: fcmPlazaIds.length,
+                        ...r,
+                    })
+                )
+                .catch((err) => console.error("[sendNotificationByRole] FCM:", err));
         }
     }
 }
@@ -212,7 +219,20 @@ export async function sendNotificationByPlaza(req: NextRequest, marcaDiaId: numb
                 body: description,
                 data: { type: "notification", action: "open", channelId: "general" },
                 channelId: "general",
-            }).catch((err) => console.error("[sendNotificationByPlaza] FCM:", err));
+            })
+                .then((r) =>
+                    console.log("[sendNotificationByPlaza] FCM result", {
+                        excludedSenderPlaza: marcaDiaPlazaId,
+                        plazas: fcmPlazaIds.length,
+                        ...r,
+                    })
+                )
+                .catch((err) => console.error("[sendNotificationByPlaza] FCM:", err));
+        } else {
+            console.log(
+                "[sendNotificationByPlaza] Sin destinatarios FCM (solo plaza emisor o sin plazas)",
+                { excludedSenderPlaza: marcaDiaPlazaId }
+            );
         }
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
@@ -261,7 +281,14 @@ export async function sendNotificationByEmployee(req: NextRequest, corpoId: numb
                 body: description,
                 data: { type: "notification", action: "open", channelId: "general" },
                 channelId: "general",
-            }).catch((err) => console.error("[sendNotificationByEmployee] FCM:", err));
+            })
+                .then((r) =>
+                    console.log("[sendNotificationByEmployee] FCM result", {
+                        empleados: fcmEmployeeIds.length,
+                        ...r,
+                    })
+                )
+                .catch((err) => console.error("[sendNotificationByEmployee] FCM:", err));
         }
     }
 }

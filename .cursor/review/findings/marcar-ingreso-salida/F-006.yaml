@@ -1,0 +1,20 @@
+id: F-006
+module_id: marcar-ingreso-salida
+severity: high
+status: fixed
+file: apps/server/app/api/attendance/user/[id]/route.ts
+lines: "412-427"
+category: validation
+title: fin_marca incorrecto en turnos nocturnos (FE/BE divergente)
+description: |
+  Para hora_inicio > hora_fin sin horas_duracion, el servidor asigna
+  fin_marca = fecha+1 a medianoche (setDate+1 sobre Date), no fecha+1 + hora_fin.
+  El cliente usa computeMarcaShiftBounds/buildMarcaDateTime con hora_fin correcta.
+  Además muta marcaDia.fecha in-place (línea 415).
+reproduction: |
+  1. Turno nocturno (ej. 22:00–06:00) sin horas_duracion.
+  2. Online: lógica absent/block del servidor usa fin_marca erróneo.
+  3. Offline: reglas locales usan bounds correctos → comportamiento distinto.
+impact: Bloqueos/ausencias incorrectos online vs offline; QA intermitente en turnos nocturnos.
+suggested_fix: |
+  Alinear servidor con buildMarcaDateTime del cliente (fecha+1 + hora_fin para cross-midnight).

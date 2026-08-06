@@ -31,6 +31,23 @@ import {
     mapTipoMantenimientoArticuloRow,
     parseTipoMantenimientoArticuloPayload,
 } from "../../../../../utils/nomenclatorsTipoMantenimientoArticulo";
+import { deleteSuperAdmin } from "../../../../../utils/nomenclatorsSuperAdmins";
+import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+
+async function requireCallerSuperAdmin(req: NextRequest, payload: any): Promise<NextResponse | null> {
+    const empleadoId = payload?.id != null ? Number(payload.id) : 0;
+    if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+        return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
+    }
+    const ok = await isSuperAdminEmpleado(req, empleadoId);
+    if (!ok) {
+        return NextResponse.json(
+            { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },
+            { status: 403 }
+        );
+    }
+    return null;
+}
 
 export async function GET(
     req: NextRequest,
@@ -146,6 +163,13 @@ export async function PUT(
 
         const kind = resolveNomenclatorKind(tipo);
         const body = await req.json();
+
+        if (kind === "super-admin") {
+            return NextResponse.json(
+                { status: false, message: "Los super admins no se editan; elimine y cree de nuevo" },
+                { status: 405 }
+            );
+        }
 
         if (kind === "empleado-ejecutivo") {
             const planillasToken =
@@ -356,7 +380,7 @@ export async function DELETE(
     context: { params: Promise<{ tipo: string; id: string }> }
 ) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired, message },
@@ -379,6 +403,23 @@ export async function DELETE(
         }
 
         const kind = resolveNomenclatorKind(tipo);
+
+        if (kind === "super-admin") {
+            const denied = await requireCallerSuperAdmin(req, payload);
+            if (denied) return denied;
+
+            const result = await deleteSuperAdmin(req, idNum);
+            if (!result.ok) {
+                return NextResponse.json(
+                    { status: false, message: result.message },
+                    { status: result.status }
+                );
+            }
+            return NextResponse.json(
+                { status: true, message: "Super admin eliminado correctamente" },
+                { status: 200 }
+            );
+        }
 
         if (kind === "empleado-ejecutivo") {
             const planillasToken =

@@ -23,13 +23,34 @@ import {
     parseTipoMantenimientoArticuloPayload,
     TIPO_MANTENIMIENTO_ARTICULO_TABLE,
 } from "../../../../utils/nomenclatorsTipoMantenimientoArticulo";
+import {
+    createSuperAdmin,
+    fetchSuperAdminsList,
+    parseSuperAdminCreatePayload,
+} from "../../../../utils/nomenclatorsSuperAdmins";
+import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+
+async function requireCallerSuperAdmin(req: NextRequest, payload: any): Promise<NextResponse | null> {
+    const empleadoId = payload?.id != null ? Number(payload.id) : 0;
+    if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+        return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
+    }
+    const ok = await isSuperAdminEmpleado(req, empleadoId);
+    if (!ok) {
+        return NextResponse.json(
+            { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },
+            { status: 403 }
+        );
+    }
+    return null;
+}
 
 export async function GET(
     req: NextRequest,
     context: { params: Promise<{ tipo: string }> }
 ) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired, message },
@@ -44,6 +65,13 @@ export async function GET(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
             );
+        }
+
+        if (resolveNomenclatorKind(tipo) === "super-admin") {
+            const denied = await requireCallerSuperAdmin(req, payload);
+            if (denied) return denied;
+            const data = await fetchSuperAdminsList(req);
+            return NextResponse.json({ status: true, data }, { status: 200 });
         }
 
         if (resolveNomenclatorKind(tipo) === "ejecutivo-coordinador") {
@@ -101,7 +129,7 @@ export async function POST(
     context: { params: Promise<{ tipo: string }> }
 ) {
     try {
-        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        const { valid, expired, message, payload } = await verifyAccessTokenByApi(req);
         if (!valid) {
             return NextResponse.json(
                 { status: false, expired, message },
@@ -119,6 +147,32 @@ export async function POST(
         }
 
         const body = await req.json();
+
+        if (resolveNomenclatorKind(tipo) === "super-admin") {
+            const denied = await requireCallerSuperAdmin(req, payload);
+            if (denied) return denied;
+
+            const createPayload = parseSuperAdminCreatePayload(body);
+            if (!createPayload) {
+                return NextResponse.json(
+                    { status: false, message: "Debe seleccionar un empleado válido" },
+                    { status: 400 }
+                );
+            }
+
+            const result = await createSuperAdmin(req, createPayload.empleado_id);
+            if (!result.ok) {
+                return NextResponse.json(
+                    { status: false, message: result.message },
+                    { status: result.status }
+                );
+            }
+
+            return NextResponse.json(
+                { status: true, message: "Super admin creado correctamente", data: result.data },
+                { status: 201 }
+            );
+        }
 
         if (resolveNomenclatorKind(tipo) === "mobile-variable") {
             return NextResponse.json(

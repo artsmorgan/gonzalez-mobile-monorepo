@@ -13,6 +13,8 @@ export const DEVICE_COORDS_GPS_TIMEOUT_MS_SIGNATURE_DEFAULT = 20_000;
 export const DEVICE_COORDS_GPS_TIMEOUT_MS_SCREEN = 10_000;
 /** Aceptar lectura cuando accuracy (m) está por debajo de este umbral. */
 const ACCURATE_LOCATION_MAX_ACCURACY_M = 50;
+/** Edad máxima de lastKnownPosition antes de rechazarlo (ms). */
+const MAX_LAST_KNOWN_AGE_MS = 5 * 60 * 1000;
 
 export type DeviceCoordsResult =
   | { ok: true; latitude: number; longitude: number; warning?: string }
@@ -162,8 +164,15 @@ async function tryReadFreshDeviceCoords(
   try {
     const lastKnown = await Location.getLastKnownPositionAsync();
     if (lastKnown?.coords) {
-      const { latitude, longitude } = lastKnown.coords;
-      if (isValidCoords(latitude, longitude)) {
+      const { latitude, longitude, accuracy } = lastKnown.coords;
+      const ageMs = Date.now() - (lastKnown.timestamp ?? 0);
+      if (
+        isValidCoords(latitude, longitude) &&
+        accuracy != null &&
+        accuracy < ACCURATE_LOCATION_MAX_ACCURACY_M &&
+        ageMs >= 0 &&
+        ageMs <= MAX_LAST_KNOWN_AGE_MS
+      ) {
         return { latitude, longitude };
       }
     }

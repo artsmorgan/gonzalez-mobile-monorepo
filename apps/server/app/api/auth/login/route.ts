@@ -204,6 +204,31 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        let empleadoFoto: string | null = null;
+        try {
+            const planillasUrl = process.env.PLANILLAS_URL;
+            if (planillasUrl) {
+                const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${empleado.codigo}/foto`;
+                const response = await axios.get(
+                    url,
+                    {
+                        headers: {
+                            "Authorization": `Bearer ${planillasToken}`,
+                        },
+                    },
+                );
+
+                if (response.data?.success) {
+                    empleadoFoto = response.data.data.imagen?.base64 ?? null;
+                    console.log("Empleado foto:", empleadoFoto?.length ?? 0);
+                }
+            }
+
+        }
+        catch (error) {
+            console.error("Error en login (auth/login):", error);
+        }
+
         return NextResponse.json(
             {
                 status: true,
@@ -229,6 +254,7 @@ export async function POST(request: NextRequest) {
                     isSuperAdmin: dynamicLoginRes.data.isSuperAdmin,
                     roles,
                     supervisor_id: empleado.supervisor_id,
+                    foto: empleadoFoto,
                 },
             },
             { status: 200 },

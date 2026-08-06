@@ -1,0 +1,15 @@
+id: F-002
+module_id: complaints-master
+severity: medium
+status: fixed
+file: apps/mobile/screens/ComplaintsMasterScreen.tsx
+lines: "1492-1501"
+category: offline
+title: delete_file sin deduplicación
+description: |
+  Múltiples delete_file mismo fileId encolables.
+reproduction: |
+  1. Tap delete offline repetido.
+impact: Cola redundante.
+suggested_fix: |
+  Filter before push.

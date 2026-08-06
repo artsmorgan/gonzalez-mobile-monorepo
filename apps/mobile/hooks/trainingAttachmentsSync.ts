@@ -63,9 +63,10 @@ export type TrainingFileMetaForApi = { original_name?: string; extension: string
  */
 export async function buildTrainingFilesAndMetaFromFileMeta(
   list: TrainingFileQueueMeta[]
-): Promise<{ files: string[]; files_meta: TrainingFileMetaForApi[] }> {
+): Promise<{ files: string[]; files_meta: TrainingFileMetaForApi[]; diskHydrationComplete: boolean }> {
   const files: string[] = [];
   const files_meta: TrainingFileMetaForApi[] = [];
+  const expected = list.filter((m) => m.localFileName);
   for (const m of list) {
     if (!m.localFileName) continue;
     try {
@@ -84,7 +85,7 @@ export async function buildTrainingFilesAndMetaFromFileMeta(
       console.warn('training: no se leyó archivo local', m.localFileName, e);
     }
   }
-  return { files, files_meta };
+  return { files, files_meta, diskHydrationComplete: files.length === expected.length };
 }
 
 /**
@@ -97,7 +98,10 @@ export async function hydrateTrainingRequestDataForSync(requestData: any): Promi
     const { filesMeta: _f, ...rest } = requestData;
     return rest;
   }
-  const { files, files_meta } = await buildTrainingFilesAndMetaFromFileMeta(meta);
+  const { files, files_meta, diskHydrationComplete } = await buildTrainingFilesAndMetaFromFileMeta(meta);
+  if (!diskHydrationComplete) {
+    throw new Error('No se pudieron leer uno o más archivos adjuntos locales de la capacitación');
+  }
   const { filesMeta: _f, file: _oldFile, ...rest } = requestData;
   // No duplicar: el API prioriza `files[]`; `file` solo confundía al subir 2 veces el primero.
   return { ...rest, files, files_meta };

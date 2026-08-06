@@ -242,6 +242,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
     }
 
+    // Lite: control de asistencia requiere red; total_empleados_turno lo recalcula el servidor desde marcas.
     const { colaboradores, totalPresentes, totalEmpleadosTurno } = await buildColaboradoresFromMarcas(req, { fecha: fechaDate, corpo_id, turno });
     const created_at = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
     const created_by = Number(payload?.id || 0);

@@ -17,13 +17,15 @@ function getGitCommitLast4() {
 
 module.exports = ({ config }) => {
 
-  const variant = process.env.APP_VARIANT;
-  const isLite = variant === "lite";
+  /** Lite por defecto si no se define APP_VARIANT (prebuild local, EAS preview-lite, etc.). */
+  const variant = process.env.APP_VARIANT ?? "lite";
+  const isLite = variant !== "full";
   const gitCommitLast4 = getGitCommitLast4();
 
   return {
       expo: {
-      name: isLite ? "MonitoreApp Lite" : "MonitoreApp",
+      /** Nombre visible: siempre MonitoreApp (la variante lite solo afecta package/flavor). */
+      name: "MonitoreApp",
       slug: "Gonzalez-Mobile-App",
       version: "1.0.0",
       platforms: [
@@ -38,10 +40,12 @@ module.exports = ({ config }) => {
       newArchEnabled: true,
       ios: {
         supportsTablet: true,
-        bundleIdentifier: "com.abrjpo98.MonitoreApp"
+        bundleIdentifier: isLite
+          ? "com.abrjpo98.MonitoreApp.lite"
+          : "com.abrjpo98.MonitoreApp.full"
       },
       android: {
-        googleServicesFile: isLite ? "./google-services-lite.json" : "./google-services-full.json",
+        googleServicesFile: "./google-services.json",
         adaptiveIcon: {
           foregroundImage: "./assets/images/adaptive-icon.png",
           backgroundColor: "#ffffff"
@@ -50,7 +54,10 @@ module.exports = ({ config }) => {
         permissions: [
           "android.permission.CAMERA",
           "android.permission.RECORD_AUDIO",
-          "android.permission.MODIFY_AUDIO_SETTINGS"
+          "android.permission.MODIFY_AUDIO_SETTINGS",
+          "android.permission.POST_NOTIFICATIONS",
+          "android.permission.RECEIVE_BOOT_COMPLETED",
+          "android.permission.VIBRATE"
         ],
         package: isLite ? "com.abrjpo98.MonitoreApp.lite" : "com.abrjpo98.MonitoreApp.full"
       },
@@ -63,11 +70,14 @@ module.exports = ({ config }) => {
         [
           "./plugins/react-native-picker-fix.js"
         ],
+        [
+          "./plugins/withAndroidAppVariants.js"
+        ],
         "expo-router",
         [
           "expo-notifications",
           {
-            icon: "./assets/images/icon.png",
+            icon: "./assets/images/notification-icon.png",
             defaultChannel: "general",
           },
         ],
@@ -95,7 +105,10 @@ module.exports = ({ config }) => {
           }
         ],
         "expo-audio",
-        "expo-video"
+        "expo-video",
+        [
+          "./plugins/withAndroidAppVariantsFinalize.js"
+        ]
       ],
       experiments: {
         typedRoutes: true

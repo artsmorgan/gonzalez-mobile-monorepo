@@ -7,6 +7,35 @@ export function isAgendaMinutaCacheType(itemType: unknown): boolean {
   return itemType === AGENDA_MINUTA_CACHE_TYPE || itemType === AGENDA_MINUTA_LEGACY_CACHE_TYPE;
 }
 
+/** Canonicaliza `physical_minute_agenda` → `agenda_minuta` en caché/cola. */
+export function normalizeAgendaMinutaCacheRow<T extends { type?: unknown }>(row: T): T {
+  if (!row || !isAgendaMinutaCacheType(row.type)) return row;
+  if (row.type === AGENDA_MINUTA_CACHE_TYPE) return row;
+  return { ...row, type: AGENDA_MINUTA_CACHE_TYPE };
+}
+
+export function normalizeAgendaMinutaEvaluationsActions(actions: unknown[]): unknown[] {
+  if (!Array.isArray(actions)) return [];
+  let changed = false;
+  const next = actions.map((a: any) => {
+    if (!a || !isAgendaMinutaCacheType(a.type) || a.type === AGENDA_MINUTA_CACHE_TYPE) return a;
+    changed = true;
+    return { ...a, type: AGENDA_MINUTA_CACHE_TYPE };
+  });
+  return changed ? next : actions;
+}
+
+export function normalizeAgendaMinutaEvaluationsCache(cache: unknown[]): unknown[] {
+  if (!Array.isArray(cache)) return [];
+  let changed = false;
+  const next = cache.map((item: any) => {
+    if (!item || !isAgendaMinutaCacheType(item.type) || item.type === AGENDA_MINUTA_CACHE_TYPE) return item;
+    changed = true;
+    return { ...item, type: AGENDA_MINUTA_CACHE_TYPE };
+  });
+  return changed ? next : cache;
+}
+
 export function getAgendaMinutaRecordPuestoId(row: any): number | null {
   const n = Number(row?.puesto_id);
   return Number.isFinite(n) && n > 0 ? n : null;

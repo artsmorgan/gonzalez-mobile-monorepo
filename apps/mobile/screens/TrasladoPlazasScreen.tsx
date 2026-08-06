@@ -33,6 +33,7 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import authedFetch from '@/hooks/authedFetch';
+import { saveFile } from '@/hooks/fileStorage';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'TrasladoPlazas'>;
 
@@ -61,6 +62,7 @@ type LocalFile = {
     extension: string;
     base64: string;
     mimeType?: string;
+    localFileName?: string;
 };
 
 const getConnectionStatus = async (): Promise<boolean> => {
@@ -324,6 +326,14 @@ export default function TrasladoPlazasScreen() {
             }
 
             const localFileId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+            const storedType = type === 'document' ? 'text' : type;
+            const localFileName = await saveFile({
+                uri: asset.uri,
+                originalName: asset.name || `archivo.${extension || 'dat'}`,
+                extension: extension || 'dat',
+                type: storedType,
+                prefix: 'traslado_plaza',
+            });
             const localFile: LocalFile = {
                 id: localFileId,
                 accion_id: accionId,
@@ -332,6 +342,7 @@ export default function TrasladoPlazasScreen() {
                 extension: extension || 'dat',
                 base64,
                 mimeType: asset.mimeType,
+                localFileName,
             };
 
             // Mostrar vista previa antes de subir
@@ -442,7 +453,13 @@ export default function TrasladoPlazasScreen() {
                     action: 'upload_file',
                     type: 'archivo_accion',
                     accion_id: accionId,
-                    payload: requestData,
+                    payload: {
+                        localFileName: file.localFileName,
+                        extension: String(file.extension || '').replace('.', '').trim() || 'dat',
+                        original_name: file.name,
+                        type: planillasType,
+                        mimeType: file.mimeType,
+                    },
                     planillasToken: storedPlanillas?.token ?? undefined,
                     synced: false,
                 });
@@ -730,6 +747,30 @@ export default function TrasladoPlazasScreen() {
                                                         const isUploadingThis = !!uploadingFile && localFiles.some((f) => f.accion_id === item.id && f.id === uploadingFile);
                                                         return (
                                                             <>
+                                                                <TouchableOpacity
+                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
+                                                                    onPress={() => handleAddFile(item.id, 'image')}
+                                                                    disabled={isUploadingThis}
+                                                                >
+                                                                    <Ionicons name="image-outline" size={18} color="#007AFF" />
+                                                                    <ThemedText style={styles.addFileButtonText}>Imagen</ThemedText>
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
+                                                                    onPress={() => handleAddFile(item.id, 'audio')}
+                                                                    disabled={isUploadingThis}
+                                                                >
+                                                                    <Ionicons name="mic-outline" size={18} color="#007AFF" />
+                                                                    <ThemedText style={styles.addFileButtonText}>Audio</ThemedText>
+                                                                </TouchableOpacity>
+                                                                <TouchableOpacity
+                                                                    style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
+                                                                    onPress={() => handleAddFile(item.id, 'video')}
+                                                                    disabled={isUploadingThis}
+                                                                >
+                                                                    <Ionicons name="videocam-outline" size={18} color="#007AFF" />
+                                                                    <ThemedText style={styles.addFileButtonText}>Video</ThemedText>
+                                                                </TouchableOpacity>
                                                                 <TouchableOpacity
                                                                     style={[styles.addFileButton, isUploadingThis && styles.uploadButtonDisabled]}
                                                                     onPress={() => handleAddFile(item.id, 'document')}

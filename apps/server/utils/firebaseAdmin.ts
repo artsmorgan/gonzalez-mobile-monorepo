@@ -26,6 +26,11 @@ export function getFirebaseAdmin(): typeof admin | null {
         credential: admin.credential.cert(parsed),
       });
       initialized = true;
+      console.log(
+        "[firebaseAdmin] Inicializado con SERVICE_ACCOUNT_JSON projectId=",
+        (parsed as { projectId?: string; project_id?: string }).projectId ||
+          (parsed as { project_id?: string }).project_id
+      );
       return admin;
     }
 
@@ -43,6 +48,7 @@ export function getFirebaseAdmin(): typeof admin | null {
         }),
       });
       initialized = true;
+      console.log("[firebaseAdmin] Inicializado con ENV vars projectId=", projectId);
       return admin;
     }
 

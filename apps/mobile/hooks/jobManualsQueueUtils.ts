@@ -26,11 +26,15 @@ export async function hydrateJobManualCreateRequestData(requestData: any): Promi
           file_base64: g.base64,
         });
       } catch {
-        /* omitir adjunto */
+        throw new Error(`Archivo adjunto local no encontrado: ${f.localFileName}`);
       }
     } else if (f?.file_base64) {
       out.push(f);
     }
+  }
+  const expectedLocal = parsed.filter((f) => f?.localFileName);
+  if (expectedLocal.length > 0 && out.length < expectedLocal.length) {
+    throw new Error('No se pudieron leer uno o más adjuntos locales del manual');
   }
   return { ...requestData, files: JSON.stringify(out) };
 }

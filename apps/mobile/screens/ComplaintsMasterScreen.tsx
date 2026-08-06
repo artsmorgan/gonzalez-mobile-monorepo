@@ -1491,14 +1491,22 @@ export default function ComplaintsMasterScreen() {
       } else {
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
         const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          id: recordId,
-          action: 'delete_file',
-          type: 'complaints_master',
-          payload: { fileId: file.id },
-          synced: false,
-        });
-        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        const alreadyQueued = actions.some(
+          (a: any) =>
+            a.type === 'complaints_master' &&
+            a.action === 'delete_file' &&
+            a.payload?.fileId === file.id
+        );
+        if (!alreadyQueued) {
+          actions.push({
+            id: recordId,
+            action: 'delete_file',
+            type: 'complaints_master',
+            payload: { fileId: file.id },
+            synced: false,
+          });
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        }
       }
 
       if (isOpenInForm) {
@@ -2062,14 +2070,26 @@ export default function ComplaintsMasterScreen() {
           /* noop */
         }
         const actionsStr = await AsyncStorage.getItem('evaluations_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          id: localId,
-          action: 'create',
-          type: 'complaints_master',
-          payload: { ...requestData, archivos: archivosForStorage },
-          synced: false,
-        });
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        const createIdx = actions.findIndex(
+          (a: any) =>
+            a.type === 'complaints_master' && a.action === 'create' && String(a.id) === String(localId)
+        );
+        if (createIdx !== -1) {
+          actions[createIdx] = {
+            ...actions[createIdx],
+            payload: { ...requestData, archivos: archivosForStorage },
+            synced: false,
+          };
+        } else {
+          actions.push({
+            id: localId,
+            action: 'create',
+            type: 'complaints_master',
+            payload: { ...requestData, archivos: archivosForStorage },
+            synced: false,
+          });
+        }
         await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
 
         const horaAccion = await getHoraAccion();
@@ -2334,6 +2354,14 @@ export default function ComplaintsMasterScreen() {
             });
           }
         } else {
+        actions = actions.filter(
+          (a: any) =>
+            !(
+              a.type === 'complaints_master' &&
+              a.action === 'update' &&
+              String(a.id) === String(recordId)
+            )
+        );
         actions.push({
           id: recordId,
           action: 'update',

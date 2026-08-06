@@ -1,0 +1,15 @@
+id: F-001
+module_id: induction-tour-record
+severity: high
+status: fixed
+file: apps/mobile/screens/InductionTourRecordScreen.tsx
+lines: "1099-1107"
+category: state
+title: Fallo API oculta registros synced en cache
+description: |
+  setRecords solo drafts locales si !result.status online.
+reproduction: |
+  1. API error transitorio online.
+impact: Registros synced desaparecen de lista.
+suggested_fix: |
+  Mostrar localByCorpo completo en error API.

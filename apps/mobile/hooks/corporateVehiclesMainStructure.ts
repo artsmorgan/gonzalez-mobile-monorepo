@@ -486,7 +486,20 @@ export async function mergeCorporateVehiclesForSucursalFromServer(params: {
     (v: any) => v?.isActive !== false
   );
   const tree = await loadMainStructureTree();
-  if (!Array.isArray(tree) || tree.length === 0) return;
+  if (!Array.isArray(tree) || tree.length === 0) {
+    const { upsertVehicleInCorpoCache } = await import('./corporateVehiclesCorpoCache');
+    for (const sv of activeServerVehicles) {
+      await upsertVehicleInCorpoCache(
+        normalizeVehiculoCorporativoForMainStructureCache({
+          ...sv,
+          sucursal_id: sucursalId,
+          corpo_id: sucursalId,
+        }),
+        { synced: true }
+      );
+    }
+    return;
+  }
 
   const serverIds = new Set(
     activeServerVehicles.map((v) => Number(v.id)).filter((n) => Number.isFinite(n) && n > 0)

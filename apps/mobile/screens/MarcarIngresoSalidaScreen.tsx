@@ -22,12 +22,14 @@ import { applyNomenclatorsFromAttendanceMarca } from '@/hooks/updateNomenclator'
 import revertAttendanceLeaving from '@/hooks/revertAttendanceLeaving';
 import {
   appendAttendanceAction,
+  ATTENDANCE_ACTIONS_KEY,
   readAttendanceActions,
   removePendingSalidaActionsForMarca,
 } from '@/hooks/attendanceActionsStorage';
 import {
   computeChangeAvailable,
   evaluateLocalMarcaRules,
+  hasMarcaPuestoCoordinates,
   validateMarcaLocation,
 } from '@/hooks/attendanceLocalMarcaValidation';
 import {
@@ -308,9 +310,9 @@ export default function MarcarIngresoSalidaScreen() {
   const [markingBlocked, setMarkingBlocked] = useState(false);
   const [localCanMarkEntrada, setLocalCanMarkEntrada] = useState(true);
   const [localCanMarkSalida, setLocalCanMarkSalida] = useState(true);
-  /** Aviso de ubicación para ingreso: mostrar botón Reintentar comprobación GPS. */
-  const [showEntradaLocationRetry, setShowEntradaLocationRetry] = useState(false);
-  const [isRefreshingEntradaLocation, setIsRefreshingEntradaLocation] = useState(false);
+  /** Aviso de ubicación para ingreso/salida: mostrar botón Reintentar comprobación GPS. */
+  const [showLocationRetry, setShowLocationRetry] = useState(false);
+  const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -448,7 +450,7 @@ export default function MarcarIngresoSalidaScreen() {
       setShouldResponseAbsentReason(validation.should_response === true);
       setShowAbsentReasonForm(validation.should_response === true);
       setRevertMarcaId(null);
-      setShowEntradaLocationRetry(false);
+      setShowLocationRetry(false);
     } else {
       setAbsentMarcaId(null);
       if (!validation.should_response) {
@@ -473,7 +475,12 @@ export default function MarcarIngresoSalidaScreen() {
   const runLocalValidationForMarca = async (
     marca: Record<string, unknown>,
     nowMs: number,
-    opts?: { validateLocationForEntrada?: boolean; lat?: number | null; lng?: number | null }
+    opts?: {
+      validateLocationForEntrada?: boolean;
+      validateLocationForSalida?: boolean;
+      lat?: number | null;
+      lng?: number | null;
+    }
   ) => {
     const pendingActions = await readAttendanceActions();
     const mid = marca.id != null ? Number(marca.id) : NaN;
@@ -487,6 +494,7 @@ export default function MarcarIngresoSalidaScreen() {
       lat: opts?.lat ?? null,
       lng: opts?.lng ?? null,
       validateLocationForEntrada: opts?.validateLocationForEntrada ?? false,
+      validateLocationForSalida: opts?.validateLocationForSalida ?? false,
       monitoringPreviousMinutes: await getMonitoringPreviousMinutesFromStorage(),
     });
   };
@@ -527,9 +535,9 @@ export default function MarcarIngresoSalidaScreen() {
     []
   );
 
-  /** Si la marca permite marcar ingreso (horario), exige GPS activo y radio de 50 m del puesto. */
-  /** Sondeo ~30 s: silent. Reintentar / marcar entrada: Alert si usa caché. */
-  const refreshEntradaLocationEligibility = async (
+  /** Si la marca permite marcar ingreso/salida (horario), exige GPS activo y radio de 50 m del puesto (si hay coords). */
+  /** Sondeo ~30 s: silent. Reintentar / marcar: Alert si usa caché. */
+  const refreshMarkLocationEligibility = async (
     marca: Record<string, unknown>,
     nowMs: number,
     opts?: { silent?: boolean },
@@ -537,60 +545,108 @@ export default function MarcarIngresoSalidaScreen() {
     const silent = opts?.silent ?? DEVICE_COORDS_POLL_SILENT.silent;
     const estado = marca.hora_entrada_digitada != null ? 'Ingresado' : 'No ingresado';
     const monitoringMinutes = await getMonitoringPreviousMinutesFromStorage();
-    if (estado !== 'No ingresado' || !computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
-      setShowEntradaLocationRetry(false);
+
+    if (estado === 'No ingresado') {
+      if (!computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
+        setShowLocationRetry(false);
+        return;
+      }
+
+      const timeValidation = await runLocalValidationForMarca(marca, nowMs, {
+        validateLocationForEntrada: false,
+        validateLocationForSalida: false,
+      });
+
+      if (
+        timeValidation.absent ||
+        timeValidation.markingBlocked ||
+        !timeValidation.canMarkEntrada
+      ) {
+        setShowLocationRetry(false);
+        return;
+      }
+
+      const coords = await obtainEntradaCoordinates({ silent });
+      if (!coords.ok) {
+        setLocalCanMarkEntrada(false);
+        setErrorMessage(coords.message);
+        setShowLocationRetry(true);
+        return;
+      }
+
+      const loc = validateMarcaLocation(marca, coords.latitude, coords.longitude);
+      if (!loc.ok) {
+        setLocalCanMarkEntrada(false);
+        setErrorMessage(loc.message);
+        setShowLocationRetry(true);
+        return;
+      }
+
+      setLocalCanMarkEntrada(true);
+      setShowLocationRetry(false);
+      if (!timeValidation.message) {
+        setErrorMessage(null);
+      }
+      return;
+    }
+
+    // Salida: solo geocerca si el puesto tiene coordenadas definidas.
+    if (marca.hora_salida_digitada != null || !hasMarcaPuestoCoordinates(marca)) {
+      setShowLocationRetry(false);
+      return;
+    }
+
+    if (!computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
+      setShowLocationRetry(false);
       return;
     }
 
     const timeValidation = await runLocalValidationForMarca(marca, nowMs, {
       validateLocationForEntrada: false,
+      validateLocationForSalida: false,
     });
 
-    if (
-      timeValidation.absent ||
-      timeValidation.markingBlocked ||
-      !timeValidation.canMarkEntrada
-    ) {
-      setShowEntradaLocationRetry(false);
+    if (timeValidation.markingBlocked || !timeValidation.canMarkSalida) {
+      setShowLocationRetry(false);
       return;
     }
 
     const coords = await obtainEntradaCoordinates({ silent });
     if (!coords.ok) {
-      setLocalCanMarkEntrada(false);
+      setLocalCanMarkSalida(false);
       setErrorMessage(coords.message);
-      setShowEntradaLocationRetry(true);
+      setShowLocationRetry(true);
       return;
     }
 
     const loc = validateMarcaLocation(marca, coords.latitude, coords.longitude);
     if (!loc.ok) {
-      setLocalCanMarkEntrada(false);
+      setLocalCanMarkSalida(false);
       setErrorMessage(loc.message);
-      setShowEntradaLocationRetry(true);
+      setShowLocationRetry(true);
       return;
     }
 
-    setLocalCanMarkEntrada(true);
-    setShowEntradaLocationRetry(false);
+    setLocalCanMarkSalida(true);
+    setShowLocationRetry(false);
     if (!timeValidation.message) {
       setErrorMessage(null);
     }
   };
 
-  const handleRetryEntradaLocationCheck = async () => {
-    if (!attendanceData?.marca || isRefreshingEntradaLocation) return;
-    setIsRefreshingEntradaLocation(true);
+  const handleRetryLocationCheck = async () => {
+    if (!attendanceData?.marca || isRefreshingLocation) return;
+    setIsRefreshingLocation(true);
     try {
       const nowMs = await getHoraAccion();
       setHoraAccion(nowMs);
-      await refreshEntradaLocationEligibility(
+      await refreshMarkLocationEligibility(
         attendanceData.marca as Record<string, unknown>,
         nowMs,
         DEVICE_COORDS_USER_ACTION,
       );
     } finally {
-      setIsRefreshingEntradaLocation(false);
+      setIsRefreshingLocation(false);
     }
   };
 
@@ -696,10 +752,21 @@ export default function MarcarIngresoSalidaScreen() {
     revalidateLocalMarcaOffline,
   ]);
 
-  // Cuando se puede marcar ingreso: revalidar GPS y radio de 50 m (sin bloquear la descarga de la marca).
+  // Cuando se puede marcar ingreso o salida: revalidar GPS y radio de 50 m (sin bloquear la descarga de la marca).
   useEffect(() => {
     if (!attendanceData?.marca || isProcessingMark || isLoadingData) return;
-    if (attendanceData.estado !== 'No ingresado') return;
+    if (
+      attendanceData.estado !== 'No ingresado' &&
+      attendanceData.estado !== 'Ingresado'
+    ) {
+      return;
+    }
+    if (
+      attendanceData.estado === 'Ingresado' &&
+      attendanceData.marca?.hora_salida_digitada != null
+    ) {
+      return;
+    }
 
     let cancelled = false;
 
@@ -707,7 +774,7 @@ export default function MarcarIngresoSalidaScreen() {
       if (cancelled || isProcessingMark || isLoadingData) return;
       const nowMs = await getHoraAccion();
       setHoraAccion(nowMs);
-      await refreshEntradaLocationEligibility(
+      await refreshMarkLocationEligibility(
         attendanceData.marca as Record<string, unknown>,
         nowMs
       );
@@ -723,6 +790,7 @@ export default function MarcarIngresoSalidaScreen() {
     attendanceData?.marca?.id,
     attendanceData?.estado,
     attendanceData?.change_available,
+    attendanceData?.marca?.hora_salida_digitada,
     isProcessingMark,
     isLoadingData,
   ]);
@@ -800,7 +868,7 @@ export default function MarcarIngresoSalidaScreen() {
             marca_send,
             marca_send.id != null ? Number(marca_send.id) : null
           );
-          await refreshEntradaLocationEligibility(marca_send, nowMs);
+          await refreshMarkLocationEligibility(marca_send, nowMs);
         } catch (e) {
           console.error(e);
           setAttendanceData(null);
@@ -932,9 +1000,10 @@ export default function MarcarIngresoSalidaScreen() {
 
         const validation = await runLocalValidationForMarca(marca_send, horaAccionValue || Date.now(), {
           validateLocationForEntrada: false,
+          validateLocationForSalida: false,
         });
         applyLocalValidationState(validation, marca_send.id != null ? Number(marca_send.id) : null);
-        await refreshEntradaLocationEligibility(
+        await refreshMarkLocationEligibility(
           marca_send as Record<string, unknown>,
           horaAccionValue || Date.now()
         );
@@ -1098,7 +1167,7 @@ export default function MarcarIngresoSalidaScreen() {
 
   const validateBeforeMarkAction = async (
     type: 'entrada' | 'salida'
-  ): Promise<{ ok: true } | { ok: false; message: string }> => {
+  ): Promise<{ ok: true; horaAccionMs: number } | { ok: false; message: string }> => {
     if (!attendanceData?.marca) {
       return { ok: false, message: 'No se encontró la marca.' };
     }
@@ -1115,6 +1184,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     let lat: number | null = null;
     let lng: number | null = null;
+    const marcaRecord = attendanceData.marca as Record<string, unknown>;
 
     if (type === 'entrada') {
       const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
@@ -1126,15 +1196,26 @@ export default function MarcarIngresoSalidaScreen() {
       }
       lat = coords.latitude;
       lng = coords.longitude;
+    } else if (type === 'salida' && hasMarcaPuestoCoordinates(marcaRecord)) {
+      const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
+      if (!coords.ok) {
+        return {
+          ok: false,
+          message: coords.message || 'No se pudo obtener la ubicación para marcar salida.',
+        };
+      }
+      lat = coords.latitude;
+      lng = coords.longitude;
     }
 
     const validation = await runLocalValidationForMarca(
-      attendanceData.marca as Record<string, unknown>,
+      marcaRecord,
       nowMs,
       {
         lat,
         lng,
         validateLocationForEntrada: type === 'entrada',
+        validateLocationForSalida: type === 'salida',
       }
     );
 
@@ -1151,12 +1232,18 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     if (type === 'entrada' && !validation.canMarkEntrada) {
+      if (lat != null && lng != null) {
+        setShowLocationRetry(true);
+      }
       return {
         ok: false,
         message: validation.message || 'No puedes marcar entrada en este momento.',
       };
     }
     if (type === 'salida' && !validation.canMarkSalida) {
+      if (lat != null && lng != null) {
+        setShowLocationRetry(true);
+      }
       return {
         ok: false,
         message: validation.message || 'No puedes marcar salida en este momento.',
@@ -1189,7 +1276,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
     }
 
-    return { ok: true };
+    return { ok: true, horaAccionMs: nowMs };
   };
 
   const executeToggleAttendance = async () => {
@@ -1228,6 +1315,32 @@ export default function MarcarIngresoSalidaScreen() {
             'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.'
           );
           return;
+        }
+
+        // Geocerca local (misma regla que ingreso) antes de salida normal o anticipada.
+        const marcaRecord = attendanceData.marca as Record<string, unknown>;
+        if (hasMarcaPuestoCoordinates(marcaRecord)) {
+          const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
+          if (!coords.ok) {
+            setLocalCanMarkSalida(false);
+            setErrorMessage(coords.message);
+            setShowLocationRetry(true);
+            Alert.alert(
+              'Ubicación requerida',
+              coords.message || 'No se pudo obtener la ubicación para marcar salida.',
+            );
+            return;
+          }
+          const loc = validateMarcaLocation(marcaRecord, coords.latitude, coords.longitude);
+          if (!loc.ok) {
+            setLocalCanMarkSalida(false);
+            setErrorMessage(loc.message);
+            setShowLocationRetry(true);
+            Alert.alert('Ubicación no válida', loc.message);
+            return;
+          }
+          setLocalCanMarkSalida(true);
+          setShowLocationRetry(false);
         }
 
         const next_time_ms = buildMarcaFinMs(attendanceData.marca);
@@ -1282,7 +1395,9 @@ export default function MarcarIngresoSalidaScreen() {
       await cleanAsyncStorage();
 
       try {
-        await deleteAllFiles();
+        const { collectPendingSyncLocalFileNames } = await import('@/hooks/collectPendingSyncLocalFileNames');
+        const preserveFiles = await collectPendingSyncLocalFileNames();
+        await deleteAllFiles(preserveFiles);
       } catch (fileErr) {
         console.warn('Error borrando archivos locales (expo-file-system) al ingresar:', fileErr);
       }
@@ -1352,10 +1467,6 @@ export default function MarcarIngresoSalidaScreen() {
       throw new Error('No se encontró la marca');
     }
 
-    if (!horaAccion) {
-      throw new Error('Hora de acción not found');
-    }
-
     let data = null;
     const markType = type === 'salida' ? 'salida' : 'entrada';
     const preCheck = await validateBeforeMarkAction(markType);
@@ -1368,9 +1479,10 @@ export default function MarcarIngresoSalidaScreen() {
       return;
     }
 
+    const actionHoraAccion = preCheck.horaAccionMs;
+
     if (await evaluateInternetConnection()) {
-      const referenceMs = (horaAccion as number) || (await getHoraAccion()) || Date.now();
-      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(actionHoraAccion);
       if (!hasValidPlanillasToken) {
         setIsProcessingMark(false);
         setProcessingType(null);
@@ -1378,7 +1490,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
 
       data = await saveMarca({
-        data_params: { type, reason, horaAccion: horaAccion },
+        data_params: { type, reason, horaAccion: actionHoraAccion },
         marcaId: attendanceData.marca.id,
         refreshAccessToken,
         logout,
@@ -1390,7 +1502,7 @@ export default function MarcarIngresoSalidaScreen() {
           type: 'salida',
           marcaId: attendanceData.marca.id,
           reason: reason ?? '',
-          horaAccion: horaAccion as number,
+          horaAccion: actionHoraAccion,
           planillasToken: storedPlanillas?.token ?? undefined,
         });
         const rawMarca = await AsyncStorage.getItem('current_marca');
@@ -1398,7 +1510,7 @@ export default function MarcarIngresoSalidaScreen() {
           try {
             const m = JSON.parse(rawMarca);
             if (Number(m.id) === Number(attendanceData.marca.id)) {
-              m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+              m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
               await AsyncStorage.setItem('current_marca', JSON.stringify(m));
             }
           } catch {
@@ -1417,8 +1529,7 @@ export default function MarcarIngresoSalidaScreen() {
       try {
         if (type === 'entrada') {
           if (attendanceData) {
-            let horaAccion = attendanceData.marca.hora_entrada_digitada ? new Date(attendanceData.marca.hora_entrada_digitada).getTime() : await getHoraAccion() as number;
-            await hydrateAfterEntrada(attendanceData.marca, horaAccion, true);
+            await hydrateAfterEntrada(attendanceData.marca, actionHoraAccion, true);
             entradaMarca = attendanceData.marca;
           }
         } else {
@@ -1427,7 +1538,7 @@ export default function MarcarIngresoSalidaScreen() {
             try {
               const m = JSON.parse(raw);
               if (Number(m.id) === Number(attendanceData.marca.id)) {
-                m.hora_salida_digitada = new Date(horaAccion as number).toISOString();
+                m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
                 await AsyncStorage.setItem('current_marca', JSON.stringify(m));
               }
             } catch {
@@ -1491,11 +1602,13 @@ export default function MarcarIngresoSalidaScreen() {
         'last_location',
         'monitoring_previous_minutes',
         'monitoring_post_minutes',
+        ATTENDANCE_ACTIONS_KEY,
       ];
       const keys = await AsyncStorage.getAllKeys();
 
       const keysToDelete = keys.filter((key) => {
         if (exceptions.includes(key)) return false;
+        if (key.endsWith('_actions')) return false;
         if (key.startsWith(MAIN_STRUCTURE_FRAG_ASYNC_PREFIX)) return false;
         if (MAIN_STRUCTURE_SWEEP_PRESERVE_ASYNC_KEYS.includes(key)) return false;
         return true;
@@ -1540,9 +1653,6 @@ export default function MarcarIngresoSalidaScreen() {
 }
 
 const getActivities = async (marcaId: number) => {
-    // Eliminar actions
-    await AsyncStorage.removeItem('activities_actions');
-    await AsyncStorage.removeItem('activities_cache');
     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
     if (!apiUrl) {
       throw new Error('Server URL not configured');
@@ -2598,18 +2708,19 @@ const getActivities = async (marcaId: number) => {
                       <ThemedText style={styles.errorText}>
                         {getActionIcon('warning')} {errorMessage}
                       </ThemedText>
-                      {showEntradaLocationRetry &&
-                        attendanceData.estado === 'No ingresado' && (
+                      {showLocationRetry &&
+                        (attendanceData.estado === 'No ingresado' ||
+                          attendanceData.estado === 'Ingresado') && (
                           <TouchableOpacity
                             style={[
                               styles.entradaLocationRetryButton,
-                              isRefreshingEntradaLocation && styles.actionButtonDisabled,
+                              isRefreshingLocation && styles.actionButtonDisabled,
                             ]}
-                            onPress={() => void handleRetryEntradaLocationCheck()}
-                            disabled={isRefreshingEntradaLocation}
+                            onPress={() => void handleRetryLocationCheck()}
+                            disabled={isRefreshingLocation}
                             activeOpacity={0.85}
                           >
-                            {isRefreshingEntradaLocation ? (
+                            {isRefreshingLocation ? (
                               <ActivityIndicator size="small" color="#007AFF" />
                             ) : (
                               <>

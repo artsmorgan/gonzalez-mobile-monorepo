@@ -1,0 +1,18 @@
+id: F-002
+module_id: activities
+severity: high
+status: fixed
+file: apps/mobile/screens/MarcarIngresoSalidaScreen.tsx
+lines: "1540-1566"
+category: offline
+title: activities_cache eliminado antes de fetch exitoso
+description: |
+  getActivities borra activities_cache y luego llama GET /api/activities/marca/{id}. Si response es
+  null/!ok, retorna sin restaurar cache.
+reproduction: |
+  1. Tener activities_cache poblado.
+  2. Marcar entrada con red intermitente o API caída.
+  3. getActivities borra cache; fetch falla.
+  4. ActivitiesScreen offline queda sin actividades hasta remarcar.
+impact: Pantalla Actividades vacía temporal o prolongada tras entrada con fallo de red.
+suggested_fix: Borrar/reemplazar cache solo tras respuesta OK; conservar anterior en fallo.

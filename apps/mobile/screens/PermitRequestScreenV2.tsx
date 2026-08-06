@@ -790,7 +790,9 @@ export default function PermitRequestScreenV2() {
           rawB64 = f.base64;
         }
         const file_base64 = stripBase64Payload(rawB64);
-        if (!file_base64) continue;
+        if (!file_base64) {
+          throw new Error(`El adjunto "${f.original_name}" no tiene contenido válido. Vuelve a seleccionarlo.`);
+        }
         filesPayload.push({
           type: f.type,
           extension: f.extension,
@@ -799,6 +801,10 @@ export default function PermitRequestScreenV2() {
           mimeType: f.mimeType,
           is_main: Boolean(f.is_main),
         });
+      }
+
+      if (attachedDocuments.length > 0 && filesPayload.length === 0) {
+        throw new Error('Ninguno de los adjuntos seleccionados pudo incluirse. Revise los archivos e intente de nuevo.');
       }
 
       const payload: any = {

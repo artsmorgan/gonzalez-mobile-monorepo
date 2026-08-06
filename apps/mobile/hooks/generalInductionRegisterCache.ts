@@ -10,13 +10,25 @@ export function girRecordSucursalId(r: any): number {
 export async function readAllGeneralInductionRegisterRecords(): Promise<any[]> {
   try {
     const raw = await AsyncStorage.getItem(GIR_RECORDS_CACHE_KEY);
+    let dedicated: any[] = [];
     if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) dedicated = parsed;
+      } catch {
+        dedicated = [];
+      }
     }
+    if (dedicated.length > 0) return dedicated;
+
     const ev = await AsyncStorage.getItem('evaluations_cache');
     if (!ev) return [];
-    const cache = JSON.parse(ev);
+    let cache: unknown;
+    try {
+      cache = JSON.parse(ev);
+    } catch {
+      return [];
+    }
     if (!Array.isArray(cache)) return [];
     const gir = cache.filter((i: any) => i.type === 'general_induction_register');
     if (gir.length > 0) {
@@ -31,9 +43,16 @@ export async function readAllGeneralInductionRegisterRecords(): Promise<any[]> {
 /** Persiste el array completo de GIR y refleja en evaluations_cache (sin tocar otros tipos). */
 export async function writeAllGeneralInductionRegisterRecords(records: any[]): Promise<void> {
   await AsyncStorage.setItem(GIR_RECORDS_CACHE_KEY, JSON.stringify(records));
-  const ev = await AsyncStorage.getItem('evaluations_cache');
-  const cache = ev ? JSON.parse(ev) : [];
-  const rest = Array.isArray(cache) ? cache.filter((i: any) => i.type !== 'general_induction_register') : [];
+  let rest: any[] = [];
+  try {
+    const ev = await AsyncStorage.getItem('evaluations_cache');
+    if (ev) {
+      const cache = JSON.parse(ev);
+      rest = Array.isArray(cache) ? cache.filter((i: any) => i.type !== 'general_induction_register') : [];
+    }
+  } catch {
+    rest = [];
+  }
   const stamped = records.map((r) => ({ ...r, type: 'general_induction_register' }));
   await AsyncStorage.setItem('evaluations_cache', JSON.stringify([...rest, ...stamped]));
 }

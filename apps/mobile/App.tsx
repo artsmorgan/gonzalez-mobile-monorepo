@@ -173,8 +173,10 @@ import { FORCE_OFFLINE } from './constants/syncFlags';
 import { resolveAppConnectivity } from './hooks/resolveAppConnectivity';
 import {
   CURRENT_MARCA_UPDATED_EVENT,
+  ensureAndroidNotificationChannels,
   extractPushData,
   flushPushDeviceActions,
+  presentPushAsLocalNotification,
   PUSH_DEVICE_ACTIONS_KEY,
   resolvePushNavigationTarget,
   syncPushDeviceRegistration,
@@ -185,6 +187,7 @@ import saveMarca from './hooks/saveMarca';
 import saveAbsentReason from './hooks/saveAbsentReason';
 import revertAttendanceLeaving from './hooks/revertAttendanceLeaving';
 import {
+  isAttendanceSyncResponseApplied,
   readAttendanceActions,
   removeAttendanceActionById,
   writeAttendanceActions,
@@ -223,6 +226,7 @@ import PuestoUbicacionScreen from './screens/PuestoUbicacionScreen';
 import JerarquiaScreen from './screens/JerarquiaScreen';
 import NomencladoresScreen from './screens/NomencladoresScreen';
 import ModuleVisibilityScreen from './screens/ModuleVisibilityScreen';
+import SuperAdminsScreen from './screens/SuperAdminsScreen';
 import ReportesScreen from './screens/ReportesScreen';
 import {
   createStaffEvaluation,
@@ -368,6 +372,7 @@ export type RootStackParamList = {
   Jerarquia: undefined;
   Nomencladores: undefined;
   ModuleVisibility: undefined;
+  SuperAdmins: undefined;
   Reportes: undefined;
 };
 
@@ -460,6 +465,7 @@ function RootNavigator() {
       <Stack.Screen name="Jerarquia" component={JerarquiaScreen} />
       <Stack.Screen name="Nomencladores" component={NomencladoresScreen} />
       <Stack.Screen name="ModuleVisibility" component={ModuleVisibilityScreen} />
+      <Stack.Screen name="SuperAdmins" component={SuperAdminsScreen} />
       <Stack.Screen name="Reportes" component={ReportesScreen} />
     </Stack.Navigator>
   );
@@ -568,7 +574,7 @@ function AppContent() {
    * `checklist_supervision_cache` (`checklistSupervisionCacheStorage`). Jerarquía: `loadMainStructureTreeMerged` / fragmentos.
    */
   const ACTION_STORAGE_KEYS = [
-    'lunch_time_actions',
+    'lunchtime_actions',
     LUNCH_TIME_HORARIO_ACTIONS_KEY,
     'vehicles_actions',
     'bitacora_vehiculo_detenido_actions',
@@ -596,6 +602,8 @@ function AppContent() {
     'job_manuals_actions',
     'checklist_supervision_actions',
     'attendance_actions',
+    'entrega_puestos_actions',
+    'archivos_acciones_actions',
     PUSH_DEVICE_ACTIONS_KEY,
   ];
 
@@ -747,10 +755,10 @@ function AppContent() {
           ...(storedPlanillas?.token ? { planillasToken: storedPlanillas.token } : {}),
         });
         await writeAttendanceActions(list);
+        await AsyncStorage.removeItem('marca_cache');
       } catch (e) {
         console.error('Migración marca_cache', e);
       }
-      await AsyncStorage.removeItem('marca_cache');
     }
 
     const legacyAbsent = await AsyncStorage.getItem('absent_reason_cache');
@@ -767,10 +775,10 @@ function AppContent() {
           horaAccion: hora && Number.isFinite(Number(hora)) ? Number(hora) : Date.now(),
         });
         await writeAttendanceActions(list);
+        await AsyncStorage.removeItem('absent_reason_cache');
       } catch (e) {
         console.error('Migración absent_reason_cache', e);
       }
-      await AsyncStorage.removeItem('absent_reason_cache');
     }
   }, []);
 
@@ -811,7 +819,12 @@ function AppContent() {
 
       const validAccessToken = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
       if (!validAccessToken) {
-        console.log('Sincronización cancelada: token inválido o expirado');
+        const onlineAfterPreflight = (await resolveAppConnectivity()).ok;
+        if (onlineAfterPreflight) {
+          console.log('[syncCaches] Sincronización cancelada: sesión inválida o expirada');
+        } else {
+          console.log('[syncCaches] Sincronización pospuesta: conexión perdida durante preflight');
+        }
         return;
       }
 
@@ -846,41 +859,56 @@ function AppContent() {
         try {
           await checkAttendanceActionsCache();
           await checkLunchTimeHorarioActionsCache();
+          await checkEntregaPuestosActionsCache();
           // Incidente debe existir en servidor antes que aportes (acciones con incidentLocalKey).
           await checkIncidentsActionsCache();
           await checkIncidentContributionsActionsCache();
           await checkArticuloMantenimientoDeleteArchivoActionsCache();
-      await Promise.all([
-        checkLunchTimeActionsCache(),
-            checkActivitiesActionsCache(),
-            checkChecklistSupervisionActionsCache(),
-        checkVehiclesActionsCache(),
-        checkArticuloMantenimientoActionsCache(),
-        checkMovimientosArticulosMantenimientoActionsCache(),
-        checkDocumentosEntregadosActionsCache(),
-        checkApreciacionVulnerabilidadActionsCache(),
-        checkNotificationsActionsCache(),
-        checkPushDeviceActionsCache(),
-        checkVisitorsActionsCache(),
-        checkNotesActionsCache(),
-        checkSurveysActionsCache(),
-        checkTrainingsActionsCache(),
-        checkMutuosAcuerdosActionsCache(),
-        checkVoiceNotesActionsCache(),
-        checkStaffEvaluationsActionsCache(),
-        checkJobManualsActionsCache(),
-      ]);
+
+          const parallelChecks = [
+            checkLunchTimeActionsCache,
+            checkActivitiesActionsCache,
+            checkChecklistSupervisionActionsCache,
+            checkVehiclesActionsCache,
+            checkArticuloMantenimientoActionsCache,
+            checkMovimientosArticulosMantenimientoActionsCache,
+            checkDocumentosEntregadosActionsCache,
+            checkApreciacionVulnerabilidadActionsCache,
+            checkNotificationsActionsCache,
+            checkPushDeviceActionsCache,
+            checkVisitorsActionsCache,
+            checkNotesActionsCache,
+            checkSurveysActionsCache,
+            checkTrainingsActionsCache,
+            checkMutuosAcuerdosActionsCache,
+            checkVoiceNotesActionsCache,
+            checkStaffEvaluationsActionsCache,
+            checkJobManualsActionsCache,
+            checkArchivosAccionesCache,
+          ];
+          for (const runCheck of parallelChecks) {
+            await runCheck();
+          }
+
           // Llaves → movimientos llave → llaveros → movimientos llavero (dependencias), luego evaluaciones/corporativos al final
           await checkLlavesActionsCache();
           await checkMovimientosLlavesActionsCache();
           await checkLlaverosActionsCache();
           await checkMovimientosLlaverosActionsCache();
           await checkEvaluationsActionsCache();
-      eventBus.emit('connectionRestored');
+          eventBus.emit('connectionRestored');
         } catch (e) {
           actionsSyncError = e;
           console.error('[syncCaches] Error sincronizando acciones en caché:', e);
-    } finally {
+        } finally {
+          const showSyncErrorAlert = () => {
+            if (!actionsSyncError) return;
+            const message =
+              actionsSyncError instanceof Error
+                ? actionsSyncError.message
+                : 'Algunas acciones offline no se pudieron sincronizar. Se reintentará en la próxima conexión.';
+            Alert.alert('Error de sincronización', message);
+          };
           const finishOverlay = () => {
             if (cacheSyncOverlayActiveRef.current) {
               Animated.timing(cacheSyncFadeAnim.current, {
@@ -891,12 +919,16 @@ function AppContent() {
                 if (finished) {
                   cacheSyncOverlayActiveRef.current = false;
                   setCacheSyncModalVisible(false);
-                  if (!actionsSyncError) {
+                  if (actionsSyncError) {
+                    showSyncErrorAlert();
+                  } else {
                     Alert.alert('Sincronización completada');
                   }
                 }
               });
-            } else if (!actionsSyncError) {
+            } else if (actionsSyncError) {
+              showSyncErrorAlert();
+            } else {
               Alert.alert('Sincronización completada');
             }
           };
@@ -1005,7 +1037,7 @@ function AppContent() {
             refreshAccessToken,
             logout,
           });
-      if (data.status) {
+          if (isAttendanceSyncResponseApplied(data)) {
             await removeAttendanceActionById(action.id);
             console.log('Salida offline sincronizada');
           }
@@ -1017,7 +1049,7 @@ function AppContent() {
             refreshAccessToken,
             logout,
           });
-          if (data.status) {
+          if (isAttendanceSyncResponseApplied(data)) {
             await removeAttendanceActionById(action.id);
             console.log('Motivo de ausencia sincronizado');
           }
@@ -1029,7 +1061,7 @@ function AppContent() {
             refreshAccessToken,
             logout,
           });
-          if (data.status) {
+          if (isAttendanceSyncResponseApplied(data)) {
             await removeAttendanceActionById(action.id);
             console.log('Revertir salida sincronizado');
           }
@@ -1112,8 +1144,8 @@ function AppContent() {
       const action = work[i];
       try {
         const horaAccion = await getHoraAccion();
-        if (!horaAccion) {
-          return;
+        if (!Number.isFinite(Number(horaAccion)) || Number(horaAccion) <= 0) {
+          continue;
         }
         if (!(await actionStillQueued(action))) {
           continue;
@@ -1368,7 +1400,7 @@ function AppContent() {
     console.log('Sincronizando acciones de visitantes:', actions.length);
 
     // Procesar acciones una por una
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           console.log('Creando visitante:', action.id);
@@ -1408,8 +1440,8 @@ function AppContent() {
               }
             }
             // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
-            await AsyncStorage.setItem('visitors_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'update') {
           console.log('Actualizando visitante:', action.id);
@@ -1435,8 +1467,8 @@ function AppContent() {
               }
             }
             // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
-            await AsyncStorage.setItem('visitors_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
+            await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando visitante:', action.id);
@@ -1450,14 +1482,14 @@ function AppContent() {
           if (result.status) {
             console.log('Visitante eliminado correctamente');
             const vid = Number(action.id);
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) =>
                 !(
                   (a.type === 'delete' && Number(a.id) === vid) ||
                   (a.type === 'update' && Number(a.id) === vid)
                 )
             );
-            await AsyncStorage.setItem('visitors_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('visitors_actions', JSON.stringify(actions));
           }
         }
       } catch (error) {
@@ -1504,7 +1536,7 @@ function AppContent() {
     console.log('Sincronizando acciones de vehículos:', actions.length);
 
     // Procesar acciones una por una
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           console.log('Creando vehículo:', action.id);
@@ -1537,10 +1569,10 @@ function AppContent() {
                 /* idempotente */
               }
             }
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
             );
-            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'update') {
           console.log('Actualizando vehículo:', action.id);
@@ -1570,10 +1602,10 @@ function AppContent() {
                 /* idempotente */
               }
             }
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) => !(a.type === 'update' && Number(a.id) === Number(action.id))
             );
-            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'delete_vehicle_attachment') {
           console.log('Eliminando adjunto de vehículo:', action.id);
@@ -1586,10 +1618,10 @@ function AppContent() {
           if (result.status) {
             const vid = Number(action.id);
             await stripVehicleVisitasAttachmentForRow(vid, '');
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) => !(a.type === 'delete_vehicle_attachment' && Number(a.id) === vid)
             );
-            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando vehículo:', action.id);
@@ -1602,7 +1634,7 @@ function AppContent() {
           if (result.status) {
             console.log('Vehículo eliminado correctamente');
             const vid = Number(action.id);
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) =>
                 !(
                   (a.type === 'delete' && Number(a.id) === vid) ||
@@ -1610,7 +1642,7 @@ function AppContent() {
                   (a.type === 'delete_vehicle_attachment' && Number(a.id) === vid)
                 )
             );
-            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
           }
         }
       } catch (error) {
@@ -1869,12 +1901,12 @@ function AppContent() {
     const actionsStr = await AsyncStorage.getItem('llaves_actions');
     if (!actionsStr) return;
 
-    const actions = sortLlavesLikeActions(JSON.parse(actionsStr));
+    let actions = sortLlavesLikeActions(JSON.parse(actionsStr));
     if (!actions || actions.length === 0) return;
 
     console.log('Sincronizando acciones de llaves:', actions.length);
 
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           const result = await createLlave({
@@ -1884,8 +1916,8 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
-            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(actions));
 
             const serverId = Number(result.id);
             if (Number.isFinite(serverId) && serverId > 0) {
@@ -1926,8 +1958,8 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(actions));
             try {
               const treeMs = await readMainStructureTree();
               const nextMs = applyLlaveUpdatePayloadToTree(treeMs, Number(action.id), action.requestData || {});
@@ -1945,8 +1977,8 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('llaves_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('llaves_actions', JSON.stringify(actions));
 
             const cacheStr = await AsyncStorage.getItem('llaves_cache');
             if (cacheStr) {
@@ -3308,10 +3340,10 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Error procesando acción de checklist de supervisión:', error);
-        return;
+        break;
       }
 
-      if (!success) return;
+      if (!success) break;
 
       const next = queueAfterSuccess(queue, action);
       await persistQueue(next);
@@ -3338,7 +3370,7 @@ function AppContent() {
     console.log('Sincronizando acciones de notificaciones:', actions.length);
 
     // Procesar acciones una por una
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'markAsRead') {
           console.log('Marcando notificaciones como leídas:', action.notificationIds);
@@ -3421,13 +3453,13 @@ function AppContent() {
     const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
     if (!actionsStr) return;
 
-    const actions = JSON.parse(actionsStr);
+    let actions: any[] = JSON.parse(actionsStr);
     if (!actions || actions.length === 0) return;
 
     console.log('Sincronizando acciones de lunch time:', actions.length);
 
     // Procesar acciones una por una
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           console.log('Guardando lunch time:', action.id);
@@ -3440,14 +3472,17 @@ function AppContent() {
 
           if (result.status) {
             console.log('Lunch time guardado correctamente');
-            // Eliminar acción del array
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
-            await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'create'));
+            await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
           }
         }
       } catch (error) {
         console.error('Error procesando acción de lunch time:', error);
       }
+    }
+
+    if (actions.length === 0) {
+      await AsyncStorage.removeItem('lunchtime_actions');
     }
   }
 
@@ -3558,10 +3593,8 @@ function AppContent() {
             a.type === 'delete' && String(a.id) === String(delId);
           if (!puestoId) {
             console.warn('Acción delete de nota sin puestoId; se descarta');
-            await AsyncStorage.setItem(
-              'notes_actions',
-              JSON.stringify(actions.filter((a: any) => !matchesDelete(a)))
-            );
+            await saveActions(actions.filter((a: any) => !matchesDelete(a)));
+            i = 0;
             continue;
           }
           const result = await deleteNote({
@@ -3764,7 +3797,10 @@ function AppContent() {
         if (Array.isArray(legacy)) {
           const legacyBitActions = legacy.filter(
             (a: any) =>
-              (a?.type === 'create' || a?.type === 'update' || a?.type === 'delete') &&
+              (a?.type === 'create' ||
+                a?.type === 'update' ||
+                a?.type === 'delete' ||
+                a?.type === 'delete_image') &&
               a?.id != null
           );
           if (legacyBitActions.length > 0) {
@@ -3792,8 +3828,19 @@ function AppContent() {
             }
             await AsyncStorage.setItem('evaluations_actions', JSON.stringify(ev0));
             const rest = legacy.filter(
-              (a: any) => !(a?.type === 'create' || a?.type === 'update' || a?.type === 'delete')
+              (a: any) =>
+                !(
+                  a?.type === 'create' ||
+                  a?.type === 'update' ||
+                  a?.type === 'delete' ||
+                  a?.type === 'delete_image'
+                )
             );
+            if (rest.length === 0) {
+              await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
+            } else {
+              await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
+            }
             if (rest.length === 0) await AsyncStorage.removeItem('bitacora_vehiculo_detenido_actions');
             else await AsyncStorage.setItem('bitacora_vehiculo_detenido_actions', JSON.stringify(rest));
           }
@@ -3811,7 +3858,12 @@ function AppContent() {
     let actions: any[] = JSON.parse(actionsStr0);
     if (!actions || actions.length === 0) return;
 
-    console.log('Sincronizando acciones de evaluaciones:', actions.length);
+    const { normalizeAgendaMinutaEvaluationsActions } = await import('@/hooks/agendaMinutaCacheHelpers');
+    const normalizedActions = normalizeAgendaMinutaEvaluationsActions(actions) as any[];
+    if (normalizedActions !== actions) {
+      actions = normalizedActions;
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+    }
 
     // Procesar acciones una por una (vehículos corporativos al final vía runCorporateEvaluationsSync)
     for (const action of actions) {
@@ -4070,14 +4122,31 @@ function AppContent() {
           } else if (action.type === 'non_conforming_product') {
             console.log('Creando producto no conforme:', action.id);
             const { createNonConformingProduct } = await import('@/hooks/evaluationFunctions');
+            const {
+              clearPncPendingFilesFromArchivoList,
+              buildNonConformingProductRequestDataForSync,
+            } = await import('@/hooks/nonConformingProductFilesSync');
+            const { requestData, rawArchivos, diskHydrationComplete } =
+              await buildNonConformingProductRequestDataForSync({
+                action: 'create',
+                actionId: action.id,
+                payload: action.payload,
+              });
+            if (!diskHydrationComplete) {
+              console.warn(
+                '[non_conforming_product] Creación aplazada: no se pudieron leer adjuntos locales; no se envía ni se borran archivos.'
+              );
+              continue;
+            }
             const result = await createNonConformingProduct({
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Producto no conforme creado correctamente');
+              await clearPncPendingFilesFromArchivoList(rawArchivos);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'create' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
@@ -5296,15 +5365,32 @@ function AppContent() {
           } else if (action.type === 'non_conforming_product') {
             console.log('Actualizando producto no conforme:', action.id);
             const { updateNonConformingProduct } = await import('@/hooks/evaluationFunctions');
+            const {
+              clearPncPendingFilesFromArchivoList,
+              buildNonConformingProductRequestDataForSync,
+            } = await import('@/hooks/nonConformingProductFilesSync');
+            const { requestData, rawArchivos, diskHydrationComplete } =
+              await buildNonConformingProductRequestDataForSync({
+                action: 'update',
+                actionId: action.id,
+                payload: action.payload,
+              });
+            if (!diskHydrationComplete) {
+              console.warn(
+                '[non_conforming_product] Actualización aplazada: no se pudieron leer adjuntos locales; no se envía ni se borran archivos.'
+              );
+              continue;
+            }
             const result = await updateNonConformingProduct({
               id: action.id,
-              requestData: action.payload,
+              requestData: requestData as any,
               refreshAccessToken,
               logout,
             });
 
             if (result.status) {
               console.log('Producto no conforme actualizado correctamente');
+              await clearPncPendingFilesFromArchivoList(rawArchivos);
               const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.action === 'update' && a.type === 'non_conforming_product'));
               await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
               actions = updatedActions;
@@ -7053,25 +7139,26 @@ function AppContent() {
 
           if (result.status) {
             const newId = result.data?.id != null ? Number(result.data.id) : null;
-            const cacheStr = await AsyncStorage.getItem('surveys_cache');
-            const list = cacheStr ? JSON.parse(cacheStr) : [];
-            const fullCache = Array.isArray(list) ? list : [];
-            const puestoId = Number(action.requestData?.puesto_id);
-            const withoutDraft = fullCache.filter(
-              (s: any) => String(s?.id_local ?? '') !== String(action.id)
-            );
-            if (newId != null && Number.isFinite(newId) && newId > 0 && Number.isFinite(puestoId) && puestoId > 0) {
+            if (newId != null && Number.isFinite(newId) && newId > 0) {
+              const cacheStr = await AsyncStorage.getItem('surveys_cache');
+              const list = cacheStr ? JSON.parse(cacheStr) : [];
+              const fullCache = Array.isArray(list) ? list : [];
+              const puestoId = Number(action.requestData?.puesto_id);
+              const withoutDraft = fullCache.filter(
+                (s: any) => String(s?.id_local ?? '') !== String(action.id)
+              );
               const row = buildSurveyCacheRowFromCreateRequest(
                 action.requestData,
                 newId,
                 ''
               );
-              const merged = upsertSurveyCacheRowForPuesto(withoutDraft, row, puestoId);
+              const merged =
+                Number.isFinite(puestoId) && puestoId > 0
+                  ? upsertSurveyCacheRowForPuesto(withoutDraft, row, puestoId)
+                  : [...withoutDraft, row];
               await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
-            } else {
-              await AsyncStorage.setItem('surveys_cache', JSON.stringify(withoutDraft));
+              done = true;
             }
-            done = true;
           }
         } else if (action.type === 'update' && action.surveyId) {
           console.log('Actualizando encuesta:', action.surveyId);
@@ -7081,7 +7168,31 @@ function AppContent() {
             refreshAccessToken,
             logout,
           });
-          if (result.status) done = true;
+          if (result.status) {
+            const cacheStr = await AsyncStorage.getItem('surveys_cache');
+            if (cacheStr) {
+              try {
+                const list = JSON.parse(cacheStr);
+                if (Array.isArray(list)) {
+                  const sid = Number(action.surveyId);
+                  const puestoId = Number(action.requestData?.puesto_id);
+                  const row = buildSurveyCacheRowFromCreateRequest(
+                    { ...action.requestData, puesto_id: action.requestData?.puesto_id ?? puestoId },
+                    sid,
+                    ''
+                  );
+                  const merged =
+                    Number.isFinite(puestoId) && puestoId > 0
+                      ? upsertSurveyCacheRowForPuesto(list, row, puestoId)
+                      : list.map((s: any) => (Number(s?.id) === sid ? { ...s, ...row } : s));
+                  await AsyncStorage.setItem('surveys_cache', JSON.stringify(merged));
+                }
+              } catch {
+                /* ignore cache patch */
+              }
+            }
+            done = true;
+          }
         } else if (action.type === 'patchFirmaPersona' && action.surveyId) {
           const result = await updateSurveySignatureAPI({
             surveyId: Number(action.surveyId),
@@ -7107,6 +7218,9 @@ function AppContent() {
             }
             done = true;
           }
+        } else {
+          console.warn('Acción de encuesta desconocida; se omite:', action?.type);
+          done = true;
         }
       } catch (error) {
         console.error('Error procesando acción de encuesta:', error);
@@ -7330,7 +7444,10 @@ function AppContent() {
 
           if (result.status) {
             console.log('Evaluación de personal creada correctamente');
-            const newId = result.evaluationId;
+            const newId = Number(result.evaluationId);
+            if (!Number.isFinite(newId) || newId <= 0) {
+              continue;
+            }
             try {
               const sec = JSON.parse(
                 typeof action.requestData?.evaluacion === 'string' ? action.requestData.evaluacion : '[]',
@@ -7486,12 +7603,12 @@ function AppContent() {
     const actionsStr = await AsyncStorage.getItem('incidents_actions');
     if (!actionsStr) return;
 
-    const actions = JSON.parse(actionsStr);
+    let actions = JSON.parse(actionsStr);
     if (!actions || actions.length === 0) return;
 
     console.log('Sincronizando acciones de incidentes:', actions.length);
 
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           console.log('Creando incidente:', action.id);
@@ -7504,9 +7621,8 @@ function AppContent() {
 
           if (result.status) {
             console.log('Incidente creado correctamente');
-            // Remove action from queue
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
-            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => a.id !== action.id || a.type !== 'create');
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
 
             // Actualizar cache: reemplazar id_local por id real (si el server lo devuelve)
             // También necesitamos recargar desde el servidor para obtener el valor correcto de 'owned'
@@ -7561,9 +7677,8 @@ function AppContent() {
 
           if (result.status) {
             console.log('Incidente actualizado correctamente');
-            // Remove action from queue
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
-            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'update'));
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando incidente:', action.id);
@@ -7576,8 +7691,8 @@ function AppContent() {
 
           if (result.status) {
             console.log('Incidente eliminado correctamente');
-            const updatedActions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
-            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => !(a.id === action.id && a.type === 'delete'));
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
 
             const cacheStr = await AsyncStorage.getItem('incidents_cache');
             if (cacheStr) {
@@ -7595,7 +7710,7 @@ function AppContent() {
             logout,
           });
           if (result.status) {
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) =>
                 !(
                   a.type === 'delete_file' &&
@@ -7603,7 +7718,7 @@ function AppContent() {
                   a.fileId === action.fileId
                 )
             );
-            await AsyncStorage.setItem('incidents_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('incidents_actions', JSON.stringify(actions));
 
             const cacheStrDf = await AsyncStorage.getItem('incidents_cache');
             if (cacheStrDf) {
@@ -7629,20 +7744,214 @@ function AppContent() {
     }
   }
 
+  const checkEntregaPuestosActionsCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('entrega_puestos_actions');
+    if (!actionsStr) return;
+
+    let actions: any[] = JSON.parse(actionsStr);
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    console.log('Sincronizando acciones de entrega de puestos:', actions.length);
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+
+    for (const action of [...actions]) {
+      try {
+        if (action.type !== 'create' || !action.requestData) continue;
+
+        const response = await authedFetch({
+          url: `${apiUrl}/api/entrega-puestos`,
+          init: {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(action.requestData),
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!response?.ok) continue;
+
+        const data = await response.json();
+        if (!data?.status) continue;
+
+        actions = actions.filter(
+          (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
+        );
+        await AsyncStorage.setItem('entrega_puestos_actions', JSON.stringify(actions));
+      } catch (error) {
+        console.error('Error procesando acción de entrega de puestos:', error);
+      }
+    }
+
+    if (actions.length === 0) {
+      await AsyncStorage.removeItem('entrega_puestos_actions');
+    }
+  };
+
+  const checkArchivosAccionesCache = async () => {
+    if (!employee) return;
+
+    const actionsStr = await AsyncStorage.getItem('archivos_acciones_actions');
+    if (!actionsStr) return;
+
+    let actions: any[] = JSON.parse(actionsStr);
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    console.log('Sincronizando archivos de traslado de plazas:', actions.length);
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return;
+
+    for (const action of [...actions]) {
+      try {
+        if (action.action !== 'upload_file' || !action.payload) continue;
+
+        const accionId = Number(action.accion_id);
+        if (!Number.isFinite(accionId) || accionId <= 0) continue;
+
+        const uploadPayload = { ...(action.payload || {}) };
+        if (uploadPayload.localFileName) {
+          try {
+            const g = await getFile(String(uploadPayload.localFileName));
+            uploadPayload.file_base64 = g.base64;
+            delete uploadPayload.localFileName;
+          } catch (e) {
+            console.warn('Sincronización traslado-plazas: no se pudo leer archivo local', e);
+            continue;
+          }
+        }
+
+        const storedPlanillas = await readStoredPlanillasToken();
+        const planillasToken =
+          String(action.planillasToken ?? '').trim() || storedPlanillas?.token || '';
+
+        const response = await authedFetch({
+          url: `${apiUrl}/api/traslado-plaza/${accionId}/upload-file`,
+          init: {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              'Planillas-Token': encodeURIComponent(planillasToken),
+            },
+            body: JSON.stringify(uploadPayload),
+          },
+          refreshAccessToken,
+          logout,
+        });
+        if (!response?.ok) continue;
+
+        const data = await response.json();
+        if (!data?.status) continue;
+
+        actions = actions.filter((a: any) => a.id !== action.id);
+        await AsyncStorage.setItem('archivos_acciones_actions', JSON.stringify(actions));
+
+        const cacheStr = await AsyncStorage.getItem('archivos_acciones_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          if (Array.isArray(cache)) {
+            const docName = data?.data?.document;
+            const updatedCache = cache.map((item: any) => {
+              if (Number(item?.id) !== accionId) return item;
+              return {
+                ...item,
+                synced: true,
+                mobile_upload: data?.data?.mobile_upload ?? true,
+                document: docName ?? item.document,
+              };
+            });
+            await AsyncStorage.setItem('archivos_acciones_cache', JSON.stringify(updatedCache));
+          }
+        }
+      } catch (error) {
+        console.error('Error procesando archivo de traslado de plazas:', error);
+      }
+    }
+
+    if (actions.length === 0) {
+      await AsyncStorage.removeItem('archivos_acciones_actions');
+    }
+  };
+
   const checkMutuosAcuerdosActionsCache = async () => {
     if (!employee) return;
 
-    // Mutuos acuerdos ahora es exclusivamente online: limpiar cola/cache legacy.
     const actionsStr = await AsyncStorage.getItem('mutuos_acuerdos_actions');
-    const actions = actionsStr ? JSON.parse(actionsStr) : [];
-    if (Array.isArray(actions) && actions.length > 0) {
-      console.log('Limpiando acciones legacy de mutuos acuerdos (modo online):', actions.length);
-      await AsyncStorage.removeItem('mutuos_acuerdos_actions');
+    if (!actionsStr) return;
+
+    let actions: any[] = JSON.parse(actionsStr);
+    if (!Array.isArray(actions) || actions.length === 0) return;
+
+    console.log('Sincronizando acciones legacy de mutuos acuerdos:', actions.length);
+
+    const {
+      createMutuoAcuerdo,
+      acceptMutuoAcuerdo,
+      signMutuoAcuerdoEjecutivo,
+      rejectMutuoAcuerdoEjecutivo,
+      listMutuosAcuerdosMine,
+    } = await import('@/hooks/mutuosAcuerdosFunctions');
+    const { setMutuosAcuerdosCache } = await import('@/hooks/mutuosAcuerdosStorage');
+
+    const actionsToProcess = [...actions];
+    for (const action of actionsToProcess) {
+      try {
+        let result: { status?: boolean } | null = null;
+
+        if (action.type === 'create' && action.requestData) {
+          result = await createMutuoAcuerdo({
+            requestData: action.requestData,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (action.type === 'accept' && action.id && action.role) {
+          result = await acceptMutuoAcuerdo({
+            id: Number(action.id),
+            role: action.role,
+            firma_ausente_manual: action.firma_ausente_manual,
+            firma_reemplaza_manual: action.firma_reemplaza_manual,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (action.type === 'sign_ejecutivo' && action.id) {
+          result = await signMutuoAcuerdoEjecutivo({
+            id: Number(action.id),
+            firma_ejecutivo_cuenta_manual: action.firma_ejecutivo_cuenta_manual,
+            firma_ejecutivo_cuenta_digital: action.firma_ejecutivo_cuenta_digital,
+            hora_accion: action.hora_accion,
+            planillasToken: action.planillasToken,
+            refreshAccessToken,
+            logout,
+          });
+        } else if (action.type === 'reject_ejecutivo' && action.id) {
+          result = await rejectMutuoAcuerdoEjecutivo({
+            id: Number(action.id),
+            hora_accion: action.hora_accion,
+            refreshAccessToken,
+            logout,
+          });
+        } else {
+          console.warn('Acción legacy de mutuos acuerdos no migrable:', action?.type);
+          continue;
+        }
+
+        if (result?.status) {
+          actions = actions.filter((a: any) => a !== action);
+          await AsyncStorage.setItem('mutuos_acuerdos_actions', JSON.stringify(actions));
+        }
+      } catch (error) {
+        console.error('Error procesando acción legacy de mutuo acuerdo:', error);
+      }
     }
-    const cacheStr = await AsyncStorage.getItem('mutuos_acuerdos_cache');
-    const cache = cacheStr ? JSON.parse(cacheStr) : [];
-    if (Array.isArray(cache) && cache.length > 0) {
+
+    if (actions.length === 0) {
+      await AsyncStorage.removeItem('mutuos_acuerdos_actions');
       await AsyncStorage.removeItem('mutuos_acuerdos_cache');
+      const list = await listMutuosAcuerdosMine({ refreshAccessToken, logout });
+      if (list.status && Array.isArray(list.data)) {
+        await setMutuosAcuerdosCache(list.data);
+      }
     }
   }
 
@@ -7827,7 +8136,7 @@ function AppContent() {
 
     console.log('Sincronizando acciones de notas de voz:', actions.length);
 
-    for (const action of actions) {
+    for (const action of [...actions]) {
       try {
         if (action.type === 'create') {
           console.log('Creando nota de voz:', action.id);
@@ -7842,6 +8151,21 @@ function AppContent() {
               rawRd.file_base64 = g.base64;
             } catch (e) {
               console.warn('Sincronización nota de voz (create): no se pudo leer audio local', e);
+              const failures = Number(action._audioReadFailures ?? 0) + 1;
+              if (failures >= 3) {
+                console.warn('Dequeue voice note after 3 failed audio reads:', action.id);
+                actions = actions.filter(
+                  (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
+                );
+                await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
+                continue;
+              }
+              actions = actions.map((a: any) =>
+                a.type === 'create' && String(a.id) === String(action.id)
+                  ? { ...a, _audioReadFailures: failures }
+                  : a
+              );
+              await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
               continue;
             }
             delete rawRd.audio_local_file;
@@ -7886,10 +8210,10 @@ function AppContent() {
                 /* idempotente */
               }
             }
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) => !(a.type === 'create' && String(a.id) === String(action.id))
             );
-            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'update') {
           console.log('Actualizando nota de voz:', action.id);
@@ -7901,8 +8225,8 @@ function AppContent() {
           });
 
           if (result.status) {
-            const updatedActions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
-            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(updatedActions));
+            actions = actions.filter((a: any) => a.id !== action.id || a.type !== 'update');
+            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
           }
         } else if (action.type === 'delete') {
           console.log('Eliminando nota de voz:', action.id);
@@ -7915,14 +8239,14 @@ function AppContent() {
           if (result.status) {
             console.log('Nota de voz eliminada correctamente');
             const nid = Number(action.id);
-            const updatedActions = actions.filter(
+            actions = actions.filter(
               (a: any) =>
                 !(
                   (a.type === 'delete' && Number(a.id) === nid) ||
                   (a.type === 'update' && Number(a.id) === nid)
                 )
             );
-            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(updatedActions));
+            await AsyncStorage.setItem('voice_notes_actions', JSON.stringify(actions));
           }
         }
       } catch (error) {
@@ -8398,6 +8722,11 @@ function AppContent() {
     return () => clearInterval(locationIntervalId);
   }, []);
 
+  /** Canales Android listos antes del registro FCM / recepción en background. */
+  useEffect(() => {
+    void ensureAndroidNotificationChannels();
+  }, []);
+
   /** Registro FCM tras login / restauración de sesión; se actualiza si cambia current_marca. */
   useEffect(() => {
     if (!employee?.id || !accessToken) return;
@@ -8469,21 +8798,40 @@ function AppContent() {
     };
 
     const receivedSub = Notifications.addNotificationReceivedListener((notification) => {
-      try {
-        const data = extractPushData(notification.request.content);
-        console.log('[push] Notificación en primer plano:', data);
-        eventBus.emit('pushNotificationReceived', {
-          title: notification.request.content.title,
-          body: notification.request.content.body,
-          data,
-        });
-        // Integración con inbox existente
-        eventBus.emit('notificationsUpdated');
-        eventBus.emit('notificationsUpdatedCounter');
-        eventBus.emit('syncCachesRequested');
-      } catch (error) {
-        console.error('[push] Error procesando notificación recibida:', error);
-      }
+      void (async () => {
+        try {
+          const data = extractPushData(notification.request.content);
+          console.log('[push] Notificación recibida:', {
+            title: notification.request.content.title,
+            body: notification.request.content.body,
+            data,
+          });
+
+          // En release Android el handler remoto a veces no pinta banner; reforzar en local.
+          if (data._presentedLocally !== '1') {
+            try {
+              await presentPushAsLocalNotification({
+                title: notification.request.content.title,
+                body: notification.request.content.body,
+                data,
+              });
+            } catch (presentErr) {
+              console.warn('[push] No se pudo presentar localmente:', presentErr);
+            }
+          }
+
+          eventBus.emit('pushNotificationReceived', {
+            title: notification.request.content.title,
+            body: notification.request.content.body,
+            data,
+          });
+          eventBus.emit('notificationsUpdated');
+          eventBus.emit('notificationsUpdatedCounter');
+          eventBus.emit('syncCachesRequested');
+        } catch (error) {
+          console.error('[push] Error procesando notificación recibida:', error);
+        }
+      })();
     });
 
     const responseSub = Notifications.addNotificationResponseReceivedListener((response) => {

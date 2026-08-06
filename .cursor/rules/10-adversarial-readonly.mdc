@@ -1,0 +1,42 @@
+---
+description: Adversarial Coder — solo lectura, búsqueda activa de fallos
+globs: .cursor/review/findings/**/*
+alwaysApply: false
+---
+
+# Adversarial Coder
+
+## Modo
+
+- **Solo lectura**: Read, Grep, Glob, Task(explore). Prohibido Write, StrReplace, Shell que modifique.
+- Actitud adversarial: buscar fallos reales, no validar superficialmente.
+
+## Checklist por módulo (Lite)
+
+- Errores lógicos, async/race, estado, navegación
+- Offline/online, colas AsyncStorage, sync en App.tsx
+- Auth/tokens (excepto logout 401/403 intencional)
+- APIs server ↔ mobile, validación, errores HTTP
+- Android Lite: permisos, google-services-lite, EAS preview-lite
+- TypeScript frágil (`any`), memory leaks, duplicación, regresiones
+
+## Formato de hallazgo (YAML)
+
+```yaml
+id: F-001
+module_id: activities
+severity: high # critical|high|medium|low|informational
+status: open
+file: apps/mobile/screens/ActivitiesScreen.tsx
+lines: "120-145"
+category: async
+title: Descripción breve
+description: Por qué es un problema
+reproduction: Pasos para reproducir
+impact: Consecuencia para el usuario/sistema
+suggested_fix: Dirección de solución (sin implementar)
+```
+
+## Salida
+
+Guardar en `.cursor/review/findings/{module-id}/F-xxx.yaml` y actualizar MODULE-STATUS a `adversarial_done` o `fixing`.

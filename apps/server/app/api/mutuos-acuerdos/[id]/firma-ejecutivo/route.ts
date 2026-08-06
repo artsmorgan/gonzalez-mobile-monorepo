@@ -6,6 +6,7 @@ import { fetchDynamicFile, uploadDynamicFiles } from "../../../../../utils/callD
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 import axios from "axios";
+import { parseMarcaIdsArray, ymdFromFecha } from "../../../../../utils/mutuosAcuerdosMarcas";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -118,15 +119,37 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       coordinador_id
       */
 
-      const marcaAusente = await prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } });
-      const marcaReemplaza = await prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } });
+      const marcaAusenteId = parseMarcaIdsArray(
+        (existing as any)?.marcas_ausente ?? (existing as any)?.marcaDiaAusente_id,
+      )[0];
+      const marcaReemplazaId = parseMarcaIdsArray(
+        (existing as any)?.marcas_reemplaza ?? (existing as any)?.marcaDiaReemplaza_id,
+      )[0];
+      const fechaAusente =
+        ymdFromFecha((existing as any)?.fecha_ausente) ||
+        null;
+      const fechaReemplaza =
+        ymdFromFecha((existing as any)?.fecha_reemplaza) ||
+        null;
 
-      if (!marcaAusente || !marcaReemplaza) {
+      const marcaAusente = marcaAusenteId
+        ? await prisma.c_marca_dia.findUnique({ where: { id: marcaAusenteId } })
+        : null;
+      const marcaReemplaza = marcaReemplazaId
+        ? await prisma.c_marca_dia.findUnique({ where: { id: marcaReemplazaId } })
+        : null;
+
+      if ((!fechaAusente && !marcaAusente) || (!fechaReemplaza && !marcaReemplaza)) {
         return NextResponse.json({ status: false, message: "Marca ausente o reemplaza no encontrada" }, { status: 200 });
       }
 
-      const fechaAusente = new Date(marcaAusente.fecha).toISOString().split("T")[0];
-      const fechaReemplaza = new Date(marcaReemplaza.fecha).toISOString().split("T")[0];
+      const fechaAusenteFinal =
+        fechaAusente || (marcaAusente?.fecha ? new Date(marcaAusente.fecha).toISOString().split("T")[0] : null);
+      const fechaReemplazaFinal =
+        fechaReemplaza || (marcaReemplaza?.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : null);
+      if (!fechaAusenteFinal || !fechaReemplazaFinal) {
+        return NextResponse.json({ status: false, message: "Fechas del mutuo acuerdo no disponibles" }, { status: 200 });
+      }
 
       const coordinador = await callDynamicPrisma({
         req,
@@ -145,9 +168,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       const body = {
         tipo: 'MUT',
         empleado_reemplaza_id: updated.empleadoReemplaza_id,
-        fecha_reemplaza: fechaReemplaza,
+        fecha_reemplaza: fechaReemplazaFinal,
         empleado_ausente_id: updated.empleadoAusente_id,
-        fecha_ausente: fechaAusente,
+        fecha_ausente: fechaAusenteFinal,
         coordinado_por_id: 3,
         coordinador_id: coordinador.coordinador_id,
       };
@@ -214,8 +237,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           ? prisma.c_empleado.findUnique({ where: { id: empleadoReemplazaId } })
           : null,
         prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } }),
-        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } }),
-        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } }),
+        (() => {
+          const id = parseMarcaIdsArray((existing as any)?.marcas_ausente ?? (existing as any)?.marcaDiaAusente_id)[0];
+          return id ? prisma.c_marca_dia.findUnique({ where: { id } }) : Promise.resolve(null);
+        })(),
+        (() => {
+          const id = parseMarcaIdsArray((existing as any)?.marcas_reemplaza ?? (existing as any)?.marcaDiaReemplaza_id)[0];
+          return id ? prisma.c_marca_dia.findUnique({ where: { id } }) : Promise.resolve(null);
+        })(),
       ]);
       const [puestoAusente, puestoReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.puesto_id
@@ -242,8 +271,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       const hora = now.split("T")[1]?.replace("Z", "") || "";
       console.log(5);
 
-      const fechaAusente = (marcaAusenteNotif as any)?.fecha ? new Date((marcaAusenteNotif as any).fecha).toISOString().split("T")[0] : fecha;
-      const fechaReemplaza = (marcaReemplazaNotif as any)?.fecha ? new Date((marcaReemplazaNotif as any).fecha).toISOString().split("T")[0] : fecha;
+      const fechaAusente =
+        ymdFromFecha((existing as any)?.fecha_ausente) ||
+        ((marcaAusenteNotif as any)?.fecha ? new Date((marcaAusenteNotif as any).fecha).toISOString().split("T")[0] : fecha);
+      const fechaReemplaza =
+        ymdFromFecha((existing as any)?.fecha_reemplaza) ||
+        ((marcaReemplazaNotif as any)?.fecha ? new Date((marcaReemplazaNotif as any).fecha).toISOString().split("T")[0] : fecha);
       const horaInicioAusente = (marcaAusenteNotif as any)?.hora_inicio ? new Date((marcaAusenteNotif as any).hora_inicio).toISOString().split("T")[1] : hora;
       const horaInicioReemplaza = (marcaReemplazaNotif as any)?.hora_inicio ? new Date((marcaReemplazaNotif as any).hora_inicio).toISOString().split("T")[1] : hora;
       const puestoNombreAusente = (puestoAusente as any)?.nombre || "Desconocido";

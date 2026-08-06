@@ -1858,6 +1858,7 @@ export default function StaffEvaluationsScreen() {
         actions.push({
           id: localId,
           type: 'create',
+          marcaId,
           requestData: requestDataQueued,
         });
         await AsyncStorage.setItem('evaluations_staff_actions', JSON.stringify(actions));

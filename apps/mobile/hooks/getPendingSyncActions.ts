@@ -49,6 +49,8 @@ export async function getPendingSyncActions(): Promise<PendingSyncActions> {
         'evaluations_staff_actions',
         'voice_notes_actions',
         'attendance_actions',
+        'entrega_puestos_actions',
+        'archivos_acciones_actions',
         'push_device_actions',
     ];
 

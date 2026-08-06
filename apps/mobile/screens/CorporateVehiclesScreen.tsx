@@ -1391,7 +1391,16 @@ export default function CorporateVehiclesScreen() {
           structureRef.current.length > 0
             ? structureRef.current
             : await loadMainStructureTreeMerged();
-        if (!Array.isArray(tree) || tree.length === 0) return;
+        if (!Array.isArray(tree) || tree.length === 0) {
+          const { upsertVehicleInCorpoCache } = await import('@/hooks/corporateVehiclesCorpoCache');
+          for (const fv of vehicles) {
+            await upsertVehicleInCorpoCache(
+              { ...(fv as any), corpo_id: sucursalId, synced: true },
+              { synced: true }
+            );
+          }
+          return;
+        }
 
         let updated = false;
 

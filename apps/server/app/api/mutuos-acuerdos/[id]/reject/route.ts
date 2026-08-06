@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
+import { parseMarcaIdsArray, ymdFromFecha } from "../../../../../utils/mutuosAcuerdosMarcas";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -100,8 +101,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           ? prisma.c_empleado.findUnique({ where: { id: empleadoReemplazaId } })
           : null,
         prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } }),
-        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaAusente_id || 0) } }),
-        prisma.c_marca_dia.findUnique({ where: { id: Number((existing as any)?.marcaDiaReemplaza_id || 0) } }),
+        (() => {
+          const id = parseMarcaIdsArray((existing as any)?.marcas_ausente ?? (existing as any)?.marcaDiaAusente_id)[0];
+          return id ? prisma.c_marca_dia.findUnique({ where: { id } }) : Promise.resolve(null);
+        })(),
+        (() => {
+          const id = parseMarcaIdsArray((existing as any)?.marcas_reemplaza ?? (existing as any)?.marcaDiaReemplaza_id)[0];
+          return id ? prisma.c_marca_dia.findUnique({ where: { id } }) : Promise.resolve(null);
+        })(),
       ]);
       const [puestoAusente, puestoReemplaza] = await Promise.all([
         (marcaAusenteNotif as any)?.puesto_id
@@ -144,8 +151,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       const reemplazaCedula = String((empleadoReemplaza as any)?.cedula ?? "");
       const fecha = now.split("T")[0];
       const hora = now.split("T")[1]?.replace("Z", "") || "";
-      const fechaAusente = (marcaAusenteNotif as any)?.fecha ? new Date((marcaAusenteNotif as any).fecha).toISOString().split("T")[0] : '-Sin fecha-';
-      const fechaReemplaza = (marcaReemplazaNotif as any)?.fecha ? new Date((marcaReemplazaNotif as any).fecha).toISOString().split("T")[0] : '-Sin fecha-';
+      const fechaAusente =
+        ymdFromFecha((existing as any)?.fecha_ausente) ||
+        ((marcaAusenteNotif as any)?.fecha ? new Date((marcaAusenteNotif as any).fecha).toISOString().split("T")[0] : "-Sin fecha-");
+      const fechaReemplaza =
+        ymdFromFecha((existing as any)?.fecha_reemplaza) ||
+        ((marcaReemplazaNotif as any)?.fecha ? new Date((marcaReemplazaNotif as any).fecha).toISOString().split("T")[0] : "-Sin fecha-");
       const horaInicioAusente = (marcaAusenteNotif as any)?.hora_inicio ? new Date((marcaAusenteNotif as any).hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
       const horaInicioReemplaza = (marcaReemplazaNotif as any)?.hora_inicio ? new Date((marcaReemplazaNotif as any).hora_inicio).toISOString().split("T")[1].split(".")[0] : '-Sin hora-';
       const puestoNombreAusente = (puestoAusente as any)?.nombre || "Desconocido";

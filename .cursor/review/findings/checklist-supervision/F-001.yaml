@@ -1,0 +1,15 @@
+id: F-001
+module_id: checklist-supervision
+severity: high
+status: fixed
+file: apps/server/app/api/checklist-supervision/route.ts
+lines: "245-282"
+category: data_loss
+title: POST persiste checklist con evaluacion vacía si fallan imágenes
+description: |
+  Registro creado con evaluacion [] antes de processEvaluationImages; fallo no hace rollback.
+reproduction: |
+  1. Provocar fallo en upload de imágenes en POST.
+impact: Checklist sin evaluación/fotos en servidor.
+suggested_fix: |
+  Rollback o no persistir hasta imágenes OK.

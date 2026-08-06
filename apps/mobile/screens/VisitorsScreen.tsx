@@ -13,7 +13,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
-import * as Network from 'expo-network';
+import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import { createVisitor as createVisitorAPI, updateVisitor as updateVisitorAPI, deleteVisitor as deleteVisitorAPI } from '@/hooks/visitorsFunctions';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import getHoraAccion from '@/hooks/getHoraAccion';
@@ -465,13 +465,8 @@ export default function VisitorsScreen() {
   const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
 
   const getConnectionStatus = async () => {
-    //return false;
-    const networkState = await Network.getNetworkStateAsync();
-
-    return (
-      networkState.isConnected === true &&
-      networkState.isInternetReachable === true
-    );
+    const connectivity = await resolveAppConnectivity();
+    return connectivity.ok;
   };
 
   const isProbablyNetworkError = (err: unknown) => {
