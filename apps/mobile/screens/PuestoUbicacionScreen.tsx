@@ -38,7 +38,6 @@ import getHoraAccion from '@/hooks/getHoraAccion';
 import resolvePuestoUbicacionCoordinates from '@/hooks/resolvePuestoUbicacionCoordinates';
 import {
   isStoredPlanillasTokenValid,
-  readStoredPlanillasToken,
 } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 import {
@@ -563,11 +562,11 @@ export default function PuestoUbicacionScreen() {
             return true;
         }
 
-        if (!planillasRevalidationModalShownRef.current) {
-            planillasRevalidationModalShownRef.current = true;
-            setShowPlanillasRevalidationModal(true);
-        }
-
+        // El modal de ubicación manual tapa el de Planillas si ambos están abiertos.
+        setManualUbicacionModalVisible(false);
+        planillasRevalidationModalShownRef.current = true;
+        // Forzar visible siempre (el ref solo evita spam; si el token sigue vencido hay que mostrar de nuevo).
+        setShowPlanillasRevalidationModal(true);
         return false;
     }, []);
 
@@ -597,20 +596,21 @@ export default function PuestoUbicacionScreen() {
             const clearing = latitud === null && longitud === null;
 
             try {
-                setIsUpdating(true);
                 const horaAccion = await getHoraAccionSafeMs();
+
+                // Validar Planillas antes de cualquier actualización (online u offline).
+                const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(horaAccion);
+                if (!hasValidPlanillasToken) {
+                    pendingPlanillasActionRef.current = { latitud, longitud };
+                    return false;
+                }
+
+                setIsUpdating(true);
                 const isConnected = await getConnectionStatus();
+                const planillasTokenCheck = await isStoredPlanillasTokenValid(horaAccion);
+                const planillasToken = planillasTokenCheck.token;
 
                 if (isConnected) {
-                    const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(horaAccion);
-                    if (!hasValidPlanillasToken) {
-                        pendingPlanillasActionRef.current = { latitud, longitud };
-                        return false;
-                    }
-
-                    const planillasTokenCheck = await isStoredPlanillasTokenValid(horaAccion);
-                    const planillasToken = planillasTokenCheck.token;
-
                     const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
                     if (!apiUrl) throw new Error('Server URL not configured');
 
@@ -645,9 +645,6 @@ export default function PuestoUbicacionScreen() {
                     Alert.alert('Error', data.message || 'Error al actualizar la ubicación');
                     return false;
                 } else {
-                    const storedPlanillas = await readStoredPlanillasToken();
-                    const planillasToken = storedPlanillas?.token ?? null;
-
                     const id_local = `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
                     const actionsStr = await AsyncStorage.getItem('evaluations_actions');
                     const actions = actionsStr ? JSON.parse(actionsStr) : [];
@@ -1015,6 +1012,7 @@ export default function PuestoUbicacionScreen() {
                 transparent
                 visible={manualUbicacionModalVisible}
                 animationType="fade"
+                presentationStyle="overFullScreen"
                 onRequestClose={closeManualUbicacionModal}
             >
                 <KeyboardAvoidingView

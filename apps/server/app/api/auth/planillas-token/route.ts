@@ -42,7 +42,6 @@ export async function POST(request: NextRequest) {
             { status: 200 },
         );
     } catch (error) {
-        console.error("Error en planillas-token:", error);
-        return NextResponse.json({ status: false, message: "Error interno del servidor" }, { status: 500 });
+        return NextResponse.json({ status: false, message: "No se podido ingresar a Planillas, revisa tu contraseña" }, { status: 500 });
     }
 }
