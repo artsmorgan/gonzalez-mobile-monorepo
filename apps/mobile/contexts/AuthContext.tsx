@@ -302,6 +302,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
             'last_location',
             'monitoring_previous_minutes',
             'monitoring_post_minutes',
+            PLANILLAS_TOKEN_TOKEN_KEY,
+            PLANILLAS_TOKEN_EXPIRES_AT_TOKEN_KEY,
           ];
           const keys = await AsyncStorage.getAllKeys();
     

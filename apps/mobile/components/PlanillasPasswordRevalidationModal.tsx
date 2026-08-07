@@ -93,6 +93,7 @@ export default function PlanillasPasswordRevalidationModal({
       visible={visible}
       animationType="fade"
       transparent
+      presentationStyle="overFullScreen"
       onRequestClose={onDismiss}
     >
       <View style={styles.modalBackdrop}>

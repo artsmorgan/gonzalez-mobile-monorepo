@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
@@ -17,6 +18,98 @@ const getUsuarioInsercion = async (req: NextRequest, id: number) => {
         return "MonitoreApp";
     }
     return empleado.cedula ? (empleado.cedula) : "MonitoreApp";
+}
+
+/** Combina fecha + hora_inicio de c_marca_dia en un Date comparable. */
+function buildMarcaDateTime(marca: { fecha: Date; hora_inicio: Date | null }): Date | null {
+    if (!marca.fecha) return null;
+    const horaInicio = marca.hora_inicio ?? new Date("1970-01-01 00:00:00");
+    const fechaIso = new Date(marca.fecha).toISOString().split("T")[0];
+    const horaIso = new Date(horaInicio).toISOString().split("T")[1];
+    const dt = new Date(`${fechaIso}T${horaIso}`);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+/**
+ * Busca la marca abierta anterior (entrada sin salida) vía Planillas,
+ * partiendo del día actual y retrocediendo hasta 14 días, ordenada por horario.
+ */
+async function findPreviousOpenMarcaViaPlanillas(params: {
+    planillasToken: string;
+    empleadoCodigo: string;
+    empleadoId: number;
+    currentMarca: { id: number; fecha: Date; hora_inicio: Date | null };
+    referenceDate: Date;
+}): Promise<{ id: number } | null> {
+    const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
+    if (!planillasUrl || !params.empleadoCodigo) return null;
+
+    const currentStart = buildMarcaDateTime(params.currentMarca);
+    if (!currentStart) return null;
+
+    const refCr = toZonedTime(params.referenceDate, "America/Costa_Rica");
+    let dateCursor = new Date(`${refCr.toISOString().split("T")[0]}T12:00:00.000Z`);
+
+    for (let day = 0; day < 5; day++) {
+        const fechaStr = dateCursor.toISOString().split("T")[0];
+        let marcaIds: number[] = [];
+
+        try {
+            const planillasResponse = await axios.get(`${planillasUrl}/marcas`, {
+                headers: {
+                    Authorization: `Bearer ${params.planillasToken}`,
+                },
+                params: {
+                    empleado_codigo: params.empleadoCodigo,
+                    fecha: fechaStr,
+                },
+            });
+
+            const marcasPlanillas = Array.isArray(planillasResponse?.data?.data?.marcas)
+                ? planillasResponse.data.data.marcas
+                : [];
+            marcaIds = marcasPlanillas
+                .map((m: { id?: number }) => Number(m?.id))
+                .filter((id: number) => Number.isFinite(id) && id > 0);
+        } catch (error) {
+            console.warn(
+                "[attendance/entrada] Error consultando marcas Planillas para fecha",
+                fechaStr,
+                error instanceof Error ? error.message : error,
+            );
+        }
+
+        if (marcaIds.length > 0) {
+            let rows = await prisma.c_marca_dia.findMany({
+                where: { id: { in: marcaIds } },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+            });
+
+            // Misma regla que attendance/user/[id]: excluir marcas del fijo cubiertas por un reemplazo.
+            rows = rows.filter(
+                (marca) =>
+                    !(
+                        Number(marca.empleadoFijo_id) === params.empleadoId &&
+                        marca.empleadoReemplaza_id != null
+                    ),
+            );
+
+            for (const marca of rows) {
+                if (Number(marca.id) === Number(params.currentMarca.id)) continue;
+
+                const marcaStart = buildMarcaDateTime(marca);
+                if (!marcaStart || marcaStart >= currentStart) continue;
+
+                if (marca.hora_entrada_digitada != null && marca.hora_salida_digitada == null) {
+                    return { id: marca.id };
+                }
+            }
+        }
+
+        dateCursor = new Date(dateCursor.getTime() - 24 * 60 * 60 * 1000);
+    }
+
+    return null;
 }
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -52,24 +145,52 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Ya has marcado la entrada" }, { status: 200 });
                 }
 
-                const previousUserMarca = await prisma.c_marca_dia.findFirst({
-                    where: { empleadoFijo_id: marcaDia.empleadoFijo_id, id: { lt: marcaDia.id } },
-                    orderBy: { id: "desc" },
-                });
-
-                if (previousUserMarca && previousUserMarca.hora_entrada_digitada != null && previousUserMarca.hora_salida_digitada == null) {
-                    const closePrevious = await marcar_salida(req, previousUserMarca.id, horaAccion, reason, payload, planillasToken);
-                    if (!closePrevious.status) {
-                        return NextResponse.json(
-                            { status: false, message: `No se pudo cerrar el turno anterior: ${closePrevious.message}` },
-                            { status: 200 }
-                        );
-                    }
-                }
-
                 empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
                 if (!empleado) {
                     return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+                }
+
+                // Cerrar turno anterior abierto (Planillas, hasta 14 días atrás por horario).
+                // Si falla el cierre, no abortar la entrada: continuar el flujo.
+                try {
+                    const referenceDate = horaAccion ? new Date(horaAccion) : new Date();
+                    const previousOpen = await findPreviousOpenMarcaViaPlanillas({
+                        planillasToken,
+                        empleadoCodigo: String(empleado.codigo || "").trim(),
+                        empleadoId: Number(empleado.id),
+                        currentMarca: {
+                            id: marcaDia.id,
+                            fecha: marcaDia.fecha,
+                            hora_inicio: marcaDia.hora_inicio,
+                        },
+                        referenceDate: Number.isNaN(referenceDate.getTime()) ? new Date() : referenceDate,
+                    });
+
+                    if (previousOpen) {
+                        console.log(
+                            "[attendance/entrada] Intentando cerrar turno anterior abierto marca_id=",
+                            previousOpen.id,
+                        );
+                        const closePrevious = await marcar_salida(
+                            req,
+                            previousOpen.id,
+                            horaAccion,
+                            reason,
+                            payload,
+                            planillasToken,
+                        );
+                        if (!closePrevious.status) {
+                            console.warn(
+                                "[attendance/entrada] No se pudo cerrar turno anterior; se continúa con la entrada:",
+                                closePrevious.message,
+                            );
+                        }
+                    }
+                } catch (prevErr) {
+                    console.warn(
+                        "[attendance/entrada] Error buscando/cerrando turno anterior; se continúa con la entrada:",
+                        prevErr instanceof Error ? prevErr.message : prevErr,
+                    );
                 }
                 
                 const horaAccionDate = new Date(horaAccion);
