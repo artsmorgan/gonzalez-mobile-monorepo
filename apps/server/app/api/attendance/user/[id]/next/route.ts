@@ -87,7 +87,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             Authorization: `Bearer ${planillasToken}`,
           },
           params: {
-            empleado_codigo: empleado.cedula,
+            empleado_codigo: empleado.codigo,
             fecha: fechaParam,
           },
         });
