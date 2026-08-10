@@ -42,10 +42,12 @@ export async function createTokenPlanillas(
         throw new Error("Error al iniciar sesión en Planillas");
     }
 
-    const now = toZonedTime(new Date(), "America/Costa_Rica");
+    let now = toZonedTime(new Date(), "America/Costa_Rica");
+    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
     const expiresInSec = Number(response.data.data.expires_in);
-    const expiresInMs = Number.isFinite(expiresInSec) && expiresInSec > 0 ? expiresInSec * 1000 : 3600_000;
-    const planillasTokenExpiresAt = Date.now() + expiresInMs;
+    const expiresInMs = expiresInSec * 1000;
+    const planillasTokenExpiresAt = now.getTime() + expiresInMs;
+    console.log('Planillas token expires at: ', planillasTokenExpiresAt);
     const expires_at = new Date(planillasTokenExpiresAt);
     const planillasToken = String(response.data.data.token ?? "");
 
