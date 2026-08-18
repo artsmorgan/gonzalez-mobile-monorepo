@@ -83,99 +83,88 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             ],
         },*/
 
-        let dias_transcurridos = 0;
-        let date_while = currentDate;
-        let marcas_planillas: any[] = [];
-
-        while (dias_transcurridos < 14 && marcas_planillas.length == 0) {
+        const fetchPlanillasMarcasForDate = async (fecha: Date): Promise<any[]> => {
             const planillasResponse = await axios.get(`${process.env.PLANILLAS_URL}/marcas`, {
                 headers: {
                     "Authorization": `Bearer ${planillasToken}`
                 },
                 params: {
                     empleado_codigo: empleado.codigo,
-                    fecha: date_while.toISOString().split("T")[0],
+                    fecha: fecha.toISOString().split("T")[0],
                 }
             });
+            const marcas = planillasResponse?.data?.data?.marcas;
+            return Array.isArray(marcas) ? marcas : [];
+        };
 
-            dias_transcurridos++;
-            date_while = new Date(date_while.getTime() + 1 * 24 * 60 * 60 * 1000);
-            marcas_planillas = planillasResponse.data.data.marcas;
-        }
+        const loadMarcasDiaForEmployee = async (
+            planillasMarcas: any[],
+            order: "asc" | "desc",
+        ) => {
+            const marcas_ids = planillasMarcas
+                .map((marca: any) => Number(marca?.id))
+                .filter((id: number) => Number.isFinite(id) && id > 0);
+            if (marcas_ids.length === 0) return [];
+            const rows = await prisma.c_marca_dia.findMany({
+                where: { id: { in: marcas_ids } },
+                orderBy: [{ fecha: order }, { hora_inicio: order }],
+            });
+            // Quitar marcas del fijo cuando hay un reemplazo distinto al consultado.
+            return rows.filter(
+                (marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null),
+            );
+        };
 
-        let marcas_ids = [ 0 ];
-        if (marcas_planillas.length > 0) {
-            marcas_ids = marcas_planillas.map((marca: any) => marca.id);
-        }
-
-        let proximasMarcas = await prisma.c_marca_dia.findMany({
-            where: { id: { in: marcas_ids } },
-            orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
-        });
-
-        // Eliminar aquellas marcas donde "empleadoReemplaza_id" sea diferente de null y diferente a "empleado.id"
-        proximasMarcas = proximasMarcas.filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null));
         let marcaDia = null;
-        if (Array.isArray(proximasMarcas)) {
+
+        // 1) Marca futura más cercana desde el momento de la consulta (hasta 14 días).
+        let nextFutureMarca: any = null;
+        let nextFutureDateTime: Date | null = null;
+        for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
+            const dateCursor = new Date(currentDate.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+            const planillasMarcas = await fetchPlanillasMarcasForDate(dateCursor);
+            if (planillasMarcas.length === 0) continue;
+
+            const proximasMarcas = await loadMarcasDiaForEmployee(planillasMarcas, "asc");
             for (const marca of proximasMarcas) {
                 const marcaDateTime = buildMarcaDateTime(marca);
-                if (!marcaDateTime) {
-                    continue;
-                }
-                if (marcaDateTime >= now && marcaDateTime <= nowPlusMonitoringWindow) {
-                    marcaDia = marca;
-                    console.log(`Usaremos próximo en ventana +${monitoringPreviousMinutes} min`);
+                if (!marcaDateTime) continue;
+                if (marcaDateTime >= now) {
+                    nextFutureMarca = marca;
+                    nextFutureDateTime = marcaDateTime;
                     break;
                 }
             }
+            if (nextFutureMarca) break;
         }
 
+        // Solo usar la futura si cae en los minutos previos al marcaje de ingreso.
+        if (nextFutureMarca && nextFutureDateTime && nextFutureDateTime <= nowPlusMonitoringWindow) {
+            marcaDia = nextFutureMarca;
+            console.log(`Usaremos próximo en ventana +${monitoringPreviousMinutes} min`);
+        } else if (nextFutureMarca) {
+            console.log(
+                `Próxima marca fuera de ventana +${monitoringPreviousMinutes} min; se busca la última desde ahora`,
+            );
+        }
+
+        // 2) Si no hay futura en ventana, última marca anterior al momento de la consulta.
         if (!marcaDia) {
+            for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
+                const dateCursor = new Date(currentDate.getTime() - dayOffset * 24 * 60 * 60 * 1000);
+                const planillasMarcas = await fetchPlanillasMarcasForDate(dateCursor);
+                if (planillasMarcas.length === 0) continue;
 
-            dias_transcurridos = 0;
-            date_while = currentDate;
-            marcas_planillas = [];
-    
-            while (dias_transcurridos < 14 && marcas_planillas.length == 0) {
-                const planillasResponse = await axios.get(`${process.env.PLANILLAS_URL}/marcas`, {
-                    headers: {
-                        "Authorization": `Bearer ${planillasToken}`
-                    },
-                    params: {
-                        empleado_codigo: empleado.codigo,
-                        fecha: date_while.toISOString().split("T")[0],
-                    }
-                });
-    
-                dias_transcurridos++;
-                date_while = new Date(date_while.getTime() - 1 * 24 * 60 * 60 * 1000); // Retroceder 1 día
-                marcas_planillas = planillasResponse.data.data.marcas;
-            }
-    
-            let marcas_ids = [ 0 ];
-            if (marcas_planillas.length > 0) {
-                marcas_ids = marcas_planillas.map((marca: any) => marca.id);
-            }
-
-            let ultimasMarcas = await prisma.c_marca_dia.findMany({
-                where: { id: { in: marcas_ids } },
-                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
-            });
-
-            // Eliminar aquellas marcas donde "empleadoReemplaza_id" sea diferente de null y diferente a "empleado.id"
-            ultimasMarcas = ultimasMarcas.filter((marca: any) => !(marca.empleadoFijo_id === empleado.id && marca.empleadoReemplaza_id !== null));
-
-            if (Array.isArray(ultimasMarcas)) {
+                const ultimasMarcas = await loadMarcasDiaForEmployee(planillasMarcas, "desc");
                 for (const marca of ultimasMarcas) {
                     const marcaDateTime = buildMarcaDateTime(marca);
-                    if (!marcaDateTime) {
-                        continue;
-                    }
+                    if (!marcaDateTime) continue;
                     if (marcaDateTime < now) {
                         marcaDia = marca;
                         break;
                     }
                 }
+                if (marcaDia) break;
             }
         }
 
@@ -400,7 +389,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
             const fecha_marca_string = marcaDia.fecha.toISOString().split("T")[0];
             const hora_inicio_string = marcaDia.hora_inicio?.toISOString().split("T")[1].split(".")[0] ?? "00:00:00"; 
-            const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string);
+            const inicio_marca = new Date(fecha_marca_string + "T" + hora_inicio_string+".000Z");
 
             let fin_marca = null;
             if (marcaDia.horas_duracion) {
@@ -430,12 +419,17 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             if (!marcaDia.hora_entrada_digitada && (now > fin_marca)) {
                 const hora_inicio_string = inicio_marca.toISOString().split("T")[1].split(".")[0];
                 const fecha_marca_display = new Date(marcaDia.fecha).toISOString().split("T")[0].split("-").reverse().join("-");
+                const isDiaLibre = String(marcaDia.tipo_turno ?? "").trim().toUpperCase() === "L";
 
                 let should_response = true;
                 let extra_reason = "";
                 if (razonAusencia?.razon && String(razonAusencia.razon).trim()) {
                     should_response = false;
                     extra_reason = " Razon: " + String(razonAusencia.razon).trim();
+                }
+                // Turno libre (L): no se espera marca de entrada/salida.
+                if (isDiaLibre) {
+                    should_response = false;
                 }
 
                 return blockedMarcaResponse(

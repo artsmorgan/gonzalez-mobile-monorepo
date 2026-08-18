@@ -12,13 +12,14 @@ export const PLANTILLA_TABLE1_HEADERS = [
 ] as const;
 
 const REF_COL_START = 9;
-const FECHA_ENTREGA_TEMPLATE_FMT = 'dd-mm-yyyy hh:mm:ss';
+const FECHA_ENTREGA_DATE_FMT = 'dd-mm-yyyy';
+const FECHA_ENTREGA_MIDNIGHT = '00:00:00';
 
 function normalizeWhitespace(value: string): string {
   return value.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Acepta DD-MM-YYYY o DD/MM/YYYY con hora HH:MM:SS (componentes con 1 o 2 dígitos). */
+/** Acepta DD-MM-YYYY o DD/MM/YYYY (hora opcional; se fuerza 00:00:00). */
 function parseFechaEntregaParts(value: string): {
   dd: string;
   mm: string;
@@ -28,30 +29,28 @@ function parseFechaEntregaParts(value: string): {
   ss: string;
 } | null {
   const s = normalizeWhitespace(value);
-  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!m) return null;
-  const [, dd, mm, yyyy, hh, mi, ss = '0'] = m;
+  const [, dd, mm, yyyy] = m;
   const day = Number(dd);
   const month = Number(mm);
   const year = Number(yyyy);
-  const hour = Number(hh);
-  const minute = Number(mi);
-  const second = Number(ss || 0);
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return null;
   if (Number.isNaN(year)) return null;
   return {
     dd: String(day).padStart(2, '0'),
     mm: String(month).padStart(2, '0'),
     yyyy: String(year),
-    hh: String(hour).padStart(2, '0'),
-    mi: String(minute).padStart(2, '0'),
-    ss: String(second).padStart(2, '0'),
+    hh: '00',
+    mi: '00',
+    ss: '00',
   };
 }
 
-function isValidFechaEntrega(value: string): boolean {
-  return parseFechaEntregaParts(value) != null;
+function formatFechaEntregaWithMidnight(value: string): string | null {
+  const parts = parseFechaEntregaParts(value);
+  if (!parts) return null;
+  return `${parts.dd}-${parts.mm}-${parts.yyyy} ${FECHA_ENTREGA_MIDNIGHT}`;
 }
 
 function readFechaEntregaCell(ws: XLSX.WorkSheet, row: number, col: number): string {
@@ -69,7 +68,7 @@ function readFechaEntregaCell(ws: XLSX.WorkSheet, row: number, col: number): str
 
   if (typeof cell.v === 'number' && Number.isFinite(cell.v)) {
     const fmt =
-      typeof cell.z === 'string' && cell.z.trim() !== '' ? cell.z : FECHA_ENTREGA_TEMPLATE_FMT;
+      typeof cell.z === 'string' && cell.z.trim() !== '' ? cell.z : FECHA_ENTREGA_DATE_FMT;
     try {
       const formatted = XLSX.SSF.format(fmt, cell.v);
       if (formatted && formatted !== '#') {
@@ -84,10 +83,7 @@ function readFechaEntregaCell(ws: XLSX.WorkSheet, row: number, col: number): str
       const dd = String(parsed.d).padStart(2, '0');
       const mm = String(parsed.m).padStart(2, '0');
       const yyyy = String(parsed.y);
-      const hh = String(parsed.H).padStart(2, '0');
-      const mi = String(parsed.M).padStart(2, '0');
-      const ss = String(parsed.S).padStart(2, '0');
-      return `${dd}-${mm}-${yyyy} ${hh}:${mi}:${ss}`;
+      return `${dd}-${mm}-${yyyy}`;
     }
   }
 
@@ -273,8 +269,9 @@ export async function parseMantenimientoEquipoPlantillaLocal(
         errors.push(`Fila ${r}: «Marca» es obligatoria.`);
         continue;
       }
-      if (!fechaEntrega || !isValidFechaEntrega(fechaEntrega)) {
-        errors.push(`Fila ${r}: «Fecha de entrega» inválida. Use DD-MM-YYYY HH:MM:SS.`);
+      const fechaEntregaNormalized = fechaEntrega ? formatFechaEntregaWithMidnight(fechaEntrega) : null;
+      if (!fechaEntregaNormalized) {
+        errors.push(`Fila ${r}: «Fecha de entrega» inválida. Use DD-MM-YYYY.`);
         continue;
       }
 
@@ -291,7 +288,7 @@ export async function parseMantenimientoEquipoPlantillaLocal(
         serie,
         marca,
         modelo: modelo || null,
-        fecha_entrega: fechaEntrega,
+        fecha_entrega: fechaEntregaNormalized,
         articulo_nombre: articuloNombre,
       });
     }

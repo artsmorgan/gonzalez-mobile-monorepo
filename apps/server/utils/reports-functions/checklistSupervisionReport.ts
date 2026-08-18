@@ -184,6 +184,9 @@ export async function queryChecklistSupervisionRows(
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : String(r.corpo_id),
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : String(r.puesto_id),
             ejecutivo_cuenta_nombre: ejecutivo?.nombre?.trim() || String(r.ejecutivo_cuenta ?? ""),
+            empleado_display: formatEmpleadoDisplay(r),
+            hora_inicio_txt: timeToHHmm((r as any).hora_inicio),
+            hora_fin_txt: timeToHHmm((r as any).hora_fin),
         };
     });
 
@@ -229,6 +232,40 @@ function fmtDt(v: unknown): string {
     const d = v instanceof Date ? v : new Date(String(v ?? ""));
     if (Number.isNaN(d.getTime())) return "";
     return d.toISOString().replace("T", " ").slice(0, 19);
+}
+
+function timeToHHmm(val: unknown): string {
+    if (val == null || String(val).trim() === "") return "";
+    const s = String(val).trim();
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return s.slice(0, 5);
+    const d = val instanceof Date ? val : new Date(s.includes("T") ? s : `1970-01-01T${s}`);
+    if (Number.isNaN(d.getTime())) return s.slice(0, 5);
+    return `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+function formatEmpleadoDisplay(r: any): string {
+    const codigo = String(r?.empleado_codigo ?? "").trim();
+    const nombre = String(r?.empleado_nombre ?? "").trim();
+    if (codigo && nombre) return `${codigo} - ${nombre}`;
+    return nombre || codigo || "";
+}
+
+type EvalPhotoItem = { file_name?: string; value?: string; imageOrientation?: unknown };
+
+function collectEvalPhotoItems(inp: any): EvalPhotoItem[] {
+    if (Array.isArray(inp?.photos) && inp.photos.length > 0) {
+        return inp.photos.filter(
+            (p: any) =>
+                String(p?.file_name ?? "").trim() ||
+                (typeof p?.value === "string" && (p.value.startsWith("data:image/") || p.value.length > 100)),
+        );
+    }
+    const fileName = String(inp?.file_name ?? "").trim();
+    const value = inp?.value;
+    if (fileName || (typeof value === "string" && (value.startsWith("data:image/") || value.length > 100))) {
+        return [{ file_name: fileName || undefined, value, imageOrientation: inp?.imageOrientation }];
+    }
+    return [];
 }
 
 /** Rutas típicas: `apps/server/public/uploads/checklist-supervision/{id}/{file}` (servidor Next en `apps/server`). */
@@ -366,9 +403,9 @@ function formatEvalInputDisplayValue(inp: any): string {
         return "No marcado";
     }
     if (inpType === "photo") {
-        const fileName = String(inp?.file_name ?? "").trim();
+        const n = collectEvalPhotoItems(inp).length;
+        if (n > 0) return n === 1 ? "Imagen adjunta" : `${n} imágenes adjuntas`;
         const v = String(inp?.value ?? "").trim();
-        if (fileName || (v && (v.startsWith("data:image/") || v.length > 100))) return "Imagen adjunta";
         return v || "—";
     }
     const raw = excelCellString(inp?.value ?? "").trim();
@@ -476,6 +513,16 @@ async function appendEvaluacionDetalleBlock(params: {
             sc.font = { italic: true };
             sc.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
 
+            const detalle = excelCellString(sub?.detalle ?? "").trim();
+            if (detalle) {
+                const dr = wsDet.addRow(["Detalle", detalle]);
+                dr.getCell(1).border = border;
+                dr.getCell(2).border = border;
+                dr.getCell(1).font = { bold: true };
+                dr.getCell(1).alignment = { vertical: "top", wrapText: true };
+                dr.getCell(2).alignment = { vertical: "top", wrapText: true };
+            }
+
             const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
             if (inputs.length === 0) {
                 const er = wsDet.addRow(["—", "—"]);
@@ -489,52 +536,76 @@ async function appendEvaluacionDetalleBlock(params: {
             for (const inp of inputs) {
                 const label = resolveChecklistEvalInputLabel(inp, subt);
                 const inpType = String(inp?.type ?? "").trim().toLowerCase();
-                const fileNameRaw = String(inp?.file_name ?? "").trim();
-                const imgOrient = normalizeImageOrientation(inp?.imageOrientation);
-
                 const isPhoto = inpType === "photo";
-                let imageAdded = false;
 
-                if (isPhoto && fileNameRaw) {
-                    const buf = await readChecklistSupervisionImageFile(checklistId, fileNameRaw);
-                    if (buf && buf.length > 0) {
-                        const ext = inferExcelImageExtension(path.basename(fileNameRaw), buf);
-                        imageAdded = tryEmbedEvalPhotoRow({
-                            wb,
-                            wsDet,
-                            buf,
-                            extension: ext,
-                            label,
-                            imageOrientation: imgOrient,
-                            border,
-                        });
+                if (isPhoto) {
+                    const photoItems = collectEvalPhotoItems(inp);
+                    if (photoItems.length === 0) {
+                        const ir = wsDet.addRow([label, "—"]);
+                        ir.getCell(1).border = border;
+                        ir.getCell(2).border = border;
+                        ir.getCell(1).alignment = { vertical: "top", wrapText: true };
+                        ir.getCell(2).alignment = { vertical: "top", wrapText: true };
+                        continue;
                     }
-                }
 
-                if (!imageAdded && isPhoto && typeof inp?.value === "string" && inp.value.startsWith("data:image/")) {
-                    const sig = parseSignatureDataForExcel(inp.value);
-                    if (sig) {
-                        const rawBuf = Buffer.from(sig.base64, "base64");
-                        imageAdded = tryEmbedEvalPhotoRow({
-                            wb,
-                            wsDet,
-                            buf: rawBuf,
-                            extension: sig.extension,
-                            label,
-                            imageOrientation: imgOrient,
-                            border,
-                        });
+                    for (let pi = 0; pi < photoItems.length; pi++) {
+                        const photo = photoItems[pi];
+                        const photoLabel =
+                            photoItems.length > 1 ? (label ? `${label} (${pi + 1}/${photoItems.length})` : `Foto ${pi + 1}`) : label;
+                        const imgOrient = normalizeImageOrientation(photo.imageOrientation ?? inp?.imageOrientation);
+                        const fileNameRaw = String(photo.file_name ?? "").trim();
+                        let imageAdded = false;
+
+                        if (fileNameRaw) {
+                            const buf = await readChecklistSupervisionImageFile(checklistId, fileNameRaw);
+                            if (buf && buf.length > 0) {
+                                const ext = inferExcelImageExtension(path.basename(fileNameRaw), buf);
+                                imageAdded = tryEmbedEvalPhotoRow({
+                                    wb,
+                                    wsDet,
+                                    buf,
+                                    extension: ext,
+                                    label: photoLabel,
+                                    imageOrientation: imgOrient,
+                                    border,
+                                });
+                            }
+                        }
+
+                        if (!imageAdded && typeof photo.value === "string" && photo.value.startsWith("data:image/")) {
+                            const sig = parseSignatureDataForExcel(photo.value);
+                            if (sig) {
+                                const rawBuf = Buffer.from(sig.base64, "base64");
+                                imageAdded = tryEmbedEvalPhotoRow({
+                                    wb,
+                                    wsDet,
+                                    buf: rawBuf,
+                                    extension: sig.extension,
+                                    label: photoLabel,
+                                    imageOrientation: imgOrient,
+                                    border,
+                                });
+                            }
+                        }
+
+                        if (!imageAdded) {
+                            const ir = wsDet.addRow([photoLabel, "Imagen no disponible"]);
+                            ir.getCell(1).border = border;
+                            ir.getCell(2).border = border;
+                            ir.getCell(1).alignment = { vertical: "top", wrapText: true };
+                            ir.getCell(2).alignment = { vertical: "top", wrapText: true };
+                        }
                     }
+                    continue;
                 }
 
-                if (!imageAdded) {
-                    const val = formatEvalInputDisplayValue(inp);
-                    const ir = wsDet.addRow([label, val]);
-                    ir.getCell(1).border = border;
-                    ir.getCell(2).border = border;
-                    ir.getCell(1).alignment = { vertical: "top", wrapText: true };
-                    ir.getCell(2).alignment = { vertical: "top", wrapText: true };
-                }
+                const val = formatEvalInputDisplayValue(inp);
+                const ir = wsDet.addRow([label, val]);
+                ir.getCell(1).border = border;
+                ir.getCell(2).border = border;
+                ir.getCell(1).alignment = { vertical: "top", wrapText: true };
+                ir.getCell(2).alignment = { vertical: "top", wrapText: true };
             }
         }
     }
@@ -571,6 +642,20 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         title.getCell(1).font = { bold: true, size: 12 };
         title.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } };
         title.getCell(1).border = border;
+
+        const metaRows: Array<[string, string]> = [
+            ["Empleado", excelCellString(rec.empleado_display ?? formatEmpleadoDisplay(rec)) || "—"],
+            ["Hora inicio", excelCellString(rec.hora_inicio_txt ?? timeToHHmm(rec.hora_inicio)) || "—"],
+            ["Hora fin", excelCellString(rec.hora_fin_txt ?? timeToHHmm(rec.hora_fin)) || "—"],
+        ];
+        for (const [label, val] of metaRows) {
+            const mr = wsDet.addRow([label, val]);
+            mr.getCell(1).border = border;
+            mr.getCell(2).border = border;
+            mr.getCell(1).font = { bold: true };
+            mr.getCell(1).alignment = { vertical: "top", wrapText: true };
+            mr.getCell(2).alignment = { vertical: "top", wrapText: true };
+        }
 
         await appendEvaluacionDetalleBlock({
             wb,
@@ -659,8 +744,11 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         "Contrato",
         "Sucursal",
         "Puesto",
+        "Empleado",
         "Ejecutivo cuenta",
         "Fecha",
+        "Hora inicio",
+        "Hora fin",
         "Creado (servidor)",
         "Evaluación",
         "Artículos puesto",
@@ -674,10 +762,10 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    const colWidths = [8, 26, 22, 18, 24, 24, 22, 22, 20, 18, 14, 16, 14];
+    const colWidths = [8, 26, 22, 18, 24, 24, 22, 24, 22, 20, 12, 12, 18, 14, 16, 14];
     wsMain.columns = colWidths.map((w) => ({ width: w, outlineLevel: 1 }));
 
-    const linkCols = { eval: 11, art: 12, fir: 13 };
+    const linkCols = { eval: 14, art: 15, fir: 16 };
 
     for (const r of rows) {
         const anchor = anchorById.get(Number(r.id)) ?? 1;
@@ -689,8 +777,11 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
             excelCellString(r.contrato_nombre),
             excelCellString(r.corpo_nombre),
             excelCellString(r.puesto_nombre),
+            excelCellString(r.empleado_display ?? formatEmpleadoDisplay(r)),
             excelCellString(r.ejecutivo_cuenta_nombre),
             fmtDt(r.fecha),
+            excelCellString(r.hora_inicio_txt ?? timeToHHmm(r.hora_inicio)),
+            excelCellString(r.hora_fin_txt ?? timeToHHmm(r.hora_fin)),
             fmtDt(r.created_at),
             parseEvalJson(r.evaluacion).length ? "Ver evaluación" : "",
             parseArticulosJson(r.articulos_puesto).length ? "Ver artículos" : "",

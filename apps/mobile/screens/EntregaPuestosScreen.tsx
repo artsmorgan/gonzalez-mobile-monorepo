@@ -32,6 +32,7 @@ import {
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
 import { isStoredPlanillasTokenValid } from '@/hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
+import { getEmployeeProfilePhotoDisplayUri } from '@/hooks/employeeProfilePhotoStorage';
 
 type EntregaPuestosScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'EntregaPuestos'>;
 
@@ -84,6 +85,14 @@ interface EntregaPuestosInfo {
     nombre: string;
     codigo?: string | null;
     /** Base64 (o data-URL) de la foto de Planillas del oficial que entrega. */
+    foto?: string | null;
+  };
+  /** Empleado que recibe el puesto (marca actual). */
+  current_employee?: {
+    id: number;
+    nombre: string;
+    codigo?: string | null;
+    /** Base64 (o data-URL) de la foto de Planillas del oficial que recibe. */
     foto?: string | null;
   };
   incidentes: Array<{
@@ -1247,12 +1256,17 @@ export default function EntregaPuestosScreen() {
     { label: 'Turno', value: getTurnoLabel(currentMarca.tipo_turno) },
   ];
 
-  const entregaProfilePhotoUri = (() => {
-    const raw = String(info?.previous_employee?.foto ?? '').trim();
+  const toProfilePhotoDataUri = (rawFoto: string | null | undefined): string => {
+    const raw = String(rawFoto ?? '').trim();
     if (!raw) return '';
     if (raw.startsWith('data:')) return raw;
     return `data:image/jpeg;base64,${raw}`;
-  })();
+  };
+
+  const entregaProfilePhotoUri = toProfilePhotoDataUri(info?.previous_employee?.foto);
+  const recibeProfilePhotoUri =
+    toProfilePhotoDataUri(info?.current_employee?.foto) ||
+    getEmployeeProfilePhotoDisplayUri(employee?.fotoLocalFileName);
 
   const renderLecturaCard = (
     title: string,
@@ -1561,7 +1575,12 @@ export default function EntregaPuestosScreen() {
                       entregaProfilePhotoUri || undefined,
                     )
                   : null}
-                {renderLecturaCard('Recibe', 'arrow-down-circle-outline', dataLecturaRecibe)}
+                {renderLecturaCard(
+                  'Recibe',
+                  'arrow-down-circle-outline',
+                  dataLecturaRecibe,
+                  recibeProfilePhotoUri || undefined,
+                )}
               </ThemedView>
             </ThemedView>
 
@@ -2306,14 +2325,14 @@ const styles = StyleSheet.create({
   },
   entregaProfilePhotoWrap: {
     alignSelf: 'center',
-    width: 96,
-    height: 96,
-    borderRadius: 48,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
     borderWidth: 3,
     borderColor: '#007AFF',
     overflow: 'hidden',
     backgroundColor: '#F2F2F7',
-    marginBottom: 10,
+    marginBottom: 12,
   },
   entregaProfilePhoto: {
     width: '100%',

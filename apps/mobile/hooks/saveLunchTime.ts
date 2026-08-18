@@ -46,11 +46,14 @@ export default async function saveLunchTime({
             return { status: false, message: 'Sesión expirada' };
         }
 
+        const data = await response.json().catch(() => null);
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const message =
+                (data && typeof data === 'object' && data.message != null
+                    ? String(data.message)
+                    : '') || `HTTP error! status: ${response.status}`;
+            return { status: false, message };
         }
-
-        const data = await response.json();
 
         return data;
     } catch (error) {

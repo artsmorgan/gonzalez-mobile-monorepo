@@ -5,12 +5,12 @@ import { sanitizeArticulosPuestoJsonForCache } from '@/utils/articuloMantenimien
 export const CHECKLIST_SUPERVISION_CACHE_KEY = 'checklist_supervision_cache';
 
 export type ChecklistSupervisionCacheFile = {
-  version: 1;
-  bySucursalId: Record<string, ChecklistSupervisionItem[]>;
+  version: 2;
+  byPuestoId: Record<string, ChecklistSupervisionItem[]>;
 };
 
 function emptyFile(): ChecklistSupervisionCacheFile {
-  return { version: 1, bySucursalId: {} };
+  return { version: 2, byPuestoId: {} };
 }
 
 /** Solo borradores sin id de servidor (id === 0). Ediciones offline de filas ya sincronizadas tienen id > 0. */
@@ -60,11 +60,20 @@ export function resolveChecklistRowCorpoId(it: any, fallbackCorpoId?: number | n
   return Number.isFinite(fb) && fb > 0 ? fb : 0;
 }
 
+/** Resuelve id de puesto desde campo plano o relación anidada. */
+export function resolveChecklistRowPuestoId(it: any, fallbackPuestoId?: number | null): number {
+  const fromRow = Number(it?.puesto_id ?? it?.puesto?.id ?? 0);
+  if (Number.isFinite(fromRow) && fromRow > 0) return fromRow;
+  const fb = Number(fallbackPuestoId ?? 0);
+  return Number.isFinite(fb) && fb > 0 ? fb : 0;
+}
+
 export function normalizeChecklistRowForCache(
   it: any,
-  fallbackCorpoId?: number | null,
+  fallbackPuestoId?: number | null,
 ): ChecklistSupervisionItem {
-  const corpo_id = resolveChecklistRowCorpoId(it, fallbackCorpoId);
+  const puesto_id = resolveChecklistRowPuestoId(it, fallbackPuestoId);
+  const corpo_id = resolveChecklistRowCorpoId(it, it?.corpo_id ?? it?.corpo?.id ?? null);
   const row = {
     ...it,
     id: Number(it?.id ?? 0),
@@ -72,7 +81,7 @@ export function normalizeChecklistRowForCache(
     contrato_id: Number(it?.contrato_id ?? 0),
     cliente_id: Number(it?.cliente_id ?? 0),
     division_id: Number(it?.division_id ?? 0),
-    puesto_id: Number(it?.puesto_id ?? 0),
+    puesto_id,
     corpo_id,
     isActive: it?.isActive !== false,
   } as ChecklistSupervisionItem;
@@ -86,35 +95,65 @@ export function normalizeChecklistRowForCache(
   return row;
 }
 
-function normalizeParsed(parsed: any): ChecklistSupervisionCacheFile {
+function pushRowToPuestoBuckets(
+  target: Record<string, ChecklistSupervisionItem[]>,
+  raw: any,
+  fallbackPuestoId?: number | null,
+) {
+  const row = normalizeChecklistRowForCache(raw, fallbackPuestoId);
+  const k = String(row.puesto_id);
+  if (!Number.isFinite(Number(k)) || Number(k) <= 0) return;
+  if (!target[k]) target[k] = [];
+  target[k].push(row);
+}
+
+function migrateLegacyCache(parsed: any): ChecklistSupervisionCacheFile {
+  const byPuestoId: Record<string, ChecklistSupervisionItem[]> = {};
+
   if (Array.isArray(parsed)) {
-    const file = emptyFile();
-    for (const raw of parsed) {
-      const row = normalizeChecklistRowForCache(raw);
-      const k = String(row.corpo_id);
-      if (!Number.isFinite(Number(k)) || Number(k) <= 0) continue;
-      if (!file.bySucursalId[k]) file.bySucursalId[k] = [];
-      file.bySucursalId[k].push(row);
-    }
-    return file;
+    for (const raw of parsed) pushRowToPuestoBuckets(byPuestoId, raw);
+    return { version: 2, byPuestoId };
   }
-  if (parsed && typeof parsed === 'object' && parsed.bySucursalId && typeof parsed.bySucursalId === 'object') {
-    const bySucursalId: Record<string, ChecklistSupervisionItem[]> = {};
-    for (const [bucketKey, arr] of Object.entries(parsed.bySucursalId)) {
+
+  if (parsed && typeof parsed === 'object' && parsed.byPuestoId && typeof parsed.byPuestoId === 'object') {
+    for (const [bucketKey, arr] of Object.entries(parsed.byPuestoId)) {
       if (!Array.isArray(arr)) continue;
-      const bucketCorpo = Number(bucketKey);
-      const fallback = Number.isFinite(bucketCorpo) && bucketCorpo > 0 ? bucketCorpo : null;
-      for (const raw of arr) {
-        const row = normalizeChecklistRowForCache(raw, fallback);
-        const k = String(row.corpo_id);
-        if (!Number.isFinite(Number(k)) || Number(k) <= 0) continue;
-        if (!bySucursalId[k]) bySucursalId[k] = [];
-        bySucursalId[k].push(row);
-      }
+      const bucketPuesto = Number(bucketKey);
+      const fallback = Number.isFinite(bucketPuesto) && bucketPuesto > 0 ? bucketPuesto : null;
+      for (const raw of arr) pushRowToPuestoBuckets(byPuestoId, raw, fallback);
     }
-    return { version: 1, bySucursalId };
+    return { version: 2, byPuestoId };
   }
+
+  if (parsed && typeof parsed === 'object' && parsed.bySucursalId && typeof parsed.bySucursalId === 'object') {
+    for (const arr of Object.values(parsed.bySucursalId)) {
+      if (!Array.isArray(arr)) continue;
+      for (const raw of arr) pushRowToPuestoBuckets(byPuestoId, raw);
+    }
+    return { version: 2, byPuestoId };
+  }
+
   return emptyFile();
+}
+
+function normalizeParsed(parsed: any): ChecklistSupervisionCacheFile {
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    parsed.version === 2 &&
+    parsed.byPuestoId &&
+    typeof parsed.byPuestoId === 'object'
+  ) {
+    const byPuestoId: Record<string, ChecklistSupervisionItem[]> = {};
+    for (const [bucketKey, arr] of Object.entries(parsed.byPuestoId)) {
+      if (!Array.isArray(arr)) continue;
+      const bucketPuesto = Number(bucketKey);
+      const fallback = Number.isFinite(bucketPuesto) && bucketPuesto > 0 ? bucketPuesto : null;
+      for (const raw of arr) pushRowToPuestoBuckets(byPuestoId, raw, fallback);
+    }
+    return { version: 2, byPuestoId };
+  }
+  return migrateLegacyCache(parsed);
 }
 
 export async function loadChecklistSupervisionCacheFile(): Promise<ChecklistSupervisionCacheFile> {
@@ -131,27 +170,27 @@ export async function saveChecklistSupervisionCacheFile(file: ChecklistSupervisi
   await AsyncStorage.setItem(CHECKLIST_SUPERVISION_CACHE_KEY, JSON.stringify(file));
 }
 
-export async function loadChecklistSupervisionCacheForCorpo(corpoId: number): Promise<ChecklistSupervisionItem[]> {
-  const cid = Number(corpoId);
-  if (!Number.isFinite(cid) || cid <= 0) return [];
+export async function loadChecklistSupervisionCacheForPuesto(puestoId: number): Promise<ChecklistSupervisionItem[]> {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return [];
   const file = await loadChecklistSupervisionCacheFile();
-  const arr = file.bySucursalId[String(cid)];
+  const arr = file.byPuestoId[String(pid)];
   if (!Array.isArray(arr)) return [];
   return dedupeChecklistRows(
     arr
-      .map((raw) => normalizeChecklistRowForCache(raw, cid))
+      .map((raw) => normalizeChecklistRowForCache(raw, pid))
       .filter((it) => it.isActive !== false),
   );
 }
 
-/** Lista plana (todas las sucursales) para operaciones de merge / cola offline. */
+/** Lista plana (todos los puestos) para operaciones de merge / cola offline. */
 export async function loadChecklistSupervisionCacheFlat(): Promise<ChecklistSupervisionItem[]> {
   const f = await loadChecklistSupervisionCacheFile();
   const out: ChecklistSupervisionItem[] = [];
-  for (const [bucketKey, arr] of Object.entries(f.bySucursalId)) {
+  for (const [bucketKey, arr] of Object.entries(f.byPuestoId)) {
     if (!Array.isArray(arr)) continue;
-    const bucketCorpo = Number(bucketKey);
-    const fallback = Number.isFinite(bucketCorpo) && bucketCorpo > 0 ? bucketCorpo : null;
+    const bucketPuesto = Number(bucketKey);
+    const fallback = Number.isFinite(bucketPuesto) && bucketPuesto > 0 ? bucketPuesto : null;
     for (const raw of arr) {
       out.push(normalizeChecklistRowForCache(raw, fallback));
     }
@@ -159,25 +198,25 @@ export async function loadChecklistSupervisionCacheFlat(): Promise<ChecklistSupe
   return out;
 }
 
-export async function saveChecklistSupervisionCacheForCorpo(
-  corpoId: number,
+export async function saveChecklistSupervisionCacheForPuesto(
+  puestoId: number,
   rows: ChecklistSupervisionItem[],
 ): Promise<void> {
-  const cid = Number(corpoId);
-  if (!Number.isFinite(cid) || cid <= 0) return;
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return;
 
   const file = await loadChecklistSupervisionCacheFile();
   const normalized = dedupeChecklistRows(
     rows
-      .map((raw) => normalizeChecklistRowForCache(raw, cid))
+      .map((raw) => normalizeChecklistRowForCache(raw, pid))
       .filter((it) => it.isActive !== false || checklistItemIsPendingLocal(it)),
   );
 
   await saveChecklistSupervisionCacheFile({
-    version: 1,
-    bySucursalId: {
-      ...file.bySucursalId,
-      [String(cid)]: normalized,
+    version: 2,
+    byPuestoId: {
+      ...file.byPuestoId,
+      [String(pid)]: normalized,
     },
   });
 }
@@ -187,12 +226,18 @@ export function applyServerPayloadToCachedChecklistRow(
   serverPayload?: any,
   requestData?: any,
 ): ChecklistSupervisionItem {
-  const corpoFallback = resolveChecklistRowCorpoId(existing, requestData?.corpo_id);
+  const puestoFallback = resolveChecklistRowPuestoId(existing, requestData?.puesto_id);
   const merged = {
     ...existing,
     ...(requestData && typeof requestData === 'object' ? requestData : {}),
     ...(serverPayload && typeof serverPayload === 'object' ? serverPayload : {}),
     id: Number(serverPayload?.id ?? existing.id ?? 0),
+    puesto_id:
+      serverPayload?.puesto_id ??
+      existing.puesto_id ??
+      requestData?.puesto_id ??
+      existing.puesto?.id ??
+      null,
     corpo_id:
       serverPayload?.corpo_id ??
       existing.corpo_id ??
@@ -204,7 +249,7 @@ export function applyServerPayloadToCachedChecklistRow(
     puesto: serverPayload?.puesto ?? existing.puesto,
     images: serverPayload?.images ?? existing.images,
   };
-  return normalizeChecklistRowForCache(merged, corpoFallback);
+  return normalizeChecklistRowForCache(merged, puestoFallback);
 }
 
 function checklistCacheRowMatches(
@@ -238,7 +283,7 @@ export async function patchChecklistSupervisionCacheAfterSync(options: {
   let bucketKey: string | null = null;
   let rowIndex = -1;
 
-  for (const [key, arr] of Object.entries(file.bySucursalId)) {
+  for (const [key, arr] of Object.entries(file.byPuestoId)) {
     if (!Array.isArray(arr)) continue;
     const idx = arr.findIndex((it) => checklistCacheRowMatches(it, matchOpts));
     if (idx !== -1) {
@@ -250,12 +295,12 @@ export async function patchChecklistSupervisionCacheAfterSync(options: {
 
   if (bucketKey == null || rowIndex < 0) return;
 
-  const bucketCorpo = Number(bucketKey);
-  const bucket = [...(file.bySucursalId[bucketKey] ?? [])];
+  const bucketPuesto = Number(bucketKey);
+  const bucket = [...(file.byPuestoId[bucketKey] ?? [])];
 
   if (options.remove) {
     const next = bucket.filter((it) => !checklistCacheRowMatches(it, matchOpts));
-    await saveChecklistSupervisionCacheForCorpo(bucketCorpo, next as ChecklistSupervisionItem[]);
+    await saveChecklistSupervisionCacheForPuesto(bucketPuesto, next as ChecklistSupervisionItem[]);
     return;
   }
 
@@ -266,11 +311,11 @@ export async function patchChecklistSupervisionCacheAfterSync(options: {
     options.requestData,
   );
   const next = bucket.map((it, i) => (i === rowIndex ? patched : it));
-  await saveChecklistSupervisionCacheForCorpo(bucketCorpo, next);
+  await saveChecklistSupervisionCacheForPuesto(bucketPuesto, next);
 }
 
 /**
- * Persiste la lista plana agrupando por `corpo_id`.
+ * Persiste la lista plana agrupando por `puesto_id`.
  * Fusiona con buckets existentes; nunca vacía el archivo completo por error de normalización.
  */
 export async function saveChecklistSupervisionCacheFlat(list: ChecklistSupervisionItem[]): Promise<void> {
@@ -280,9 +325,9 @@ export async function saveChecklistSupervisionCacheFlat(list: ChecklistSupervisi
   const grouped: Record<string, ChecklistSupervisionItem[]> = {};
 
   for (const raw of list) {
-    let fallback = resolveChecklistRowCorpoId(raw, null);
+    let fallback = resolveChecklistRowPuestoId(raw, null);
     if (fallback <= 0) {
-      for (const [k, arr] of Object.entries(existing.bySucursalId)) {
+      for (const [k, arr] of Object.entries(existing.byPuestoId)) {
         if (
           !Array.isArray(arr) ||
           !arr.some(
@@ -300,7 +345,7 @@ export async function saveChecklistSupervisionCacheFlat(list: ChecklistSupervisi
       }
     }
     const row = normalizeChecklistRowForCache(raw, fallback > 0 ? fallback : null);
-    const k = String(row.corpo_id);
+    const k = String(row.puesto_id);
     if (!Number.isFinite(Number(k)) || Number(k) <= 0) continue;
     if (!grouped[k]) grouped[k] = [];
     grouped[k].push(row);
@@ -309,60 +354,60 @@ export async function saveChecklistSupervisionCacheFlat(list: ChecklistSupervisi
   if (Object.keys(grouped).length === 0) return;
 
   await saveChecklistSupervisionCacheFile({
-    version: 1,
-    bySucursalId: { ...existing.bySucursalId, ...grouped },
+    version: 2,
+    byPuestoId: { ...existing.byPuestoId, ...grouped },
   });
 }
 
-export function filterChecklistFlatByCorpoId(
+export function filterChecklistFlatByPuestoId(
   flat: ChecklistSupervisionItem[],
-  corpoId: number | null,
+  puestoId: number | null,
 ): ChecklistSupervisionItem[] {
-  if (corpoId == null) return [];
-  const cid = Number(corpoId);
+  if (puestoId == null) return [];
+  const pid = Number(puestoId);
   return flat.filter((it: any) => {
     if (it?.isActive === false) return false;
-    return resolveChecklistRowCorpoId(it, cid) === cid;
+    return resolveChecklistRowPuestoId(it, pid) === pid;
   });
 }
 
-export async function mergeChecklistSupervisionServerIntoCacheForCorpo(
-  corpoId: number,
+export async function mergeChecklistSupervisionServerIntoCacheForPuesto(
+  puestoId: number,
   serverList: ChecklistSupervisionItem[],
 ): Promise<void> {
-  const cid = Number(corpoId);
-  if (!Number.isFinite(cid) || cid <= 0 || !Array.isArray(serverList)) return;
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0 || !Array.isArray(serverList)) return;
 
   const file = await loadChecklistSupervisionCacheFile();
-  const key = String(cid);
+  const key = String(pid);
 
-  const existingForCorpo = Array.isArray(file.bySucursalId[key]) ? [...file.bySucursalId[key]] : [];
-  const pendingOnly = existingForCorpo
-    .map((it) => normalizeChecklistRowForCache(it, cid))
+  const existingForPuesto = Array.isArray(file.byPuestoId[key]) ? [...file.byPuestoId[key]] : [];
+  const pendingOnly = existingForPuesto
+    .map((it) => normalizeChecklistRowForCache(it, pid))
     .filter((it) => checklistItemIsPendingLocal(it));
 
   const offlineServerEdits = new Map<number, ChecklistSupervisionItem>();
-  for (const it of existingForCorpo) {
+  for (const it of existingForPuesto) {
     const sid = Number(it?.id ?? 0);
     const idLocal = String((it as any)?.id_local ?? '').trim();
     if (sid > 0 && idLocal) {
-      offlineServerEdits.set(sid, normalizeChecklistRowForCache(it, cid));
+      offlineServerEdits.set(sid, normalizeChecklistRowForCache(it, pid));
     }
   }
 
   const scopedServer = serverList
     .map((it) => {
-      const normalized = normalizeChecklistRowForCache(it, cid);
+      const normalized = normalizeChecklistRowForCache(it, pid);
       const edit = offlineServerEdits.get(Number(normalized.id));
       if (!edit) return normalized;
-      return normalizeChecklistRowForCache({ ...normalized, ...edit, id: normalized.id }, cid);
+      return normalizeChecklistRowForCache({ ...normalized, ...edit, id: normalized.id }, pid);
     })
     .filter((it) => it.isActive !== false);
 
   await saveChecklistSupervisionCacheFile({
-    version: 1,
-    bySucursalId: {
-      ...file.bySucursalId,
+    version: 2,
+    byPuestoId: {
+      ...file.byPuestoId,
       [key]: dedupeChecklistRows([...pendingOnly, ...scopedServer]),
     },
   });

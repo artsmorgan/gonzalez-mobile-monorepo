@@ -9,6 +9,12 @@ import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
+import { eventBus } from '../hooks/eventBus';
+import { CURRENT_MARCA_UPDATED_EVENT } from '@/hooks/pushNotificationsService';
+import {
+  MODULES_RELEASE_UPDATED_EVENT,
+  readModulesReleaseFromStorage,
+} from '@/hooks/getModulesRelease';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -51,6 +57,93 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
   const [hasLunchTime, setHasLunchTime] = React.useState<boolean>(false);
   const [isDev, setIsDev] = React.useState<boolean>(false);
 
+  const applyMarcaSnapshot = React.useCallback((marcaData: any | null) => {
+    if (!marcaData || typeof marcaData !== 'object') {
+      setRole(null);
+      setDivision(null);
+      setHasCurrentMarca(false);
+      setCurrentMarca(null);
+      setHasLunchTime(false);
+      return;
+    }
+
+    setHasCurrentMarca(true);
+    setCurrentMarca(marcaData);
+    setRole(marcaData?.roleDivision?.role?.nombre ?? marcaData?.role_division?.role?.nombre ?? null);
+    setDivision(
+      marcaData?.roleDivision?.division?.nombre ?? marcaData?.role_division?.division?.nombre ?? null
+    );
+  }, []);
+
+  const applyModulesReleaseSnapshot = React.useCallback((modules: any[]) => {
+    setModulesRelease(Array.isArray(modules) ? modules : []);
+    setModulesReleaseReady(true);
+  }, []);
+
+  const reloadModulesReleaseFromStorage = React.useCallback(async () => {
+    const modules = await readModulesReleaseFromStorage();
+    applyModulesReleaseSnapshot(modules);
+  }, [applyModulesReleaseSnapshot]);
+
+  const loadCurrentMarcaFromStorage = React.useCallback(async () => {
+    try {
+      const currentMarcaRaw = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaRaw || currentMarcaRaw.trim() === '') {
+        applyMarcaSnapshot(null);
+        return;
+      }
+
+      const currentMarcaData = JSON.parse(currentMarcaRaw);
+      applyMarcaSnapshot(currentMarcaData);
+
+      const lunchTime = await AsyncStorage.getItem('lunch_time_config');
+      if (lunchTime) {
+        try {
+          const lunchTimeData = JSON.parse(lunchTime);
+          setHasLunchTime(Boolean(lunchTimeData.tiene_almuerzo));
+        } catch {
+          setHasLunchTime(false);
+        }
+      } else {
+        setHasLunchTime(false);
+      }
+    } catch (error) {
+      console.error('Error loading current_marca for SlideMenu:', error);
+      applyMarcaSnapshot(null);
+    }
+  }, [applyMarcaSnapshot]);
+
+  React.useEffect(() => {
+    const onMarcaUpdated = (marca?: unknown) => {
+      if (marca && typeof marca === 'object') {
+        applyMarcaSnapshot(marca as any);
+      } else {
+        void loadCurrentMarcaFromStorage();
+      }
+    };
+
+    const onModulesReleaseUpdated = (modules?: unknown) => {
+      if (Array.isArray(modules)) {
+        applyModulesReleaseSnapshot(modules);
+        return;
+      }
+      void reloadModulesReleaseFromStorage();
+    };
+
+    eventBus.on(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+    eventBus.on(MODULES_RELEASE_UPDATED_EVENT, onModulesReleaseUpdated);
+
+    return () => {
+      eventBus.off(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+      eventBus.off(MODULES_RELEASE_UPDATED_EVENT, onModulesReleaseUpdated);
+    };
+  }, [
+    applyMarcaSnapshot,
+    applyModulesReleaseSnapshot,
+    loadCurrentMarcaFromStorage,
+    reloadModulesReleaseFromStorage,
+  ]);
+
   React.useEffect(() => {
     if (isVisible) {
       setShouldRender(true);
@@ -59,48 +152,10 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         duration: 300,
         useNativeDriver: true,
       }).start();
-      const loadCurrentMarca = async () => {
-        const currentMarca = await AsyncStorage.getItem('current_marca');
-        if (currentMarca) {
-          const currentMarcaData = JSON.parse(currentMarca);
-          setRole(currentMarcaData.roleDivision.role.nombre);
-          setDivision(currentMarcaData.roleDivision.division.nombre);
-          setHasCurrentMarca(true);
-          setCurrentMarca(currentMarcaData);
-          const lunchTime = await AsyncStorage.getItem('lunch_time_config');
-          if (lunchTime) {
-            const lunchTimeData = JSON.parse(lunchTime);
-            setHasLunchTime(lunchTimeData.tiene_almuerzo);
-          }
-          else {
-            setHasLunchTime(false);
-          }
-        }
-        else {
-          setRole(null);
-          setDivision(null);
-          setHasCurrentMarca(false);
-        }
-      };
-      const loadModulesRelease = async () => {
-        try {
-          const modules_release = await AsyncStorage.getItem('modules_release');
-          if (modules_release) {
-            console.log('+++++++++++++++++++++++++++++++++++++++++ Modules release: ' + modules_release);
-            const modules_release_data = JSON.parse(modules_release);
-            setModulesRelease(modules_release_data);
-          }
-        } finally {
-          setModulesReleaseReady(true);
-        }
-      };
-      loadCurrentMarca();
-      loadModulesRelease();
+      setModulesReleaseReady(false);
+      void loadCurrentMarcaFromStorage();
+      void reloadModulesReleaseFromStorage();
       setIsUserSuperAdmin(employee?.isSuperAdmin || false);
-      console.log('role', role);
-      console.log('division', division);
-      console.log('hasCurrentMarca', hasCurrentMarca);
-
     } else {
       Animated.timing(slideAnim, {
         toValue: MENU_WIDTH,
@@ -108,10 +163,11 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
         useNativeDriver: true,
       }).start(() => {
         setShouldRender(false);
+        setModulesReleaseReady(false);
       });
     }
     //fetchPermissions();
-  }, [isVisible, slideAnim]);
+  }, [isVisible, slideAnim, employee?.isSuperAdmin, loadCurrentMarcaFromStorage, reloadModulesReleaseFromStorage]);
 
   const handleLogout = () => {
     Alert.alert(

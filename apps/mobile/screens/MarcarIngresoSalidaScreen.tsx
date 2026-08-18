@@ -189,6 +189,28 @@ function resolveMarcaIsLate(marca: Record<string, unknown> | null | undefined): 
   return marca.is_late === true;
 }
 
+/** Turno tipo "L" = día libre: no se permite marcar ingreso. */
+function resolveMarcaIsDiaLibre(marca: Record<string, unknown> | null | undefined): boolean {
+  if (!marca) return false;
+  return String(marca.tipo_turno ?? '').trim().toUpperCase() === 'L';
+}
+
+const DIA_LIBRE_INGRESO_MESSAGE =
+  'Esta marca corresponde a un día libre. No puedes marcar ingreso.';
+
+const ESPERA_SIGUIENTE_TURNO_MESSAGE = 'Espera a tu siguiente turno; puedes consultarlo en la ventana de "Ver turnos futuros"';
+
+function appendEsperaSiguienteTurnoIfNeeded(
+  message: string | null | undefined,
+  marca: Record<string, unknown> | null | undefined,
+  isAbsent: boolean,
+): string {
+  const base = String(message ?? '').trim();
+  if (!isAbsent || !resolveMarcaIsDiaLibre(marca)) return base;
+  if (base.includes(ESPERA_SIGUIENTE_TURNO_MESSAGE)) return base;
+  return ESPERA_SIGUIENTE_TURNO_MESSAGE; 
+}
+
 function buildMarcaInicioMs(marca: {
   fecha: string;
   hora_inicio: string;
@@ -436,19 +458,25 @@ export default function MarcarIngresoSalidaScreen() {
 
   const applyLocalValidationState = (
     validation: ReturnType<typeof evaluateLocalMarcaRules>,
-    marcaId: number | null
+    marcaId: number | null,
+    marca?: Record<string, unknown> | null,
   ) => {
+    const marcaForRules = marca ?? (attendanceData?.marca as Record<string, unknown> | undefined) ?? null;
+    const isLibreAbsent = Boolean(validation.absent) && resolveMarcaIsDiaLibre(marcaForRules);
     setMarkingBlocked(validation.markingBlocked);
     if (validation.message) {
-      setErrorMessage(validation.message);
+      setErrorMessage(
+        appendEsperaSiguienteTurnoIfNeeded(validation.message, marcaForRules, Boolean(validation.absent)),
+      );
     } else if (!validation.markingBlocked) {
       setErrorMessage(null);
     }
 
     if (validation.absent) {
       setAbsentMarcaId(marcaId);
-      setShouldResponseAbsentReason(validation.should_response === true);
-      setShowAbsentReasonForm(validation.should_response === true);
+      // Día libre (L): no pedir motivo; el usuario solo espera el siguiente turno.
+      setShouldResponseAbsentReason(!isLibreAbsent && validation.should_response === true);
+      setShowAbsentReasonForm(!isLibreAbsent && validation.should_response === true);
       setRevertMarcaId(null);
       setShowLocationRetry(false);
     } else {
@@ -514,7 +542,7 @@ export default function MarcarIngresoSalidaScreen() {
       const validation = await runLocalValidationForMarca(marcaWithTime, nowMs, {
         validateLocationForEntrada: false,
       });
-      applyLocalValidationState(validation, marcaId);
+      applyLocalValidationState(validation, marcaId, marca);
 
       const pendingActions = await readAttendanceActions();
       const mid = marcaId ?? NaN;
@@ -694,13 +722,15 @@ export default function MarcarIngresoSalidaScreen() {
     });
     applyLocalValidationState(
       validation,
-      marcaPayload.id != null ? Number(marcaPayload.id) : null
+      marcaPayload.id != null ? Number(marcaPayload.id) : null,
+      marcaPayload,
     );
 
     if (errorData.absent === true) {
       setAbsentMarcaId(errorData.marca_id ?? (marcaPayload.id != null ? Number(marcaPayload.id) : null));
-      setShouldResponseAbsentReason(errorData.should_response === true);
-      setShowAbsentReasonForm(errorData.should_response === true);
+      const isLibreAbsent = resolveMarcaIsDiaLibre(marcaPayload);
+      setShouldResponseAbsentReason(!isLibreAbsent && errorData.should_response === true);
+      setShowAbsentReasonForm(!isLibreAbsent && errorData.should_response === true);
     } else {
       setShouldResponseAbsentReason(false);
       if (errorData.absent === false && errorData.marca_id != null) {
@@ -714,7 +744,13 @@ export default function MarcarIngresoSalidaScreen() {
       setLocalCanMarkSalida(false);
     }
 
-    setErrorMessage(errorData.message);
+    setErrorMessage(
+      appendEsperaSiguienteTurnoIfNeeded(
+        errorData.message,
+        marcaPayload,
+        errorData.absent === true,
+      ),
+    );
     return true;
   };
 
@@ -979,15 +1015,10 @@ export default function MarcarIngresoSalidaScreen() {
         ) {
           shouldUpdateData = true;
         }
-        await AsyncStorage.setItem(
-          'current_marca',
-          JSON.stringify(
-            attachMarcaAttendanceFlags(marca_send, {
-              is_late: data.is_late,
-              is_salida_anticipada: data.is_salida_anticipada,
-            })
-          )
-        );
+        await persistCurrentMarcaWithFlags(marca_send, {
+          is_late: data.is_late,
+          is_salida_anticipada: data.is_salida_anticipada,
+        });
       }
 
       if (result) {
@@ -1002,7 +1033,11 @@ export default function MarcarIngresoSalidaScreen() {
           validateLocationForEntrada: false,
           validateLocationForSalida: false,
         });
-        applyLocalValidationState(validation, marca_send.id != null ? Number(marca_send.id) : null);
+        applyLocalValidationState(
+          validation,
+          marca_send.id != null ? Number(marca_send.id) : null,
+          marca_send as Record<string, unknown>,
+        );
         await refreshMarkLocationEligibility(
           marca_send as Record<string, unknown>,
           horaAccionValue || Date.now()
@@ -1134,6 +1169,14 @@ export default function MarcarIngresoSalidaScreen() {
 
     if (
       attendanceData.estado === 'No ingresado' &&
+      resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)
+    ) {
+      Alert.alert('Día libre', DIA_LIBRE_INGRESO_MESSAGE);
+      return;
+    }
+
+    if (
+      attendanceData.estado === 'No ingresado' &&
       resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)
     ) {
       Alert.alert(
@@ -1170,6 +1213,13 @@ export default function MarcarIngresoSalidaScreen() {
   ): Promise<{ ok: true; horaAccionMs: number } | { ok: false; message: string }> => {
     if (!attendanceData?.marca) {
       return { ok: false, message: 'No se encontró la marca.' };
+    }
+
+    if (type === 'entrada' && resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)) {
+      return {
+        ok: false,
+        message: DIA_LIBRE_INGRESO_MESSAGE,
+      };
     }
 
     if (type === 'entrada' && resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)) {
@@ -1221,7 +1271,8 @@ export default function MarcarIngresoSalidaScreen() {
 
     applyLocalValidationState(
       validation,
-      attendanceData.marca.id != null ? Number(attendanceData.marca.id) : null
+      attendanceData.marca.id != null ? Number(attendanceData.marca.id) : null,
+      attendanceData.marca as Record<string, unknown>,
     );
 
     if (validation.absent) {
@@ -1284,6 +1335,14 @@ export default function MarcarIngresoSalidaScreen() {
 
     if (attendanceData.marca?.hora_salida_digitada != null) {
       Alert.alert('Información', 'Ya has marcado la salida.');
+      return;
+    }
+
+    if (
+      attendanceData.estado === 'No ingresado' &&
+      resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)
+    ) {
+      Alert.alert('Día libre', DIA_LIBRE_INGRESO_MESSAGE);
       return;
     }
 
@@ -1511,7 +1570,7 @@ export default function MarcarIngresoSalidaScreen() {
             const m = JSON.parse(rawMarca);
             if (Number(m.id) === Number(attendanceData.marca.id)) {
               m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
-              await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+              await persistCurrentMarcaWithFlags(m);
             }
           } catch {
             /* ignore */
@@ -1539,7 +1598,7 @@ export default function MarcarIngresoSalidaScreen() {
               const m = JSON.parse(raw);
               if (Number(m.id) === Number(attendanceData.marca.id)) {
                 m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
-                await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+                await persistCurrentMarcaWithFlags(m);
               }
             } catch {
               /* ignore */
@@ -1710,7 +1769,7 @@ const getActivities = async (marcaId: number) => {
       const m = JSON.parse(raw);
       if (Number(m.id) !== Number(marcaId)) return;
       m.hora_salida_digitada = horaSalidaIso;
-      await AsyncStorage.setItem('current_marca', JSON.stringify(m));
+      await persistCurrentMarcaWithFlags(m);
     } catch {
       /* ignore */
     }
@@ -1968,6 +2027,7 @@ const getActivities = async (marcaId: number) => {
     }
 
     if (attendanceData.estado === 'No ingresado') {
+      if (resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)) return true;
       if (resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)) return true;
       if (!localCanMarkEntrada || !attendanceData.change_available) return true;
     }
@@ -2244,7 +2304,7 @@ const getActivities = async (marcaId: number) => {
 
                   let tipoTurno = 'Desconocido';
                   if (mark.tipo_turno) {
-                    switch (mark.tipo_turno) {
+                    switch (String(mark.tipo_turno).trim().toUpperCase()) {
                       case 'D':
                         tipoTurno = 'Diurno';
                         break;
@@ -2253,6 +2313,9 @@ const getActivities = async (marcaId: number) => {
                         break;
                       case 'M':
                         tipoTurno = 'Mixto';
+                        break;
+                      case 'L':
+                        tipoTurno = 'Día libre';
                         break;
                     }
                   }
@@ -2588,6 +2651,15 @@ const getActivities = async (marcaId: number) => {
                   <ThemedText style={styles.infoLabel}>Horario:</ThemedText>
                   <ThemedText style={styles.infoValue}>{attendanceData.marca.horario.nombre}</ThemedText>
                 </ThemedView>
+
+                <ThemedView style={styles.infoRow}>
+                  <ThemedText style={styles.infoLabel}>Tipo de turno:</ThemedText>
+                  <ThemedText style={styles.infoValue}>
+                    {resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>)
+                      ? 'Día libre (L)'
+                      : String(attendanceData.marca.tipo_turno || '—')}
+                  </ThemedText>
+                </ThemedView>
               </ThemedView>
 
               {/* Status Display */}
@@ -2641,6 +2713,21 @@ const getActivities = async (marcaId: number) => {
                     <ThemedText style={styles.lateWarningText}>
                       {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}
                     </ThemedText>
+                  </ThemedView>
+                )}
+
+                {resolveMarcaIsDiaLibre(attendanceData.marca as Record<string, unknown>) && (
+                  <ThemedView style={styles.salidaAnticipadaWarning}>
+                    <ThemedText style={styles.salidaAnticipadaWarningText}>
+                      {getActionIcon('warning')} Esta marca pertenece a un día libre.
+                    </ThemedText>
+                    {attendanceData.estado === 'No ingresado' && (
+                      <ThemedText style={styles.salidaAnticipadaHintText}>
+                        {absentMarcaId != null
+                          ? ESPERA_SIGUIENTE_TURNO_MESSAGE
+                          : DIA_LIBRE_INGRESO_MESSAGE}
+                      </ThemedText>
+                    )}
                   </ThemedView>
                 )}
 

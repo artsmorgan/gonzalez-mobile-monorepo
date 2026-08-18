@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { mapChecklistSupervisionPublicRow } from "../mapPublicRow";
 import { processChecklistSupervisionArticulosMantenimiento } from "../articulosMantenimiento";
+import { processChecklistEvaluationImages, validateChecklistEmpleadoHoras } from "../evaluationImages";
 import {
   sanitizeArticulosPuestoForPersistence,
   stripMantenimientoFilesFromArticulosPuesto,
@@ -32,64 +33,7 @@ function safeParseJson<T>(value: any, fallback: T): T {
 }
 
 async function processEvaluationImages(req: NextRequest, evaluation: any, checklistId: number): Promise<any> {
-  if (!evaluation || typeof evaluation !== "object") return evaluation;
-
-  const photoInputs: Array<{ input: any; value: string }> = [];
-  function collectPhotos(obj: any) {
-    if (!obj || typeof obj !== "object") return;
-    if (Array.isArray(obj)) {
-      obj.forEach(collectPhotos);
-      return;
-    }
-    if (obj.type === "photo" && obj.value && typeof obj.value === "string" && obj.value.startsWith("data:image/")) {
-      photoInputs.push({ input: obj, value: obj.value });
-    }
-    if (obj.subsections) obj.subsections.forEach(collectPhotos);
-    if (obj.inputs) obj.inputs.forEach(collectPhotos);
-  }
-  collectPhotos(evaluation);
-
-  if (photoInputs.length > 0) {
-    const getExt = (v: string) => {
-      const m = v.match(/data:image\/([^;]+)/);
-      return m ? m[1].replace("jpeg", "jpg") : "jpg";
-    };
-    const uploadResp = await uploadDynamicFiles({
-      req,
-      folderPath: `checklist-supervision/${checklistId}`,
-      files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
-    });
-    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-
-    // Asociar nombres de archivo a los inputs y registrar en c_imagenes_checklist_supervision
-    for (let i = 0; i < photoInputs.length; i++) {
-      const { input } = photoInputs[i];
-      const file = uploaded[i];
-      if (!file) continue;
-
-      // Guardar referencia en el JSON de evaluación y limpiar el base64
-      input.file_name = file.name;
-      if (typeof input.value === "string" && input.value.startsWith("data:image/")) {
-        input.value = null;
-      }
-
-      // Registrar en la tabla c_imagenes_checklist_supervision
-      await callDynamicPrisma({
-        req,
-        data: {
-          action: "POST",
-          table: "c_imagenes_checklist_supervision",
-          operation: "create",
-          data: {
-            name: file.name,
-            checklist_id: checklistId,
-            original_name: file.original_name || file.name,
-          },
-        },
-      });
-    }
-  }
-  return evaluation;
+  return processChecklistEvaluationImages(req, evaluation, checklistId, uploadDynamicFiles, callDynamicPrisma);
 }
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -162,6 +106,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable,
       created_at,
       hora_accion,
+      empleado_id,
+      empleado_nombre,
+      empleado_codigo,
+      hora_inicio,
+      hora_fin,
     } = body ?? {};
 
     const existing = await callDynamicPrisma({
@@ -202,6 +151,29 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           : null;
     }
     if (firma_responsable !== undefined) updateData.firma_responsable = String(firma_responsable);
+    const touchesEmpleadoHoras =
+      empleado_id !== undefined ||
+      empleado_nombre !== undefined ||
+      empleado_codigo !== undefined ||
+      hora_inicio !== undefined ||
+      hora_fin !== undefined;
+    if (touchesEmpleadoHoras) {
+      const empleadoHoras = validateChecklistEmpleadoHoras({
+        empleado_id: empleado_id !== undefined ? empleado_id : (existing as any).empleado_id,
+        empleado_nombre: empleado_nombre !== undefined ? empleado_nombre : (existing as any).empleado_nombre,
+        empleado_codigo: empleado_codigo !== undefined ? empleado_codigo : (existing as any).empleado_codigo,
+        hora_inicio: hora_inicio !== undefined ? hora_inicio : (existing as any).hora_inicio,
+        hora_fin: hora_fin !== undefined ? hora_fin : (existing as any).hora_fin,
+      });
+      if (!empleadoHoras.ok) {
+        return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 200 });
+      }
+      updateData.empleado_id = empleadoHoras.empleadoId;
+      updateData.empleado_nombre = empleadoHoras.empleadoNombre;
+      updateData.empleado_codigo = empleadoHoras.empleadoCodigo;
+      updateData.hora_inicio = empleadoHoras.horaInicio.toISOString();
+      updateData.hora_fin = empleadoHoras.horaFin.toISOString();
+    }
 
     // Procesar evaluación si se proporciona
     if (evaluacion !== undefined) {

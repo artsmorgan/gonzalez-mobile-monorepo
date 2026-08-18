@@ -6,6 +6,7 @@ import { resolveAppConnectivity } from './resolveAppConnectivity';
 type GetValidAccessTokenOrLogoutArgs = {
     refreshAccessToken: () => Promise<boolean>;
     logout: () => Promise<any>;
+    shouldUpdateServerTime?: boolean;
 };
 
 /**
@@ -19,6 +20,7 @@ type GetValidAccessTokenOrLogoutArgs = {
 export default async function getValidAccessTokenOrLogout({
     refreshAccessToken,
     logout,
+    shouldUpdateServerTime = true,
 }: GetValidAccessTokenOrLogoutArgs): Promise<string | null> {
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) {
@@ -46,7 +48,7 @@ export default async function getValidAccessTokenOrLogout({
 
     let shouldRefresh = false;
     try {
-        const horaAccion = await getHoraAccion();
+        const horaAccion = await getHoraAccion(shouldUpdateServerTime);
         shouldRefresh = horaAccion > createdAtNum + lifetimeMs;
     } catch {
         shouldRefresh = true;

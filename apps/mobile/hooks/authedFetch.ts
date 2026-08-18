@@ -5,6 +5,7 @@ type AuthedFetchArgs = {
     init?: RequestInit;
     refreshAccessToken: () => Promise<boolean>;
     logout: () => Promise<any>;
+    shouldUpdateServerTime?: boolean;
 };
 
 // Mutex para asegurar que solo una ejecución ocurra a la vez
@@ -25,6 +26,7 @@ export default async function authedFetch({
     init,
     refreshAccessToken,
     logout,
+    shouldUpdateServerTime = true,
 }: AuthedFetchArgs): Promise<Response | null> {
     // Esperar a que la ejecución anterior termine
     await executionQueue;
@@ -32,7 +34,7 @@ export default async function authedFetch({
     // Crear nueva ejecución y agregarla a la cola
     executionQueue = (async () => {
         try {
-            const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout });
+            const token = await getValidAccessTokenOrLogout({ refreshAccessToken, logout, shouldUpdateServerTime });
             if (!token) return null;
 
             const headers: any = {

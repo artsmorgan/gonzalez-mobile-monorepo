@@ -5,7 +5,18 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import React, { useState, useCallback } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -19,6 +30,7 @@ export default function LoginScreen() {
   const [rememberCedula, setRememberCedula] = useState(false);
   const { login } = useAuth();
   const navigation = useNavigation<LoginScreenNavigationProp>();
+  const insets = useSafeAreaInsets();
 
   // Cargar cédula guardada cuando la pantalla se enfoque
   useFocusEffect(
@@ -86,82 +98,105 @@ export default function LoginScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <ThemedView style={styles.contentContainer}>
-        <ThemedText type="title" style={styles.title}>
-          Iniciar Sesión
-        </ThemedText>
-        
-        <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Cédula</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={cedula}
-            onChangeText={setCedula}
-            placeholder="Ingrese su cédula"
-            autoCapitalize="none"
-            autoCorrect={false}
-            keyboardType="numeric"
-          />
-          <TouchableOpacity
-            style={styles.checkboxContainer}
-            onPress={() => setRememberCedula(!rememberCedula)}
-            activeOpacity={0.7}
-          >
-            <View style={[
-              styles.checkbox,
-              rememberCedula ? styles.checkboxChecked : styles.checkboxUnchecked
-            ]}>
-              {rememberCedula && (
-                <Ionicons name="checkmark" size={16} color="#fff" />
-              )}
-            </View>
-            <ThemedText style={styles.checkboxLabel}>Recordar cédula</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-
-        <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Contraseña</ThemedText>
-          <View style={styles.passwordInputContainer}>
-            <TextInput
-              style={styles.passwordInput}
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Ingrese su contraseña"
-              secureTextEntry={!showPassword}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity
-              style={styles.eyeIcon}
-              onPress={() => setShowPassword(!showPassword)}
-            >
-              <Ionicons
-                name={showPassword ? 'eye-off' : 'eye'}
-                size={24}
-                color="#666666"
-              />
-            </TouchableOpacity>
-          </View>
-        </ThemedView>
-
-        <TouchableOpacity 
-          style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} 
-          onPress={handleLogin}
-          disabled={isLoading}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoiding}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: Math.max(20, insets.top + 12),
+              paddingBottom: Math.max(24, insets.bottom + 16),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
         >
-          {isLoading ? (
-            <ActivityIndicator color="#ffffff" size="small" />
-          ) : (
-            <ThemedText style={styles.loginButtonText}>Ingresar</ThemedText>
-          )}
-        </TouchableOpacity>
+          <ThemedView style={styles.contentContainer}>
+            <ThemedText type="title" style={styles.title}>
+              Iniciar Sesión
+            </ThemedText>
+            
+            <ThemedView style={styles.inputContainer}>
+              <ThemedText style={styles.label}>Cédula</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={cedula}
+                onChangeText={setCedula}
+                placeholder="Ingrese su cédula"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="numeric"
+                returnKeyType="next"
+              />
+              <TouchableOpacity
+                style={styles.checkboxContainer}
+                onPress={() => setRememberCedula(!rememberCedula)}
+                activeOpacity={0.7}
+              >
+                <View style={[
+                  styles.checkbox,
+                  rememberCedula ? styles.checkboxChecked : styles.checkboxUnchecked
+                ]}>
+                  {rememberCedula && (
+                    <Ionicons name="checkmark" size={16} color="#fff" />
+                  )}
+                </View>
+                <ThemedText style={styles.checkboxLabel}>Recordar cédula</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
 
-        <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordContainer}>
-          <ThemedText style={styles.forgotPasswordText}>
-            ¿Olvidó su contraseña?
-          </ThemedText>
-        </TouchableOpacity>
-      </ThemedView>
+            <ThemedView style={styles.inputContainer}>
+              <ThemedText style={styles.label}>Contraseña</ThemedText>
+              <View style={styles.passwordInputContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Ingrese su contraseña"
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleLogin}
+                />
+                <TouchableOpacity
+                  style={styles.eyeIcon}
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-off' : 'eye'}
+                    size={24}
+                    color="#666666"
+                  />
+                </TouchableOpacity>
+              </View>
+            </ThemedView>
+
+            <TouchableOpacity 
+              style={[styles.loginButton, isLoading && styles.loginButtonDisabled]} 
+              onPress={handleLogin}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <ThemedText style={styles.loginButtonText}>Ingresar</ThemedText>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={handleForgotPassword} style={styles.forgotPasswordContainer}>
+              <ThemedText style={styles.forgotPasswordText}>
+                ¿Olvidó su contraseña?
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </ThemedView>
   );
 }
@@ -169,9 +204,15 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  keyboardAvoiding: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 20,
   },
   contentContainer: {
     width: '100%',
@@ -273,4 +314,3 @@ const styles = StyleSheet.create({
     color: '#000000',
   },
 });
-

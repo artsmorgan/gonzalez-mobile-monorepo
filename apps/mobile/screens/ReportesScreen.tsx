@@ -824,6 +824,22 @@ function moveCreadoRangeToFechaReporte(target: Record<string, unknown>): void {
   delete target.creadoHasta;
 }
 
+function reportDateFilterLabel(modulo: string, bound: 'desde' | 'hasta'): string {
+  if (modulo === MODULO_TIEMPO_ALMUERZO) {
+    return bound === 'desde' ? 'Inicio desde (opcional)' : 'Fin hasta (opcional)';
+  }
+  if (modulo === MODULO_INCIDENTES || modulo === MODULO_CHECKLIST_SUPERVISION) {
+    return bound === 'desde' ? 'Fecha reporte desde (opcional)' : 'Fecha reporte hasta (opcional)';
+  }
+  return bound === 'desde'
+    ? isModuloCreacionFechaOpcional(modulo)
+      ? 'Creado desde (opcional)'
+      : 'Creado desde'
+    : isModuloCreacionFechaOpcional(modulo)
+      ? 'Creado hasta (opcional)'
+      : 'Creado hasta';
+}
+
 function actaDateTimeRangeIsComplete(
   desdeD: Date | null,
   desdeT: Date | null,
@@ -4980,7 +4996,7 @@ export default function ReportesScreen() {
                     </ThemedText>
                     {modulo === MODULO_INCIDENTES || modulo === MODULO_CHECKLIST_SUPERVISION ? (
                       <>
-                        <ThemedText style={styles.label}>Creado desde (fecha y hora)</ThemedText>
+                        <ThemedText style={styles.label}>{reportDateFilterLabel(modulo, 'desde')}</ThemedText>
                         <View style={styles.dateRow}>
                           {Platform.OS === 'web' ? (
                             <>
@@ -5014,7 +5030,7 @@ export default function ReportesScreen() {
                             </>
                           )}
                         </View>
-                        <ThemedText style={styles.label}>Creado hasta (fecha y hora)</ThemedText>
+                        <ThemedText style={styles.label}>{reportDateFilterLabel(modulo, 'hasta')}</ThemedText>
                         <View style={styles.dateRow}>
                           {Platform.OS === 'web' ? (
                             <>
@@ -8082,15 +8098,14 @@ export default function ReportesScreen() {
                                   ? 'Filtros — Entrega de puesto'
                       : 'Filtros del módulo'}
                   </ThemedText>
+                  {formModulo === MODULO_CHECKLIST_SUPERVISION ? (
+                    <ThemedText style={styles.helperText}>
+                      Filtre por puesto para acotar los checklists incluidos en el reporte.
+                    </ThemedText>
+                  ) : null}
                   {formModulo !== MODULO_ARTICULOS_PUESTO ? (
                     <>
-                      <ThemedText style={styles.label}>
-                        {formModulo === MODULO_TIEMPO_ALMUERZO
-                          ? 'Inicio desde (opcional)'
-                          : isModuloCreacionFechaOpcional(formModulo)
-                            ? 'Creado desde (opcional)'
-                            : 'Creado desde'}
-                      </ThemedText>
+                      <ThemedText style={styles.label}>{reportDateFilterLabel(formModulo, 'desde')}</ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaDd(true)} activeOpacity={0.85}>
                           <ThemedText style={styles.dateButtonText}>{modalActaDesdeD ? formatDateOnlyLabel(modalActaDesdeD) : 'Fecha'}</ThemedText>
@@ -8101,13 +8116,7 @@ export default function ReportesScreen() {
                           <Ionicons name="time-outline" size={18} color="#007AFF" />
                         </TouchableOpacity>
                       </View>
-                      <ThemedText style={styles.label}>
-                        {formModulo === MODULO_TIEMPO_ALMUERZO
-                          ? 'Fin hasta (opcional)'
-                          : isModuloCreacionFechaOpcional(formModulo)
-                            ? 'Creado hasta (opcional)'
-                            : 'Creado hasta'}
-                      </ThemedText>
+                      <ThemedText style={styles.label}>{reportDateFilterLabel(formModulo, 'hasta')}</ThemedText>
                       <View style={styles.dateRow}>
                         <TouchableOpacity style={styles.dateButtonHalf} onPress={() => setShowModalActaHd(true)} activeOpacity={0.85}>
                           <ThemedText style={styles.dateButtonText}>{modalActaHastaD ? formatDateOnlyLabel(modalActaHastaD) : 'Fecha'}</ThemedText>

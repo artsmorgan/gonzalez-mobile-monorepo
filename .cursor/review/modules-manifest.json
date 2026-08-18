@@ -23,6 +23,8 @@
         "apps/mobile/components/LoginForm.tsx",
         "apps/mobile/components/PlanillasPasswordRevalidationModal.tsx",
         "apps/mobile/screens/LoginScreen.tsx",
+        "apps/mobile/screens/ForgotPasswordScreen.tsx",
+        "apps/mobile/screens/RecoverPasswordScreen.tsx",
         "apps/server/app/api/auth/**",
         "apps/server/app/api/dynamic-prisma/auth/**",
         "apps/server/utils/verifyAccessTokenByApi.ts",
@@ -92,6 +94,7 @@
         "apps/mobile/hooks/saveMarca.ts",
         "apps/mobile/hooks/saveAbsentReason.ts",
         "apps/mobile/hooks/attendanceActionsStorage.ts",
+        "apps/mobile/hooks/attendanceLocalMarcaValidation.ts",
         "apps/mobile/hooks/getHoraAccion.ts",
         "apps/mobile/hooks/resolveDeviceCoordinates.ts",
         "apps/server/app/api/attendance/**",
@@ -256,6 +259,7 @@
         "apps/mobile/hooks/puestoArticulosSync.ts",
         "apps/mobile/hooks/prioritizePlanByArticuloNomencladorId.ts",
         "apps/server/app/api/mantenimiento-equipo/**",
+        "apps/server/utils/mantenimientoEquipoPlantilla.ts",
         "apps/server/app/api/articulo-mantenimiento/**"
       ],
       "dependsOn": ["platform-auth", "platform-offline-sync"]
@@ -272,6 +276,8 @@
         "apps/mobile/hooks/checklistSupervisionFunctions.ts",
         "apps/mobile/hooks/checklistSupervisionCacheStorage.ts",
         "apps/mobile/hooks/checklistSupervisionEvaluationFiles.ts",
+        "apps/mobile/hooks/checklistSupervisionFormDraftStorage.ts",
+        "apps/mobile/hooks/checklistSupervisionIncidentLink.ts",
         "apps/server/app/api/checklist-supervision/**"
       ],
       "dependsOn": ["platform-auth", "platform-offline-sync"]
@@ -448,6 +454,7 @@
         "apps/mobile/hooks/incidentsStorage.ts",
         "apps/mobile/hooks/incidentsTypes.ts",
         "apps/mobile/hooks/incidentsArchivosSync.ts",
+        "apps/mobile/hooks/checklistSupervisionIncidentLink.ts",
         "apps/server/app/api/incidents/**"
       ],
       "dependsOn": ["platform-auth", "platform-offline-sync"]

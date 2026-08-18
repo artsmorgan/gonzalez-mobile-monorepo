@@ -10,6 +10,52 @@ import {
 } from './lunchTimeHorarioApi';
 
 const EVALUATIONS_ACTIONS_KEY = 'evaluations_actions';
+const CHECKLIST_SUPERVISION_ACTIONS_KEY = 'checklist_supervision_actions';
+
+async function readChecklistSupervisionActions(): Promise<any[]> {
+  const raw = await AsyncStorage.getItem(CHECKLIST_SUPERVISION_ACTIONS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function checklistSupervisionActionRequiresPlanillasToken(action: any): boolean {
+  const type = String(action?.type ?? '');
+  return type === 'create' || type === 'update';
+}
+
+export async function attachPlanillasTokenToChecklistSupervisionActions(
+  planillasToken: string,
+): Promise<void> {
+  const token = String(planillasToken ?? '').trim();
+  if (!token) return;
+
+  const actions = await readChecklistSupervisionActions();
+  if (actions.length === 0) return;
+
+  let changed = false;
+  const next = actions.map((action: any) => {
+    if (!checklistSupervisionActionRequiresPlanillasToken(action)) return action;
+    const current = String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim();
+    const nextRequestData =
+      action.requestData && typeof action.requestData === 'object'
+        ? { ...action.requestData, planillasToken: token }
+        : action.requestData;
+    if (current === token && String(action.requestData?.planillasToken ?? '').trim() === token) {
+      return action;
+    }
+    changed = true;
+    return { ...action, planillasToken: token, requestData: nextRequestData };
+  });
+
+  if (changed) {
+    await AsyncStorage.setItem(CHECKLIST_SUPERVISION_ACTIONS_KEY, JSON.stringify(next));
+  }
+}
 
 async function readUnsyncedPuestoUbicacionActions(): Promise<any[]> {
   const raw = await AsyncStorage.getItem(EVALUATIONS_ACTIONS_KEY);
@@ -45,6 +91,11 @@ export async function pendingActionsRequirePlanillasToken(): Promise<boolean> {
     return true;
   }
 
+  const checklistActions = await readChecklistSupervisionActions();
+  if (checklistActions.some(checklistSupervisionActionRequiresPlanillasToken)) {
+    return true;
+  }
+
   return false;
 }
 
@@ -54,6 +105,8 @@ export async function attachPlanillasTokenToAllPendingActions(planillasToken: st
   if (!token) return;
 
   await attachPlanillasTokenToPlanillasAttendanceActions(token);
+
+  await attachPlanillasTokenToChecklistSupervisionActions(token);
 
   const evalRaw = await AsyncStorage.getItem(EVALUATIONS_ACTIONS_KEY);
   if (evalRaw) {

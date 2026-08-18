@@ -233,6 +233,7 @@ export function evaluateLocalMarcaRules(
   if (marca.hora_entrada_digitada == null && nowMs > fin.getTime()) {
     const hora_inicio_display = inicio.toISOString().split('T')[1].split('.')[0];
     const fecha_display = isoDatePart(marca.fecha).split('-').reverse().join('-');
+    const isDiaLibre = String(marca.tipo_turno ?? '').trim().toUpperCase() === 'L';
     let should_response = true;
     let extra_reason = '';
     const comment = marca.accion_personal_comentarios ?? marca.ausencia_comentario;
@@ -241,6 +242,10 @@ export function evaluateLocalMarcaRules(
       extra_reason = ' Razon: ' + String(comment).trim();
     }
     if (opts?.pendingAbsentReason) {
+      should_response = false;
+    }
+    // Turno libre (L): no se marca entrada/salida; no pedir motivo de ausencia.
+    if (isDiaLibre) {
       should_response = false;
     }
     return {

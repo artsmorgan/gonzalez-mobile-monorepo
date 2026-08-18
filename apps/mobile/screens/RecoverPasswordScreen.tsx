@@ -5,8 +5,22 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
-import React, { useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  findNodeHandle,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+  UIManager,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type RecoverPasswordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'RecoverPassword'>;
 type RecoverPasswordScreenRouteProp = RouteProp<RootStackParamList, 'RecoverPassword'>;
@@ -15,6 +29,10 @@ export default function RecoverPasswordScreen() {
   const navigation = useNavigation<RecoverPasswordScreenNavigationProp>();
   const route = useRoute<RecoverPasswordScreenRouteProp>();
   const { token = '', employeeId = '', employeeName = '', employeeEmail = '', employeeCedula = '', employeeTelefono = '' } = route.params || {};
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollView>(null);
+  const passwordFieldRef = useRef<View>(null);
+  const confirmPasswordFieldRef = useRef<View>(null);
 
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -22,6 +40,52 @@ export default function RecoverPasswordScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordErrors, setPasswordErrors] = useState<string[]>([]);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const onShow = Keyboard.addListener(showEvent, (event) => {
+      setKeyboardHeight(event.endCoordinates?.height ?? 0);
+    });
+    const onHide = Keyboard.addListener(hideEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      onShow.remove();
+      onHide.remove();
+    };
+  }, []);
+
+  const scrollFieldIntoView = (fieldRef: React.RefObject<View | null>) => {
+    const scrollNode = findNodeHandle(scrollRef.current);
+    const fieldNode = findNodeHandle(fieldRef.current);
+    if (!scrollNode || !fieldNode) {
+      setTimeout(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+      return;
+    }
+
+    const runMeasure = () => {
+      UIManager.measureLayout(
+        fieldNode,
+        scrollNode,
+        () => {
+          scrollRef.current?.scrollToEnd({ animated: true });
+        },
+        (_left, top, _width, height) => {
+          const targetY = Math.max(0, top - 24);
+          scrollRef.current?.scrollTo({ y: targetY + Math.max(0, height - 40), animated: true });
+        }
+      );
+    };
+
+    // Esperar a que el teclado termine de animar / redimensionar el layout.
+    setTimeout(runMeasure, Platform.OS === 'ios' ? 80 : 180);
+  };
 
   const validatePasswordRules = (pwd: string): string[] => {
     const errors: string[] = [];
@@ -179,130 +243,151 @@ export default function RecoverPasswordScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <ScrollView 
-        style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoiding}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
-        <ThemedView style={styles.contentContainer}>
-          <ThemedText type="title" style={styles.title}>
-            Recuperar Contraseña
-          </ThemedText>
-          
-          {employeeName && employeeEmail && (
-            <ThemedView style={styles.userInfoContainer}>
-              <ThemedText style={styles.userInfoTitle}>Información del Usuario</ThemedText>
-              <ThemedText style={styles.userInfoText}>
-                <ThemedText style={styles.userInfoLabel}>Nombre: </ThemedText>
-                {employeeName}
-              </ThemedText>
-              <ThemedText style={styles.userInfoText}>
-                <ThemedText style={styles.userInfoLabel}>Cédula: </ThemedText>
-                {employeeCedula}
-              </ThemedText>
-              <ThemedText style={styles.userInfoText}>
-                <ThemedText style={styles.userInfoLabel}>Email: </ThemedText>
-                {employeeEmail}
-              </ThemedText>
-              {employeeTelefono && (
-                <ThemedText style={styles.userInfoText}>
-                  <ThemedText style={styles.userInfoLabel}>Teléfono: </ThemedText>
-                  {employeeTelefono}
-                </ThemedText>
-              )}
-            </ThemedView>
-          )}
-
-          {/* Cartel de recomendaciones */}
-          <ThemedView style={styles.recommendationsContainer}>
-            <ThemedText style={styles.recommendationsTitle}>Recomendaciones para crear una contraseña segura:</ThemedText>
-            <View style={styles.recommendationsList}>
-              <ThemedText style={styles.recommendationItem}>• No menos de 8 caracteres</ThemedText>
-              <ThemedText style={styles.recommendationItem}>• Sin secuencias lógicas <ThemedText style={styles.exampleText}>abcd 1234 qwerty</ThemedText></ThemedText>
-              <ThemedText style={styles.recommendationItem}>• Sin info nuestra <ThemedText style={styles.exampleText}>minadre miperro minacimiento</ThemedText></ThemedText>
-              <ThemedText style={styles.recommendationItem}>• Combina mayúsculas y minúsculas <ThemedText style={styles.exampleText}>aDRnTi</ThemedText></ThemedText>
-              <ThemedText style={styles.recommendationItem}>• Combina números y letras <ThemedText style={styles.exampleText}>a1DR4nT76i</ThemedText></ThemedText>
-              <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR"4nT7:6i</ThemedText></ThemedText>
-            </View>
-          </ThemedView>
-
-          <ThemedView style={styles.inputContainer}>
-            <ThemedText style={styles.label}>Nueva contraseña</ThemedText>
-            <View style={styles.passwordInputContainer}>
-              <TextInput
-                style={styles.passwordInput}
-                value={password}
-                onChangeText={handlePasswordChange}
-                placeholder="Ingresa tu nueva contraseña"
-                placeholderTextColor="#999"
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                style={styles.eyeIcon}
-                onPress={() => setShowPassword(!showPassword)}
-              >
-                <Ionicons
-                  name={showPassword ? 'eye-off' : 'eye'}
-                  size={24}
-                  color="#666"
-                />
-              </TouchableOpacity>
-            </View>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: Math.max(20, insets.top + 12),
+              paddingBottom:
+                Math.max(24, insets.bottom + 16) +
+                (Platform.OS === 'android' ? keyboardHeight : Math.max(0, keyboardHeight * 0.15)),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
+        >
+          <ThemedView style={styles.contentContainer}>
+            <ThemedText type="title" style={styles.title}>
+              Recuperar Contraseña
+            </ThemedText>
             
-            {/* Mensajes de error de validación */}
-            {passwordErrors.length > 0 && (
-              <View style={styles.errorsContainer}>
-                {passwordErrors.map((error, index) => (
-                  <ThemedText key={index} style={styles.errorText}>• {error}</ThemedText>
-                ))}
+            {employeeName && employeeEmail && (
+              <ThemedView style={styles.userInfoContainer}>
+                <ThemedText style={styles.userInfoTitle}>Información del Usuario</ThemedText>
+                <ThemedText style={styles.userInfoText}>
+                  <ThemedText style={styles.userInfoLabel}>Nombre: </ThemedText>
+                  {employeeName}
+                </ThemedText>
+                <ThemedText style={styles.userInfoText}>
+                  <ThemedText style={styles.userInfoLabel}>Cédula: </ThemedText>
+                  {employeeCedula}
+                </ThemedText>
+                <ThemedText style={styles.userInfoText}>
+                  <ThemedText style={styles.userInfoLabel}>Email: </ThemedText>
+                  {employeeEmail}
+                </ThemedText>
+                {employeeTelefono && (
+                  <ThemedText style={styles.userInfoText}>
+                    <ThemedText style={styles.userInfoLabel}>Teléfono: </ThemedText>
+                    {employeeTelefono}
+                  </ThemedText>
+                )}
+              </ThemedView>
+            )}
+
+            {/* Cartel de recomendaciones */}
+            <ThemedView style={styles.recommendationsContainer}>
+              <ThemedText style={styles.recommendationsTitle}>Recomendaciones para crear una contraseña segura:</ThemedText>
+              <View style={styles.recommendationsList}>
+                <ThemedText style={styles.recommendationItem}>• No menos de 8 caracteres</ThemedText>
+                <ThemedText style={styles.recommendationItem}>• Sin secuencias lógicas <ThemedText style={styles.exampleText}>abcd 1234 qwerty</ThemedText></ThemedText>
+                <ThemedText style={styles.recommendationItem}>• Sin info nuestra <ThemedText style={styles.exampleText}>minadre miperro minacimiento</ThemedText></ThemedText>
+                <ThemedText style={styles.recommendationItem}>• Combina mayúsculas y minúsculas <ThemedText style={styles.exampleText}>aDRnTi</ThemedText></ThemedText>
+                <ThemedText style={styles.recommendationItem}>• Combina números y letras <ThemedText style={styles.exampleText}>a1DR4nT76i</ThemedText></ThemedText>
+                <ThemedText style={styles.recommendationItem}>• Con caracteres especiales <ThemedText style={styles.exampleText}>aa18DR"4nT7:6i</ThemedText></ThemedText>
               </View>
-            )}
-          </ThemedView>
+            </ThemedView>
 
-          <ThemedView style={styles.inputContainer}>
-            <ThemedText style={styles.label}>Confirmar contraseña</ThemedText>
-            <View style={styles.passwordInputContainer}>
-              <TextInput
-                style={styles.passwordInput}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                placeholder="Confirma tu nueva contraseña"
-                placeholderTextColor="#999"
-                secureTextEntry={!showConfirmPassword}
-                autoCapitalize="none"
-              />
-              <TouchableOpacity
-                style={styles.eyeIcon}
-                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-              >
-                <Ionicons
-                  name={showConfirmPassword ? 'eye-off' : 'eye'}
-                  size={24}
-                  color="#666"
+            <View style={styles.inputContainer} ref={passwordFieldRef} collapsable={false}>
+              <ThemedText style={styles.label}>Nueva contraseña</ThemedText>
+              <View style={styles.passwordInputContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  value={password}
+                  onChangeText={handlePasswordChange}
+                  placeholder="Ingresa tu nueva contraseña"
+                  placeholderTextColor="#999"
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  returnKeyType="next"
+                  onFocus={() => scrollFieldIntoView(passwordFieldRef)}
                 />
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.eyeIcon}
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  <Ionicons
+                    name={showPassword ? 'eye-off' : 'eye'}
+                    size={24}
+                    color="#666"
+                  />
+                </TouchableOpacity>
+              </View>
+              
+              {/* Mensajes de error de validación */}
+              {passwordErrors.length > 0 && (
+                <View style={styles.errorsContainer}>
+                  {passwordErrors.map((error, index) => (
+                    <ThemedText key={index} style={styles.errorText}>• {error}</ThemedText>
+                  ))}
+                </View>
+              )}
             </View>
+
+            <View style={styles.inputContainer} ref={confirmPasswordFieldRef} collapsable={false}>
+              <ThemedText style={styles.label}>Confirmar contraseña</ThemedText>
+              <View style={styles.passwordInputContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="Confirma tu nueva contraseña"
+                  placeholderTextColor="#999"
+                  secureTextEntry={!showConfirmPassword}
+                  autoCapitalize="none"
+                  returnKeyType="done"
+                  onSubmitEditing={handlePasswordReset}
+                  onFocus={() => scrollFieldIntoView(confirmPasswordFieldRef)}
+                />
+                <TouchableOpacity
+                  style={styles.eyeIcon}
+                  onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                >
+                  <Ionicons
+                    name={showConfirmPassword ? 'eye-off' : 'eye'}
+                    size={24}
+                    color="#666"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <TouchableOpacity 
+              style={[styles.submitButton, isSubmitting && styles.disabledButton]} 
+              onPress={handlePasswordReset}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <ThemedText style={styles.submitButtonText}>Confirmar</ThemedText>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.backButton} onPress={handleBackToLogin}>
+              <ThemedText style={styles.backButtonText}>Volver al inicio de sesión</ThemedText>
+            </TouchableOpacity>
           </ThemedView>
-
-          <TouchableOpacity 
-            style={[styles.submitButton, isSubmitting && styles.disabledButton]} 
-            onPress={handlePasswordReset}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? (
-              <ActivityIndicator size="small" color="#ffffff" />
-            ) : (
-              <ThemedText style={styles.submitButtonText}>Confirmar</ThemedText>
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.backButton} onPress={handleBackToLogin}>
-            <ThemedText style={styles.backButtonText}>Volver al inicio de sesión</ThemedText>
-          </TouchableOpacity>
-        </ThemedView>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </ThemedView>
   );
 }
@@ -311,15 +396,14 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  scrollView: {
+  keyboardAvoiding: {
     flex: 1,
   },
   scrollContent: {
     flexGrow: 1,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
-    padding: 20,
-    minHeight: '100%',
+    paddingHorizontal: 20,
   },
   contentContainer: {
     width: '100%',

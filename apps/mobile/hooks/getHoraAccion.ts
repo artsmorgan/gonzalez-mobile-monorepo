@@ -9,9 +9,11 @@ function costaRicaNowMs(): number {
 }
 
 /** Hora de referencia del servidor (CR), extrapolada offline desde la última sincronización. */
-export default async function getHoraAccion(): Promise<number> {
+export default async function getHoraAccion(shouldUpdateServerTime: boolean = true): Promise<number> { // default true
   try {
-    await updateServerTime();
+    if (shouldUpdateServerTime) {
+      await updateServerTime();
+    }
     const server_time = await AsyncStorage.getItem('server_time');
     if (server_time) {
       const server_time_obj = JSON.parse(server_time);
