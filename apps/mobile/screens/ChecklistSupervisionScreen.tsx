@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, TextInput, TouchableOpacity, ActivityIndicator, Platform, Modal, View, Image, Dimensions } from 'react-native';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { RootStackParamList } from '../App';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -16,6 +18,7 @@ import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -32,12 +35,12 @@ import {
 } from '../hooks/checklistSupervisionFunctions';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import {
-  loadChecklistSupervisionCacheForCorpo,
-  mergeChecklistSupervisionServerIntoCacheForCorpo,
-  saveChecklistSupervisionCacheForCorpo,
+  loadChecklistSupervisionCacheForPuesto,
+  mergeChecklistSupervisionServerIntoCacheForPuesto,
+  saveChecklistSupervisionCacheForPuesto,
   normalizeChecklistRowForCache,
   dedupeChecklistRows,
-  resolveChecklistRowCorpoId,
+  resolveChecklistRowPuestoId,
   applyServerPayloadToCachedChecklistRow,
 } from '@/hooks/checklistSupervisionCacheStorage';
 import {
@@ -51,12 +54,32 @@ import type { ArticuloMantenimientoPendingFile } from '@/utils/articuloMantenimi
 import { serializeArticulosPuestoForStorage } from '@/utils/articuloMantenimientoFiles';
 import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
 import { deleteFile, getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import {
+  clearChecklistSupervisionFormDraft,
+  collectChecklistFormDraftLocalFileNames,
+  deleteChecklistSupervisionFormDraftFiles,
+  loadChecklistSupervisionFormDraft,
+  persistEvaluationPhotosForDraft,
+  removeChecklistSupervisionFormDraftMeta,
+  saveChecklistSupervisionFormDraft,
+  type ChecklistSupervisionFormDraft,
+} from '@/hooks/checklistSupervisionFormDraftStorage';
+import {
+  isChecklistSupervisionIncidentLinkComplete,
+  type ChecklistSupervisionIncidentLinkParams,
+} from '@/hooks/checklistSupervisionIncidentLink';
+import {
+  MODULES_RELEASE_UPDATED_EVENT,
+  readModulesReleaseFromStorage,
+} from '@/hooks/getModulesRelease';
 import Constants from 'expo-constants';
+import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from '@/hooks/planillasTokenStorage';
+import PlanillasPasswordRevalidationModal from '@/components/PlanillasPasswordRevalidationModal';
 
 const CHECKLIST_SUPERVISION_PHOTO_PREFIX = 'checklist_supervision';
 
-/** Alcance listado/caché: sucursal (corpo_id). */
-type ChecklistListCorpoScope = { filterCorpoId: number | null };
+/** Alcance listado/caché: puesto (puesto_id). */
+type ChecklistListPuestoScope = { filterPuestoId: number | null };
 
 type ChecklistSupervisionUI = ChecklistSupervisionItem & { id_local?: string };
 
@@ -129,6 +152,14 @@ type HierarchyPath = {
 };
 
 // Tipos para evaluación dinámica
+type EvaluationPhotoItem = {
+  id: string;
+  value?: string;
+  file_name?: string;
+  localFileName?: string;
+  imageOrientation?: 'horizontal' | 'vertical';
+};
+
 type EvaluationInput = {
   id: string;
   type: 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox';
@@ -139,12 +170,18 @@ type EvaluationInput = {
   file_name?: string; // Solo para registros sincronizados (se establece en backend)
   /** Archivo en `Paths.document` (solo borrador/local; el base64 va al API al enviar). */
   localFileName?: string;
+  /** Varias fotos por punto (formato nuevo). */
+  photos?: EvaluationPhotoItem[];
 };
 
 type EvaluationSubsection = {
   id: string;
   title: string;
   inputs: EvaluationInput[];
+  /** Detalle libre del punto evaluado. */
+  detalle?: string;
+  /** Si es true, no se puede eliminar (plantilla). Las añadidas por el usuario quedan en false. */
+  isPredefined?: boolean;
 };
 
 type EvaluationSection = {
@@ -160,6 +197,48 @@ function shouldShowInputTitle(inputTitle: string | undefined, subsectionTitle?: 
   if (!t || t.toLowerCase() === 'respuesta') return false;
   const sub = String(subsectionTitle ?? '').trim();
   return !sub || t !== sub;
+}
+
+function isEvaluationPhotoInput(input: EvaluationInput): boolean {
+  return (
+    input.type === 'photo' ||
+    (input.type === 'text' && String(input.title ?? '').toLowerCase().includes('foto'))
+  );
+}
+
+type EvaluationInputType = 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox';
+
+const EVALUATION_INPUT_TYPE_OPTIONS: Array<{
+  type: EvaluationInputType;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}> = [
+  { type: 'text', label: 'Texto', icon: 'text-outline' },
+  { type: 'textarea', label: 'Texto largo', icon: 'document-text-outline' },
+  { type: 'select', label: 'Select', icon: 'list-outline' },
+  { type: 'date', label: 'Fecha', icon: 'calendar-outline' },
+  { type: 'photo', label: 'Multifoto', icon: 'images-outline' },
+  { type: 'checkbox', label: 'Checkbox', icon: 'checkbox-outline' },
+];
+
+/** Recoge `localFileName` de una subsección (incl. multifotos) para borrar de disco. */
+function collectLocalFileNamesFromSubsection(subsection: EvaluationSubsection): string[] {
+  const names = new Set<string>();
+  for (const input of subsection.inputs || []) {
+    if (!isEvaluationPhotoInput(input) && input.type !== 'photo') {
+      const ln = String(input.localFileName ?? '').trim();
+      if (ln) names.add(ln);
+      continue;
+    }
+    const photos = normalizePhotoInput(input);
+    for (const photo of photos) {
+      const ln = String(photo.localFileName ?? '').trim();
+      if (ln) names.add(ln);
+    }
+    const top = String(input.localFileName ?? '').trim();
+    if (top) names.add(top);
+  }
+  return [...names];
 }
 
 // Tipos para artículos del puesto (similar a EntregaPuestosScreen)
@@ -188,6 +267,539 @@ function articuloListKey(art: Pick<ArticuloForm, 'id' | 'tipo' | 'rowKey'>, inde
 
 function evaluationInputKey(sectionId: string, subsectionId: string, inputId: string): string {
   return `${sectionId}::${subsectionId}::${inputId}`;
+}
+
+/** Reloj de 24 h sin aplicar zona local (HH:mm). */
+const wallClockDate = (hours: number, minutes: number): Date =>
+  new Date(1970, 0, 1, hours, minutes, 0, 0);
+
+const formatTimeHHmm = (date: Date): string => {
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+};
+
+const parseTimeHHmm = (s: string | null | undefined): Date => {
+  if (!s || typeof s !== 'string') return wallClockDate(0, 0);
+  const m = s.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return wallClockDate(0, 0);
+  const hh = Math.min(23, Math.max(0, Number(m[1])));
+  const mm = Math.min(59, Math.max(0, Number(m[2])));
+  return wallClockDate(hh, mm);
+};
+
+/**
+ * Hora de acción para inicio/fin: usa componentes UTC del timestamp
+ * (server_time / TIME en BD) para no restar la zona local (p. ej. 12:20 → 06:20).
+ */
+const timeDateFromHoraAccion = (horaAccion: number | Date): Date => {
+  const src = horaAccion instanceof Date ? horaAccion : new Date(horaAccion);
+  if (Number.isNaN(src.getTime())) {
+    const n = new Date();
+    return wallClockDate(n.getHours(), n.getMinutes());
+  }
+  return wallClockDate(src.getUTCHours(), src.getUTCMinutes());
+};
+
+/** Valor del DateTimePicker: hora de reloj del dispositivo, sin reconvertir por UTC. */
+const timeDateFromPicker = (selectedDate: Date): Date =>
+  wallClockDate(selectedDate.getHours(), selectedDate.getMinutes());
+
+const normalizeTimeToHHmm = (value: any): string | null => {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const s = value.trim();
+    const hhmm = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+    if (hhmm) return `${String(Number(hhmm[1])).padStart(2, '0')}:${hhmm[2]}`;
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+    }
+    return null;
+  }
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return null;
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+};
+
+function normalizePhotoInput(input: EvaluationInput): EvaluationPhotoItem[] {
+  if (Array.isArray(input.photos) && input.photos.length > 0) {
+    return input.photos;
+  }
+  if (
+    input.localFileName ||
+    input.file_name ||
+    (input.value && typeof input.value === 'string' && (input.value.startsWith('data:image/') || input.value.length > 100))
+  ) {
+    return [
+      {
+        id: `${input.id}-legacy`,
+        value: input.value,
+        file_name: input.file_name,
+        localFileName: input.localFileName,
+        imageOrientation: input.imageOrientation,
+      },
+    ];
+  }
+  return [];
+}
+
+function isCarnesEvaluationSection(section: EvaluationSection): boolean {
+  const id = String(section.id ?? '').trim().toLowerCase();
+  if (id === 'carnes') return true;
+  return /carn[eé]s?/.test(String(section.title ?? '').trim().toLowerCase());
+}
+
+function isEmpresaCarneSubsection(subsection: Pick<EvaluationSubsection, 'id' | 'title'>): boolean {
+  const id = String(subsection.id ?? '').trim().toLowerCase();
+  if (id === 'car-sub-0') return true;
+  return /carn[eé]\s+de\s+la\s+empresa/.test(String(subsection.title ?? '').trim().toLowerCase());
+}
+
+function isUserAddedSubsection(section: EvaluationSection, subsection: EvaluationSubsection): boolean {
+  if (subsection.isPredefined === false) return true;
+  if (subsection.isPredefined === true) return false;
+  const id = String(subsection.id ?? '');
+  if (id.startsWith('subsection-')) return true;
+  return !section.isPredefined;
+}
+
+function resolveCarneFechaVencimientoId(subsection: EvaluationSubsection): string | null {
+  if (isEmpresaCarneSubsection(subsection)) return null;
+  const subId = String(subsection.id ?? '').trim();
+  const subMatch = subId.match(/^car-sub-(\d+)$/i);
+  if (subMatch) return `car-${subMatch[1]}-fecha-vencimiento`;
+  const cal = subsection.inputs.find((inp) => inp.type === 'select' && /^(car-\d+)-cal$/i.test(inp.id));
+  if (!cal) return null;
+  const prefix = cal.id.match(/^(car-\d+)/i);
+  return prefix ? `${prefix[1]}-fecha-vencimiento` : null;
+}
+
+type EmpleadoDocumento = {
+  nombre: string;
+  tipo: 'carn' | 'lic';
+  identificador: number | string;
+  fecha_vencimiento: string | Date | null;
+};
+
+const LICENCIA_SUBSECTION_DEFS: { code: string; title: string }[] = [
+  { code: 'A1', title: 'A1 - (0 a 125cc) Bicimoto y motocicleta. (Hasta 250 cc) cuadr' },
+  { code: 'A2', title: 'A2 - (126 a 500 cc) Bicimoto y motocicleta. (256 hasta los 50' },
+  { code: 'A3', title: 'A3 - (501 cc en adelante) Bicimoto o motocicleta, cuadriciclo' },
+  { code: 'B1', title: 'B1 - Vehículo < 4000 kg' },
+  { code: 'B2', title: 'B2 - Vehículo 4001 a 8000 Kg' },
+  { code: 'B3', title: 'B3 - (8.001 Kg en adelante, excepto vehículos pesados articul' },
+  { code: 'B4', title: 'B4 - (8.001 Kg, vehículos pesados articulados), Vehículo comp' },
+  { code: 'C2', title: 'C2 - Vehículos como Autobús, Buseta y Microbús' },
+  { code: 'D1', title: 'D1 - Vehículos tractores de llanta' },
+  { code: 'D2', title: 'D2 - Tractor de oruga' },
+  { code: 'D3', title: 'D3 - Otro equipo especial no contemplado como D-1 o D-2' },
+];
+
+function buildLicenciaSubsection(def: { code: string; title: string }, idx: number): EvaluationSubsection {
+  const slug = def.code.toLowerCase();
+  return {
+    id: `lic-sub-${slug}`,
+    title: def.title,
+    isPredefined: true,
+    inputs: [
+      {
+        id: `lic-${slug}-cal`,
+        type: 'select' as const,
+        value: 'No aplica',
+        options: ['Vigente', 'Vencido', 'No aplica'],
+      },
+      {
+        id: `lic-${slug}-fecha-vencimiento`,
+        type: 'date' as const,
+        title: 'Fecha de vencimiento',
+        value: '',
+      },
+      {
+        id: `lic-${slug}-photo`,
+        type: 'photo' as const,
+        title: 'Foto',
+        value: '',
+        photos: [],
+      },
+    ],
+  };
+}
+
+const LICENCIAS_SECTION: EvaluationSection = {
+  id: 'licencias',
+  title: 'Licencias',
+  isPredefined: true,
+  subsections: LICENCIA_SUBSECTION_DEFS.map(buildLicenciaSubsection),
+};
+
+function isLicenciasEvaluationSection(section: EvaluationSection): boolean {
+  const id = String(section.id ?? '').trim().toLowerCase();
+  if (id === 'licencias') return true;
+  return /licencias/.test(String(section.title ?? '').trim().toLowerCase());
+}
+
+function resolveLicenciaCodeFromSubsection(subsection: EvaluationSubsection): string | null {
+  const subId = String(subsection.id ?? '').trim();
+  const idMatch = subId.match(/^lic-sub-([a-z0-9]+)$/i);
+  if (idMatch) return idMatch[1].toUpperCase();
+  const titleMatch = String(subsection.title ?? '').trim().match(/^([A-Z]\d+)\s*-/i);
+  return titleMatch ? titleMatch[1].toUpperCase() : null;
+}
+
+function resolveLicenciaFechaVencimientoId(subsection: EvaluationSubsection): string | null {
+  const code = resolveLicenciaCodeFromSubsection(subsection);
+  if (!code) return null;
+  return `lic-${code.toLowerCase()}-fecha-vencimiento`;
+}
+
+function resolveCarneDocumentoIdentificador(subsection: EvaluationSubsection): number | null {
+  const subId = String(subsection.id ?? '').trim().toLowerCase();
+  if (subId === 'car-sub-1') return 5;
+  if (subId === 'car-sub-2') return 15;
+  const title = String(subsection.title ?? '').trim().toLowerCase();
+  if (/portaci[oó]n\s+de\s+armas/.test(title)) return 5;
+  if (/agente\s+de\s+seguridad\s+privada/.test(title)) return 15;
+  return null;
+}
+
+function normalizeLicenciaIdentificador(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function documentoFechaToIso(value: unknown): string {
+  if (value == null || String(value).trim() === '') return '';
+  const d = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toISOString();
+}
+
+function resolveVigenciaFromExpiry(isoDate: string, referenceMs: number): 'Vigente' | 'Vencido' | 'No aplica' {
+  if (!isoDate) return 'No aplica';
+  const expiry = new Date(isoDate);
+  if (Number.isNaN(expiry.getTime())) return 'No aplica';
+  const ref = new Date(referenceMs);
+  ref.setHours(23, 59, 59, 999);
+  return expiry.getTime() < ref.getTime() ? 'Vencido' : 'Vigente';
+}
+
+function resolveEmpleadoDocumentosFromTree(tree: StructureNode[], empleadoId: number): EmpleadoDocumento[] {
+  const eid = Number(empleadoId);
+  if (!Array.isArray(tree) || !Number.isFinite(eid) || eid <= 0) return [];
+  for (const empresa of tree) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            for (const puesto of sucursal?.puestos || []) {
+              for (const plaza of (puesto as any)?.plazas || []) {
+                const empleados = Array.isArray((plaza as any)?.empleados) ? (plaza as any).empleados : [];
+                const emp = empleados.find((e: any) => Number(e?.id) === eid);
+                if (emp && Array.isArray(emp.documentos)) {
+                  return emp.documentos as EmpleadoDocumento[];
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return [];
+}
+
+function applyEmpleadoDocumentosToEvaluation(
+  sections: EvaluationSection[],
+  documentos: EmpleadoDocumento[],
+  referenceMs: number,
+): EvaluationSection[] {
+  if (!Array.isArray(documentos) || documentos.length === 0) return sections;
+
+  const carnDocs = documentos.filter((d) => d.tipo === 'carn');
+  const licDocs = documentos.filter((d) => d.tipo === 'lic');
+
+  return sections.map((section) => {
+    if (isCarnesEvaluationSection(section)) {
+      return {
+        ...section,
+        subsections: section.subsections.map((subsection) => {
+          if (isEmpresaCarneSubsection(subsection)) return subsection;
+          const carnId = resolveCarneDocumentoIdentificador(subsection);
+          if (carnId == null) return subsection;
+          const doc = carnDocs.find((d) => Number(d.identificador) === carnId);
+          if (!doc?.fecha_vencimiento) return subsection;
+          const isoDate = documentoFechaToIso(doc.fecha_vencimiento);
+          if (!isoDate) return subsection;
+          const vigencia = resolveVigenciaFromExpiry(isoDate, referenceMs);
+          const dateId = resolveCarneFechaVencimientoId(subsection);
+          return {
+            ...subsection,
+            inputs: subsection.inputs.map((inp) => {
+              if (inp.type === 'select') return { ...inp, value: vigencia };
+              if (dateId && inp.id === dateId) return { ...inp, value: isoDate };
+              if (inp.type === 'date' || String(inp.id).includes('fecha-vencimiento')) {
+                return { ...inp, value: isoDate };
+              }
+              return inp;
+            }),
+          };
+        }),
+      };
+    }
+
+    if (isLicenciasEvaluationSection(section)) {
+      return {
+        ...section,
+        subsections: section.subsections.map((subsection) => {
+          const licCode = resolveLicenciaCodeFromSubsection(subsection);
+          if (!licCode) return subsection;
+          const doc = licDocs.find(
+            (d) => normalizeLicenciaIdentificador(d.identificador) === licCode,
+          );
+          if (!doc?.fecha_vencimiento) return subsection;
+          const isoDate = documentoFechaToIso(doc.fecha_vencimiento);
+          if (!isoDate) return subsection;
+          const vigencia = resolveVigenciaFromExpiry(isoDate, referenceMs);
+          const dateId = resolveLicenciaFechaVencimientoId(subsection);
+          return {
+            ...subsection,
+            inputs: subsection.inputs.map((inp) => {
+              if (inp.type === 'select') return { ...inp, value: vigencia };
+              if (dateId && inp.id === dateId) return { ...inp, value: isoDate };
+              if (inp.type === 'date' || String(inp.id).includes('fecha-vencimiento')) {
+                return { ...inp, value: isoDate };
+              }
+              return inp;
+            }),
+          };
+        }),
+      };
+    }
+
+    return section;
+  });
+}
+
+function ensureLicenciaFechaVencimientoInputs(section: EvaluationSection): EvaluationSection {
+  if (!isLicenciasEvaluationSection(section)) return section;
+  return {
+    ...section,
+    subsections: section.subsections.map((subsection) => {
+      const dateId = resolveLicenciaFechaVencimientoId(subsection);
+      if (!dateId) return subsection;
+      const hasDate = subsection.inputs.some(
+        (inp) =>
+          inp.type === 'date' ||
+          inp.id === dateId ||
+          String(inp.id).includes('fecha-vencimiento'),
+      );
+      if (hasDate) return subsection;
+      const dateInput: EvaluationInput = {
+        id: dateId,
+        type: 'date',
+        title: 'Fecha de vencimiento',
+        value: '',
+      };
+      const inputs = [...subsection.inputs];
+      const selectIdx = inputs.findIndex((inp) => inp.type === 'select');
+      inputs.splice(selectIdx >= 0 ? selectIdx + 1 : 0, 0, dateInput);
+      return { ...subsection, inputs };
+    }),
+  };
+}
+
+function ensureLicenciasSection(sections: EvaluationSection[]): EvaluationSection[] {
+  const licIdx = sections.findIndex((s) => isLicenciasEvaluationSection(s));
+  const predefined = JSON.parse(JSON.stringify(LICENCIAS_SECTION)) as EvaluationSection;
+  if (licIdx === -1) {
+    const carnIdx = sections.findIndex((s) => isCarnesEvaluationSection(s));
+    const next = [...sections];
+    if (carnIdx >= 0) next.splice(carnIdx + 1, 0, predefined);
+    else next.push(predefined);
+    return next;
+  }
+  const existing = sections[licIdx];
+  const mergedSubs = predefined.subsections.map((preSub) => {
+    const found =
+      existing.subsections.find((s) => s.id === preSub.id) ??
+      existing.subsections.find(
+        (s) => resolveLicenciaCodeFromSubsection(s) === resolveLicenciaCodeFromSubsection(preSub),
+      );
+    return found ? { ...preSub, ...found, isPredefined: true } : preSub;
+  });
+  const next = [...sections];
+  next[licIdx] = { ...predefined, ...existing, subsections: mergedSubs, isPredefined: true };
+  return next;
+}
+
+function migrateLegacyLicenciaConduccionFromCarnes(sections: EvaluationSection[]): EvaluationSection[] {
+  return sections.map((section) => {
+    if (!isCarnesEvaluationSection(section)) return section;
+    return {
+      ...section,
+      subsections: section.subsections.filter((sub) => {
+        const id = String(sub.id ?? '').trim().toLowerCase();
+        const title = String(sub.title ?? '').trim().toLowerCase();
+        if (id === 'car-sub-3') return false;
+        return !/licencia\s+de\s+conducci[oó]n/.test(title);
+      }),
+    };
+  });
+}
+
+function ensureCarnetNoAplicaDefaults(section: EvaluationSection): EvaluationSection {
+  if (!isCarnesEvaluationSection(section)) return section;
+  return {
+    ...section,
+    subsections: section.subsections.map((subsection) => {
+      if (isEmpresaCarneSubsection(subsection)) return subsection;
+      return {
+        ...subsection,
+        inputs: subsection.inputs.map((inp) => {
+          if (inp.type !== 'select') return inp;
+          const options = inp.options ?? ['Vigente', 'Vencido', 'No aplica'];
+          const hasNoAplica = options.some((o) => String(o).toLowerCase() === 'no aplica');
+          const normalizedOptions = hasNoAplica
+            ? options
+            : [...options, 'No aplica'];
+          return {
+            ...inp,
+            options: normalizedOptions,
+            value:
+              inp.value == null || String(inp.value).trim() === ''
+                ? 'No aplica'
+                : inp.value,
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function ensureCarneFechaVencimientoInputs(section: EvaluationSection): EvaluationSection {
+  if (!isCarnesEvaluationSection(section)) return section;
+  return {
+    ...section,
+    subsections: section.subsections.map((subsection) => {
+      if (isEmpresaCarneSubsection(subsection)) return subsection;
+      const dateId = resolveCarneFechaVencimientoId(subsection);
+      if (!dateId) return subsection;
+      const hasDate = subsection.inputs.some(
+        (inp) =>
+          inp.type === 'date' ||
+          inp.id === dateId ||
+          String(inp.id).includes('fecha-vencimiento'),
+      );
+      if (hasDate) return subsection;
+      const dateInput: EvaluationInput = {
+        id: dateId,
+        type: 'date',
+        title: 'Fecha de vencimiento',
+        value: '',
+      };
+      const inputs = [...subsection.inputs];
+      const selectIdx = inputs.findIndex((inp) => inp.type === 'select');
+      inputs.splice(selectIdx >= 0 ? selectIdx + 1 : 0, 0, dateInput);
+      return { ...subsection, inputs };
+    }),
+  };
+}
+
+function migrateEmpresaCarneSubsection(subsection: EvaluationSubsection): EvaluationSubsection {
+  if (!isEmpresaCarneSubsection(subsection)) return subsection;
+  return {
+    ...subsection,
+    inputs: subsection.inputs
+      .filter((inp) => {
+        if (inp.type === 'date') return false;
+        return !String(inp.id ?? '').includes('fecha-vencimiento');
+      })
+      .map((inp) => {
+        if (inp.type !== 'select') return inp;
+        const raw = String(inp.value ?? '').trim().toLowerCase();
+        const value = raw === 'malo' || raw === 'vencido' ? 'Malo' : 'Bueno';
+        return {
+          ...inp,
+          value,
+          options: ['Bueno', 'Malo'],
+        };
+      }),
+  };
+}
+
+function normalizeEvaluationSections(sections: EvaluationSection[]): EvaluationSection[] {
+  const migrated = migrateLegacyLicenciaConduccionFromCarnes(sections);
+  const withLicencias = ensureLicenciasSection(migrated);
+  return withLicencias.map((section) => {
+    const withDates = ensureCarneFechaVencimientoInputs(ensureLicenciaFechaVencimientoInputs(section));
+    const withCarnetDefaults = ensureCarnetNoAplicaDefaults(withDates);
+    return {
+      ...withCarnetDefaults,
+      subsections: withCarnetDefaults.subsections.map((subsection) => {
+        const migrated = migrateEmpresaCarneSubsection(subsection);
+        return {
+          ...migrated,
+          isPredefined: isUserAddedSubsection(withCarnetDefaults, migrated) ? false : (migrated.isPredefined ?? true),
+          detalle: migrated.detalle ?? '',
+          inputs: migrated.inputs.map((input) => {
+            if (input.type !== 'photo') return input;
+            const photos = normalizePhotoInput(input);
+            return {
+              ...input,
+              photos,
+              value: '',
+              localFileName: undefined,
+              file_name: undefined,
+              imageOrientation: undefined,
+            };
+          }),
+        };
+      }),
+    };
+  });
+}
+
+function resolveEmpleadoCodigoFromTree(tree: StructureNode[], empleadoId: number): string {
+  const eid = Number(empleadoId);
+  if (!Array.isArray(tree) || !Number.isFinite(eid) || eid <= 0) return '';
+  for (const empresa of tree) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            for (const puesto of sucursal?.puestos || []) {
+              for (const plaza of (puesto as any)?.plazas || []) {
+                const empleados = Array.isArray((plaza as any)?.empleados) ? (plaza as any).empleados : [];
+                const emp = empleados.find((e: any) => Number(e?.id) === eid);
+                if (emp) {
+                  return String(emp?.codigo ?? emp?.codigo_empleado ?? '').trim();
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return '';
+}
+
+function empleadoFromSearchHit(hit: EmployeeSearchHit, tree: StructureNode[]): {
+  id: number;
+  nombre: string;
+  codigo: string;
+} {
+  const codigoFromTree = resolveEmpleadoCodigoFromTree(tree, hit.empleadoId);
+  const codigoFromTitle = hit.title.match(/\(([^)]+)\)\s*$/)?.[1]?.trim() ?? '';
+  const nombre = hit.title.replace(/\s*\([^)]+\)\s*$/, '').trim() || hit.title;
+  return {
+    id: hit.empleadoId,
+    nombre,
+    codigo: codigoFromTree || codigoFromTitle,
+  };
 }
 
 // Constantes predefinidas para Aseo y limpieza
@@ -377,24 +989,20 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
       {
         id: 'car-sub-0',
         title: 'Carne de la empresa',
+        isPredefined: true,
         inputs: [
           {
             id: 'car-0-cal',
             type: 'select' as const,
-            value: 'Vigente',
-            options: ['Vencido', 'Vigente'],
-          },
-          {
-            id: 'car-0-fecha-vencimiento',
-            type: 'date' as const,
-            title: 'Fecha de vencimiento',
-            value: '',
+            value: 'Bueno',
+            options: ['Bueno', 'Malo', 'No aplica'],
           },
           {
             id: 'car-0-photo',
             type: 'photo' as const,
             title: 'Foto',
             value: '',
+            photos: [],
           }
         ]
       },
@@ -405,8 +1013,8 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'car-1-cal',
             type: 'select' as const,
-            value: 'Vigente',
-            options: ['Vencido', 'Vigente'],
+            value: 'No aplica',
+            options: ['Vigente', 'Vencido', 'No aplica'],
           },
           {
             id: 'car-1-fecha-vencimiento',
@@ -419,53 +1027,38 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
             type: 'photo' as const,
             title: 'Foto',
             value: '',
+            photos: [],
           }
         ]
       },
       {
         id: 'car-sub-2',
-        title: 'Carne de Agente de Seguridad',
+        title: 'Carne de Agente de Seguridad Privada',
         inputs: [
           {
             id: 'car-2-cal',
             type: 'select' as const,
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'No existe'],
+            value: 'No aplica',
+            options: ['Vigente', 'Vencido', 'No aplica'],
           },
           {
-            id: 'car-2-photo',
-            type: 'text' as const,
-            title: 'Foto',
-            value: '',
-          }
-        ]
-      },
-      {
-        id: 'car-sub-3',
-        title: 'Licencia de conducción',
-        inputs: [
-          {
-            id: 'car-3-cal',
-            type: 'select' as const,
-            value: 'Vigente',
-            options: ['Vencido', 'Vigente'],
-          },
-          {
-            id: 'car-3-fecha-vencimiento',
+            id: 'car-2-fecha-vencimiento',
             type: 'date' as const,
             title: 'Fecha de vencimiento',
             value: '',
           },
           {
-            id: 'car-3-photo',
+            id: 'car-2-photo',
             type: 'photo' as const,
             title: 'Foto',
             value: '',
+            photos: [],
           }
         ]
-      }
+      },
     ]
   },
+  JSON.parse(JSON.stringify(LICENCIAS_SECTION)) as EvaluationSection,
   {
     id: 'uniforme-seguridad',
     title: 'Uniforme',
@@ -478,8 +1071,8 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
           {
             id: 'us-0-cal',
             type: 'select' as const,
-            value: 'Bueno',
-            options: ['Bueno', 'Malo', 'No existe'],
+            value: 'Cumple',
+            options: ['Cumple', 'No cumple'],
           },
           {
             id: 'us-0-photo',
@@ -542,7 +1135,7 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
     title: 'Marcas',
     isPredefined: true,
     subsections: [
-      'Dispositivos (marcas y bastón) en buen estado',
+      'Dispositivos de marcas en buen estado',
       'SEG-F-038-Control de recorrido y marcas Electronicas (Completo, sin manchones ni tachaduras, y no debe estar completo antes de tiempo)',
       'Verificación del estado de las pastillas',
     ].map((item, idx) => ({
@@ -614,46 +1207,86 @@ const SEGURIDAD_SECTIONS: EvaluationSection[] = [
   },
   {
     id: 'capacitacion-iso',
-    title: 'Capacitación ISO',
+    title: 'Política integrada',
     isPredefined: true,
     subsections: [
       {
-        id: 'cap-sub-0',
-        title: 'Política de Calidad',
+        id: 'pol-sub-0',
+        title: 'ISO de calidad',
+        isPredefined: true,
         inputs: [
           {
-            id: 'cap-0-1',
+            id: 'pol-0-cual',
             type: 'text' as const,
             title: '¿Cual es?',
             value: '',
           },
           {
-            id: 'cap-0-2',
-            type: 'text' as const,
-            title: '¿Como aporta?',
+            id: 'pol-0-aporta',
+            type: 'textarea' as const,
+            title: '¿Cómo aporta?',
             value: '',
-          }
-        ]
+          },
+        ],
       },
       {
-        id: 'cap-sub-1',
-        title: 'Objetivos de Calidad',
+        id: 'pol-sub-1',
+        title: 'ISO de ambiente',
+        isPredefined: true,
         inputs: [
           {
-            id: 'cap-1-1',
+            id: 'pol-1-cual',
             type: 'text' as const,
             title: '¿Cual es?',
             value: '',
           },
           {
-            id: 'cap-1-2',
-            type: 'text' as const,
-            title: '¿Como aporta?',
+            id: 'pol-1-aporta',
+            type: 'textarea' as const,
+            title: '¿Cómo aporta?',
             value: '',
-          }
-        ]
-      }
-    ]
+          },
+        ],
+      },
+      {
+        id: 'pol-sub-2',
+        title: 'ISO de antisoborno',
+        isPredefined: true,
+        inputs: [
+          {
+            id: 'pol-2-cual',
+            type: 'text' as const,
+            title: '¿Cual es?',
+            value: '',
+          },
+          {
+            id: 'pol-2-aporta',
+            type: 'textarea' as const,
+            title: '¿Cómo aporta?',
+            value: '',
+          },
+        ],
+      },
+      {
+        id: 'pol-sub-3',
+        title: 'ISO de seguridad',
+        isPredefined: true,
+        inputs: [
+          {
+            id: 'pol-3-cual',
+            type: 'text' as const,
+            title: '¿Cual es?',
+            value: '',
+          },
+          {
+            id: 'pol-3-aporta',
+            type: 'textarea' as const,
+            title: '¿Cómo aporta?',
+            value: '',
+          },
+        ],
+      },
+    ],
   },
   {
     id: 'papeleria',
@@ -899,7 +1532,7 @@ function formatSignatureForDisplay(value?: string | null): string {
 }
 
 export default function ChecklistSupervisionScreen() {
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
   const { scanQR, QRScannerComponent } = useQRScanner();
 
@@ -956,6 +1589,7 @@ export default function ChecklistSupervisionScreen() {
   const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
 
   // Mensaje informativo jerarquía (cerrable)
   const [isHierarchyHintVisible, setIsHierarchyHintVisible] = useState(true);
@@ -968,6 +1602,12 @@ export default function ChecklistSupervisionScreen() {
   const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [fecha, setFecha] = useState<Date>(new Date());
   const [showFechaPicker, setShowFechaPicker] = useState(false);
+  const [horaInicio, setHoraInicio] = useState<Date>(new Date());
+  const [horaFin, setHoraFin] = useState<Date>(new Date());
+  const [showTimePickerInicio, setShowTimePickerInicio] = useState(false);
+  const [showTimePickerFin, setShowTimePickerFin] = useState(false);
+  const [selectedEmpleado, setSelectedEmpleado] = useState<{ id: number; nombre: string; codigo: string } | null>(null);
+  const [isEmployeeSearchVisible, setIsEmployeeSearchVisible] = useState(false);
   const [ejecutivoCuenta, setEjecutivoCuenta] = useState('-');
   const [evaluation, setEvaluation] = useState<EvaluationSection[]>([]);
   const [firmaSupervisor, setFirmaSupervisor] = useState('');
@@ -1004,6 +1644,14 @@ export default function ChecklistSupervisionScreen() {
   const [newSubsectionTitle, setNewSubsectionTitle] = useState('');
   const [newSubsectionInputs, setNewSubsectionInputs] = useState<Omit<EvaluationInput, 'id' | 'value'>[]>([]);
 
+  /** Modal flotante para elegir tipo de input (Alert de Android solo muestra ~3 botones). */
+  const [isInputTypeModalVisible, setIsInputTypeModalVisible] = useState(false);
+  const [inputTypeModalTarget, setInputTypeModalTarget] = useState<
+    | { mode: 'existing'; sectionId: string; subsectionId: string }
+    | { mode: 'new-subsection' }
+    | null
+  >(null);
+
   // Estado para items expandidos (como StaffEvaluationsScreen)
   const [expandedChecklists, setExpandedChecklists] = useState<Set<string>>(new Set());
   const [expandedChecklistFirmas, setExpandedChecklistFirmas] = useState<Set<string>>(new Set());
@@ -1011,6 +1659,178 @@ export default function ChecklistSupervisionScreen() {
   // Estados para artículos del puesto
   const [articulos, setArticulos] = useState<ArticuloForm[]>([]);
   const [archivosModalIndex, setArchivosModalIndex] = useState<number | null>(null);
+
+  // Borrador local del formulario (continuar más tarde)
+  const skipHierarchySideEffectsRef = useRef(false);
+  /** Tras restaurar borrador: evita que división/puesto pisen evaluación, fotos y artículos. */
+  const draftFormContentLockRef = useRef(false);
+  const [hasFormDraft, setHasFormDraft] = useState(false);
+  const [formDraftSavedAt, setFormDraftSavedAt] = useState<string | null>(null);
+  const [draftStatusMessage, setDraftStatusMessage] = useState<{ type: 'info' | 'success' | 'error'; text: string } | null>(null);
+  const [isSavingFormDraft, setIsSavingFormDraft] = useState(false);
+  const [isRestoringFormDraft, setIsRestoringFormDraft] = useState(false);
+  const [isResettingFormDraft, setIsResettingFormDraft] = useState(false);
+  const [isIncidentsModuleVisible, setIsIncidentsModuleVisible] = useState(false);
+  const planillasRevalidationModalShownRef = useRef(false);
+  const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
+  const pendingPlanillasSubmitRef = useRef(false);
+
+  const requestPlanillasRevalidationIfNeeded = useCallback(async (horaAccionMs: number): Promise<boolean> => {
+    const tokenCheck = await isStoredPlanillasTokenValid(horaAccionMs);
+    if (tokenCheck.valid) {
+      planillasRevalidationModalShownRef.current = false;
+      return true;
+    }
+    if (!planillasRevalidationModalShownRef.current) {
+      planillasRevalidationModalShownRef.current = true;
+      setShowPlanillasRevalidationModal(true);
+    }
+    return false;
+  }, []);
+
+  const handlePlanillasRevalidationSuccess = useCallback(() => {
+    setShowPlanillasRevalidationModal(false);
+    planillasRevalidationModalShownRef.current = false;
+    if (pendingPlanillasSubmitRef.current) {
+      pendingPlanillasSubmitRef.current = false;
+      void submitSaveRef.current();
+    }
+  }, []);
+
+  const handlePlanillasRevalidationDismiss = useCallback(() => {
+    planillasRevalidationModalShownRef.current = false;
+    pendingPlanillasSubmitRef.current = false;
+    setShowPlanillasRevalidationModal(false);
+    setIsSubmitting(false);
+  }, []);
+
+  const applyEmpleadoDocumentosToForm = useCallback(
+    async (empleadoId: number) => {
+      if (!(Number(empleadoId) > 0)) return;
+      const documentos = resolveEmpleadoDocumentosFromTree(structureRef.current, empleadoId);
+      if (documentos.length === 0) return;
+      let referenceMs = Date.now();
+      try {
+        const hora = await getHoraAccion();
+        if (hora && Number.isFinite(Number(hora))) referenceMs = Number(hora);
+      } catch {
+        /* ignore */
+      }
+      setEvaluation((prev) =>
+        normalizeEvaluationSections(applyEmpleadoDocumentosToEvaluation(prev, documentos, referenceMs)),
+      );
+    },
+    [],
+  );
+
+  const submitSaveRef = useRef<() => Promise<void>>(async () => {});
+
+  const isCurrentUserSuperAdmin = useCallback(async (): Promise<boolean> => {
+    if (Boolean(employee?.isSuperAdmin)) return true;
+    // Fallback: sesión persistida (por si AuthContext aún no hidrató isSuperAdmin).
+    try {
+      const raw = await AsyncStorage.getItem('employee_data');
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      return Boolean(parsed?.isSuperAdmin);
+    } catch {
+      return false;
+    }
+  }, [employee?.isSuperAdmin]);
+
+  const refreshIncidentsModuleVisibility = useCallback(async () => {
+    // Superadmin = usuario autenticado actual, no el empleado seleccionado en el formulario.
+    if (await isCurrentUserSuperAdmin()) {
+      setIsIncidentsModuleVisible(true);
+      return;
+    }
+    const modules = await readModulesReleaseFromStorage();
+    const mod = modules.find((m: any) => String(m?.module_name ?? '').trim() === 'incidents');
+    setIsIncidentsModuleVisible(Boolean(mod?.is_visible));
+  }, [isCurrentUserSuperAdmin]);
+
+  useEffect(() => {
+    void refreshIncidentsModuleVisibility();
+  }, [refreshIncidentsModuleVisibility]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshIncidentsModuleVisibility();
+    }, [refreshIncidentsModuleVisibility]),
+  );
+
+  useEffect(() => {
+    const handler = () => {
+      void refreshIncidentsModuleVisibility();
+    };
+    eventBus.on(MODULES_RELEASE_UPDATED_EVENT, handler);
+    return () => {
+      eventBus.off(MODULES_RELEASE_UPDATED_EVENT, handler);
+    };
+  }, [refreshIncidentsModuleVisibility]);
+
+  const isFormHierarchyComplete = useMemo(
+    () =>
+      Boolean(
+        selectedEmpresaId &&
+          selectedClienteId &&
+          selectedDivisionId &&
+          selectedContratoId &&
+          selectedCorpoId &&
+          selectedPuestoId,
+      ),
+    [
+      selectedEmpresaId,
+      selectedClienteId,
+      selectedDivisionId,
+      selectedContratoId,
+      selectedCorpoId,
+      selectedPuestoId,
+    ],
+  );
+
+  /** Código/nombre del empleado seleccionado en el checklist (involucrado del incidente). */
+  const selectedInvolucrado = useMemo(() => {
+    const codigo = String(selectedEmpleado?.codigo ?? '').trim();
+    const nombre = String(selectedEmpleado?.nombre ?? '').trim();
+    if (!selectedEmpleado || !codigo || !nombre) return null;
+    return { codigo, nombre };
+  }, [selectedEmpleado]);
+
+  /** Mostrar enlace si incidents está liberado o el usuario actual es superadmin. */
+  const showReportIncidentOption = isIncidentsModuleVisible;
+
+  const canReportIncidentFromChecklist = useMemo(() => {
+    if (!showReportIncidentOption || !isFormHierarchyComplete) return false;
+    return selectedInvolucrado != null;
+  }, [showReportIncidentOption, isFormHierarchyComplete, selectedInvolucrado]);
+
+  const resolveOwnerEmpleadoId = useCallback((): number => {
+    const id = Number(employee?.id ?? 0);
+    return Number.isFinite(id) && id > 0 ? id : 0;
+  }, [employee?.id]);
+
+  const refreshFormDraftPresence = useCallback(async () => {
+    const ownerId = resolveOwnerEmpleadoId();
+    if (ownerId <= 0) {
+      setHasFormDraft(false);
+      setFormDraftSavedAt(null);
+      return;
+    }
+    const draft = await loadChecklistSupervisionFormDraft(ownerId);
+    setHasFormDraft(Boolean(draft));
+    setFormDraftSavedAt(draft?.savedAt ?? null);
+  }, [resolveOwnerEmpleadoId]);
+
+  useEffect(() => {
+    void refreshFormDraftPresence();
+  }, [refreshFormDraftPresence]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshFormDraftPresence();
+    }, [refreshFormDraftPresence]),
+  );
 
   const getMarcaRoleDivisionId = useCallback((currentMarca: any): number | null => {
     const id = Number(currentMarca?.roleDivision?.division?.id);
@@ -1082,6 +1902,7 @@ export default function ChecklistSupervisionScreen() {
     setFilterDivisionId(path.divisionId);
     setFilterContratoId(path.contratoId);
     setFilterCorpoId(path.sucursalId);
+    setFilterPuestoId(path.puestoId);
   }, []);
 
   const applyFormHierarchyPath = useCallback((path: HierarchyPath | null) => {
@@ -1199,41 +2020,41 @@ export default function ChecklistSupervisionScreen() {
     logoutRef.current = logout;
   }, [refreshAccessToken, logout]);
 
-  const filterCorpoIdRef = useRef(filterCorpoId);
-  const listCorpoScopeRef = useRef<number | null>(null);
-  filterCorpoIdRef.current = filterCorpoId;
-  if (filterCorpoId != null) listCorpoScopeRef.current = filterCorpoId;
+  const filterPuestoIdRef = useRef(filterPuestoId);
+  const listPuestoScopeRef = useRef<number | null>(null);
+  filterPuestoIdRef.current = filterPuestoId;
+  if (filterPuestoId != null) listPuestoScopeRef.current = filterPuestoId;
 
-  const normalizeApiChecklistRows = useCallback((rows: any[], corpoScope: number) => {
+  const normalizeApiChecklistRows = useCallback((rows: any[], puestoScope: number) => {
     return (Array.isArray(rows) ? rows : []).map(
-      (it: any) => normalizeChecklistRowForCache(it, corpoScope) as ChecklistSupervisionUI,
+      (it: any) => normalizeChecklistRowForCache(it, puestoScope) as ChecklistSupervisionUI,
     );
   }, []);
 
-  // Cargar checklists: caché por sucursal (offline) + API (online). `checklists` queda acotado a la sucursal activa.
-  const fetchChecklists = useCallback(async (scopeOverride?: ChecklistListCorpoScope | null) => {
+  // Cargar checklists: caché por puesto (offline) + API (online). `checklists` queda acotado al puesto activo.
+  const fetchChecklists = useCallback(async (scopeOverride?: ChecklistListPuestoScope | null) => {
     
     setIsLoading(true);
     setError(null);
     try {
-      const scope: ChecklistListCorpoScope =
+      const scope: ChecklistListPuestoScope =
         scopeOverride != null
           ? scopeOverride
-          : { filterCorpoId: filterCorpoIdRef.current ?? listCorpoScopeRef.current };
+          : { filterPuestoId: filterPuestoIdRef.current ?? listPuestoScopeRef.current };
 
-      const corpoScope = Number(scope.filterCorpoId ?? listCorpoScopeRef.current);
-      if (!Number.isFinite(corpoScope) || corpoScope <= 0) {
+      const puestoScope = Number(scope.filterPuestoId ?? listPuestoScopeRef.current);
+      if (!Number.isFinite(puestoScope) || puestoScope <= 0) {
         setChecklists([]);
         setIsLoading(false);
         return;
       }
 
-      listCorpoScopeRef.current = corpoScope;
-      filterCorpoIdRef.current = corpoScope;
-      setFilterCorpoId(corpoScope);
+      listPuestoScopeRef.current = puestoScope;
+      filterPuestoIdRef.current = puestoScope;
+      setFilterPuestoId(puestoScope);
 
       try {
-        const cached = await loadChecklistSupervisionCacheForCorpo(corpoScope);
+        const cached = await loadChecklistSupervisionCacheForPuesto(puestoScope);
         setChecklists(dedupeChecklistRows(cached) as ChecklistSupervisionUI[]);
       } catch {
         /* conservar lista previa si falla la caché */
@@ -1246,7 +2067,7 @@ export default function ChecklistSupervisionScreen() {
       }
 
       const result = await listChecklistSupervision({
-        corpoId: corpoScope,
+        puestoId: puestoScope,
         refreshAccessToken: () => refreshAccessTokenRef.current(),
         logout: () => logoutRef.current(),
       });
@@ -1254,10 +2075,10 @@ export default function ChecklistSupervisionScreen() {
       const rawRows = Array.isArray(result?.data) ? result.data : null;
       if (result.status && rawRows != null) {
         const list = dedupeChecklistRows(
-          normalizeApiChecklistRows(rawRows, corpoScope) as ChecklistSupervisionItem[],
+          normalizeApiChecklistRows(rawRows, puestoScope) as ChecklistSupervisionItem[],
         );
         setChecklists(list as ChecklistSupervisionUI[]);
-        await mergeChecklistSupervisionServerIntoCacheForCorpo(corpoScope, list);
+        await mergeChecklistSupervisionServerIntoCacheForPuesto(puestoScope, list);
       } else if (!result.status) {
         setError(result.message || 'Error al cargar checklists');
       }
@@ -1271,11 +2092,11 @@ export default function ChecklistSupervisionScreen() {
   const fetchChecklistsRef = useRef(fetchChecklists);
   fetchChecklistsRef.current = fetchChecklists;
 
-  /** Lee el bucket de la sucursal activa en AsyncStorage y actualiza la lista UI. */
-  const syncChecklistsFromCache = useCallback(async (corpoId?: number | null) => {
-    const cid = Number(corpoId ?? listCorpoScopeRef.current ?? filterCorpoIdRef.current);
-    if (!Number.isFinite(cid) || cid <= 0) return;
-    const rows = await loadChecklistSupervisionCacheForCorpo(cid);
+  /** Lee el bucket del puesto activo en AsyncStorage y actualiza la lista UI. */
+  const syncChecklistsFromCache = useCallback(async (puestoId?: number | null) => {
+    const pid = Number(puestoId ?? listPuestoScopeRef.current ?? filterPuestoIdRef.current);
+    if (!Number.isFinite(pid) || pid <= 0) return;
+    const rows = await loadChecklistSupervisionCacheForPuesto(pid);
     setChecklists(dedupeChecklistRows(rows) as ChecklistSupervisionUI[]);
   }, []);
 
@@ -1285,12 +2106,18 @@ export default function ChecklistSupervisionScreen() {
     setFilterDivisionId(v.divisionId);
     setFilterContratoId(v.contratoId);
     setFilterCorpoId(v.sucursalId);
-    if (v.sucursalId != null) {
-      fetchChecklistsRef.current({ filterCorpoId: v.sucursalId });
+    setFilterPuestoId(v.puestoId ?? null);
+    if (v.puestoId != null) {
+      fetchChecklistsRef.current({ filterPuestoId: v.puestoId });
+    } else {
+      setChecklists([]);
     }
   }, []);
 
   const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    // Cambio manual de jerarquía: permitir recarga de evaluación/artículos.
+    draftFormContentLockRef.current = false;
+    skipHierarchySideEffectsRef.current = false;
     setSelectedEmpresaId(v.empresaId);
     setSelectedClienteId(v.clienteId);
     setSelectedDivisionId(v.divisionId);
@@ -1304,14 +2131,14 @@ export default function ChecklistSupervisionScreen() {
       let cancelled = false;
       (async () => {
         const loadedStructure = await fetchMainStructure();
-        let marcaScope: ChecklistListCorpoScope | null = null;
+        let marcaScope: ChecklistListPuestoScope | null = null;
         try {
           const currentMarcaStr = await AsyncStorage.getItem('current_marca');
           const currentMarca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
           const hierarchy = buildHierarchyFromCurrentMarca(currentMarca, loadedStructure);
           applyFilterHierarchyPath(hierarchy);
-          if (hierarchy?.sucursalId != null) {
-            marcaScope = { filterCorpoId: hierarchy.sucursalId };
+          if (hierarchy?.puestoId != null) {
+            marcaScope = { filterPuestoId: hierarchy.puestoId };
           }
         } catch {
           /* ignore */
@@ -1327,9 +2154,9 @@ export default function ChecklistSupervisionScreen() {
 
   useEffect(() => {
     const handler = () => {
-      const corpo = listCorpoScopeRef.current ?? filterCorpoIdRef.current;
-      if (corpo != null) {
-        fetchChecklistsRef.current({ filterCorpoId: corpo });
+      const puesto = listPuestoScopeRef.current ?? filterPuestoIdRef.current;
+      if (puesto != null) {
+        fetchChecklistsRef.current({ filterPuestoId: puesto });
       }
     };
     eventBus.on('connectionRestored', handler);
@@ -1340,6 +2167,7 @@ export default function ChecklistSupervisionScreen() {
 
   // Cuando cambia la división seleccionada, cargar evaluación (solo si no estamos editando)
   useEffect(() => {
+    if (skipHierarchySideEffectsRef.current || draftFormContentLockRef.current) return;
     // No cargar secciones predefinidas si estamos editando un registro existente
     if (editing) return;
 
@@ -1349,9 +2177,9 @@ export default function ChecklistSupervisionScreen() {
       if (selectedDivision) {
         const divisionName = (selectedDivision.nombre || '').toLowerCase();
         if (divisionName.includes('aseo') || divisionName.includes('limpieza')) {
-          setEvaluation(JSON.parse(JSON.stringify(ASEO_LIMPIEZA_SECTIONS)));
+          setEvaluation(normalizeEvaluationSections(JSON.parse(JSON.stringify(ASEO_LIMPIEZA_SECTIONS))));
         } else if (divisionName.includes('seguridad')) {
-          setEvaluation(JSON.parse(JSON.stringify(SEGURIDAD_SECTIONS)));
+          setEvaluation(normalizeEvaluationSections(JSON.parse(JSON.stringify(SEGURIDAD_SECTIONS))));
         } else {
           setEvaluation([]);
         }
@@ -1366,6 +2194,7 @@ export default function ChecklistSupervisionScreen() {
 
   // Cargar artículos del puesto cuando se selecciona un puesto (solo si no estamos editando)
   useEffect(() => {
+    if (skipHierarchySideEffectsRef.current || draftFormContentLockRef.current) return;
     // No cargar artículos si estamos editando un registro existente
     if (editing) return;
 
@@ -1461,8 +2290,9 @@ export default function ChecklistSupervisionScreen() {
   const addInputToNewSubsection = (type: 'text' | 'textarea' | 'select' | 'date' | 'photo' | 'checkbox') => {
     const newInput: Omit<EvaluationInput, 'id' | 'value'> = {
       type,
-      title: '',
+      title: type === 'photo' ? 'Fotos' : '',
       options: type === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
+      photos: type === 'photo' ? [] : undefined,
     };
     setNewSubsectionInputs([...newSubsectionInputs, newInput]);
   };
@@ -1483,10 +2313,13 @@ export default function ChecklistSupervisionScreen() {
     const newSubsection: EvaluationSubsection = {
       id: `subsection-${Date.now()}`,
       title: newSubsectionTitle.trim() || 'Nueva Subsección',
+      detalle: '',
+      isPredefined: false,
       inputs: newSubsectionInputs.map((input, idx) => ({
         id: `input-${Date.now()}-${idx}`,
         ...input,
         value: input.type === 'checkbox' ? 'true' : '',
+        photos: input.type === 'photo' ? (Array.isArray(input.photos) ? input.photos : []) : undefined,
       })),
     };
 
@@ -1503,18 +2336,100 @@ export default function ChecklistSupervisionScreen() {
     openAddSubsectionModal(sectionId);
   };
 
+  const openInputTypeModal = (
+    target:
+      | { mode: 'existing'; sectionId: string; subsectionId: string }
+      | { mode: 'new-subsection' },
+  ) => {
+    setInputTypeModalTarget(target);
+    setIsInputTypeModalVisible(true);
+  };
+
+  const closeInputTypeModal = () => {
+    setIsInputTypeModalVisible(false);
+    setInputTypeModalTarget(null);
+  };
+
+  const handleSelectInputType = (type: EvaluationInputType) => {
+    const target = inputTypeModalTarget;
+    closeInputTypeModal();
+    if (!target) return;
+    if (target.mode === 'new-subsection') {
+      addInputToNewSubsection(type);
+      return;
+    }
+    addInput(target.sectionId, target.subsectionId, type);
+  };
+
   const deleteSubsection = (sectionId: string, subsectionId: string) => {
     const section = evaluation.find((s) => s.id === sectionId);
-    if (section?.isPredefined) {
+    const subsection = section?.subsections.find((sub) => sub.id === subsectionId);
+    if (!section || !subsection) return;
+    if (!isUserAddedSubsection(section, subsection)) {
       Alert.alert('Error', 'No se pueden eliminar subsecciones predefinidas');
       return;
     }
-    setEvaluation(
-      evaluation.map((s) =>
-        s.id === sectionId
-          ? { ...s, subsections: s.subsections.filter((sub) => sub.id !== subsectionId) }
-          : s
-      )
+    Alert.alert(
+      'Eliminar subsección',
+      'Se eliminará esta subsección y las fotos/archivos locales asociados. El resto del formulario se conserva.',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              const fileNames = [
+                ...new Set([
+                  ...collectLocalFileNamesFromSubsection(subsection),
+                  ...collectChecklistFormDraftLocalFileNames(
+                    [{ ...section, subsections: [subsection] }],
+                    [],
+                  ),
+                ]),
+              ];
+              if (fileNames.length > 0) {
+                await deleteChecklistSupervisionFormDraftFiles(fileNames);
+                // Mantener el borrador coherente: quitar nombres borrados de localFileNames.
+                try {
+                  const ownerId = resolveOwnerEmpleadoId();
+                  const draft = ownerId > 0 ? await loadChecklistSupervisionFormDraft(ownerId) : null;
+                  if (draft) {
+                    const removed = new Set(fileNames);
+                    const nextNames = (draft.localFileNames || []).filter((n) => !removed.has(n));
+                    const nextEval = Array.isArray(draft.evaluation)
+                      ? (draft.evaluation as EvaluationSection[]).map((s) =>
+                          s.id !== sectionId
+                            ? s
+                            : {
+                                ...s,
+                                subsections: (s.subsections || []).filter((sub) => sub.id !== subsectionId),
+                              },
+                        )
+                      : draft.evaluation;
+                    await saveChecklistSupervisionFormDraft({
+                      ...draft,
+                      evaluation: nextEval,
+                      localFileNames: nextNames,
+                    });
+                    setHasFormDraft(true);
+                    setFormDraftSavedAt(draft.savedAt);
+                  }
+                } catch (e) {
+                  console.warn('[ChecklistSupervision] No se pudo actualizar borrador tras borrar subsección:', e);
+                }
+              }
+              setEvaluation((prev) =>
+                prev.map((s) =>
+                  s.id === sectionId
+                    ? { ...s, subsections: s.subsections.filter((sub) => sub.id !== subsectionId) }
+                    : s,
+                ),
+              );
+            })();
+          },
+        },
+      ],
     );
   };
 
@@ -1522,9 +2437,10 @@ export default function ChecklistSupervisionScreen() {
     const newInput: EvaluationInput = {
       id: `input-${Date.now()}`,
       type,
-      title: '',
+      title: type === 'photo' ? 'Fotos' : '',
       value: type === 'checkbox' ? 'true' : '',
       options: type === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
+      photos: type === 'photo' ? [] : undefined,
     };
     setEvaluation(
       evaluation.map((s) =>
@@ -1562,11 +2478,68 @@ export default function ChecklistSupervisionScreen() {
     );
   };
 
+  const updateSubsectionDetalle = (sectionId: string, subsectionId: string, detalle: string) => {
+    setEvaluation((prev) =>
+      prev.map((s) =>
+        s.id === sectionId
+          ? {
+              ...s,
+              subsections: s.subsections.map((sub) =>
+                sub.id === subsectionId ? { ...sub, detalle } : sub
+              ),
+            }
+          : s
+      )
+    );
+  };
+
+  const removePhotoFromInput = (
+    sectionId: string,
+    subsectionId: string,
+    inputId: string,
+    photoId: string,
+  ) => {
+    setEvaluation((prev) =>
+      prev.map((s) => {
+        if (s.id !== sectionId) return s;
+        return {
+          ...s,
+          subsections: s.subsections.map((sub) => {
+            if (sub.id !== subsectionId) return sub;
+            return {
+              ...sub,
+              inputs: sub.inputs.map((inp) => {
+                if (inp.id !== inputId || inp.type !== 'photo') return inp;
+                const photos = normalizePhotoInput(inp).filter((p) => p.id !== photoId);
+                const removed = normalizePhotoInput(inp).find((p) => p.id === photoId);
+                if (removed?.localFileName) {
+                  void deleteFile(String(removed.localFileName).trim());
+                }
+                return { ...inp, photos, value: '', localFileName: undefined, file_name: undefined };
+              }),
+            };
+          }),
+        };
+      }),
+    );
+  };
+
   const deleteInput = (sectionId: string, subsectionId: string, inputId: string) => {
     const section = evaluation.find((s) => s.id === sectionId);
-    if (section?.isPredefined) {
+    const subsection = section?.subsections.find((sub) => sub.id === subsectionId);
+    if (!section || !subsection || !isUserAddedSubsection(section, subsection)) {
       Alert.alert('Error', 'No se pueden eliminar inputs predefinidos');
       return;
+    }
+    const input = subsection.inputs.find((inp) => inp.id === inputId);
+    if (input) {
+      const fileNames = collectLocalFileNamesFromSubsection({
+        ...subsection,
+        inputs: [input],
+      });
+      if (fileNames.length > 0) {
+        void deleteChecklistSupervisionFormDraftFiles(fileNames);
+      }
     }
     setEvaluation(
       evaluation.map((s) =>
@@ -1701,8 +2674,8 @@ export default function ChecklistSupervisionScreen() {
     const isLocalOnly = !row.id || Number(row.id) === 0;
 
     if (isLocalOnly && row.id_local) {
-      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
-      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const puestoId = resolveChecklistRowPuestoId(row, filterPuestoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
       const next = bucket.map((c) =>
         matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
       );
@@ -1716,8 +2689,8 @@ export default function ChecklistSupervisionScreen() {
         };
         await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
       }
-      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
-      await syncChecklistsFromCache(corpoId);
+      await saveChecklistSupervisionCacheForPuesto(puestoId, next);
+      await syncChecklistsFromCache(puestoId);
       return true;
     }
 
@@ -1734,8 +2707,8 @@ export default function ChecklistSupervisionScreen() {
         return false;
       }
       const sr = (result as any).data;
-      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
-      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const puestoId = resolveChecklistRowPuestoId(row, filterPuestoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
       const next = bucket.map((c) =>
         Number(c.id) === Number(row.id)
           ? applyServerPayloadToCachedChecklistRow(c, {
@@ -1744,14 +2717,14 @@ export default function ChecklistSupervisionScreen() {
             })
           : c,
       );
-      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
-      await syncChecklistsFromCache(corpoId);
+      await saveChecklistSupervisionCacheForPuesto(puestoId, next);
+      await syncChecklistsFromCache(puestoId);
       return true;
     }
 
     if (Number(row.id) > 0 && !isConnected) {
-      const corpoId = resolveChecklistRowCorpoId(row, filterCorpoIdRef.current);
-      const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+      const puestoId = resolveChecklistRowPuestoId(row, filterPuestoIdRef.current);
+      const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
       const next = bucket.map((c) =>
         matchesRow(c as ChecklistSupervisionUI) ? { ...c, firma_supervisor: formattedSignature } : c,
       );
@@ -1777,8 +2750,8 @@ export default function ChecklistSupervisionScreen() {
         else actions.push(entry);
       }
       await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
-      await saveChecklistSupervisionCacheForCorpo(corpoId, next);
-      await syncChecklistsFromCache(corpoId);
+      await saveChecklistSupervisionCacheForPuesto(puestoId, next);
+      await syncChecklistsFromCache(puestoId);
       return true;
     }
 
@@ -1913,59 +2886,48 @@ export default function ChecklistSupervisionScreen() {
   };
 
   // Función para obtener la URI de la imagen (como StaffEvaluationsScreen)
-  const getImageUri = (input: EvaluationInput): string => {
-    console.log('[ChecklistSupervision] getImageUri called for input:', {
-      id: input.id,
-      hasValue: !!input.value,
-      valuePrefix: typeof input.value === 'string' ? input.value.substring(0, 30) : null,
-      file_name: input.file_name,
-      localFileName: input.localFileName,
-    });
-
-    if (input.localFileName && String(input.localFileName).trim() !== '') {
-      const u = getLocalFileDisplayUri(String(input.localFileName).trim());
+  const getPhotoItemUri = (photo: EvaluationPhotoItem, input: EvaluationInput): string => {
+    if (photo.localFileName && String(photo.localFileName).trim() !== '') {
+      const u = getLocalFileDisplayUri(String(photo.localFileName).trim());
       if (u) return u;
     }
 
     const draftEditing = editing != null && checklistRowShowsOfflineBadge(editing);
 
-    // Borrador local: solo base64 en value (no get-image sin id de servidor estable)
     if (draftEditing) {
-      if (input.value && typeof input.value === 'string') {
-        if (input.value.startsWith('data:image/')) {
-          return input.value;
-        }
-        if (input.value.length > 100 && !input.value.startsWith('http')) {
-          return `data:image/jpeg;base64,${input.value}`;
+      if (photo.value && typeof photo.value === 'string') {
+        if (photo.value.startsWith('data:image/')) return photo.value;
+        if (photo.value.length > 100 && !photo.value.startsWith('http')) {
+          return `data:image/jpeg;base64,${photo.value}`;
         }
       }
       return '';
     }
 
-    // Sincronizado: data URI si aún viene en el JSON; si no, get-image con API_SERVER
-    if (input.value && typeof input.value === 'string') {
-      if (input.value.startsWith('data:image/')) {
-        return input.value;
-      }
-      if (input.value.length > 100 && !input.value.startsWith('http')) {
-        const wrapped = `data:image/jpeg;base64,${input.value}`;
-        return wrapped;
+    if (photo.value && typeof photo.value === 'string') {
+      if (photo.value.startsWith('data:image/')) return photo.value;
+      if (photo.value.length > 100 && !photo.value.startsWith('http')) {
+        return `data:image/jpeg;base64,${photo.value}`;
       }
     }
 
     const serverId = editing?.id != null ? Number(editing.id) : 0;
-    if (Number.isFinite(serverId) && serverId > 0 && input.file_name) {
+    if (Number.isFinite(serverId) && serverId > 0 && photo.file_name) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
-        const uri = appendTokenToUrl(
-          `${apiUrl}/api/checklist-supervision/${serverId}/get-image/${encodeURIComponent(input.file_name)}?t=${Date.now()}`,
+        return appendTokenToUrl(
+          `${apiUrl}/api/checklist-supervision/${serverId}/get-image/${encodeURIComponent(photo.file_name)}?t=${Date.now()}`,
         );
-        return uri;
       }
     }
 
-    const fallback = (input.value && typeof input.value === 'string') ? input.value : '';
-    return fallback;
+    return (photo.value && typeof photo.value === 'string') ? photo.value : '';
+  };
+
+  const getImageUri = (input: EvaluationInput): string => {
+    const photos = normalizePhotoInput(input);
+    if (photos.length > 0) return getPhotoItemUri(photos[0], input);
+    return '';
   };
 
   const handleAddPhoto = async (target: string) => {
@@ -2039,26 +3001,26 @@ export default function ChecklistSupervisionScreen() {
         const sec = evaluation.find((s) => s.id === sectionId);
         const sub = sec?.subsections.find((ss) => ss.id === subsectionId);
         const prevInp = sub?.inputs.find((i) => i.id === inputId);
-        if (prevInp?.localFileName && String(prevInp.localFileName).trim() !== String(storedFileName)) {
-          try {
-            await deleteFile(String(prevInp.localFileName).trim());
-          } catch {
-            /* noop */
-          }
-        }
 
-        console.log('[ChecklistSupervision] Updating input with local file reference (no base64 en estado).');
+        console.log('[ChecklistSupervision] Appending photo to input (local file reference).');
         const orientation: 'horizontal' | 'vertical' | undefined =
           photo.width && photo.height
             ? photo.width >= photo.height
               ? 'horizontal'
               : 'vertical'
             : undefined;
-        updateInput(sectionId, subsectionId, inputId, {
-          value: '',
+        const existingPhotos = prevInp ? normalizePhotoInput(prevInp) : [];
+        const newPhoto: EvaluationPhotoItem = {
+          id: `photo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           localFileName: storedFileName,
-          file_name: undefined,
           ...(orientation ? { imageOrientation: orientation } : {}),
+        };
+        updateInput(sectionId, subsectionId, inputId, {
+          photos: [...existingPhotos, newPhoto],
+          value: '',
+          localFileName: undefined,
+          file_name: undefined,
+          imageOrientation: undefined,
         });
       } else {
         console.error('[ChecklistSupervision] takePicture: cameraTarget no tiene el formato correcto:', cameraTarget);
@@ -2072,14 +3034,363 @@ export default function ChecklistSupervisionScreen() {
     }
   };
 
-  // Funciones para CRUD
-  const resetForm = async () => {
+  const syncProcessTimesFromHoraAccion = useCallback(async () => {
     const horaAccion = await getHoraAccion();
-    if (!horaAccion) {
-      Alert.alert('Error', 'No se pudo obtener la hora');
+    const src = horaAccion ? new Date(horaAccion) : new Date();
+    const horaAccionTime = timeDateFromHoraAccion(src);
+    setHoraInicio(horaAccionTime);
+    setHoraFin(horaAccionTime);
+    return horaAccionTime;
+  }, []);
+
+  // Al abrir formulario de creación, cargar hora inicio/fin desde hora de acción.
+  useEffect(() => {
+    if (!isCreating || editing) return;
+    void syncProcessTimesFromHoraAccion();
+  }, [isCreating, editing, syncProcessTimesFromHoraAccion]);
+
+  // Funciones para CRUD
+  const buildFormDraftSnapshot = useCallback(async (): Promise<ChecklistSupervisionFormDraft | null> => {
+    const ownerEmpleadoId = resolveOwnerEmpleadoId();
+    if (ownerEmpleadoId <= 0) return null;
+
+    const evalRaw = normalizeEvaluationSections(JSON.parse(JSON.stringify(evaluation)) as EvaluationSection[]);
+    const articulosSnapshot = JSON.parse(JSON.stringify(articulos)) as ArticuloForm[];
+    const persisted = await persistEvaluationPhotosForDraft(evalRaw as unknown[]);
+    const evalSnapshot = normalizeEvaluationSections(persisted.evaluation as EvaluationSection[]);
+    const localFileNames = [
+      ...new Set([
+        ...persisted.localFileNames,
+        ...collectChecklistFormDraftLocalFileNames(evalSnapshot, articulosSnapshot),
+      ]),
+    ];
+
+    // Usar hora de acción (servidor/CR) para que cambios de hora se reflejen en el borrador.
+    const horaAccion = await getHoraAccion();
+    const savedAt = Number.isFinite(horaAccion)
+      ? new Date(horaAccion).toISOString()
+      : new Date().toISOString();
+
+    return {
+      version: 1,
+      savedAt,
+      ownerEmpleadoId,
+      mode: editing ? 'edit' : 'create',
+      editingRef: editing
+        ? {
+            id: Number(editing.id ?? 0),
+            id_local: String((editing as ChecklistSupervisionUI).id_local ?? '').trim() || undefined,
+          }
+        : null,
+      fechaIso: fecha.toISOString(),
+      horaInicioIso: horaInicio.toISOString(),
+      horaFinIso: horaFin.toISOString(),
+      selectedEmpleado: selectedEmpleado
+        ? {
+            id: selectedEmpleado.id,
+            nombre: selectedEmpleado.nombre,
+            codigo: selectedEmpleado.codigo,
+          }
+        : null,
+      ejecutivoCuenta,
+      evaluation: evalSnapshot,
+      firmaSupervisor,
+      firmaResponsable,
+      hierarchy: {
+        empresaId: selectedEmpresaId,
+        clienteId: selectedClienteId,
+        divisionId: selectedDivisionId,
+        contratoId: selectedContratoId,
+        sucursalId: selectedCorpoId,
+        puestoId: selectedPuestoId,
+      },
+      articulos: articulosSnapshot,
+      localFileNames,
+      isHierarchyHintVisible,
+    };
+  }, [
+    resolveOwnerEmpleadoId,
+    editing,
+    fecha,
+    horaInicio,
+    horaFin,
+    selectedEmpleado,
+    ejecutivoCuenta,
+    evaluation,
+    firmaSupervisor,
+    firmaResponsable,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedCorpoId,
+    selectedPuestoId,
+    articulos,
+    isHierarchyHintVisible,
+  ]);
+
+  const applyInitialFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      const currentMarca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+      const hierarchy = buildHierarchyFromCurrentMarca(currentMarca, structure);
+      applyFormHierarchyPath(hierarchy);
+
+      if (filterPuestoId != null) {
+        setSelectedEmpresaId(filterEmpresaId);
+        setSelectedClienteId(filterClienteId);
+        setSelectedDivisionId(filterDivisionId);
+        setSelectedContratoId(filterContratoId);
+        setSelectedCorpoId(filterCorpoId);
+        setSelectedPuestoId(filterPuestoId);
+      }
+    } catch {
+      // ignore
+    }
+  }, [
+    structure,
+    buildHierarchyFromCurrentMarca,
+    applyFormHierarchyPath,
+    filterPuestoId,
+    filterEmpresaId,
+    filterClienteId,
+    filterDivisionId,
+    filterContratoId,
+    filterCorpoId,
+  ]);
+
+  const applyFormDraftSnapshot = useCallback(async (draft: ChecklistSupervisionFormDraft) => {
+    skipHierarchySideEffectsRef.current = true;
+    draftFormContentLockRef.current = true;
+    try {
+      setDraftStatusMessage(null);
+      setIsCreating(true);
+
+      if (draft.mode === 'edit' && draft.editingRef) {
+        const cachedRows = await loadChecklistSupervisionCacheForPuesto(Number(draft.hierarchy.puestoId ?? 0));
+        const match = cachedRows.find((row) => {
+          const idLocal = String((row as any).id_local ?? '').trim();
+          if (draft.editingRef?.id_local && idLocal === draft.editingRef.id_local) return true;
+          return Number(row.id) > 0 && Number(row.id) === Number(draft.editingRef?.id ?? 0);
+        });
+        setEditing((match as ChecklistSupervisionUI) ?? ({
+          id: Number(draft.editingRef.id ?? 0),
+          id_local: draft.editingRef.id_local,
+        } as ChecklistSupervisionUI));
+      } else {
+        setEditing(null);
+      }
+
+      // Jerarquía primero; el lock evita que los useEffect pisen evaluación/artículos.
+      applyFormHierarchyPath(draft.hierarchy);
+      setIsHierarchyHintVisible(Boolean(draft.isHierarchyHintVisible));
+
+      setFecha(draft.fechaIso ? new Date(draft.fechaIso) : new Date());
+      setHoraInicio(draft.horaInicioIso ? new Date(draft.horaInicioIso) : new Date());
+      setHoraFin(draft.horaFinIso ? new Date(draft.horaFinIso) : new Date());
+      setSelectedEmpleado(draft.selectedEmpleado);
+      setEjecutivoCuenta(draft.ejecutivoCuenta ?? '');
+
+      const restoredEvaluation = Array.isArray(draft.evaluation)
+        ? normalizeEvaluationSections(JSON.parse(JSON.stringify(draft.evaluation)) as EvaluationSection[])
+        : [];
+      setEvaluation(restoredEvaluation);
+      setFirmaSupervisor(draft.firmaSupervisor ?? '');
+      setFirmaResponsable(draft.firmaResponsable ?? '');
+
+      const restoredArticulos = Array.isArray(draft.articulos)
+        ? (draft.articulos as ArticuloForm[]).map((art, index) => ({
+            ...art,
+            id: Number(art?.id ?? 0),
+            rowKey: art.rowKey ?? articuloListKey(art, index),
+            cantidad_requerida: normalizeCantidadNecesaria(art?.cantidad_requerida ?? 0),
+            observaciones: art.observaciones ?? '',
+          }))
+        : [];
+      setArticulos(restoredArticulos);
+
+      // Reaplicar tras el ciclo de efectos por si hubo carrera residual.
+      await new Promise<void>((resolve) => setTimeout(resolve, 50));
+      setEvaluation(restoredEvaluation);
+      setArticulos(restoredArticulos);
+
+      const photoNames = collectChecklistFormDraftLocalFileNames(restoredEvaluation, restoredArticulos);
+      const missingPhotos = photoNames.filter((name) => !getLocalFileDisplayUri(name)).length;
+
+      setDraftStatusMessage({
+        type: missingPhotos > 0 ? 'error' : 'success',
+        text:
+          missingPhotos > 0
+            ? `Borrador restaurado, pero ${missingPhotos} imagen(es) local(es) no se encontraron en el dispositivo.`
+            : `Borrador restaurado (${convertDateTimestampToLocalString(draft.savedAt, true)}).`,
+      });
+    } finally {
+      skipHierarchySideEffectsRef.current = false;
+      // draftFormContentLockRef permanece true hasta cambio manual de jerarquía o reestablecer.
+    }
+  }, [applyFormHierarchyPath]);
+
+  const saveFormDraft = useCallback(async (options?: { closeForm?: boolean }) => {
+    setIsSavingFormDraft(true);
+    setDraftStatusMessage(null);
+    try {
+      const snapshot = await buildFormDraftSnapshot();
+      if (!snapshot) {
+        Alert.alert('Error', 'No se pudo identificar al usuario para guardar el borrador.');
+        return;
+      }
+
+      await saveChecklistSupervisionFormDraft(snapshot);
+      // Mantener el formulario alineado con lo persistido (localFileName, sin base64).
+      if (Array.isArray(snapshot.evaluation)) {
+        setEvaluation(normalizeEvaluationSections(snapshot.evaluation as EvaluationSection[]));
+      }
+      setHasFormDraft(true);
+      setFormDraftSavedAt(snapshot.savedAt);
+      const photoCount = snapshot.localFileNames.length;
+      setDraftStatusMessage({
+        type: 'success',
+        text: `Borrador guardado (${convertDateTimestampToLocalString(snapshot.savedAt, true)})${
+          photoCount > 0 ? ` con ${photoCount} archivo(s) local(es)` : ''
+        }. Puedes cerrar el formulario y continuar más tarde.`,
+      });
+      if (options?.closeForm) {
+        setIsCreating(false);
+        setEditing(null);
+      }
+    } catch (e) {
+      console.error('[ChecklistSupervision] saveFormDraft failed:', e);
+      setDraftStatusMessage({
+        type: 'error',
+        text: 'No se pudo guardar el borrador. Intenta de nuevo.',
+      });
+      Alert.alert('Error', 'No se pudo guardar el borrador del formulario.');
+    } finally {
+      setIsSavingFormDraft(false);
+    }
+  }, [buildFormDraftSnapshot]);
+
+  const handleReportIncident = useCallback(() => {
+    if (!showReportIncidentOption) {
+      Alert.alert('No disponible', 'El módulo de incidentes no está disponible para su usuario.');
       return;
     }
-    setFecha(new Date(horaAccion));
+    if (!isFormHierarchyComplete) {
+      Alert.alert(
+        'Jerarquía incompleta',
+        'Complete la jerarquía (empresa → puesto) antes de reportar un incidente.',
+      );
+      return;
+    }
+    if (!selectedInvolucrado) {
+      Alert.alert(
+        'Empleado requerido',
+        'Seleccione un empleado con código y nombre; será el involucrado del incidente.',
+      );
+      return;
+    }
+
+    const linkParams: ChecklistSupervisionIncidentLinkParams = {
+      empresaId: Number(selectedEmpresaId),
+      clienteId: Number(selectedClienteId),
+      divisionId: Number(selectedDivisionId),
+      contratoId: Number(selectedContratoId),
+      sucursalId: Number(selectedCorpoId),
+      puestoId: Number(selectedPuestoId),
+      involucrado: {
+        codigo: selectedInvolucrado.codigo,
+        nombre: selectedInvolucrado.nombre,
+      },
+    };
+
+    if (!isChecklistSupervisionIncidentLinkComplete(linkParams)) {
+      Alert.alert('Datos incompletos', 'La jerarquía o el empleado seleccionado no cumplen los requisitos para reportar un incidente.');
+      return;
+    }
+
+    Alert.alert(
+      'Reportar incidente',
+      'Se guardará el borrador del checklist y se abrirá el formulario de incidentes con la jerarquía actual y el empleado seleccionado como involucrado. ¿Desea continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Continuar',
+          onPress: () => {
+            void (async () => {
+              try {
+                await saveFormDraft({ closeForm: true });
+                navigation.navigate('Incidents', { fromChecklistSupervision: linkParams });
+              } catch (e) {
+                console.error('[ChecklistSupervision] handleReportIncident failed:', e);
+                Alert.alert('Error', 'No se pudo guardar el borrador antes de abrir incidentes.');
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [
+    showReportIncidentOption,
+    isFormHierarchyComplete,
+    selectedInvolucrado,
+    selectedEmpresaId,
+    selectedClienteId,
+    selectedDivisionId,
+    selectedContratoId,
+    selectedCorpoId,
+    selectedPuestoId,
+    saveFormDraft,
+    navigation,
+  ]);
+
+  const restoreFormDraft = useCallback(async () => {
+    const ownerId = resolveOwnerEmpleadoId();
+    if (ownerId <= 0) return;
+
+    setIsRestoringFormDraft(true);
+    setDraftStatusMessage(null);
+    try {
+      const draft = await loadChecklistSupervisionFormDraft(ownerId);
+      if (!draft) {
+        setHasFormDraft(false);
+        setFormDraftSavedAt(null);
+        Alert.alert('Sin borrador', 'No hay un borrador guardado para continuar.');
+        return;
+      }
+      await applyFormDraftSnapshot(draft);
+    } catch (e) {
+      console.error('[ChecklistSupervision] restoreFormDraft failed:', e);
+      setDraftStatusMessage({
+        type: 'error',
+        text: 'No se pudo restaurar el borrador.',
+      });
+      Alert.alert('Error', 'No se pudo restaurar el borrador del formulario.');
+    } finally {
+      setIsRestoringFormDraft(false);
+    }
+  }, [resolveOwnerEmpleadoId, applyFormDraftSnapshot]);
+
+  const clearDraftAfterSuccessfulSubmit = useCallback(async () => {
+    try {
+      // No borrar archivos locales: la cola de sync / hidratación al enviar aún puede necesitarlos.
+      await removeChecklistSupervisionFormDraftMeta();
+      setHasFormDraft(false);
+      setFormDraftSavedAt(null);
+      setDraftStatusMessage(null);
+      draftFormContentLockRef.current = false;
+    } catch (e) {
+      console.warn('[ChecklistSupervision] clearDraftAfterSuccessfulSubmit:', e);
+    }
+  }, []);
+
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    const actionDate = horaAccion ? new Date(horaAccion) : new Date();
+    setFecha(actionDate);
+    const horaAccionTime = timeDateFromHoraAccion(actionDate);
+    setHoraInicio(horaAccionTime);
+    setHoraFin(horaAccionTime);
+    setSelectedEmpleado(null);
     setEjecutivoCuenta('');
     setEvaluation([]);
     setFirmaSupervisor('');
@@ -2093,18 +3404,89 @@ export default function ChecklistSupervisionScreen() {
     setArticulos([]);
   };
 
-  const startCreating = async () => {
+  const resetFormWithDraftClear = useCallback(async () => {
+    Alert.alert(
+      'Reestablecer formulario',
+      'Se eliminará el borrador guardado, las fotos/archivos locales del formulario y se cargará un formulario vacío. ¿Continuar?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Reestablecer',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setIsResettingFormDraft(true);
+              setDraftStatusMessage(null);
+              try {
+                const currentFiles = collectChecklistFormDraftLocalFileNames(evaluation, articulos);
+                const storedDraft = await loadChecklistSupervisionFormDraft(resolveOwnerEmpleadoId());
+                const allFiles = [
+                  ...new Set([
+                    ...currentFiles,
+                    ...(storedDraft?.localFileNames ?? []),
+                  ]),
+                ];
+                await clearChecklistSupervisionFormDraft(allFiles);
+                setHasFormDraft(false);
+                setFormDraftSavedAt(null);
+
+                draftFormContentLockRef.current = false;
+                skipHierarchySideEffectsRef.current = true;
+                await resetForm();
+                setEditing(null);
+                await applyInitialFormHierarchy();
+                setTimeout(() => {
+                  skipHierarchySideEffectsRef.current = false;
+                }, 0);
+
+                setDraftStatusMessage({
+                  type: 'info',
+                  text: 'Formulario reestablecido. El borrador y los archivos locales asociados fueron eliminados.',
+                });
+              } catch (e) {
+                console.error('[ChecklistSupervision] resetFormWithDraftClear failed:', e);
+                Alert.alert('Error', 'No se pudo reestablecer el formulario por completo.');
+              } finally {
+                setIsResettingFormDraft(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [
+    evaluation,
+    articulos,
+    resolveOwnerEmpleadoId,
+    applyInitialFormHierarchy,
+  ]);
+
+  const beginNewForm = async () => {
+    draftFormContentLockRef.current = false;
     await resetForm();
     setEditing(null);
-    try {
-      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
-      const currentMarca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
-      const hierarchy = buildHierarchyFromCurrentMarca(currentMarca, structure);
-      applyFormHierarchyPath(hierarchy);
-    } catch {
-      // ignore
-    }
+    await applyInitialFormHierarchy();
     setIsCreating(true);
+    setDraftStatusMessage(null);
+  };
+
+  const startCreating = async () => {
+    const ownerId = resolveOwnerEmpleadoId();
+    if (ownerId > 0) {
+      const draft = await loadChecklistSupervisionFormDraft(ownerId);
+      if (draft) {
+        Alert.alert(
+          'Borrador encontrado',
+          `Tienes un formulario guardado el ${convertDateTimestampToLocalString(draft.savedAt, true)}. ¿Deseas continuar donde lo dejaste?`,
+          [
+            { text: 'Nuevo formulario', onPress: () => void beginNewForm() },
+            { text: 'Continuar borrador', onPress: () => void restoreFormDraft() },
+          ],
+        );
+        return;
+      }
+    }
+    await beginNewForm();
   };
 
   const startEditing = async (it: ChecklistSupervisionUI) => {
@@ -2113,6 +3495,7 @@ export default function ChecklistSupervisionScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
+    draftFormContentLockRef.current = false;
     // Establecer editing PRIMERO para evitar que useEffect sobrescriba la evaluación
     setEditing(it);
     setIsCreating(true);
@@ -2121,10 +3504,27 @@ export default function ChecklistSupervisionScreen() {
     setFirmaSupervisor(it.firma_supervisor || '');
     setFirmaResponsable(it.firma_responsable || '');
 
+    const empleadoId = Number((it as any).empleado_id ?? 0);
+    if (Number.isFinite(empleadoId) && empleadoId > 0) {
+      setSelectedEmpleado({
+        id: empleadoId,
+        nombre: String((it as any).empleado_nombre ?? '').trim() || `Empleado #${empleadoId}`,
+        codigo: String((it as any).empleado_codigo ?? '').trim(),
+      });
+    } else {
+      setSelectedEmpleado(null);
+    }
+
+    const hi = normalizeTimeToHHmm((it as any).hora_inicio);
+    const hf = normalizeTimeToHHmm((it as any).hora_fin);
+    const horaAccionTime = timeDateFromHoraAccion(horaAccion);
+    setHoraInicio(hi ? parseTimeHHmm(hi) : horaAccionTime);
+    setHoraFin(hf ? parseTimeHHmm(hf) : horaAccionTime);
+
     // Cargar evaluación INMEDIATAMENTE para preservar los valores
     try {
       const evalData = JSON.parse(it.evaluacion || '[]');
-      const parsedEvaluation = Array.isArray(evalData) ? evalData : [];
+      const parsedEvaluation = Array.isArray(evalData) ? normalizeEvaluationSections(evalData) : [];
       console.log('startEditing: Cargando evaluación:', {
         sections: parsedEvaluation.length,
         firstSection: parsedEvaluation[0]?.title,
@@ -2191,6 +3591,20 @@ export default function ChecklistSupervisionScreen() {
       Alert.alert('Error', 'Debes seleccionar todos los campos requeridos (Empresa, Cliente, División, Contrato, Sucursal y Puesto)');
       return false;
     }
+    if (!selectedEmpleado || !(Number(selectedEmpleado.id) > 0) || !String(selectedEmpleado.nombre).trim()) {
+      Alert.alert('Error', 'Debes buscar y seleccionar un empleado');
+      return false;
+    }
+    if (!String(selectedEmpleado.codigo).trim()) {
+      Alert.alert('Error', 'El empleado debe tener código. Búscalo de nuevo o actualiza la jerarquía.');
+      return false;
+    }
+    const horaInicioStr = formatTimeHHmm(horaInicio);
+    const horaFinStr = formatTimeHHmm(horaFin);
+    if (!/^\d{2}:\d{2}$/.test(horaInicioStr) || !/^\d{2}:\d{2}$/.test(horaFinStr)) {
+      Alert.alert('Error', 'Debes indicar la hora de inicio y fin del proceso');
+      return false;
+    }
     // firma_supervisor es opcional; solo se requiere la firma responsable.
     if (!firmaResponsable) {
       Alert.alert('Error', 'Debes registrar la firma responsable');
@@ -2201,6 +3615,8 @@ export default function ChecklistSupervisionScreen() {
 
   const submitSave = async () => {
     if (!validateForm()) return;
+    const empleadoSel = selectedEmpleado;
+    if (!empleadoSel) return;
 
     setIsSubmitting(true);
     setSubmitResponse(null);
@@ -2212,26 +3628,53 @@ export default function ChecklistSupervisionScreen() {
       return;
     }
 
+    const isConnected = await getConnectionStatus();
+    const isCreateFlow = !(editing && editing.id && editing.id !== 0);
+
+    if (isConnected && isCreateFlow) {
+      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(Number(horaAccion));
+      if (!hasValidPlanillasToken) {
+        pendingPlanillasSubmitRef.current = true;
+        return;
+      }
+    }
+
+    let planillasToken: string | undefined;
+    if (isConnected) {
+      const planillasTokenCheck = await isStoredPlanillasTokenValid(Number(horaAccion));
+      planillasToken = planillasTokenCheck.token ?? undefined;
+    } else {
+      const storedPlanillas = await readStoredPlanillasToken();
+      planillasToken = storedPlanillas?.token ?? undefined;
+    }
+
     try {
-      const evalSnapshot = JSON.parse(JSON.stringify(evaluation)) as EvaluationSection[];
+      const evalSnapshot = normalizeEvaluationSections(JSON.parse(JSON.stringify(evaluation)) as EvaluationSection[]);
       let hasImages = false;
       let imageCount = 0;
       const checkForImages = (obj: any) => {
         if (Array.isArray(obj)) {
           obj.forEach(item => checkForImages(item));
         } else if (obj && typeof obj === 'object') {
-          if (
-            obj.type === 'photo' &&
-            ((obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) ||
-              (obj.localFileName && String(obj.localFileName).trim() !== ''))
-          ) {
-            hasImages = true;
-            imageCount++;
-            console.log(`Imagen #${imageCount} encontrada en evaluación:`, {
-              id: obj.id,
-              hasLocalFile: !!obj.localFileName,
-              imageOrientation: obj.imageOrientation,
-            });
+          if (obj.type === 'photo') {
+            const photos = Array.isArray(obj.photos) ? obj.photos : [];
+            if (photos.length > 0) {
+              for (const photo of photos) {
+                if (
+                  (photo?.value && typeof photo.value === 'string' && photo.value.startsWith('data:image/')) ||
+                  (photo?.localFileName && String(photo.localFileName).trim() !== '')
+                ) {
+                  hasImages = true;
+                  imageCount++;
+                }
+              }
+            } else if (
+              (obj.value && typeof obj.value === 'string' && obj.value.startsWith('data:image/')) ||
+              (obj.localFileName && String(obj.localFileName).trim() !== '')
+            ) {
+              hasImages = true;
+              imageCount++;
+            }
           }
           Object.values(obj).forEach(value => checkForImages(value));
         }
@@ -2239,7 +3682,6 @@ export default function ChecklistSupervisionScreen() {
       checkForImages(evalSnapshot);
       console.log(`Evaluación a enviar tiene ${imageCount} imagen(es):`, hasImages);
 
-      const isConnected = await getConnectionStatus();
       /** JSON con `localFileName`; la hidratación a base64 ocurre dentro de create/update en checklistSupervisionFunctions (como en la cola de sync). */
       const evaluacionStr = JSON.stringify(evalSnapshot);
       console.log(
@@ -2270,7 +3712,13 @@ export default function ChecklistSupervisionScreen() {
         firma_responsable: firmaResponsable,
         created_at: horaAccionIso,
         hora_accion: horaAccionIso,
+        empleado_id: empleadoSel.id,
+        empleado_nombre: empleadoSel.nombre,
+        empleado_codigo: empleadoSel.codigo,
+        hora_inicio: formatTimeHHmm(horaInicio),
+        hora_fin: formatTimeHHmm(horaFin),
         isActive: true,
+        ...(planillasToken ? { planillasToken } : {}),
       };
 
       if (editing && editing.id && editing.id !== 0) {
@@ -2279,6 +3727,7 @@ export default function ChecklistSupervisionScreen() {
           const result = await updateChecklistSupervision({
             id: editing.id,
             requestData,
+            planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -2291,6 +3740,7 @@ export default function ChecklistSupervisionScreen() {
             await refreshPuestoArticulosCacheAfterSave();
 
             Alert.alert('Éxito', result.message || 'Checklist actualizado correctamente');
+            await clearDraftAfterSuccessfulSubmit();
             setTimeout(async () => {
               await fetchChecklists();
               cancelCreating();
@@ -2311,16 +3761,17 @@ export default function ChecklistSupervisionScreen() {
             id: editing.id,
             id_local: localId,
             requestData,
+            ...(planillasToken ? { planillasToken } : {}),
           };
           const uidx = actions.findIndex((a: any) => a.type === 'update' && a.id === editing.id);
           if (uidx !== -1) actions[uidx] = entry;
           else actions.push(entry);
           await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(actions));
 
-          // Actualizar cache (lista en estado solo incluye la sucursal del filtro: mezclar con el flat completo)
+          // Actualizar cache (lista en estado solo incluye el puesto del filtro)
           const lblUp = resolveChecklistHierarchyLabels(structure, selectedPuestoId);
-          const corpoId = Number(selectedCorpoId);
-          const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+          const cachePuestoId = Number(selectedPuestoId);
+          const bucket = await loadChecklistSupervisionCacheForPuesto(cachePuestoId);
           const nextBucket = bucket.map((c) => {
             if (c.id !== editing.id) return c;
             return normalizeChecklistRowForCache(
@@ -2342,11 +3793,11 @@ export default function ChecklistSupervisionScreen() {
                   codigo: (c.puesto as any)?.codigo || lblUp.codigo || '',
                 },
               },
-              corpoId,
+              cachePuestoId,
             );
           });
-          await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
-          await syncChecklistsFromCache(corpoId);
+          await saveChecklistSupervisionCacheForPuesto(cachePuestoId, nextBucket);
+          await syncChecklistsFromCache(cachePuestoId);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2355,6 +3806,7 @@ export default function ChecklistSupervisionScreen() {
           await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
 
           Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
+          await clearDraftAfterSuccessfulSubmit();
           setTimeout(() => {
             cancelCreating();
           }, 2000);
@@ -2364,13 +3816,14 @@ export default function ChecklistSupervisionScreen() {
         if (isConnected) {
           const result = await createChecklistSupervision({
             requestData,
+            planillasToken,
             refreshAccessToken,
             logout,
           });
           if (result.status) {
             const newId = Number((result as any).id ?? (result as any).data?.id ?? 0);
             const payload = (result as any).data;
-            if (newId > 0 && selectedCorpoId) {
+            if (newId > 0 && selectedPuestoId) {
               const empresaNode = structure.find((e: any) => e.id === selectedEmpresaId);
               const clienteNode = empresaNode?.clientes?.find((c: any) => c.id === selectedClienteId);
               const sucursalNode = sucursales.find((s: any) => s.id === selectedCorpoId);
@@ -2395,6 +3848,11 @@ export default function ChecklistSupervisionScreen() {
                       firma_responsable: firmaResponsable,
                       created_by: typeof employee?.id === 'number' ? employee.id : Number(employee?.id ?? 0),
                       created_at: horaAccionIso,
+                      empleado_id: empleadoSel.id,
+                      empleado_nombre: empleadoSel.nombre,
+                      empleado_codigo: empleadoSel.codigo,
+                      hora_inicio: formatTimeHHmm(horaInicio),
+                      hora_fin: formatTimeHHmm(horaFin),
                       cliente: clienteNode ? { id: clienteNode.id, nombre: clienteNode.nombre } : undefined,
                       corpo: sucursalNode ? { id: sucursalNode.id, nombre: sucursalNode.nombre } : undefined,
                       puesto: puestoNode
@@ -2407,12 +3865,12 @@ export default function ChecklistSupervisionScreen() {
                     };
               const row = normalizeChecklistRowForCache(
                 serverRow,
-                selectedCorpoId,
+                selectedPuestoId,
               ) as ChecklistSupervisionUI;
-              const bucket = await loadChecklistSupervisionCacheForCorpo(selectedCorpoId);
+              const bucket = await loadChecklistSupervisionCacheForPuesto(selectedPuestoId);
               const nextBucket = [row, ...bucket.filter((x) => Number(x.id) !== newId)];
-              await saveChecklistSupervisionCacheForCorpo(selectedCorpoId, nextBucket);
-              await syncChecklistsFromCache(selectedCorpoId);
+              await saveChecklistSupervisionCacheForPuesto(selectedPuestoId, nextBucket);
+              await syncChecklistsFromCache(selectedPuestoId);
             }
             // Online: actualizar caches sin encolar acciones de mantenimiento
             await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2422,6 +3880,7 @@ export default function ChecklistSupervisionScreen() {
             await refreshPuestoArticulosCacheAfterSave();
 
             Alert.alert('Éxito', result.message || 'Checklist creado correctamente');
+            await clearDraftAfterSuccessfulSubmit();
             setTimeout(async () => {
               await fetchChecklists();
               cancelCreating();
@@ -2437,7 +3896,12 @@ export default function ChecklistSupervisionScreen() {
               : `local-checklist-${Date.now()}-${generateRandomId()}`;
           const actionsStr = await AsyncStorage.getItem('checklist_supervision_actions');
           const actions = actionsStr ? JSON.parse(actionsStr) : [];
-          const entry = { type: 'create' as const, id_local: localId, requestData };
+          const entry = {
+            type: 'create' as const,
+            id_local: localId,
+            requestData,
+            ...(planillasToken ? { planillasToken } : {}),
+          };
           const existingIdx = actions.findIndex((a: any) => a.type === 'create' && a.id_local === localId);
           if (existingIdx !== -1) actions[existingIdx] = entry;
           else actions.push(entry);
@@ -2468,21 +3932,26 @@ export default function ChecklistSupervisionScreen() {
             firma_responsable: firmaResponsable,
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
             created_at: new Date(horaAccion).toISOString(),
+            empleado_id: empleadoSel.id,
+            empleado_nombre: empleadoSel.nombre,
+            empleado_codigo: empleadoSel.codigo,
+            hora_inicio: formatTimeHHmm(horaInicio),
+            hora_fin: formatTimeHHmm(horaFin),
             cliente: { id: selectedClienteId, nombre: lblNew.cliente || '-' },
             corpo: { id: selectedCorpoId, nombre: lblNew.corpo || '-' },
             puesto: { id: selectedPuestoId, nombre: lblNew.puesto || '-', codigo: lblNew.codigo || '' },
           };
-          const corpoId = Number(selectedCorpoId);
-          const normalizedNew = normalizeChecklistRowForCache(newItem, corpoId) as ChecklistSupervisionItem;
-          const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+          const cachePuestoId = Number(selectedPuestoId);
+          const normalizedNew = normalizeChecklistRowForCache(newItem, cachePuestoId) as ChecklistSupervisionItem;
+          const bucket = await loadChecklistSupervisionCacheForPuesto(cachePuestoId);
           const nextBucket =
             editing?.id_local && String(editing.id_local).length > 0
               ? bucket.map((c) =>
                   String((c as ChecklistSupervisionUI).id_local) === String(editing.id_local) ? normalizedNew : c,
                 )
               : [...bucket, normalizedNew];
-          await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
-          await syncChecklistsFromCache(corpoId);
+          await saveChecklistSupervisionCacheForPuesto(cachePuestoId, nextBucket);
+          await syncChecklistsFromCache(cachePuestoId);
 
           // Offline: actualizar solo caches locales (sin encolar acciones de mantenimiento)
           await updateMainStructureCacheWithChecklist(selectedPuestoId || null, articulos, {
@@ -2491,6 +3960,7 @@ export default function ChecklistSupervisionScreen() {
           await updateActivitiesCacheWithChecklist(selectedPuestoId || null, articulos);
 
           Alert.alert('Éxito', 'Checklist guardado localmente. Se sincronizará cuando haya conexión.');
+          await clearDraftAfterSuccessfulSubmit();
           setTimeout(() => {
             cancelCreating();
           }, 2000);
@@ -2502,6 +3972,7 @@ export default function ChecklistSupervisionScreen() {
       setIsSubmitting(false);
     }
   };
+  submitSaveRef.current = submitSave;
 
   const handleSave = () => {
     Alert.alert(
@@ -2557,11 +4028,11 @@ export default function ChecklistSupervisionScreen() {
               });
               await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(cleaned));
 
-              const corpoId = resolveChecklistRowCorpoId(it, filterCorpoIdRef.current);
-              const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+              const puestoId = resolveChecklistRowPuestoId(it, filterPuestoIdRef.current);
+              const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
               const nextBucket = bucket.filter((c) => Number(c.id) !== Number(it.id));
-              await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
-              await syncChecklistsFromCache(corpoId);
+              await saveChecklistSupervisionCacheForPuesto(puestoId, nextBucket);
+              await syncChecklistsFromCache(puestoId);
 
               Alert.alert('Modo Offline', 'Checklist eliminado localmente. Se sincronizará cuando haya conexión.');
             } else if (it.id_local) {
@@ -2574,13 +4045,13 @@ export default function ChecklistSupervisionScreen() {
               });
               await AsyncStorage.setItem('checklist_supervision_actions', JSON.stringify(updatedActions));
 
-              const corpoId = resolveChecklistRowCorpoId(it, filterCorpoIdRef.current);
-              const bucket = await loadChecklistSupervisionCacheForCorpo(corpoId);
+              const puestoId = resolveChecklistRowPuestoId(it, filterPuestoIdRef.current);
+              const bucket = await loadChecklistSupervisionCacheForPuesto(puestoId);
               const nextBucket = bucket.filter(
                 (c) => String((c as ChecklistSupervisionUI).id_local || '') !== String(it.id_local),
               );
-              await saveChecklistSupervisionCacheForCorpo(corpoId, nextBucket);
-              await syncChecklistsFromCache(corpoId);
+              await saveChecklistSupervisionCacheForPuesto(puestoId, nextBucket);
+              await syncChecklistsFromCache(puestoId);
 
               Alert.alert('Éxito', 'Registro pendiente eliminado (no requiere sincronizar borrado en servidor).');
             }
@@ -2599,9 +4070,11 @@ export default function ChecklistSupervisionScreen() {
     setFilterDivisionId(null);
     setFilterContratoId(null);
     setFilterCorpoId(null);
+    setFilterPuestoId(null);
+    setChecklists([]);
   };
 
-  /** `checklists` ya está acotado a la sucursal activa; aquí solo aplica búsqueda por texto. */
+  /** `checklists` ya está acotado al puesto activo; aquí solo aplica búsqueda por texto. */
   const filteredChecklists = useMemo(() => {
     const unique = dedupeChecklistRows(checklists as ChecklistSupervisionItem[]) as ChecklistSupervisionUI[];
     if (!filterSearch.trim()) return unique;
@@ -2679,21 +4152,6 @@ export default function ChecklistSupervisionScreen() {
               selectedValue={input.value || ''}
               onValueChange={(value) => {
                 updateInput(sectionId, subsectionId, input.id, { value });
-                // Si el select es de un carné y cambia a "Vencido", limpiar la fecha de vencimiento
-                if (input.id.includes('-cal') && value === 'Vencido') {
-                  const prefixMatch = input.id.match(/^(car-\d+)/);
-                  if (prefixMatch) {
-                    const prefix = prefixMatch[1];
-                    const fechaInputId = `${prefix}-fecha-vencimiento`;
-                    // Buscar y limpiar el input de fecha correspondiente
-                    const section = evaluation.find(s => s.id === sectionId);
-                    const subsection = section?.subsections.find(sub => sub.id === subsectionId);
-                    const fechaInput = subsection?.inputs.find(inp => inp.id === fechaInputId);
-                    if (fechaInput) {
-                      updateInput(sectionId, subsectionId, fechaInputId, { value: '' });
-                    }
-                  }
-                }
               }}
               style={styles.picker}
             >
@@ -2795,7 +4253,7 @@ export default function ChecklistSupervisionScreen() {
     try {
       const parsed = JSON.parse(evaluacionStr);
       const result = Array.isArray(parsed) ? parsed : [];
-      return result;
+      return normalizeEvaluationSections(result);
     } catch (error) {
       console.error('parseEvaluation: Error parsing evaluation:', error);
       return [];
@@ -2803,29 +4261,39 @@ export default function ChecklistSupervisionScreen() {
   };
 
   // Función para obtener URI de imagen en lista
-  const getImageUriForList = (input: EvaluationInput, row: ChecklistSupervisionUI): string => {
-    if (input.localFileName && String(input.localFileName).trim() !== '') {
-      const u = getLocalFileDisplayUri(String(input.localFileName).trim());
+  const getPhotoItemUriForList = (
+    photo: EvaluationPhotoItem,
+    input: EvaluationInput,
+    row: ChecklistSupervisionUI,
+  ): string => {
+    if (photo.localFileName && String(photo.localFileName).trim() !== '') {
+      const u = getLocalFileDisplayUri(String(photo.localFileName).trim());
       if (u) return u;
     }
-    if (input.value && typeof input.value === 'string' && input.value.startsWith('data:image/')) {
-      return input.value;
+    if (photo.value && typeof photo.value === 'string' && photo.value.startsWith('data:image/')) {
+      return photo.value;
     }
-    if (input.value && typeof input.value === 'string' && input.value.length > 100 && !input.value.startsWith('http')) {
-      return `data:image/jpeg;base64,${input.value}`;
+    if (photo.value && typeof photo.value === 'string' && photo.value.length > 100 && !photo.value.startsWith('http')) {
+      return `data:image/jpeg;base64,${photo.value}`;
     }
-    if (checklistRowShowsOfflineBadge(row) && !input.localFileName) {
+    if (checklistRowShowsOfflineBadge(row) && !photo.localFileName) {
       return '';
     }
     const checklistId = row.id != null ? Number(row.id) : 0;
-    if (input.file_name && Number.isFinite(checklistId) && checklistId > 0) {
+    if (photo.file_name && Number.isFinite(checklistId) && checklistId > 0) {
       const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
       if (apiUrl) {
         return appendTokenToUrl(
-          `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(input.file_name)}?t=${Date.now()}`,
+          `${apiUrl}/api/checklist-supervision/${checklistId}/get-image/${encodeURIComponent(photo.file_name)}?t=${Date.now()}`,
         );
       }
     }
+    return '';
+  };
+
+  const getImageUriForList = (input: EvaluationInput, row: ChecklistSupervisionUI): string => {
+    const photos = normalizePhotoInput(input);
+    if (photos.length > 0) return getPhotoItemUriForList(photos[0], input, row);
     return '';
   };
 
@@ -2834,6 +4302,10 @@ export default function ChecklistSupervisionScreen() {
     const isExpanded = expandedChecklists.has(key);
     const firmasExpanded = expandedChecklistFirmas.has(key);
     const fechaStr = it.fecha ? new Date(it.fecha).toLocaleDateString() : '-';
+    const horaInicioStr = normalizeTimeToHHmm((it as any).hora_inicio) || '—';
+    const horaFinStr = normalizeTimeToHHmm((it as any).hora_fin) || '—';
+    const empleadoNombre = String((it as any).empleado_nombre ?? '').trim();
+    const empleadoCodigo = String((it as any).empleado_codigo ?? '').trim();
     const evaluationSections = parseEvaluation(it.evaluacion);
 
     const lbl = resolveChecklistHierarchyLabels(structure, it.puesto_id);
@@ -2850,6 +4322,18 @@ export default function ChecklistSupervisionScreen() {
         <ThemedText style={styles.bitLine}>
           <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
           <ThemedText style={styles.bitValue}>{fechaStr}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Empleado: </ThemedText>
+          <ThemedText style={styles.bitValue}>
+            {empleadoNombre || empleadoCodigo
+              ? `${empleadoNombre || '—'}${empleadoCodigo ? ` (${empleadoCodigo})` : ''}`
+              : '—'}
+          </ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Horario: </ThemedText>
+          <ThemedText style={styles.bitValue}>{horaInicioStr} – {horaFinStr}</ThemedText>
         </ThemedText>
 
         <TouchableOpacity
@@ -2954,16 +4438,22 @@ export default function ChecklistSupervisionScreen() {
               evaluationSections.map((section) => (
                 <ThemedView key={section.id} style={styles.sectionCardList}>
                   <ThemedText style={styles.sectionTitle}>{section.title}</ThemedText>
-                  {section.subsections.map((subsection) => (
-                    <ThemedView key={subsection.id} style={styles.questionRow}>
-                      {subsection.title && subsection.title.trim() !== '' && (
-                        <ThemedText style={styles.questionTitleList}>{subsection.title}</ThemedText>
-                      )}
-                      {subsection.inputs.map((input) => {
+                  {section.subsections.map((subsection) => {
+                    const listOtherInputs = subsection.inputs.filter((inp) => !isEvaluationPhotoInput(inp));
+                    const listPhotoInputs = subsection.inputs.filter((inp) => isEvaluationPhotoInput(inp));
+                    const listDetalle =
+                      subsection.detalle && String(subsection.detalle).trim() !== '' ? (
+                        <ThemedText style={styles.evalLine}>
+                          <ThemedText style={styles.evalLabel}>Detalle: </ThemedText>
+                          <ThemedText style={styles.evalValue}>{subsection.detalle}</ThemedText>
+                        </ThemedText>
+                      ) : null;
+                    const renderListInput = (input: EvaluationInput) => {
+                        const photoItems = input.type === 'photo' ? normalizePhotoInput(input) : [];
                         const listPhotoUri = getImageUriForList(input, it);
                         const displayValue =
                           input.type === 'photo'
-                            ? (input.value || input.file_name || input.localFileName ? 'Imagen adjunta' : '-')
+                            ? (photoItems.length > 0 ? `${photoItems.length} imagen(es)` : '-')
                             : input.type === 'checkbox'
                               ? (input.value === 'true' ? 'Marcado' : 'No marcado')
                               : (input.value || '-');
@@ -2979,14 +4469,32 @@ export default function ChecklistSupervisionScreen() {
                                 <ThemedText style={styles.evalValue}>{displayValue}</ThemedText>
                               )}
                             </ThemedText>
-                            {/* Mostrar imagen si es tipo photo */}
+                            {input.type === 'photo' && photoItems.length > 0 ? (
+                              <View style={styles.photoGridList}>
+                                {photoItems.map((photo) => {
+                                  const uri = getPhotoItemUriForList(photo, input, it);
+                                  if (!uri) return null;
+                                  return (
+                                    <Image
+                                      key={photo.id}
+                                      source={{ uri }}
+                                      style={[
+                                        styles.questionImagePreviewList,
+                                        photo.imageOrientation === 'vertical'
+                                          ? styles.questionImagePreviewListVertical
+                                          : styles.questionImagePreviewListHorizontal,
+                                      ]}
+                                      resizeMode="contain"
+                                    />
+                                  );
+                                })}
+                              </View>
+                            ) : null}
                             {input.type === 'photo' &&
-                              (input.value || input.file_name || input.localFileName) &&
+                              photoItems.length === 0 &&
                               listPhotoUri.length > 0 && (
                               <Image
-                                source={{
-                                  uri: listPhotoUri,
-                                }}
+                                source={{ uri: listPhotoUri }}
                                 style={[
                                   styles.questionImagePreviewList,
                                   input.imageOrientation === 'vertical'
@@ -2994,16 +4502,22 @@ export default function ChecklistSupervisionScreen() {
                                     : styles.questionImagePreviewListHorizontal,
                                 ]}
                                 resizeMode="contain"
-                                onError={(e) => {
-                                  console.error('Error loading image in list:', e.nativeEvent.error);
-                                }}
                               />
                             )}
                           </ThemedView>
                         );
-                      })}
-                    </ThemedView>
-                  ))}
+                    };
+                    return (
+                      <ThemedView key={subsection.id} style={styles.questionRow}>
+                        {subsection.title && subsection.title.trim() !== '' && (
+                          <ThemedText style={styles.questionTitleList}>{subsection.title}</ThemedText>
+                        )}
+                        {listOtherInputs.map(renderListInput)}
+                        {listDetalle}
+                        {listPhotoInputs.map(renderListInput)}
+                      </ThemedView>
+                    );
+                  })}
                 </ThemedView>
               ))
             )}
@@ -3097,7 +4611,7 @@ export default function ChecklistSupervisionScreen() {
                     />
                   </ThemedView>
 
-                  {/* Jerarquía para filtros (sucursal = alcance del listado) */}
+                  {/* Jerarquía para filtros (puesto = alcance del listado) */}
                   {isStructureLoading ? (
                     <ThemedText style={styles.emptyText}>Cargando jerarquía…</ThemedText>
                   ) : structure.length === 0 ? (
@@ -3106,7 +4620,7 @@ export default function ChecklistSupervisionScreen() {
                     <HierarchyPickerFields
                       structure={structure}
                       isLoading={isStructureLoading}
-                      levels={['cliente', 'contrato', 'sucursal']}
+                      levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                       emptyPickerValue={0}
                       values={{
                         empresaId: filterEmpresaId,
@@ -3114,6 +4628,7 @@ export default function ChecklistSupervisionScreen() {
                         divisionId: filterDivisionId,
                         contratoId: filterContratoId,
                         sucursalId: filterCorpoId,
+                        puestoId: filterPuestoId,
                       }}
                       onChange={handleFilterHierarchyChange}
                       labels={{ sucursal: 'Sucursal (corpo)' }}
@@ -3123,10 +4638,41 @@ export default function ChecklistSupervisionScreen() {
                     />
                   )}
                   <ThemedText style={styles.filterHintMuted}>
-                    Elija sucursal para ver y sincronizar registros. El puesto solo aplica en el formulario de nuevo/editar.
+                    Elija un puesto para ver y sincronizar los registros de ese puesto.
                   </ThemedText>
                 </ThemedView>
               )}
+            </ThemedView>
+          )}
+
+          {!isCreating && !isLoading && hasFormDraft && (
+            <ThemedView style={[styles.draftBannerBox, styles.hierarchyHintBoxColumn]}>
+              <ThemedView style={styles.draftBannerTopRow}>
+                <Ionicons name="document-text-outline" size={22} color="#FF9500" style={{ marginRight: 10 }} />
+                <ThemedView style={{ flex: 1 }}>
+                  <ThemedText style={styles.draftBannerTitle}>Borrador guardado</ThemedText>
+                  <ThemedText style={styles.draftBannerText}>
+                    {formDraftSavedAt
+                      ? `Último guardado: ${convertDateTimestampToLocalString(formDraftSavedAt, true)}. Puedes continuar donde lo dejaste.`
+                      : 'Tienes un formulario sin terminar. Puedes continuar donde lo dejaste.'}
+                  </ThemedText>
+                </ThemedView>
+              </ThemedView>
+              <TouchableOpacity
+                style={styles.draftContinueButton}
+                onPress={() => void restoreFormDraft()}
+                disabled={isRestoringFormDraft}
+                activeOpacity={0.85}
+              >
+                {isRestoringFormDraft ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="play-circle-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.draftContinueButtonText}>Continuar borrador</ThemedText>
+                  </>
+                )}
+              </TouchableOpacity>
             </ThemedView>
           )}
 
@@ -3173,6 +4719,21 @@ export default function ChecklistSupervisionScreen() {
             <ThemedView style={styles.formCard}>
               <ThemedText style={styles.formTitle}>{editing ? 'Editar registro' : 'Nuevo registro'}</ThemedText>
 
+              {draftStatusMessage ? (
+                <ThemedView
+                  style={[
+                    styles.draftStatusBox,
+                    draftStatusMessage.type === 'success'
+                      ? styles.responseSuccess
+                      : draftStatusMessage.type === 'error'
+                        ? styles.responseError
+                        : styles.draftStatusInfo,
+                  ]}
+                >
+                  <ThemedText style={styles.draftStatusText}>{draftStatusMessage.text}</ThemedText>
+                </ThemedView>
+              ) : null}
+
               {/* Jerarquía para formulario (incluye puesto) */}
               <HierarchyPickerFields
                 structure={structure}
@@ -3202,6 +4763,97 @@ export default function ChecklistSupervisionScreen() {
                 <Ionicons name="calendar-outline" size={18} color="#007AFF" />
               </TouchableOpacity>
 
+              <ThemedText style={styles.label}>Empleado *</ThemedText>
+              {selectedEmpleado ? (
+                <ThemedView style={styles.selectedEmpleadoBox}>
+                  <ThemedView style={{ flex: 1 }}>
+                    <ThemedText style={styles.selectedEmpleadoName}>{selectedEmpleado.nombre}</ThemedText>
+                    {selectedEmpleado.codigo ? (
+                      <ThemedText style={styles.selectedEmpleadoMeta}>Código: {selectedEmpleado.codigo}</ThemedText>
+                    ) : null}
+                  </ThemedView>
+                  <TouchableOpacity
+                    onPress={() => setSelectedEmpleado(null)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                  </TouchableOpacity>
+                </ThemedView>
+              ) : null}
+              <TouchableOpacity
+                style={styles.cameraSmallButton}
+                onPress={() => setIsEmployeeSearchVisible(true)}
+              >
+                <Ionicons name="person-add-outline" size={16} color="#007AFF" />
+                <ThemedText style={[styles.cameraSmallButtonText, { color: '#007AFF' }]}>
+                  {selectedEmpleado ? 'Cambiar empleado' : 'Buscar empleado'}
+                </ThemedText>
+              </TouchableOpacity>
+
+              <ThemedText style={styles.label}>Horario del proceso *</ThemedText>
+
+              <ThemedText style={styles.label}>Hora inicio *</ThemedText>
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerInicio(true)}>
+                <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaInicio)}</ThemedText>
+                <Ionicons name="time-outline" size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {showTimePickerInicio && (
+                <DateTimePicker
+                  value={horaInicio}
+                  mode="time"
+                  is24Hour={true}
+                  display="default"
+                  onChange={(_event, selectedDate) => {
+                    if (Platform.OS === 'android') setShowTimePickerInicio(false);
+                    if (selectedDate) {
+                      setHoraInicio(timeDateFromPicker(selectedDate));
+                    }
+                  }}
+                />
+              )}
+
+              <ThemedText style={styles.label}>Hora fin *</ThemedText>
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerFin(true)}>
+                <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaFin)}</ThemedText>
+                <Ionicons name="time-outline" size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {showTimePickerFin && (
+                <DateTimePicker
+                  value={horaFin}
+                  mode="time"
+                  is24Hour={true}
+                  display="default"
+                  onChange={(_event, selectedDate) => {
+                    if (Platform.OS === 'android') setShowTimePickerFin(false);
+                    if (selectedDate) {
+                      setHoraFin(timeDateFromPicker(selectedDate));
+                    }
+                  }}
+                />
+              )}
+
+              {showReportIncidentOption ? (
+                <ThemedView style={styles.reportIncidentBox}>
+                  <ThemedText style={styles.reportIncidentHint}>
+                    {canReportIncidentFromChecklist
+                      ? 'Puede reportar un incidente vinculado a este checklist. Se usará la jerarquía actual y el empleado seleccionado como involucrado.'
+                      : 'Para reportar un incidente complete la jerarquía (empresa → puesto) y seleccione un empleado con código y nombre.'}
+                  </ThemedText>
+                  <TouchableOpacity
+                    style={[
+                      styles.reportIncidentButton,
+                      (!canReportIncidentFromChecklist || isSavingFormDraft || isSubmitting) && styles.buttonDisabled,
+                    ]}
+                    onPress={handleReportIncident}
+                    disabled={isSavingFormDraft || isSubmitting}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="warning-outline" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.reportIncidentButtonText}>Reportar incidente</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+              ) : null}
+
               {/* Evaluación dinámica */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Evaluación</ThemedText>
@@ -3222,134 +4874,136 @@ export default function ChecklistSupervisionScreen() {
                       )}
                     </ThemedView>
 
-                    {section.subsections.map((subsection) => (
+                    {section.subsections.map((subsection) => {
+                      const formOtherInputs = subsection.inputs.filter((inp) => !isEvaluationPhotoInput(inp));
+                      const formPhotoInputs = subsection.inputs.filter((inp) => isEvaluationPhotoInput(inp));
+                      const formDetalle = (
+                        <>
+                          <TextInput
+                            style={[styles.formInput, styles.textAreaInput]}
+                            value={subsection.detalle ?? ''}
+                            onChangeText={(text) => updateSubsectionDetalle(section.id, subsection.id, text)}
+                            placeholder="Detalle del punto evaluado"
+                            placeholderTextColor="#999"
+                            multiline
+                            numberOfLines={3}
+                            textAlignVertical="top"
+                          />
+                        </>
+                      );
+                      const renderFormInputCard = (input: EvaluationInput) => {
+                        const formPhotoItems = isEvaluationPhotoInput(input) ? normalizePhotoInput(input) : [];
+                        return (
+                          <ThemedView
+                            key={evaluationInputKey(section.id, subsection.id, input.id)}
+                            style={styles.inputCard}
+                          >
+                            {shouldShowInputTitle(input.title, subsection.title) && (
+                              <ThemedText style={styles.questionTitleList}>
+                                {input.title}
+                              </ThemedText>
+                            )}
+                            {isEvaluationPhotoInput(input) ? (
+                              <View>
+                                {formPhotoItems.length > 0 ? (
+                                  <View style={styles.photoGridForm}>
+                                    {formPhotoItems.map((photo) => {
+                                      const uri = getPhotoItemUri(photo, input);
+                                      if (!uri) {
+                                        return (
+                                          <View key={photo.id} style={styles.photoThumbWrap}>
+                                            <View style={[styles.photoThumb, styles.photoThumbHorizontal, styles.photoThumbMissing]}>
+                                              <Ionicons name="image-outline" size={22} color="#999" />
+                                              <ThemedText style={styles.photoThumbMissingText}>Sin archivo</ThemedText>
+                                            </View>
+                                            <TouchableOpacity
+                                              style={styles.photoDeleteBtn}
+                                              onPress={() =>
+                                                removePhotoFromInput(section.id, subsection.id, input.id, photo.id)
+                                              }
+                                            >
+                                              <Ionicons name="trash" size={16} color="#FFFFFF" />
+                                            </TouchableOpacity>
+                                          </View>
+                                        );
+                                      }
+                                      return (
+                                        <View key={photo.id} style={styles.photoThumbWrap}>
+                                          <Image
+                                            source={{ uri }}
+                                            style={[
+                                              styles.photoThumb,
+                                              photo.imageOrientation === 'vertical'
+                                                ? styles.photoThumbVertical
+                                                : styles.photoThumbHorizontal,
+                                            ]}
+                                            resizeMode="cover"
+                                          />
+                                          <TouchableOpacity
+                                            style={styles.photoDeleteBtn}
+                                            onPress={() =>
+                                              removePhotoFromInput(section.id, subsection.id, input.id, photo.id)
+                                            }
+                                          >
+                                            <Ionicons name="trash" size={16} color="#FFFFFF" />
+                                          </TouchableOpacity>
+                                        </View>
+                                      );
+                                    })}
+                                  </View>
+                                ) : null}
+                                <TouchableOpacity
+                                  style={styles.cameraSmallButton}
+                                  onPress={() => handleAddPhoto(`${section.id}|${subsection.id}|${input.id}`)}
+                                >
+                                  <Ionicons name="camera" size={16} color="#000000" />
+                                  <ThemedText style={styles.cameraSmallButtonText}>
+                                    {formPhotoItems.length > 0 ? 'Agregar otra foto' : 'Tomar foto'}
+                                  </ThemedText>
+                                </TouchableOpacity>
+                              </View>
+                            ) : (
+                              <View>
+                                {renderEvaluationInput(input, section.id, subsection.id)}
+                                {isUserAddedSubsection(section, subsection) && (
+                                  <TouchableOpacity
+                                    style={styles.deleteInputButtonSmall}
+                                    onPress={() => deleteInput(section.id, subsection.id, input.id)}
+                                  >
+                                    <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                                  </TouchableOpacity>
+                                )}
+                              </View>
+                            )}
+                          </ThemedView>
+                        );
+                      };
+                      return (
                       <ThemedView key={subsection.id} style={styles.questionCard}>
                         {subsection.title && subsection.title.trim() !== '' && (
                           <ThemedText style={styles.questionTitleList}>
                             {subsection.title}
                           </ThemedText>
                         )}
-                        {subsection.inputs.map((input) => {
-                          // Verificar si este input de fecha debe mostrarse (solo si el select anterior es "Vigente")
-                          if (input.type === 'date' && input.id.includes('fecha-vencimiento')) {
-                            // Extraer el prefijo del ID (car-0, car-1, car-3)
-                            const prefixMatch = input.id.match(/^(car-\d+)/);
-                            if (prefixMatch) {
-                              const prefix = prefixMatch[1];
-                              // Buscar el input select correspondiente en la misma subsección
-                              const selectInput = subsection.inputs.find(inp =>
-                                inp.type === 'select' && inp.id === `${prefix}-cal`
-                              );
-                              // Si el select no es "Vigente", no mostrar el input de fecha
-                              if (!selectInput || selectInput.value !== 'Vigente') {
-                                return null;
-                              }
-                            }
-                          }
-                          const formPhotoUri = getImageUri(input);
-                          return (
-                            <ThemedView
-                              key={evaluationInputKey(section.id, subsection.id, input.id)}
-                              style={styles.inputCard}
-                            >
-                              {shouldShowInputTitle(input.title, subsection.title) && (
-                                <ThemedText style={styles.questionTitleList}>
-                                  {input.title}
-                                </ThemedText>
-                              )}
-                              {input.type === 'photo' || (input.type === 'text' && input.title?.toLowerCase().includes('foto')) ? (
-                                <View>
-                                  {formPhotoUri.length > 0 &&
-                                  (((input.value && input.value.startsWith('data:image/')) ||
-                                    input.file_name ||
-                                    input.localFileName)) ? (
-                                    <View>
-                                      <Image
-                                        source={{ uri: formPhotoUri }}
-                                        style={[
-                                          styles.questionImagePreview,
-                                          input.imageOrientation === 'vertical'
-                                            ? styles.questionImagePreviewVertical
-                                            : styles.questionImagePreviewHorizontal,
-                                        ]}
-                                        resizeMode="contain"
-                                        onError={(e) => {
-                                          console.error('Error loading image:', e.nativeEvent.error);
-                                        }}
-                                      />
-                                      <TouchableOpacity
-                                        style={styles.cameraSmallButton}
-                                        onPress={() => {
-                                          if (input.localFileName) {
-                                            void deleteFile(String(input.localFileName).trim());
-                                          }
-                                          updateInput(section.id, subsection.id, input.id, {
-                                            value: '',
-                                            localFileName: undefined,
-                                            file_name: undefined,
-                                            imageOrientation: undefined,
-                                          });
-                                        }}
-                                      >
-                                        <Ionicons name="trash" size={16} color="#FF3B30" />
-                                        <ThemedText style={styles.cameraSmallButtonText}>Eliminar imagen</ThemedText>
-                                      </TouchableOpacity>
-                                    </View>
-                                  ) : null}
-                                  <TouchableOpacity
-                                    style={styles.cameraSmallButton}
-                                    onPress={() => handleAddPhoto(`${section.id}|${subsection.id}|${input.id}`)}
-                                  >
-                                    <Ionicons name="camera" size={16} color="#000000" />
-                                    <ThemedText style={styles.cameraSmallButtonText}>
-                                      {(input.value && input.value.startsWith('data:image/')) ||
-                                      input.file_name ||
-                                      input.localFileName
-                                        ? 'Cambiar imagen'
-                                        : 'Tomar foto'}
-                                    </ThemedText>
-                                  </TouchableOpacity>
-                                </View>
-                              ) : (
-                                <View>
-                                  {renderEvaluationInput(input, section.id, subsection.id)}
-                                  {!section.isPredefined && (
-                                    <TouchableOpacity
-                                      style={styles.deleteInputButtonSmall}
-                                      onPress={() => deleteInput(section.id, subsection.id, input.id)}
-                                    >
-                                      <Ionicons name="close-circle" size={18} color="#FF3B30" />
-                                    </TouchableOpacity>
-                                  )}
-                                </View>
-                              )}
-                            </ThemedView>
-                          );
-                        })}
-                        {!section.isPredefined && (
+                        {formOtherInputs.map(renderFormInputCard)}
+                        {formDetalle}
+                        {formPhotoInputs.map(renderFormInputCard)}
+                        {isUserAddedSubsection(section, subsection) && (
                           <TouchableOpacity
                             style={styles.cameraSmallButton}
-                            onPress={() => {
-                              Alert.alert(
-                                'Tipo de input',
-                                'Selecciona el tipo de input',
-                                [
-                                  { text: 'Texto', onPress: () => addInput(section.id, subsection.id, 'text') },
-                                  { text: 'Texto largo', onPress: () => addInput(section.id, subsection.id, 'textarea') },
-                                  { text: 'Select', onPress: () => addInput(section.id, subsection.id, 'select') },
-                                  { text: 'Fecha', onPress: () => addInput(section.id, subsection.id, 'date') },
-                                  { text: 'Foto', onPress: () => addInput(section.id, subsection.id, 'photo') },
-                                  { text: 'Checkbox', onPress: () => addInput(section.id, subsection.id, 'checkbox') },
-                                  { text: 'Cancelar', style: 'cancel' },
-                                ]
-                              );
-                            }}
+                            onPress={() =>
+                              openInputTypeModal({
+                                mode: 'existing',
+                                sectionId: section.id,
+                                subsectionId: subsection.id,
+                              })
+                            }
                           >
                             <Ionicons name="add" size={16} color="#007AFF" />
                             <ThemedText style={styles.cameraSmallButtonText}>Agregar input</ThemedText>
                           </TouchableOpacity>
                         )}
-                        {!section.isPredefined && (
+                        {isUserAddedSubsection(section, subsection) && (
                           <TouchableOpacity
                             style={[styles.cameraSmallButton, { backgroundColor: '#FFECEC', borderColor: '#FF3B30' }]}
                             onPress={() => deleteSubsection(section.id, subsection.id)}
@@ -3359,7 +5013,8 @@ export default function ChecklistSupervisionScreen() {
                           </TouchableOpacity>
                         )}
                       </ThemedView>
-                    ))}
+                      );
+                    })}
 
                     {/* Botón para agregar nueva subsección - debe estar fuera del map pero dentro de sectionCard */}
                     <TouchableOpacity
@@ -3577,6 +5232,46 @@ export default function ChecklistSupervisionScreen() {
                   </ThemedText>
                 </ThemedView>
               )}
+
+              <ThemedView style={styles.draftActionsRow}>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void saveFormDraft()}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  {isSavingFormDraft ? (
+                    <ActivityIndicator size="small" color="#007AFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="bookmark-outline" size={16} color="#007AFF" />
+                      <ThemedText style={styles.draftActionButtonText}>Guardar borrador</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void saveFormDraft({ closeForm: true })}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  <Ionicons name="exit-outline" size={16} color="#007AFF" />
+                  <ThemedText style={styles.draftActionButtonText}>Guardar y cerrar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, styles.draftActionReset, (isResettingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void resetFormWithDraftClear()}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  {isResettingFormDraft ? (
+                    <ActivityIndicator size="small" color="#FF3B30" />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh-outline" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.draftActionResetText}>Reestablecer</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ThemedView>
+
               <ThemedView style={styles.formActions}>
                 <TouchableOpacity
                   style={[styles.formActionButton, styles.formActionCancel]}
@@ -3614,9 +5309,9 @@ export default function ChecklistSupervisionScreen() {
               ) : filteredChecklists.length === 0 ? (
                 <ThemedView style={styles.emptyContainer}>
                   <ThemedText style={styles.emptyText}>
-                    {filterCorpoId == null && listCorpoScopeRef.current == null
-                      ? 'Seleccione una sucursal en los filtros (o use la marca actual al entrar) para ver registros.'
-                      : 'No hay registros para esta sucursal'}
+                    {filterPuestoId == null && listPuestoScopeRef.current == null
+                      ? 'Seleccione un puesto en los filtros (o use la marca actual al entrar) para ver registros.'
+                      : 'No hay registros para este puesto'}
                   </ThemedText>
                 </ThemedView>
               ) : (
@@ -3856,7 +5551,15 @@ export default function ChecklistSupervisionScreen() {
                         selectedValue={input.type}
                         onValueChange={(value) => {
                           const updated = [...newSubsectionInputs];
-                          updated[idx] = { ...updated[idx], type: value, options: value === 'select' ? ['Opción 1', 'Opción 2'] : undefined };
+                          updated[idx] = {
+                            ...updated[idx],
+                            type: value,
+                            options: value === 'select' ? ['Opción 1', 'Opción 2'] : undefined,
+                            photos: value === 'photo' ? [] : undefined,
+                            title: value === 'photo' && !String(updated[idx].title ?? '').trim()
+                              ? 'Fotos'
+                              : updated[idx].title,
+                          };
                           setNewSubsectionInputs(updated);
                         }}
                         style={styles.picker}
@@ -3865,10 +5568,15 @@ export default function ChecklistSupervisionScreen() {
                         <Picker.Item label="Texto largo" value="textarea" color="#000000" />
                         <Picker.Item label="Select" value="select" color="#000000" />
                         <Picker.Item label="Fecha" value="date" color="#000000" />
-                        <Picker.Item label="Foto" value="photo" color="#000000" />
+                        <Picker.Item label="Multifoto" value="photo" color="#000000" />
                         <Picker.Item label="Checkbox" value="checkbox" color="#000000" />
                       </Picker>
                     </View>
+                    {input.type === 'photo' ? (
+                      <ThemedText style={styles.filterHintMuted}>
+                        Permite adjuntar varias fotos. Se conservan en el borrador local.
+                      </ThemedText>
+                    ) : null}
                   </ThemedView>
 
                   <ThemedView style={styles.filterGroup}>
@@ -3910,21 +5618,7 @@ export default function ChecklistSupervisionScreen() {
 
               <TouchableOpacity
                 style={styles.cameraSmallButton}
-                onPress={() => {
-                  Alert.alert(
-                    'Tipo de input',
-                    'Selecciona el tipo de input',
-                    [
-                      { text: 'Texto', onPress: () => addInputToNewSubsection('text') },
-                      { text: 'Texto largo', onPress: () => addInputToNewSubsection('textarea') },
-                      { text: 'Select', onPress: () => addInputToNewSubsection('select') },
-                      { text: 'Fecha', onPress: () => addInputToNewSubsection('date') },
-                      { text: 'Foto', onPress: () => addInputToNewSubsection('photo') },
-                      { text: 'Checkbox', onPress: () => addInputToNewSubsection('checkbox') },
-                      { text: 'Cancelar', style: 'cancel' },
-                    ]
-                  );
-                }}
+                onPress={() => openInputTypeModal({ mode: 'new-subsection' })}
               >
                 <Ionicons name="add" size={16} color="#007AFF" />
                 <ThemedText style={styles.cameraSmallButtonText}>Agregar input</ThemedText>
@@ -3942,6 +5636,91 @@ export default function ChecklistSupervisionScreen() {
           </ThemedView>
         </ThemedView>
       </Modal>
+
+      <Modal
+        transparent
+        visible={isInputTypeModalVisible}
+        animationType="fade"
+        onRequestClose={closeInputTypeModal}
+      >
+        <ThemedView style={styles.modalBackdrop}>
+          <ThemedView style={[styles.modalCard, { maxWidth: 420 }]}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>Tipo de input</ThemedText>
+              <TouchableOpacity onPress={closeInputTypeModal} style={styles.modalCloseBtn}>
+                <Ionicons name="close" size={22} color="#000" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedView style={styles.inputTypeModalBody}>
+              <ThemedText style={styles.inputTypeModalHint}>Selecciona el tipo de campo a agregar</ThemedText>
+              {EVALUATION_INPUT_TYPE_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.type}
+                  style={styles.inputTypeOptionBtn}
+                  onPress={() => handleSelectInputType(opt.type)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name={opt.icon} size={20} color="#007AFF" />
+                  <ThemedText style={styles.inputTypeOptionText}>{opt.label}</ThemedText>
+                  <Ionicons name="chevron-forward" size={18} color="#999" />
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                style={[styles.modalPrimaryBtn, { backgroundColor: '#6c757d', marginTop: 8 }]}
+                onPress={closeInputTypeModal}
+              >
+                <ThemedText style={styles.modalPrimaryBtnText}>Cancelar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      <Modal
+        visible={isSavingFormDraft || isRestoringFormDraft || isResettingFormDraft}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+      >
+        <View style={styles.draftLoadingOverlay}>
+          <ThemedView style={styles.draftLoadingCard}>
+            <ActivityIndicator size="large" color="#007AFF" />
+            <ThemedText style={styles.draftLoadingText}>
+              {isSavingFormDraft
+                ? 'Guardando borrador…'
+                : isRestoringFormDraft
+                  ? 'Restaurando borrador…'
+                  : 'Reestableciendo formulario…'}
+            </ThemedText>
+            <ThemedText style={styles.draftLoadingSubtext}>
+              {isSavingFormDraft
+                ? 'Se están guardando los datos, evaluación, anotaciones e imágenes locales.'
+                : isRestoringFormDraft
+                  ? 'Cargando jerarquía, checks, artículos y archivos del borrador.'
+                  : 'Eliminando borrador y archivos locales asociados.'}
+            </ThemedText>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      <EmployeeSearchModal
+        visible={isEmployeeSearchVisible}
+        structure={structure}
+        onClose={() => setIsEmployeeSearchVisible(false)}
+        onSelect={(hit) => {
+          const emp = empleadoFromSearchHit(hit, structure);
+          setSelectedEmpleado(emp);
+          void applyEmpleadoDocumentosToForm(emp.id);
+        }}
+      />
+
+      <PlanillasPasswordRevalidationModal
+        visible={showPlanillasRevalidationModal}
+        refreshAccessToken={refreshAccessToken}
+        logout={logout}
+        onSuccess={handlePlanillasRevalidationSuccess}
+        onDismiss={handlePlanillasRevalidationDismiss}
+      />
 
       <AppFooter />
       <SlideMenu
@@ -4042,6 +5821,159 @@ const styles = StyleSheet.create({
   createButtonText: {
     color: '#FFFFFF',
     fontSize: 16,
+    fontWeight: '700',
+  },
+  draftBannerBox: {
+    backgroundColor: '#FFF8E6',
+    borderWidth: 1,
+    borderColor: '#FFD699',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+  },
+  draftBannerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    width: '100%',
+    marginBottom: 10,
+  },
+  draftBannerTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#8A5500',
+    marginBottom: 4,
+  },
+  draftBannerText: {
+    fontSize: 13,
+    color: '#664400',
+    lineHeight: 18,
+  },
+  draftContinueButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FF9500',
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  draftContinueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  draftStatusBox: {
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  draftStatusInfo: {
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8DAF8',
+  },
+  draftStatusText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#333',
+    lineHeight: 18,
+  },
+  draftActionsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  draftActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#F0F8FF',
+    minWidth: '30%',
+    flexGrow: 1,
+  },
+  draftActionButtonText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  draftActionReset: {
+    borderColor: '#FF3B30',
+    backgroundColor: '#FFF5F5',
+  },
+  draftActionResetText: {
+    color: '#FF3B30',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  draftLoadingOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  draftLoadingCard: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  draftLoadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000',
+    textAlign: 'center',
+  },
+  draftLoadingSubtext: {
+    marginTop: 8,
+    fontSize: 13,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  reportIncidentBox: {
+    marginTop: 12,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FFB84D',
+    backgroundColor: '#FFF8EE',
+  },
+  reportIncidentHint: {
+    fontSize: 13,
+    color: '#664400',
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  reportIncidentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FF9500',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  reportIncidentButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '700',
   },
   hierarchyHintBox: {
@@ -4477,7 +6409,6 @@ const styles = StyleSheet.create({
   checkboxContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
     paddingVertical: 8,
   },
   checkbox: {
@@ -4542,6 +6473,85 @@ const styles = StyleSheet.create({
   },
   questionImagePreviewVertical: {
     height: 260,
+  },
+  textAreaInput: {
+    minHeight: 72,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  selectedEmpleadoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 10,
+    backgroundColor: '#F9F9F9',
+    marginBottom: 6,
+  },
+  selectedEmpleadoName: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  selectedEmpleadoMeta: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 2,
+  },
+  photoGridForm: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  photoGridList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 4,
+  },
+  photoThumbWrap: {
+    position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  photoThumb: {
+    width: 120,
+    borderRadius: 8,
+  },
+  photoThumbHorizontal: {
+    height: 90,
+  },
+  photoThumbVertical: {
+    height: 150,
+  },
+  photoThumbMissing: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F5F5',
+    gap: 4,
+    padding: 8,
+  },
+  photoThumbMissingText: {
+    fontSize: 11,
+    color: '#999',
+  },
+  photoDeleteBtn: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#FF3B30',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   formInput: {
     borderWidth: 1,
@@ -4685,6 +6695,33 @@ const styles = StyleSheet.create({
   modalFooter: { padding: 12, borderTopWidth: 1, borderTopColor: '#E0E0E0', backgroundColor: '#FAFAFA', gap: 8 },
   modalPrimaryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#007AFF', borderRadius: 10, paddingVertical: 12 },
   modalPrimaryBtnText: { color: '#FFFFFF', fontSize: 14, fontWeight: '900' },
+  inputTypeModalBody: {
+    padding: 16,
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  inputTypeModalHint: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 4,
+  },
+  inputTypeOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F8FBFF',
+  },
+  inputTypeOptionText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+  },
   modalFormCard: { backgroundColor: '#fff', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 14 },
   // Estilos de tabla (replicados de EntregaPuestosScreen)
   tableWrapper: {

@@ -22,15 +22,31 @@ export async function hydrateChecklistEvaluationImagesForApi(evaluacionJson: str
       for (const x of obj) await walk(x);
       return;
     }
-    if (obj.type === 'photo' && obj.localFileName != null && String(obj.localFileName).trim() !== '') {
-      try {
-        const { base64 } = await getFile(String(obj.localFileName).trim());
-        obj.value = `data:image/jpeg;base64,${base64}`;
-        delete obj.localFileName;
-      } catch (e) {
-        console.warn('[checklistSupervisionEvaluationFiles] No se pudo leer foto local:', obj.localFileName, e);
-        throw new Error(`Archivo local de foto no encontrado: ${obj.localFileName}`);
+    if (obj.type === 'photo') {
+      if (Array.isArray(obj.photos)) {
+        for (const photo of obj.photos) {
+          if (photo?.localFileName != null && String(photo.localFileName).trim() !== '') {
+            try {
+              const { base64 } = await getFile(String(photo.localFileName).trim());
+              photo.value = `data:image/jpeg;base64,${base64}`;
+              delete photo.localFileName;
+            } catch (e) {
+              console.warn('[checklistSupervisionEvaluationFiles] No se pudo leer foto local:', photo.localFileName, e);
+              throw new Error(`Archivo local de foto no encontrado: ${photo.localFileName}`);
+            }
+          }
+        }
+      } else if (obj.localFileName != null && String(obj.localFileName).trim() !== '') {
+        try {
+          const { base64 } = await getFile(String(obj.localFileName).trim());
+          obj.value = `data:image/jpeg;base64,${base64}`;
+          delete obj.localFileName;
+        } catch (e) {
+          console.warn('[checklistSupervisionEvaluationFiles] No se pudo leer foto local:', obj.localFileName, e);
+          throw new Error(`Archivo local de foto no encontrado: ${obj.localFileName}`);
+        }
       }
+      return;
     }
     for (const k of Object.keys(obj)) {
       const v = (obj as any)[k];

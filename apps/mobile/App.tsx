@@ -199,7 +199,7 @@ import {
 import getHoraAccion from './hooks/getHoraAccion';
 import authedFetch from './hooks/authedFetch';
 import updateServerTime from './hooks/updateServerTime';
-import getModulesRelease from './hooks/getModulesRelease';
+import { fetchAndPersistModulesRelease } from './hooks/getModulesRelease';
 import updateLastLocation from './hooks/updateLastLocation';
 import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from './hooks/planillasTokenStorage';
@@ -294,7 +294,7 @@ export type RootStackParamList = {
   Vehicles: undefined;
   Visitors: undefined;
   Evaluations: undefined;
-  Incidents: undefined;
+  Incidents: { fromChecklistSupervision?: import('./hooks/checklistSupervisionIncidentLink').ChecklistSupervisionIncidentLinkParams } | undefined;
   MutuosAcuerdos: undefined;
   Notifications: undefined;
   Surveys: undefined;
@@ -608,8 +608,8 @@ function AppContent() {
   ];
 
   const authedFetchCb = useCallback(
-    async (args: { url: string; init: RequestInit }): Promise<Response | null> => {
-      return authedFetch({ ...args, refreshAccessToken, logout });
+    async (args: { url: string; init: RequestInit, shouldUpdateServerTime?: boolean }): Promise<Response | null> => {
+      return authedFetch({ ...args, refreshAccessToken, logout, shouldUpdateServerTime: args.shouldUpdateServerTime ?? true });
     },
     [refreshAccessToken, logout]
   );
@@ -669,6 +669,7 @@ function AppContent() {
             'ngrok-skip-browser-warning': '69420',
           },
         },
+        shouldUpdateServerTime: true,
       });
       if (!response || !response.ok) {
         eventBus.emit(MOBILE_VERSION_EVENT, { available: false, data: null, appVersion });
@@ -2647,6 +2648,7 @@ function AppContent() {
               'Content-Type': 'application/json',
             },
           },
+          shouldUpdateServerTime: false,
         });
 
         if (!response) {
@@ -2731,6 +2733,7 @@ function AppContent() {
             },
             body: JSON.stringify(payload),
           },
+          shouldUpdateServerTime: false,
         });
 
         if (!response) {
@@ -2860,6 +2863,7 @@ function AppContent() {
               },
               body: JSON.stringify(action.requestData),
             },
+            shouldUpdateServerTime: false,
           });
 
           if (!response) {
@@ -3228,8 +3232,11 @@ function AppContent() {
       try {
         if (action.type === 'create') {
           const { createChecklistSupervision } = await import('@/hooks/checklistSupervisionFunctions');
+          const planillasToken =
+            String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined;
           const result = await createChecklistSupervision({
             requestData: action.requestData,
+            planillasToken,
             refreshAccessToken,
             logout,
           });
@@ -3273,6 +3280,8 @@ function AppContent() {
           const result = await updateChecklistSupervision({
             id: resolvedId,
             requestData: action.requestData,
+            planillasToken:
+              String(action.planillasToken ?? action.requestData?.planillasToken ?? '').trim() || undefined,
             refreshAccessToken,
             logout,
           });
@@ -8319,6 +8328,39 @@ function AppContent() {
     return horaAccion;
   }
 
+  const enqueueLunchTimeCreateAction = useCallback(async (requestData: Record<string, any>) => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let localId = '';
+    for (let i = 0; i < 10; i++) {
+      localId += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
+    let actions: any[] = [];
+    try {
+      actions = actionsStr ? JSON.parse(actionsStr) : [];
+    } catch {
+      actions = [];
+    }
+    if (!Array.isArray(actions)) actions = [];
+
+    const marcaId = Number(requestData.marca_id);
+    const inicio = String(requestData.inicio || '');
+    const alreadyQueued = actions.some(
+      (a: any) =>
+        a?.type === 'create' &&
+        Number(a?.requestData?.marca_id) === marcaId &&
+        String(a?.requestData?.inicio || '') === inicio
+    );
+    if (!alreadyQueued) {
+      actions.push({
+        requestData,
+        id: localId,
+        type: 'create',
+      });
+      await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
+    }
+  }, []);
+
   const checkLunchTime = useCallback(async (
     temp_state: any,
     employeeId?: string,
@@ -8342,15 +8384,19 @@ function AppContent() {
     try {
       const startTime = new Date(temp_state.startTime).getTime();
       const endTimeMs = computeLunchEndTimeMs(temp_state);
-      const firma_empleado = temp_state.firma_empleado;
+      if (!Number.isFinite(startTime) || !Number.isFinite(endTimeMs) || endTimeMs <= 0) {
+        console.warn('[lunchTimer] temp_state con fechas inválidas; no se completa el almuerzo');
+        return;
+      }
 
+      const firma_empleado = String(temp_state.firma_empleado || '').trim();
       const requestData: Record<string, any> = {
         empleadoId: employeeId,
-        inicio: new Date(startTime),
-        fin: new Date(endTimeMs),
+        inicio: new Date(startTime).toISOString(),
+        fin: new Date(endTimeMs).toISOString(),
         pausas: JSON.stringify(temp_state.inactivities ?? []),
         es_manual: false,
-        firma_empleado: firma_empleado,
+        firma_empleado,
       };
 
       await mergeCurrentMarcaHierarchyIntoLunchRequest(requestData);
@@ -8361,8 +8407,21 @@ function AppContent() {
         return;
       }
 
+      const finishLocally = async (postedOnline: boolean) => {
+        await AsyncStorage.removeItem('temp_state');
+        await markLunchTimeAsCompleted();
+        Alert.alert(
+          postedOnline ? '🎉 ¡Tiempo de alimentación completado!' : 'Modo Offline',
+          postedOnline
+            ? 'Tu descanso ha terminado. ¡Es hora de volver al trabajo!'
+            : 'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
+          [{ text: 'OK', onPress: async () => {} }]
+        );
+      };
+
       const lunchConnectivity = await resolveAppConnectivity();
-      if (lunchConnectivity.ok) {
+      if (lunchConnectivity.ok && refreshAccessTokenFn && logoutFn) {
+        console.log('[lunchTimer] Completado: enviando POST /api/lunch-time');
         const responseData = await saveLunchTime({
           requestData,
           employeeId,
@@ -8370,48 +8429,27 @@ function AppContent() {
           logout: logoutFn,
         });
 
-        if (!responseData.status) {
-          Alert.alert('Error', responseData.message);
+        if (responseData.status) {
+          await finishLocally(true);
           return;
         }
 
-        await AsyncStorage.removeItem('temp_state');
-
-        await markLunchTimeAsCompleted();
-
-        Alert.alert(
-          '🎉 ¡Tiempo de alimentación completado!',
-          'Tu descanso ha terminado. ¡Es hora de volver al trabajo!',
-          [{ text: 'OK', onPress: async () => {} }]
+        console.warn(
+          '[lunchTimer] POST /api/lunch-time falló; se encola para reintento:',
+          responseData.message
         );
-      } else {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let localId = '';
-        for (let i = 0; i < 10; i++) {
-          localId += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-
-        const actionsStr = await AsyncStorage.getItem('lunchtime_actions');
-        const actions = actionsStr ? JSON.parse(actionsStr) : [];
-        actions.push({
-          requestData,
-          id: localId,
-          type: 'create',
-        });
-        await AsyncStorage.setItem('lunchtime_actions', JSON.stringify(actions));
-
-        await AsyncStorage.removeItem('temp_state');
-        await markLunchTimeAsCompleted();
-        Alert.alert(
-          'Modo Offline',
-          'Tu descanso ha terminado. El registro se sincronizará cuando haya conexión.',
-          [{ text: 'OK', onPress: async () => {} }]
-        );
+        await enqueueLunchTimeCreateAction(requestData);
+        await finishLocally(false);
+        return;
       }
+
+      console.log('[lunchTimer] Completado sin conexión (o sin auth); encolando POST /api/lunch-time');
+      await enqueueLunchTimeCreateAction(requestData);
+      await finishLocally(false);
     } finally {
       await releaseLunchTimerCompletionLock();
     }
-  }, []);
+  }, [enqueueLunchTimeCreateAction]);
 
   const lunchTimerPollInFlightRef = useRef(false);
 
@@ -8422,29 +8460,13 @@ function AppContent() {
 
       let horaAccion: number;
       try {
-        const connectivity = await resolveAppConnectivity();
-        if (connectivity.ok) {
-          horaAccion = await getHoraAccion();
-        }
-        else {
-          const server_time = await AsyncStorage.getItem('server_time');
-          if (server_time) {
-            const server_time_obj = JSON.parse(server_time);
-            const t = parseInt(String(server_time_obj.server_time), 10);
-            if (Number.isFinite(t)) {
-              horaAccion = t;
-            }
-            else {
-              horaAccion = new Date().getTime();
-            }
-          }
-          else {
-            horaAccion = new Date().getTime();
-          }
-        }
+        horaAccion = await getHoraAccion();
       } catch (error) {
         console.error('[lunchTimer] Error obteniendo hora de referencia:', error);
-        horaAccion = await getHoraAccion();
+        horaAccion = Date.now();
+      }
+      if (!Number.isFinite(horaAccion) || horaAccion <= 0) {
+        horaAccion = Date.now();
       }
 
       const temp_state_async = await AsyncStorage.getItem('temp_state');
@@ -8480,13 +8502,19 @@ function AppContent() {
 
 
   const check_conection_time = async () => {
-    console.log('Checking connection time...');
     await updateServerTime();
     const connectivity = await resolveAppConnectivity();
     if (connectivity.ok) {
       await get_notifications();
+      // El POST de almuerzo no requiere token de Planillas; reintentar cola aquí
+      // (la sync general puede quedar bloqueada esperando revalidación).
+      try {
+        await checkLunchTimeActionsCache();
+      } catch (e) {
+        console.error('[lunchTimer] Error sincronizando lunchtime_actions:', e);
+      }
     }
-    
+
     // Si no existe marca activa, forzar flujo de marcado de ingreso/salida.
     // Se evita redirigir cuando ya estamos en esa pantalla.
     try {
@@ -8494,14 +8522,14 @@ function AppContent() {
       if (!currentMarca && navigationRef.current && employee?.id != null) {
         const currentRoute = navigationRef.current?.getCurrentRoute?.()?.name;
         if (currentRoute !== 'MarcarIngresoSalida' && currentRoute !== 'Login') {
-          console.log("Redireccionamos");
+          console.log('Redireccionamos');
           navigationRef.current?.navigate('MarcarIngresoSalida');
         }
       }
     } catch (e) {
       console.error('Error verificando current_marca tras actualización de hora:', e);
     }
-  }
+  };
 
   const checkReleaseModule = useCallback(async () => {
     if (!employee?.id || !accessToken) return;
@@ -8509,12 +8537,12 @@ function AppContent() {
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) return;
 
-    const modules_release = await getModulesRelease({
+    const modules_release = await fetchAndPersistModulesRelease({
       refreshAccessToken,
       logout,
     });
-    if (modules_release.status) {
-      await AsyncStorage.setItem('modules_release', JSON.stringify(modules_release.modules || []));
+    if (!modules_release.status) {
+      console.warn('[modules-release] No se pudo actualizar visibilidad de módulos:', modules_release.message);
     }
   }, [employee?.id, accessToken, refreshAccessToken, logout]);
 
@@ -8585,7 +8613,6 @@ function AppContent() {
   }
 
   const get_notifications = async () => {
-    console.log('+++++++++++++++++++++++++++++++++++++++++ Getting notifications...');
     const planillas_token = await AsyncStorage.getItem('planillas_token');
     const connectivity = await resolveAppConnectivity();
     if (!connectivity.ok) {
@@ -8624,6 +8651,7 @@ function AppContent() {
           'Content-Type': 'application/json',
         },
       },
+      shouldUpdateServerTime: false,
     });
 
     if (!response) {
@@ -8686,30 +8714,38 @@ function AppContent() {
   }
 
   useEffect(() => {
-    let timeoutId: NodeJS.Timeout;
-    let timeoutIdReleaseModules: NodeJS.Timeout;
+    let cancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let timeoutIdReleaseModules: ReturnType<typeof setTimeout> | undefined;
 
     const poll = async () => {
+      if (cancelled) return;
       await check_conection_time();
+      if (cancelled) return;
       await alert_lunch_time();
-      timeoutId = setTimeout(poll, 30000) as unknown as NodeJS.Timeout;
+      if (cancelled) return;
+      timeoutId = setTimeout(poll, 30000);
     };
-    
+
     const pollReleaseModules = async () => {
+      if (cancelled) return;
       await checkReleaseModule();
-      timeoutIdReleaseModules = setTimeout(pollReleaseModules, 30000 * 60) as unknown as NodeJS.Timeout; // 30 minutos
+      if (cancelled) return;
+      timeoutIdReleaseModules = setTimeout(pollReleaseModules, 30000 * 60); // 30 minutos
     };
 
     if (isConnected) {
-      poll(); // ejecuta inmediato
+      void poll();
       if (employee?.id && accessToken) {
-        pollReleaseModules(); // ejecuta inmediato si hay sesión
+        void pollReleaseModules();
       }
     }
 
+    // Al recrear el efecto (nuevo poll): invalidar el anterior y limpiar sus timeouts.
     return () => {
-      clearTimeout(timeoutId);
-      clearTimeout(timeoutIdReleaseModules);
+      cancelled = true;
+      if (timeoutId != null) clearTimeout(timeoutId);
+      if (timeoutIdReleaseModules != null) clearTimeout(timeoutIdReleaseModules);
     };
   }, [isConnected, employee?.id, accessToken, checkReleaseModule]);
 
@@ -8748,13 +8784,14 @@ function AppContent() {
     void run();
     const onMarcaUpdated = () => {
       void run();
+      void checkReleaseModule();
     };
     eventBus.on(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
     return () => {
       cancelled = true;
       eventBus.off(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
     };
-  }, [employee?.id, accessToken]);
+  }, [employee?.id, accessToken, checkReleaseModule]);
 
   /** Listeners FCM: primer plano + tap (background/cerrada). */
   useEffect(() => {

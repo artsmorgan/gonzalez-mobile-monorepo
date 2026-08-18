@@ -41,6 +41,11 @@ export type ChecklistSupervisionItem = {
   firma_responsable: string;
   created_by: number;
   created_at: string;
+  empleado_id?: number | null;
+  empleado_nombre?: string | null;
+  empleado_codigo?: string | null;
+  hora_inicio?: string | null;
+  hora_fin?: string | null;
   id_local?: string;
   images?: ChecklistSupervisionImageMeta[];
   cliente?: { id: number; nombre: string };
@@ -64,6 +69,7 @@ type ListParams = {
 
 type CreateParams = {
   requestData: any;
+  planillasToken?: string | null;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -71,6 +77,7 @@ type CreateParams = {
 type UpdateParams = {
   id: number;
   requestData: any;
+  planillasToken?: string | null;
   refreshAccessToken?: () => Promise<boolean>;
   logout?: () => Promise<any>;
 };
@@ -153,8 +160,30 @@ export type CreateChecklistSupervisionResponse = BasicResponse & {
   data?: ChecklistSupervisionItem & { id?: number };
 };
 
+const buildChecklistHeaders = (planillasToken?: string | null): Record<string, string> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  const token = String(planillasToken ?? '').trim();
+  if (token) {
+    headers['Planillas-Token'] = encodeURIComponent(token);
+  }
+  return headers;
+};
+
+const resolvePlanillasTokenFromParams = (
+  planillasToken?: string | null,
+  requestData?: any,
+): string | undefined => {
+  const direct = String(planillasToken ?? '').trim();
+  if (direct) return direct;
+  const fromRequest = String(requestData?.planillasToken ?? '').trim();
+  return fromRequest || undefined;
+};
+
 export async function createChecklistSupervision({
   requestData,
+  planillasToken,
   refreshAccessToken,
   logout,
 }: CreateParams): Promise<CreateChecklistSupervisionResponse> {
@@ -162,14 +191,13 @@ export async function createChecklistSupervision({
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
     const payload = await requestDataWithHydratedEvaluacion(requestData);
+    const resolvedPlanillasToken = resolvePlanillasTokenFromParams(planillasToken, requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision`,
       init: {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: buildChecklistHeaders(resolvedPlanillasToken),
         body: JSON.stringify(payload),
       },
       refreshAccessToken: refresh,
@@ -231,6 +259,7 @@ export async function updateChecklistSupervisionFirmaSupervisor({
 export async function updateChecklistSupervision({
   id,
   requestData,
+  planillasToken,
   refreshAccessToken,
   logout,
 }: UpdateParams): Promise<BasicResponse> {
@@ -238,14 +267,13 @@ export async function updateChecklistSupervision({
     const apiUrl = getApiUrl();
     const { refreshAccessToken: refresh, logout: doLogout } = requireAuthHandlers(refreshAccessToken, logout);
     const payload = await requestDataWithHydratedEvaluacion(requestData);
+    const resolvedPlanillasToken = resolvePlanillasTokenFromParams(planillasToken, requestData);
 
     const response = await authedFetch({
       url: `${apiUrl}/api/checklist-supervision/${id}`,
       init: {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: buildChecklistHeaders(resolvedPlanillasToken),
         body: JSON.stringify(payload),
       },
       refreshAccessToken: refresh,

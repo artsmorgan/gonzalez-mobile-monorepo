@@ -5775,7 +5775,8 @@ export default function MantenimientoEquipoScreen() {
                         <ThemedText style={styles.modalTitle}>Carga masiva de artículos</ThemedText>
                         <ThemedText style={styles.bulkModalDisclaimer}>
                             Descargue la plantilla Excel, indique el código de cada puesto en la primera columna,
-                            complétela y súbala para vincular artículos. La validación de códigos de puesto requiere
+                            complétela y súbala para vincular artículos. En «Fecha de entrega» use solo la fecha
+                            (DD-MM-YYYY); al cargar se asignará 00:00:00. La validación de códigos de puesto requiere
                             conexión a internet.
                         </ThemedText>
                         <ScrollView

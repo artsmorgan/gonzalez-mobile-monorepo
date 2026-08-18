@@ -7,6 +7,8 @@ import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { mapChecklistSupervisionPublicRow } from "./mapPublicRow";
 import { processChecklistSupervisionArticulosMantenimiento } from "./articulosMantenimiento";
+import { processChecklistEvaluationImages, validateChecklistEmpleadoHoras } from "./evaluationImages";
+import { notifyChecklistSupervisionEmpleado } from "./notifyEmpleado";
 import {
   sanitizeArticulosPuestoForPersistence,
   stripMantenimientoFilesFromArticulosPuesto,
@@ -33,64 +35,7 @@ function safeParseJson<T>(value: any, fallback: T): T {
 }
 
 async function processEvaluationImages(req: NextRequest, evaluation: any, checklistId: number): Promise<any> {
-  if (!evaluation || typeof evaluation !== "object") return evaluation;
-
-  const photoInputs: Array<{ input: any; value: string }> = [];
-  function collectPhotos(obj: any) {
-    if (!obj || typeof obj !== "object") return;
-    if (Array.isArray(obj)) {
-      obj.forEach(collectPhotos);
-      return;
-    }
-    if (obj.type === "photo" && obj.value && typeof obj.value === "string" && obj.value.startsWith("data:image/")) {
-      photoInputs.push({ input: obj, value: obj.value });
-    }
-    if (obj.subsections) obj.subsections.forEach(collectPhotos);
-    if (obj.inputs) obj.inputs.forEach(collectPhotos);
-  }
-  collectPhotos(evaluation);
-
-  if (photoInputs.length > 0) {
-    const getExt = (v: string) => {
-      const m = v.match(/data:image\/([^;]+)/);
-      return m ? m[1].replace("jpeg", "jpg") : "jpg";
-    };
-    const uploadResp = await uploadDynamicFiles({
-      req,
-      folderPath: `checklist-supervision/${checklistId}`,
-      files: photoInputs.map(({ value }) => ({ type: "image", extension: getExt(value), file_base64: value })),
-    });
-    const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
-
-    // Asociar nombres de archivo a los inputs y registrar en c_imagenes_checklist_supervision
-    for (let i = 0; i < photoInputs.length; i++) {
-      const { input } = photoInputs[i];
-      const file = uploaded[i];
-      if (!file) continue;
-
-      // Guardar referencia en el JSON de evaluación
-      input.file_name = file.name;
-      if (typeof input.value === "string" && input.value.startsWith("data:image/")) {
-        input.value = null;
-      }
-
-      // Registrar en la tabla c_imagenes_checklist_supervision (nombre + checklist_id + original_name)
-      await callDynamicPrisma({
-        req,
-        data: {
-          action: "POST",
-          table: "c_imagenes_checklist_supervision",
-          operation: "create",
-          data: {
-            name: file.name,
-            checklist_id: checklistId,
-            original_name: file.original_name || file.name,
-          },
-        },
-      });
-    }
-  }
-  return evaluation;
+  return processChecklistEvaluationImages(req, evaluation, checklistId, uploadDynamicFiles, callDynamicPrisma);
 }
 
 export async function GET(req: NextRequest) {
@@ -158,6 +103,11 @@ export async function POST(req: NextRequest) {
       firma_responsable,
       created_at,
       hora_accion,
+      empleado_id,
+      empleado_nombre,
+      empleado_codigo,
+      hora_inicio,
+      hora_fin,
     } = body ?? {};
 
     if (
@@ -195,6 +145,19 @@ export async function POST(req: NextRequest) {
         ? new Date(hora_accion)
         : createdAt;
     const fechaDate = fecha instanceof Date ? fecha : new Date(fecha);
+    const empleadoHoras = validateChecklistEmpleadoHoras({
+      empleado_id,
+      empleado_nombre,
+      empleado_codigo,
+      hora_inicio,
+      hora_fin,
+    });
+    if (!empleadoHoras.ok) {
+      return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 200 });
+    }
+    const horaInicioParsed = empleadoHoras.horaInicio;
+    const horaFinParsed = empleadoHoras.horaFin;
+    const empleadoIdNum = empleadoHoras.empleadoId;
 
     // Parsear evaluación para procesar imágenes
     let evaluationParsed = safeParseJson<any>(evaluacion, []);
@@ -251,6 +214,11 @@ export async function POST(req: NextRequest) {
           firma_responsable: String(firma_responsable),
           created_by: parseInt(String((payload as any)?.id ?? 0)) || 0,
           created_at: createdAt.toISOString(),
+          empleado_id: empleadoHoras.empleadoId,
+          empleado_nombre: empleadoHoras.empleadoNombre,
+          empleado_codigo: empleadoHoras.empleadoCodigo,
+          hora_inicio: horaInicioParsed.toISOString(),
+          hora_fin: horaFinParsed.toISOString(),
         }
       }
     });
@@ -325,8 +293,22 @@ export async function POST(req: NextRequest) {
       (created as any).articulos_puesto = articulosStored;
     }
 
-    // Registrar cambio de creación
     const createdBy = parseInt(String((payload as any)?.id ?? 0)) || 0;
+    try {
+      await notifyChecklistSupervisionEmpleado({
+        req,
+        empleadoId: empleadoIdNum,
+        corpoId: parseInt(String(corpo_id), 10),
+        puestoId: parseInt(String(puesto_id), 10),
+        fechaRegistro: fechaDate,
+        evaluacion: processedEvaluation ?? evaluationParsed,
+        createdByEmpleadoId: createdBy,
+      });
+    } catch (notifyErr) {
+      console.error("Error notificando empleado del checklist de supervisión:", notifyErr);
+    }
+
+    // Registrar cambio de creación
     await callDynamicPrisma({
       req,
       data: {

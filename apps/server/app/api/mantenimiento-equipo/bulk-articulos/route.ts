@@ -28,25 +28,21 @@ function parseFechaEntregaParts(value: string): {
     .replace(/\u00A0/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  const m = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!m) return null;
-  const [, dd, mm, yyyy, hh, mi, ss = "0"] = m;
+  const [, dd, mm, yyyy] = m;
   const day = Number(dd);
   const month = Number(mm);
   const year = Number(yyyy);
-  const hour = Number(hh);
-  const minute = Number(mi);
-  const second = Number(ss || 0);
   if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return null;
   if (Number.isNaN(year)) return null;
   return {
     dd: String(day).padStart(2, "0"),
     mm: String(month).padStart(2, "0"),
     yyyy: String(year),
-    hh: String(hour).padStart(2, "0"),
-    mi: String(minute).padStart(2, "0"),
-    ss: String(second).padStart(2, "0"),
+    hh: "00",
+    mi: "00",
+    ss: "00",
   };
 }
 
@@ -123,10 +119,11 @@ export async function POST(req: NextRequest) {
         continue;
       }
       if (!fechaEntrega || !isValidFechaEntrega(fechaEntrega)) {
-        validationErrors.push(`Artículo ${i + 1}: fecha de entrega inválida (DD-MM-YYYY HH:MM:SS).`);
+        validationErrors.push(`Artículo ${i + 1}: fecha de entrega inválida (DD-MM-YYYY).`);
         continue;
       }
 
+      const fechaParts = parseFechaEntregaParts(fechaEntrega);
       articulos.push({
         codigo_puesto: codigoPuesto,
         numero_articulo: Math.trunc(numero),
@@ -134,7 +131,9 @@ export async function POST(req: NextRequest) {
         serie,
         marca,
         modelo,
-        fecha_entrega: fechaEntrega,
+        fecha_entrega: fechaParts
+          ? `${fechaParts.dd}-${fechaParts.mm}-${fechaParts.yyyy} 00:00:00`
+          : fechaEntrega,
       });
     }
 

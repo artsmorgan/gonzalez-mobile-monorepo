@@ -1,5 +1,10 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import authedFetch from './authedFetch';
+import { eventBus } from './eventBus';
+
+export const MODULES_RELEASE_UPDATED_EVENT = 'modulesReleaseUpdated';
+export const MODULES_RELEASE_STORAGE_KEY = 'modules_release';
 
 export type ModulesReleaseResult = {
   status: boolean;
@@ -64,4 +69,31 @@ export default async function getModulesRelease({
       message: error instanceof Error ? error.message : 'Error al obtener módulos liberados',
     };
   }
+}
+
+export async function readModulesReleaseFromStorage(): Promise<any[]> {
+  try {
+    const raw = await AsyncStorage.getItem(MODULES_RELEASE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function persistModulesReleaseToStorage(modules: unknown[]): Promise<void> {
+  const normalized = Array.isArray(modules) ? modules : [];
+  await AsyncStorage.setItem(MODULES_RELEASE_STORAGE_KEY, JSON.stringify(normalized));
+  eventBus.emit(MODULES_RELEASE_UPDATED_EVENT, normalized);
+}
+
+export async function fetchAndPersistModulesRelease(
+  params: GetModulesReleaseParams
+): Promise<ModulesReleaseResult> {
+  const result = await getModulesRelease(params);
+  if (result.status) {
+    await persistModulesReleaseToStorage(result.modules || []);
+  }
+  return result;
 }

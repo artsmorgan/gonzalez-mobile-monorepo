@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Dimensions, Modal, Platform, ScrollView, StyleSheet, TextInput, TouchableOpacity, View, Image } from 'react-native';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Picker } from '@react-native-picker/picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -41,8 +41,13 @@ import { deleteFile, getLocalFileDisplayUri, saveFile, type StoredFileType } fro
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { findHierarchyByPuestoIn } from '@/hooks/llavesMainStructureHelpers';
 import { filterIncidentsByCorpo, getCurrentMarcaId, getExecutivesCache, getIncidentsCache, getIncidentsClassificationsCache, INCIDENT_CONTRIBUTIONS_ACTIONS_KEY, mergeIncidentsCacheForCorpo, setExecutivesCache, setIncidentsCache, setIncidentsClassificationsCache } from '@/hooks/incidentsStorage';
+import {
+  isChecklistSupervisionIncidentLinkComplete,
+  type ChecklistSupervisionIncidentLinkParams,
+} from '@/hooks/checklistSupervisionIncidentLink';
 
 type IncidentsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Incidents'>;
+type IncidentsScreenRouteProp = RouteProp<RootStackParamList, 'Incidents'>;
 
 type InvolucradoForm = { codigo: string; nombre: string };
 
@@ -226,7 +231,11 @@ const canModifyAporte = (rolAporte: string, aporteEmpleadoId: number, currentEmp
 
 export default function IncidentsScreen() {
   const navigation = useNavigation<IncidentsScreenNavigationProp>();
+  const route = useRoute<IncidentsScreenRouteProp>();
   const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+
+  const checklistLinkConsumedRef = useRef(false);
+  const [checklistIncidentLink, setChecklistIncidentLink] = useState<ChecklistSupervisionIncidentLinkParams | null>(null);
 
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -880,6 +889,7 @@ export default function IncidentsScreen() {
     const tree = await fetchMainStructure();
     await applyCurrentMarcaToFormHierarchy(tree);
     const today = isoDateOnly(new Date(horaAccion));
+    setChecklistIncidentLink(null);
     setIsCreating(true);
     setTextFiles([]);
     setImageFiles([]);
@@ -914,6 +924,86 @@ export default function IncidentsScreen() {
     nombreResponsableRef.current = employee?.name || '';
   };
 
+  const startCreatingFromChecklistSupervision = useCallback(
+    async (link: ChecklistSupervisionIncidentLinkParams) => {
+      if (!isChecklistSupervisionIncidentLinkComplete(link)) {
+        Alert.alert('Error', 'Los datos recibidos desde Checklist de supervisión están incompletos.');
+        return;
+      }
+
+      const horaAccion = await getHoraAccion();
+      if (!horaAccion) {
+        Alert.alert('Error', 'No se pudo obtener la hora');
+        return;
+      }
+
+      await fetchMainStructure();
+      const today = isoDateOnly(new Date(horaAccion));
+
+      setFormEmpresaId(link.empresaId);
+      setFormClienteId(link.clienteId);
+      setFormDivisionId(link.divisionId);
+      setFormContratoId(link.contratoId);
+      setFormSucursalId(link.sucursalId);
+      setFormPuestoId(link.puestoId);
+      setChecklistIncidentLink(link);
+      setIsCreating(true);
+      setTextFiles([]);
+      setImageFiles([]);
+      setAudioFiles([]);
+      setVideoFiles([]);
+      setNewIncident({
+        id: null,
+        id_local: '',
+        estado: true,
+        ejecutivo_id: null,
+        fecha_incidente: today,
+        fecha_reporte: today,
+        nombre_responsable: employee?.name || '',
+        clasificacion_id: null,
+        descripcion: '',
+        involucrados: [
+          {
+            codigo: String(link.involucrado.codigo).trim(),
+            nombre: String(link.involucrado.nombre).trim(),
+          },
+        ],
+        libro_fecha: today,
+        libro_numero: '',
+        nombre_responsable_atencion: '',
+        solucion: '',
+        fecha_solucion: '',
+        fecha_real_solucion: '',
+        costo_asociado: '',
+        consecutivo_informe: '',
+        link_informe: '',
+        owned: false,
+      });
+      resetRefs();
+      fechaIncidenteRef.current = today;
+      fechaReporteRef.current = today;
+      nombreResponsableRef.current = employee?.name || '';
+      setCodigoInvolucradoBusqueda('');
+    },
+    [employee?.name, fetchMainStructure],
+  );
+
+  const clearChecklistIncidentLink = useCallback(() => {
+    setChecklistIncidentLink(null);
+    checklistLinkConsumedRef.current = false;
+    navigation.setParams({ fromChecklistSupervision: undefined });
+  }, [navigation]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const link = route.params?.fromChecklistSupervision;
+      if (!link || checklistLinkConsumedRef.current) return;
+      if (!isChecklistSupervisionIncidentLinkComplete(link)) return;
+      checklistLinkConsumedRef.current = true;
+      void startCreatingFromChecklistSupervision(link);
+    }, [route.params?.fromChecklistSupervision, startCreatingFromChecklistSupervision]),
+  );
+
   const cancelCreating = () => {
     setIsCreating(false);
     clearFormHierarchy();
@@ -921,6 +1011,9 @@ export default function IncidentsScreen() {
     setImageFiles([]);
     setAudioFiles([]);
     setVideoFiles([]);
+    if (checklistIncidentLink) {
+      clearChecklistIncidentLink();
+    }
   };
 
   const handleAddInvolucrado = () => {
@@ -934,7 +1027,10 @@ export default function IncidentsScreen() {
 
   const removeInvolucrado = (idx: number) => {
     const update = (list: InvolucradoForm[]) => list.filter((_, i) => i !== idx);
-    setNewIncident(prev => ({ ...prev, involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }] }));
+    setNewIncident(prev => ({
+      ...prev,
+      involucrados: update(prev.involucrados).length ? update(prev.involucrados) : [{ codigo: '', nombre: '' }],
+    }));
   };
 
   const getEmpleadoByCodigo = async (codigo: string) => {
@@ -1069,6 +1165,14 @@ export default function IncidentsScreen() {
     if (!clasificacionRef.current) return 'La clasificación es obligatoria';
     if (!descripcionRef.current.trim()) return 'La descripción es obligatoria';
     if (!nombreResponsableAtencionRef.current.trim()) return 'El nombre del responsable de atención es obligatorio';
+    if (checklistIncidentLink) {
+      const hasValidInvolucrado = newIncident.involucrados.some(
+        (inv) => String(inv?.codigo ?? '').trim() && String(inv?.nombre ?? '').trim(),
+      );
+      if (!hasValidInvolucrado) {
+        return 'Debe haber al menos un involucrado con código y nombre';
+      }
+    }
     return null;
   };
 
@@ -1281,6 +1385,7 @@ export default function IncidentsScreen() {
             }
             setIsCreating(false);
             clearFormHierarchy();
+            if (checklistIncidentLink) clearChecklistIncidentLink();
             setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
             await fetchAll();
           }, 2000);
@@ -1316,6 +1421,7 @@ export default function IncidentsScreen() {
       setTimeout(() => {
         setIsCreating(false);
         clearFormHierarchy();
+        if (checklistIncidentLink) clearChecklistIncidentLink();
         setTextFiles([]); setImageFiles([]); setAudioFiles([]); setVideoFiles([]);
       }, 2000);
     } catch (e) {
@@ -2353,12 +2459,25 @@ export default function IncidentsScreen() {
 
   const renderIncidentForm = (incident: EditingIncident) => {
     const formKey = incident.id_local || String(incident.id ?? 'new');
+    const fromChecklist = Boolean(checklistIncidentLink);
+    const showFormHierarchy = fromChecklist || !isOperativoUser;
 
     return (
       <ThemedView style={[styles.card, styles.formCard]}>
-        <ThemedText style={styles.formTitle}>Nuevo Incidente</ThemedText>
+        <ThemedText style={styles.formTitle}>
+          {fromChecklist ? 'Nuevo incidente (desde Checklist)' : 'Nuevo Incidente'}
+        </ThemedText>
 
-        {!isOperativoUser ? (
+        {fromChecklist ? (
+          <ThemedView style={styles.checklistLinkBanner}>
+            <Ionicons name="information-circle-outline" size={20} color="#007AFF" style={{ marginRight: 8 }} />
+            <ThemedText style={styles.checklistLinkBannerText}>
+              La jerarquía proviene del Checklist de supervisión y no se puede modificar. El empleado del checklist se precarga como involucrado; puede editarlo o agregar más.
+            </ThemedText>
+          </ThemedView>
+        ) : null}
+
+        {showFormHierarchy ? (
           <ThemedView style={styles.formGroup}>
             <ThemedText style={styles.formLabel}>Ubicación del registro (empresa → sucursal / corpo)</ThemedText>
             {isStructureLoading ? (
@@ -2373,6 +2492,7 @@ export default function IncidentsScreen() {
                 structure={mainStructure}
                 levels={['cliente', 'contrato', 'sucursal', 'puesto']}
                 emptyPickerValue={0}
+                disabled={fromChecklist}
                 values={{
                   empresaId: formEmpresaId,
                   clienteId: formClienteId,
@@ -2381,7 +2501,7 @@ export default function IncidentsScreen() {
                   sucursalId: formSucursalId,
                   puestoId: formPuestoId,
                 }}
-                onChange={handleFormHierarchyChange}
+                onChange={fromChecklist ? () => {} : handleFormHierarchyChange}
                 labels={{
                   empresa: 'Empresa *',
                   cliente: 'Cliente *',
@@ -2733,7 +2853,7 @@ export default function IncidentsScreen() {
             </ThemedView>
           )}
 
-          {!isCreating && (
+          {!isCreating && !checklistIncidentLink && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
             </TouchableOpacity>
@@ -3125,6 +3245,27 @@ const styles = StyleSheet.create({
   inlinePickerContainer: { marginTop: 8, borderRadius: 8, backgroundColor: '#FFFFFF' },
 
   involucradoRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8, backgroundColor: '#fff' },
+  involucradoLockedRow: {
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F8F8F8',
+    marginBottom: 8,
+  },
+  involucradoLockedLabel: { fontSize: 12, color: '#666', fontWeight: '600' },
+  involucradoLockedValue: { fontSize: 14, color: '#000', marginTop: 2 },
+  checklistLinkBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#E8F4FF',
+    borderWidth: 1,
+    borderColor: '#B8DAF8',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+  },
+  checklistLinkBannerText: { flex: 1, fontSize: 13, color: '#004080', lineHeight: 18 },
   smallInput: { width: 120 },
   flexInput: { flex: 1 },
   addSmallButton: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },

@@ -286,36 +286,47 @@ export async function GET(req: NextRequest) {
             codigo?: string | null;
             foto?: string | null;
         } = { id: 0, nombre: "Desconocido", codigo: null, foto: null };
-        if (marcaAnterior.empleadoFijo_id) {
-            const empleado_bd = await prisma.c_empleado.findUnique({
-                where: { id: marcaAnterior.empleadoFijo_id },
-            });
-            if (empleado_bd && empleado_bd.id) {
-                previous_employee = {
-                    id: empleado_bd.id,
-                    nombre: (empleado_bd.nombre || "") + " " + (empleado_bd.primer_apellido || "") + " " + (empleado_bd.segundo_apellido || ""),
-                    codigo: empleado_bd.codigo ?? null,
-                    foto: null,
-                };
 
-                try {
-                    const planillasUrl = process.env.PLANILLAS_URL;
-                    const codigo = String(empleado_bd.codigo ?? "").trim();
-                    if (planillasUrl && codigo) {
-                        const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${codigo}/foto`;
-                        const fotoRes = await axios.get(url, {
-                            headers: { Authorization: `Bearer ${planillasToken}` },
-                            validateStatus: () => true,
-                        });
-                        if (fotoRes.status === 200 && fotoRes.data?.success) {
-                            previous_employee.foto = fotoRes.data?.data?.imagen?.base64 ?? null;
-                        }
+        const resolveEmployeeWithFoto = async (empleadoId: number | null | undefined) => {
+            const empty = { id: 0, nombre: "Desconocido", codigo: null as string | null, foto: null as string | null };
+            if (!empleadoId) return empty;
+            const empleado_bd = await prisma.c_empleado.findUnique({
+                where: { id: empleadoId },
+            });
+            if (!empleado_bd?.id) return empty;
+
+            const resolved = {
+                id: empleado_bd.id,
+                nombre: (empleado_bd.nombre || "") + " " + (empleado_bd.primer_apellido || "") + " " + (empleado_bd.segundo_apellido || ""),
+                codigo: empleado_bd.codigo ?? null,
+                foto: null as string | null,
+            };
+
+            try {
+                const planillasUrl = process.env.PLANILLAS_URL;
+                const codigo = String(empleado_bd.codigo ?? "").trim();
+                if (planillasUrl && codigo) {
+                    const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${codigo}/foto`;
+                    const fotoRes = await axios.get(url, {
+                        headers: { Authorization: `Bearer ${planillasToken}` },
+                        validateStatus: () => true,
+                    });
+                    if (fotoRes.status === 200 && fotoRes.data?.success) {
+                        resolved.foto = fotoRes.data?.data?.imagen?.base64 ?? null;
                     }
-                } catch (fotoError) {
-                    console.error("Error obteniendo foto de quien entrega (Planillas):", fotoError);
                 }
+            } catch (fotoError) {
+                console.error("Error obteniendo foto de empleado (Planillas):", fotoError);
             }
+
+            return resolved;
+        };
+
+        if (marcaAnterior.empleadoFijo_id) {
+            previous_employee = await resolveEmployeeWithFoto(marcaAnterior.empleadoFijo_id);
         }
+
+        const current_employee = await resolveEmployeeWithFoto(marca.empleadoFijo_id);
 
         const marcaAnteriorFecha = marcaAnterior.fecha instanceof Date ? marcaAnterior.fecha : new Date(marcaAnterior.fecha);
         if (isNaN(marcaAnteriorFecha.getTime())) {
@@ -665,6 +676,7 @@ export async function GET(req: NextRequest) {
         const info_return = {
             previous_marca: marcaAnterior,
             previous_employee: previous_employee,
+            current_employee: current_employee,
             is_self_delivery: isSelfDelivery,
             marca_recibe_id: marca.id,
             marca_entrega_id: isSelfDelivery ? null : marcaAnterior.id,

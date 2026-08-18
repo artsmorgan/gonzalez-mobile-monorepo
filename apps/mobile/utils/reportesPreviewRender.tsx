@@ -219,6 +219,89 @@ function displayEntregaPuestoMarcaId(v: unknown): string {
   return Number.isFinite(n) && n > 0 ? String(Math.floor(n)) : ENTREGA_PUESTO_NA;
 }
 
+function formatChecklistTimeHHmm(raw: unknown): string {
+  if (raw == null || String(raw).trim() === '') return '';
+  const s = String(raw).trim();
+  if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(s)) {
+    const [hh, mm] = s.split(':');
+    return `${String(Number(hh)).padStart(2, '0')}:${mm}`;
+  }
+  const d = raw instanceof Date ? raw : new Date(s);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function formatChecklistEmpleadoDisplay(row: any): string {
+  const display = row?.empleado_display != null ? String(row.empleado_display).trim() : '';
+  if (display) return display;
+  const codigo = row?.empleado_codigo != null ? String(row.empleado_codigo).trim() : '';
+  const nombre = row?.empleado_nombre != null ? String(row.empleado_nombre).trim() : '';
+  if (codigo && nombre) return `${codigo} — ${nombre}`;
+  return nombre || codigo || '—';
+}
+
+function parseChecklistEvalSections(raw: unknown): any[] {
+  if (raw == null || String(raw).trim() === '') return [];
+  try {
+    const parsed = JSON.parse(String(raw));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function collectChecklistPreviewPhotoItems(inp: any): any[] {
+  if (Array.isArray(inp?.photos) && inp.photos.length > 0) return inp.photos;
+  const fileName = inp?.file_name != null ? String(inp.file_name).trim() : '';
+  const value = inp?.value;
+  if (fileName || (typeof value === 'string' && (value.startsWith('data:image/') || value.length > 100))) {
+    return [{ file_name: fileName || undefined, value }];
+  }
+  return [];
+}
+
+function formatChecklistEvalInputPreview(inp: any): string {
+  const inpType = String(inp?.type ?? '').trim().toLowerCase();
+  if (inpType === 'checkbox') {
+    const v = inp?.value;
+    if (v === true || v === 1) return 'Marcado';
+    if (v === false || v === 0) return 'No marcado';
+    const t = String(v ?? '')
+      .trim()
+      .toLowerCase();
+    if (t === 'true' || t === '1' || t === 'sí' || t === 'si' || t === 'yes' || t === 'y') return 'Marcado';
+    return 'No marcado';
+  }
+  if (inpType === 'photo') {
+    const n = collectChecklistPreviewPhotoItems(inp).length;
+    return n > 0 ? `${n} imagen${n === 1 ? '' : 'es'}` : '—';
+  }
+  const raw = String(inp?.value ?? '').trim();
+  return raw || '—';
+}
+
+function buildChecklistEvalPreviewSummary(raw: unknown, maxLen = 1200): string {
+  const sections = parseChecklistEvalSections(raw);
+  if (sections.length === 0) return '';
+  const lines: string[] = [];
+  for (const sec of sections) {
+    const secTitle = String(sec?.title ?? '').trim() || '(Sección)';
+    const subs = Array.isArray(sec?.subsections) ? sec.subsections : [];
+    for (const sub of subs) {
+      const subTitle = String(sub?.title ?? '').trim() || '(Punto)';
+      const detalle = String(sub?.detalle ?? '').trim();
+      const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
+      const vals = inputs.map((inp: any) => formatChecklistEvalInputPreview(inp)).filter((v: string) => v !== '—');
+      let line = subTitle;
+      if (detalle) line += ` — ${detalle}`;
+      if (vals.length) line += `: ${vals.join('; ')}`;
+      lines.push(`${secTitle} › ${line}`);
+    }
+  }
+  const joined = lines.join('\n');
+  return joined.length > maxLen ? `${joined.slice(0, maxLen - 1)}…` : joined;
+}
+
 type PreviewFieldProps = {
   label: string;
   value?: unknown;
@@ -900,9 +983,28 @@ export function renderReportesPreviewRow(
         <PreviewRecord>
           <PreviewField label="Empresa" value={row.empresa_nombre} />
           <PreviewField label="Cliente" value={row.cliente_nombre} />
-          <PreviewField label="Fecha" value={row.fecha != null ? String(row.fecha) : undefined} />
-          <PreviewUbicacionNombre row={row} />
+          <PreviewField label="División" value={row.division_nombre} />
+          <PreviewField label="Contrato" value={row.contrato_nombre} />
+          <PreviewField label="Corpo" value={row.corpo_nombre} />
+          <PreviewField label="Puesto" value={row.puesto_nombre} />
+          <PreviewField label="Fecha reporte" text={formatPreviewDateTime(row.fecha)} />
+          <PreviewField
+            label="Hora inicio"
+            text={formatChecklistTimeHHmm(row.hora_inicio_txt || row.hora_inicio) || '—'}
+          />
+          <PreviewField
+            label="Hora fin"
+            text={formatChecklistTimeHHmm(row.hora_fin_txt || row.hora_fin) || '—'}
+          />
+          <PreviewField label="Empleado" text={formatChecklistEmpleadoDisplay(row)} />
           <PreviewField label="Ejecutivo de cuenta" value={row.ejecutivo_cuenta_nombre} />
+          {(() => {
+            const evalSummary = buildChecklistEvalPreviewSummary(row.evaluacion);
+            return evalSummary ? (
+              <PreviewField label="Evaluación" text={evalSummary} selectable numberOfLines={10} />
+            ) : null;
+          })()}
+          <PreviewSignature label="Firma supervisor" uri={signatureUri(row.firma_supervisor)} small />
         </PreviewRecord>
       );
 

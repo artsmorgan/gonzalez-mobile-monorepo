@@ -82,9 +82,16 @@ export async function fetchEmpleadoPlazaRows(plazaIds: number[]) {
     });
 }
 
+export type EmpleadoDocumentoDTO = {
+    nombre: string;
+    tipo: "carn" | "lic";
+    identificador: number | string;
+    fecha_vencimiento: Date | string | null;
+};
+
 export async function fetchEmpleados(empleadoIds: number[]) {
     if (empleadoIds.length === 0) return [];
-    return prisma.c_empleado.findMany({
+    const empleados = await prisma.c_empleado.findMany({
         where: {
             id: { in: empleadoIds },
             fecha_contratacion: { not: null },
@@ -108,6 +115,105 @@ export async function fetchEmpleados(empleadoIds: number[]) {
         },
         orderBy: [{ nombre: "asc" }, { primer_apellido: "asc" }, { segundo_apellido: "asc" }, { id: "asc" }],
     });
+
+    const documentosByEmpleadoId = await fetchDocumentosByEmpleadoIds(empleados.map((e) => e.id));
+    return empleados.map((e) => ({
+        ...e,
+        documentos: documentosByEmpleadoId.get(e.id) ?? [],
+    }));
+}
+
+/** Carnets (c_empleado_datos_adjuntos_rrhh) y licencias (e_licencia) en consultas agrupadas. */
+async function fetchDocumentosByEmpleadoIds(
+    empleadoIds: number[],
+): Promise<Map<number, EmpleadoDocumentoDTO[]>> {
+    const result = new Map<number, EmpleadoDocumentoDTO[]>();
+    if (empleadoIds.length === 0) return result;
+
+    const [adjuntosRows, licenciasRows] = await Promise.all([
+        prisma.c_empleado_datos_adjuntos_rrhh.findMany({
+            where: { empleado_id: { in: empleadoIds } },
+            select: {
+                empleado_id: true,
+                fecha: true,
+                tipoDatoAdjunto_id: true,
+            },
+        }),
+        prisma.e_licencia.findMany({
+            where: { empleado_id: { in: empleadoIds } },
+            select: {
+                empleado_id: true,
+                vence: true,
+                tipoLicencia_id: true,
+            },
+        }),
+    ]);
+
+    const tipoAdjuntoIds = [
+        ...new Set(
+            adjuntosRows
+                .map((r) => Number(r.tipoDatoAdjunto_id))
+                .filter((id) => Number.isFinite(id) && id > 0),
+        ),
+    ];
+    const tipoLicenciaIds = [
+        ...new Set(
+            licenciasRows
+                .map((r) => Number(r.tipoLicencia_id))
+                .filter((id) => Number.isFinite(id) && id > 0),
+        ),
+    ];
+
+    const [tiposAdjunto, tiposLicencia] = await Promise.all([
+        tipoAdjuntoIds.length > 0
+            ? prisma.n_tipo_dato_adjunto_rrhh.findMany({
+                  where: { id: { in: tipoAdjuntoIds } },
+                  select: { id: true, nombre: true },
+              })
+            : Promise.resolve([] as { id: number; nombre: string }[]),
+        tipoLicenciaIds.length > 0
+            ? prisma.n_tipo_licencia.findMany({
+                  where: { id: { in: tipoLicenciaIds } },
+                  select: { id: true, nombre: true },
+              })
+            : Promise.resolve([] as { id: number; nombre: string }[]),
+    ]);
+
+    const tipoAdjuntoById = new Map(tiposAdjunto.map((t) => [t.id, t]));
+    const tipoLicenciaById = new Map(tiposLicencia.map((t) => [t.id, t]));
+
+    const pushDoc = (empleadoId: number | null | undefined, doc: EmpleadoDocumentoDTO) => {
+        const eid = Number(empleadoId);
+        if (!Number.isFinite(eid) || eid <= 0) return;
+        const list = result.get(eid) ?? [];
+        list.push(doc);
+        result.set(eid, list);
+    };
+
+    for (const row of adjuntosRows) {
+        const tipoId = Number(row.tipoDatoAdjunto_id);
+        const tipo = Number.isFinite(tipoId) ? tipoAdjuntoById.get(tipoId) : undefined;
+        pushDoc(row.empleado_id, {
+            nombre: String(tipo?.nombre ?? "").trim(),
+            tipo: "carn",
+            identificador: Number.isFinite(tipoId) && tipoId > 0 ? tipoId : "",
+            fecha_vencimiento: row.fecha ?? null,
+        });
+    }
+
+    for (const row of licenciasRows) {
+        const tipoId = Number(row.tipoLicencia_id);
+        const tipo = Number.isFinite(tipoId) ? tipoLicenciaById.get(tipoId) : undefined;
+        const tipoNombre = String(tipo?.nombre ?? "").trim();
+        pushDoc(row.empleado_id, {
+            nombre: tipoNombre,
+            tipo: "lic",
+            identificador: tipoNombre,
+            fecha_vencimiento: row.vence ?? null,
+        });
+    }
+
+    return result;
 }
 
 // --- Tablas creadas (callDynamicPrisma) ---

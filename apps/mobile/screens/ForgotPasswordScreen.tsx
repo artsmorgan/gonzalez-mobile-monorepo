@@ -5,7 +5,17 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, TextInput, TouchableOpacity } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  TouchableOpacity,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type ForgotPasswordScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'ForgotPassword'>;
 
@@ -13,6 +23,7 @@ export default function ForgotPasswordScreen() {
   const [cedula, setCedula] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const navigation = useNavigation<ForgotPasswordScreenNavigationProp>();
+  const insets = useSafeAreaInsets();
 
   const handleResetPassword = async () => {
     if (!cedula.trim()) {
@@ -72,48 +83,70 @@ export default function ForgotPasswordScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <ThemedView style={styles.contentContainer}>
-        <ThemedText type="title" style={styles.title}>
-          Cambiar contraseña
-        </ThemedText>
-        
-        <ThemedText style={styles.description}>
-          Ingrese su cédula y le enviaremos un código de verificación para restablecer su contraseña.
-        </ThemedText>
-
-        <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Cédula</ThemedText>
-          <TextInput
-            style={styles.input}
-            value={cedula}
-            onChangeText={setCedula}
-            placeholder="Ingrese su cédula"
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!isLoading}
-            keyboardType="numeric"
-            maxLength={12}
-          />
-        </ThemedView>
-
-        <TouchableOpacity 
-          style={[styles.resetButton, isLoading && styles.resetButtonDisabled]} 
-          onPress={handleResetPassword}
-          disabled={isLoading}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoiding}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.scrollContent,
+            {
+              paddingTop: Math.max(20, insets.top + 12),
+              paddingBottom: Math.max(24, insets.bottom + 16),
+            },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+          bounces={false}
         >
-          {isLoading ? (
-            <ActivityIndicator color="#ffffff" size="small" />
-          ) : (
-            <ThemedText style={styles.resetButtonText}>Enviar código</ThemedText>
-          )}
-        </TouchableOpacity>
+          <ThemedView style={styles.contentContainer}>
+            <ThemedText type="title" style={styles.title}>
+              Cambiar contraseña
+            </ThemedText>
+            
+            <ThemedText style={styles.description}>
+              Ingrese su cédula y le enviaremos un código de verificación para restablecer su contraseña.
+            </ThemedText>
 
-        <TouchableOpacity onPress={handleBackToLogin} style={styles.backToLoginContainer}>
-          <ThemedText style={styles.backToLoginText}>
-            Volver al inicio de sesión
-          </ThemedText>
-        </TouchableOpacity>
-      </ThemedView>
+            <ThemedView style={styles.inputContainer}>
+              <ThemedText style={styles.label}>Cédula</ThemedText>
+              <TextInput
+                style={styles.input}
+                value={cedula}
+                onChangeText={setCedula}
+                placeholder="Ingrese su cédula"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!isLoading}
+                keyboardType="numeric"
+                maxLength={12}
+                returnKeyType="done"
+                onSubmitEditing={handleResetPassword}
+              />
+            </ThemedView>
+
+            <TouchableOpacity 
+              style={[styles.resetButton, isLoading && styles.resetButtonDisabled]} 
+              onPress={handleResetPassword}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <ThemedText style={styles.resetButtonText}>Enviar código</ThemedText>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={handleBackToLogin} style={styles.backToLoginContainer}>
+              <ThemedText style={styles.backToLoginText}>
+                Volver al inicio de sesión
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </ThemedView>
   );
 }
@@ -121,9 +154,15 @@ export default function ForgotPasswordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  keyboardAvoiding: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    paddingHorizontal: 20,
   },
   contentContainer: {
     alignItems: 'center',
@@ -187,4 +226,3 @@ const styles = StyleSheet.create({
     textDecorationLine: 'underline',
   },
 });
-

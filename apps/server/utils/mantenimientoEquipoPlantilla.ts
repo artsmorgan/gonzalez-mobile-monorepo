@@ -30,7 +30,7 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
   instr.value =
     "INSTRUCCIONES:\n" +
     "1. Complete la tabla «Datos a cargar» (izquierda) con la información de cada artículo que desea vincular.\n" +
-    "2. Formatos obligatorios: «Número artículo» y «Cantidad» (numéricos); «Fecha de entrega» (DD-MM-YYYY HH:MM:SS).\n" +
+    "2. Formatos obligatorios: «Número artículo» y «Cantidad» (numéricos); «Fecha de entrega» (DD-MM-YYYY, solo fecha).\n" +
     "3. Indique en «Código del puesto» el código de cada puesto destino (debe existir en el sistema).\n" +
     "4. No modifique los encabezados ni la estructura de columnas; de lo contrario la información no se cargará.\n" +
     "5. Consulte la tabla de referencia (derecha) para verificar números y nombres de artículo válidos.";
@@ -60,7 +60,7 @@ export async function buildMantenimientoEquipoPlantillaBuffer(
     const r = ws.getRow(FIRST_DATA_ROW + i);
     r.getCell(2).numFmt = "0";
     r.getCell(3).numFmt = "0";
-    r.getCell(7).numFmt = "dd-mm-yyyy hh:mm:ss";
+    r.getCell(7).numFmt = "dd-mm-yyyy";
   }
 
   articulos.forEach((a, i) => {
