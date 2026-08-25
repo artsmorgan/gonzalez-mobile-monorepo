@@ -1962,17 +1962,19 @@ model c_combo_uniforme_plaza {
 }
 
 model c_configuracion {
-  id                            Int @id @default(autoincrement())
-  tiempo_subir_adjunto_acciones Int
-  tiempo_justificar_ausencia    Int
-  max_horas_xsem_semanales      Int
-  max_horas_xmes_semanales      Int
-  max_horas_xsem_quincenales    Int
-  max_horas_xmes_quincenales    Int
-  llegada_tardia_minimo         Int
-  llegada_tardia_maximo         Int
-  dias_gracia_fin_contrato      Int @default(60)
-  dias_gracia_portacion         Int @default(15)
+  id                                            Int     @id @default(autoincrement())
+  tiempo_subir_adjunto_acciones                 Int
+  tiempo_justificar_ausencia                    Int
+  max_horas_xsem_semanales                      Int
+  max_horas_xmes_semanales                      Int
+  max_horas_xsem_quincenales                    Int
+  max_horas_xmes_quincenales                    Int
+  llegada_tardia_minimo                         Int
+  llegada_tardia_maximo                         Int
+  dias_gracia_fin_contrato                      Int     @default(60)
+  dias_gracia_portacion                         Int     @default(15)
+  habilitar_triple_validacion_tipo_contratacion Boolean @default(false)
+  tiempo_gracia_marcar_salida                   Int     @default(30)
 }
 
 model c_contratacion {
@@ -5875,6 +5877,7 @@ model pg_planilla_empleado {
   info_ultima_semana                                                                            Json?
   imp_rdh                                                                                       Decimal                         @db.Decimal(10, 2)
   num_rdh                                                                                       Decimal                         @db.Decimal(10, 2)
+  imp_recorte_tope_jr                                                                           Decimal?                        @db.Decimal(10, 2)
   c_horas_extras                                                                                c_horas_extras[]
   pg_pe_bonif_empl_pagado                                                                       pg_pe_bonif_empl_pagado[]
   pg_pe_bonif_plaza_pagado                                                                      pg_pe_bonif_plaza_pagado[]
@@ -6473,4 +6476,19 @@ model v_vacacion_solicitud {
   @@index([periodoPago_id], map: "IDX_98808EDAD2624C39")
   @@index([coordinador_id], map: "IDX_98808EDAE4517BDD")
   @@index([plaza_id], map: "IDX_98808EDAEF34C0BD")
+}
+
+model api_password_reset_token {
+  id              Int       @id @default(autoincrement())
+  token_hash      String    @unique(map: "uniq_api_password_reset_token_hash") @db.VarChar(64)
+  username        String    @db.VarChar(180)
+  expires_at      DateTime  @db.DateTime(0)
+  created_at      DateTime  @db.DateTime(0)
+  used            Boolean   @default(false)
+  code_hash       String?   @db.VarChar(64)
+  code_expires_at DateTime? @db.DateTime(0)
+  code_attempts   Int       @default(0) @db.SmallInt
+
+  @@index([username, used], map: "idx_api_password_reset_token_lookup")
+  @@index([username], map: "idx_api_password_reset_token_username")
 }

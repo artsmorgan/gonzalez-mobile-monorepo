@@ -1,5 +1,5 @@
 {
-  "created_at": 1787071201070,
+  "created_at": 1787673553577,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -4969,66 +4969,12 @@
     "sucursal_126_llaveros": [],
     "sucursal_126_puestos": [
       {
-        "id": 12,
-        "nombre": "0-CG-RRHH - RRHH",
-        "codigo": "0-CG-RRHH",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 13,
-        "nombre": "0-CG-FIN - ADM FINANCIERO",
-        "codigo": "0-CG-FIN",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 14,
-        "nombre": "0-P - PRESIDENCIA",
-        "codigo": "0-P",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
         "id": 15,
         "nombre": "0-CG-SEG - SEGURIDAD",
         "codigo": "0-CG-SEG",
         "ubicacion": {
           "lat": "9.9131459",
           "lng": "-84.0427534"
-        }
-      },
-      {
-        "id": 16,
-        "nombre": "0-CG-AYL - ASEO Y LIMPIEZA",
-        "codigo": "0-CG-AYL",
-        "ubicacion": {
-          "lat": "10.0748791",
-          "lng": "-84.7291437"
-        }
-      },
-      {
-        "id": 960,
-        "nombre": "0-CG-DL - Departamento Legal",
-        "codigo": "0-CG-DL",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 1024,
-        "nombre": "0-CG-GG - GERENCIA GENERAL",
-        "codigo": "0-CG-GG",
-        "ubicacion": {
-          "lat": "9.9182285",
-          "lng": "-84.1479432"
         }
       }
     ],
@@ -7648,6 +7594,16 @@
         "id": 11869,
         "nombre": "SEG012 - ASISTENTE DE OPERACIONES EN SEGURIDAD 2",
         "codigo_plaza": "SEG012"
+      },
+      {
+        "id": 11942,
+        "nombre": "null - QA TOPE JR PLAZA",
+        "codigo_plaza": null
+      },
+      {
+        "id": 11943,
+        "nombre": "null - QA TOPE JR PLAZA 2",
+        "codigo_plaza": null
       }
     ],
     "plaza_180_empleados": [
@@ -167339,6 +167295,25 @@
     ],
     "plaza_11898_empleados": [],
     "plaza_11899_empleados": [],
-    "plaza_11900_empleados": []
+    "plaza_11900_empleados": [],
+    "plaza_11942_empleados": [],
+    "plaza_11943_empleados": [
+      {
+        "id": 13173,
+        "codigo": "QATOPEJR001",
+        "cedula": "999888777",
+        "nombre": "QA",
+        "primer_apellido": "TOPE",
+        "segundo_apellido": "JR",
+        "Email": null,
+        "telefono": null,
+        "tipoCedula": "Nacional",
+        "fecha_contratacion": "2026-08-01T00:00:00.000Z",
+        "estado": "CO",
+        "supervisor_id": null,
+        "firma_manual": null,
+        "documentos": []
+      }
+    ]
   }
 }

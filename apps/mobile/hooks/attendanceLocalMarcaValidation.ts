@@ -167,10 +167,11 @@ export function validateMarcaLocation(
 
   const marcaUbicacion = `${pLat}, ${pLng}`;
   const ubicacionActual = `${lat}, ${lng}`;
+  const tipoAccion = marca.hora_entrada_digitada == null ? 'ingreso' : 'salida';
   return {
     ok: false,
     message:
-      'Ubicación no válida \n\nDebes estar dentro del radio de 50 metros del puesto para marcar la asistencia.\n\nPuesto: ' +
+      'Ubicación no válida \n\nDebes estar dentro del radio de 50 metros del puesto para marcar '+tipoAccion+'. \n\nPuesto: ' +
       marcaUbicacion +
       '\nTu ubicación: ' +
       ubicacionActual,

@@ -6,6 +6,8 @@ import getRoleDivision from "../../../../../utils/getRoleDivision";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { getMonitoringPreviousMinutes } from "../../../../../utils/getMonitoringPreviousMinutes";
 import { getMonitoringPostMinutes } from "../../../../../utils/getMonitoringPostMinutes";
+import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraciaMarcarSalida";
+import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
 import axios from "axios";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -43,6 +45,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         const monitoringPreviousMinutes = await getMonitoringPreviousMinutes(req);
         const monitoringPostMinutes = await getMonitoringPostMinutes(req);
+        const tiempoGraciaMarcarSalida = await getTiempoGraciaMarcarSalida(req);
+        const validateGpsSalida = await getValidateGpsSalida(req);
         const nowPlusMonitoringWindow = new Date(now.getTime() + monitoringPreviousMinutes * 60 * 1000);
         const currentDate = new Date(now.toISOString().split("T")[0]);
         const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
@@ -323,6 +327,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     marca_id: marca_return.id,
                     monitoring_previous_minutes: monitoringPreviousMinutes,
                     monitoring_post_minutes: monitoringPostMinutes,
+                    tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
+                    validate_gps_salida: validateGpsSalida,
                     is_salida_anticipada: isSalidaAnticipada,
                     message,
                     ...extra,
@@ -464,6 +470,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             current_time: currentTime,
             monitoring_previous_minutes: monitoringPreviousMinutes,
             monitoring_post_minutes: monitoringPostMinutes,
+            tiempo_gracia_marcar_salida: tiempoGraciaMarcarSalida,
+            validate_gps_salida: validateGpsSalida,
             change_available,
             is_late,
             is_salida_anticipada: isSalidaAnticipada,

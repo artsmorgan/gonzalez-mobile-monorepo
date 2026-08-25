@@ -19,6 +19,7 @@ import { ThemedView } from '../components/ThemedView';
 import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import EmployeeSearchModal, { type EmployeeSearchHit } from '@/components/EmployeeSearchModal';
+import { Collapsible } from '@/components/Collapsible';
 import { useAuth } from '../contexts/AuthContext';
 import { eventBus } from '../hooks/eventBus';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -4863,8 +4864,11 @@ export default function ChecklistSupervisionScreen() {
                   </ThemedText>
                 )}
 
-                {evaluation.map((section) => (
-                  <ThemedView key={section.id} style={styles.sectionCard}>
+                {evaluation.map((section) => {
+                  const isLicenciasSection = isLicenciasEvaluationSection(section);
+                  const sectionInner = (
+                    <>
+                    {!isLicenciasSection ? (
                     <ThemedView style={styles.sectionHeader}>
                       <ThemedText style={styles.sectionTitle}>{section.title}</ThemedText>
                       {!section.isPredefined && (
@@ -4873,7 +4877,7 @@ export default function ChecklistSupervisionScreen() {
                         </TouchableOpacity>
                       )}
                     </ThemedView>
-
+                    ) : null}
                     {section.subsections.map((subsection) => {
                       const formOtherInputs = subsection.inputs.filter((inp) => !isEvaluationPhotoInput(inp));
                       const formPhotoInputs = subsection.inputs.filter((inp) => isEvaluationPhotoInput(inp));
@@ -5024,8 +5028,19 @@ export default function ChecklistSupervisionScreen() {
                       <Ionicons name="add" size={16} color="#007AFF" />
                       <ThemedText style={styles.cameraSmallButtonText}>Agregar subsección</ThemedText>
                     </TouchableOpacity>
-                  </ThemedView>
-                ))}
+                    </>
+                  );
+
+                  return (
+                    <ThemedView key={section.id} style={styles.sectionCard}>
+                      {isLicenciasSection ? (
+                        <Collapsible title={section.title || 'Licencias'}>{sectionInner}</Collapsible>
+                      ) : (
+                        sectionInner
+                      )}
+                    </ThemedView>
+                  );
+                })}
 
                 {!selectedDivisionId && (
                   <TouchableOpacity style={styles.cameraSmallButton} onPress={addSection}>

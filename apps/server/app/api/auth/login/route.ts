@@ -1,11 +1,12 @@
 /* Login principal: tablas preexistentes (Prisma) + orquestación de tablas creadas y Planillas. */
 import { NextRequest, NextResponse } from "next/server";
-import axios from "axios";
+import axios, { AxiosError, AxiosResponse } from "axios";
 import { v4 as uuidv4 } from "uuid";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../utils/prismaClient";
 import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
 import { createTokenPlanillas } from "../../../../utils/createTokenPlanillas";
+import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const jwt = require("jsonwebtoken");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -111,18 +112,55 @@ export async function POST(request: NextRequest) {
                 { status: 401 },
             );
         }
-
-        const passwordMatch = await bcrypt.compare(password, empleado.password);
-        if (!passwordMatch) {
-            return NextResponse.json({ status: false, message: "La contraseña es incorrecta" }, { status: 401 });
+        
+        const planillasUrl = process.env.PLANILLAS_URL;
+        if (!planillasUrl) {
+            return NextResponse.json({ status: false, message: "URL de Planillas no configurada" }, { status: 500 });
         }
+
+        const url_planillas_login = `${planillasUrl.replace(/\/+$/, "")}/login`;
+        let response_planillas_login: AxiosResponse;
+        try {
+            response_planillas_login = await axios.post(
+                url_planillas_login,
+                {
+                    username: cedula,
+                    password,
+                },
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                },
+            );
+        } catch (error) {
+            if (error instanceof AxiosError && error.response?.status === 401 && error.response?.data?.error?.code === "INVALID_CREDENTIALS") {
+                return NextResponse.json({ status: false, message: "Credenciales inválidas" }, { status: 401 });
+            }
+            else {
+                console.error("Error en login (auth/login):", error);
+                return NextResponse.json({ status: false, message: "Error al iniciar sesión en Planillas" }, { status: 500 });
+            }
+        }
+
+        if (!response_planillas_login) {
+            return NextResponse.json({ status: false, message: "Error al iniciar sesión en Planillas" }, { status: 500 });
+        }
+
+        let now = toZonedTime(new Date(), "America/Costa_Rica");
+        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        const expiresInSec = Number(response_planillas_login.data.data.expires_in);
+        const expiresInMs = expiresInSec * 1000;
+        const planillasTokenExpiresAt_planillas_login = now.getTime() + expiresInMs;
+        console.log('Planillas token expires at: ', planillasTokenExpiresAt_planillas_login);
+        const expires_at = new Date(planillasTokenExpiresAt_planillas_login);
+        const planillasToken_planillas_login = String(response_planillas_login.data.data.token ?? "");
 
         if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
             throw new Error("JWT secrets not configured");
         }
 
         const sessionId = uuidv4();
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
 
         const accessToken = jwt.sign(
             { id: empleado.id, cedula: empleado.cedula, sessionId },
@@ -135,6 +173,57 @@ export async function POST(request: NextRequest) {
             process.env.JWT_REFRESH_SECRET!,
             { expiresIn: "7d" },
         );
+
+        
+        const prismaOpts = {
+            token: accessToken,
+            shouldVerifyAccessToken: Boolean(accessToken),
+        };
+
+        const mobile_token = await callDynamicPrisma({
+            req: request,
+            data: {
+                action: "GET",
+                table: "a_mobile_token_for_planillas",
+                operation: "findFirst",
+                where: { empleado_id: empleado.id },
+            },
+            ...prismaOpts,
+        });
+
+        if (mobile_token?.id) {
+            await callDynamicPrisma({
+                req: request,
+                data: {
+                    action: "UPDATE",
+                    table: "a_mobile_token_for_planillas",
+                    operation: "update",
+                    where: { id: mobile_token.id },
+                    data: {
+                        token: planillasToken_planillas_login,
+                        created_at: now,
+                        expires_at,
+                    },
+                },
+                ...prismaOpts,
+            });
+        } else {
+            await callDynamicPrisma({
+                req: request,
+                data: {
+                    action: "POST",
+                    table: "a_mobile_token_for_planillas",
+                    operation: "create",
+                    data: {
+                        empleado_id: empleado.id,
+                        token: planillasToken_planillas_login,
+                        created_at: now,
+                        expires_at,
+                    },
+                },
+                ...prismaOpts,
+            });
+        }
 
         const roles = await buildEmpleadoRoles(empleado.id);
         const baseUrl = resolveServerBaseUrl(request);
@@ -179,49 +268,21 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        let planillasToken: string | undefined;
-        let planillasTokenExpiresAt: number | undefined;
-        try {
-            const planillas = await createTokenPlanillas(
-                request,
-                { id: empleado.id, cedula: empleado.cedula },
-                password,
-                { accessToken },
-            );
-            planillasToken = planillas.planillasToken;
-            planillasTokenExpiresAt = planillas.planillasTokenExpiresAt;
-        } catch (planillasError) {
-            console.error("Error obteniendo token Planillas en login:", planillasError);
-            return NextResponse.json(
-                {
-                    status: false,
-                    message:
-                        planillasError instanceof Error
-                            ? planillasError.message
-                            : "No se pudo obtener el token de Planillas",
-                },
-                { status: 502 },
-            );
-        }
-
         let empleadoFoto: string | null = null;
         try {
-            const planillasUrl = process.env.PLANILLAS_URL;
-            if (planillasUrl) {
-                const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${empleado.codigo}/foto`;
-                const response = await axios.get(
-                    url,
-                    {
-                        headers: {
-                            "Authorization": `Bearer ${planillasToken}`,
-                        },
+            const url = `${planillasUrl.replace(/\/+$/, "")}/empleados/${empleado.codigo}/foto`;
+            const response = await axios.get(
+                url,
+                {
+                    headers: {
+                        "Authorization": `Bearer ${planillasToken_planillas_login}`,
                     },
-                );
+                },
+            );
 
-                if (response.data?.success) {
-                    empleadoFoto = response.data.data.imagen?.base64 ?? null;
-                    console.log("Empleado foto:", empleadoFoto?.length ?? 0);
-                }
+            if (response.data?.success) {
+                empleadoFoto = response.data.data.imagen?.base64 ?? null;
+                console.log("Empleado foto:", empleadoFoto?.length ?? 0);
             }
 
         }
@@ -236,8 +297,8 @@ export async function POST(request: NextRequest) {
                 accessToken,
                 refreshToken,
                 createdAt: now.getTime(),
-                planillasToken,
-                planillasTokenExpiresAt,
+                planillasToken: planillasToken_planillas_login,
+                planillasTokenExpiresAt: planillasTokenExpiresAt_planillas_login,
                 empleado: {
                     id: empleado.id,
                     cedula: empleado.cedula,
@@ -260,7 +321,6 @@ export async function POST(request: NextRequest) {
             { status: 200 },
         );
     } catch (error) {
-        console.error("Error en login (auth/login):", error);
         return NextResponse.json({ status: false, message: "Error interno del servidor" }, { status: 500 });
     }
 }

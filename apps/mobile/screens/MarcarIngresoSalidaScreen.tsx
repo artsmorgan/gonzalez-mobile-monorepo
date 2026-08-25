@@ -40,6 +40,14 @@ import {
   getMonitoringPostMinutesFromStorage,
   setMonitoringPostMinutesStorage,
 } from '@/hooks/monitoringPostMinutesStorage';
+import {
+  getTiempoGraciaMarcarSalidaFromStorage,
+  setTiempoGraciaMarcarSalidaStorage,
+} from '@/hooks/tiempoGraciaMarcarSalidaStorage';
+import {
+  getValidateGpsSalidaFromStorage,
+  setValidateGpsSalidaStorage,
+} from '@/hooks/validateGpsSalidaStorage';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import resolveMarcaIngresoCoordinates from '@/hooks/resolveMarcaIngresoCoordinates';
 import {
@@ -350,19 +358,25 @@ export default function MarcarIngresoSalidaScreen() {
   const [isEntradaMarcaHintVisible, setIsEntradaMarcaHintVisible] = useState(true);
   const [monitoringPreviousMinutes, setMonitoringPreviousMinutes] = useState<number>(15);
   const [monitoringPostMinutes, setMonitoringPostMinutes] = useState<number>(0);
+  const [tiempoGraciaMarcarSalida, setTiempoGraciaMarcarSalida] = useState<number>(15);
+  const [validateGpsSalida, setValidateGpsSalida] = useState<boolean>(false);
   /** Re-render del reloj cuando no hay `attendanceData` (hora local CR como respaldo). */
   const [clockTick, setClockTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [previousMinutes, postMinutes] = await Promise.all([
+      const [previousMinutes, postMinutes, graciaSalida, gpsSalida] = await Promise.all([
         getMonitoringPreviousMinutesFromStorage(),
         getMonitoringPostMinutesFromStorage(),
+        getTiempoGraciaMarcarSalidaFromStorage(),
+        getValidateGpsSalidaFromStorage(),
       ]);
       if (!cancelled) {
         setMonitoringPreviousMinutes(previousMinutes);
         setMonitoringPostMinutes(postMinutes);
+        setTiempoGraciaMarcarSalida(graciaSalida);
+        setValidateGpsSalida(gpsSalida);
       }
     })();
     return () => {
@@ -374,6 +388,8 @@ export default function MarcarIngresoSalidaScreen() {
     payload: {
       monitoring_previous_minutes?: unknown;
       monitoring_post_minutes?: unknown;
+      tiempo_gracia_marcar_salida?: unknown;
+      validate_gps_salida?: unknown;
     } | null | undefined
   ) => {
     if (payload?.monitoring_previous_minutes != null) {
@@ -383,6 +399,14 @@ export default function MarcarIngresoSalidaScreen() {
     if (payload?.monitoring_post_minutes != null) {
       const minutes = await setMonitoringPostMinutesStorage(payload.monitoring_post_minutes);
       setMonitoringPostMinutes(minutes);
+    }
+    if (payload?.tiempo_gracia_marcar_salida != null) {
+      const minutes = await setTiempoGraciaMarcarSalidaStorage(payload.tiempo_gracia_marcar_salida);
+      setTiempoGraciaMarcarSalida(minutes);
+    }
+    if (payload?.validate_gps_salida != null) {
+      const enabled = await setValidateGpsSalidaStorage(payload.validate_gps_salida);
+      setValidateGpsSalida(enabled);
     }
   };
   useEffect(() => {
@@ -618,9 +642,16 @@ export default function MarcarIngresoSalidaScreen() {
       return;
     }
 
-    // Salida: solo geocerca si el puesto tiene coordenadas definidas.
-    if (marca.hora_salida_digitada != null || !hasMarcaPuestoCoordinates(marca)) {
+    // Salida: geocerca solo si validate_gps_salida está activo y el puesto tiene coordenadas.
+    if (marca.hora_salida_digitada != null) {
       setShowLocationRetry(false);
+      return;
+    }
+
+    const gpsSalidaEnabled = await getValidateGpsSalidaFromStorage();
+    if (!gpsSalidaEnabled || !hasMarcaPuestoCoordinates(marca)) {
+      setShowLocationRetry(false);
+      setLocalCanMarkSalida(true);
       return;
     }
 
@@ -1188,7 +1219,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     const action = attendanceData.estado === 'No ingresado' ? 'ingresar' : 'salir';
     const actionText = attendanceData.estado === 'No ingresado' ? 'Ingresar' : 'Salir';
-    const actionExtraText = attendanceData.estado === 'No ingresado' ? '' : ' Si lo haces, no podrás acceder a la mayoría de las opciones del menú.';
+    const actionExtraText = attendanceData.estado === 'No ingresado' ? '' : ' Si lo haces, habrán opciones del menú que no estarán disponibles.';
 
     Alert.alert(
       'Confirmar acción',
@@ -1225,7 +1256,7 @@ export default function MarcarIngresoSalidaScreen() {
     if (type === 'entrada' && resolveMarcaIsSalidaAnticipada(attendanceData.marca as Record<string, unknown>)) {
       return {
         ok: false,
-        message: 'No puedes marcar ingreso porque esta marca tiene salida anticipada.',
+        message: 'No puedes marcar ingreso porque esta marca tiene salida anticipada. Si deseas revertirlo, contacta con la administración de tu puesto.',
       };
     }
 
@@ -1246,17 +1277,32 @@ export default function MarcarIngresoSalidaScreen() {
       }
       lat = coords.latitude;
       lng = coords.longitude;
-    } else if (type === 'salida' && hasMarcaPuestoCoordinates(marcaRecord)) {
-      const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
-      if (!coords.ok) {
-        return {
-          ok: false,
-          message: coords.message || 'No se pudo obtener la ubicación para marcar salida.',
-        };
+    } else if (type === 'salida') {
+      const gpsSalidaEnabled = await getValidateGpsSalidaFromStorage();
+      if (gpsSalidaEnabled) {
+        if (!(await evaluateInternetConnection())) {
+          return {
+            ok: false,
+            message:
+              'La validación GPS de salida está activa. Debes tener conexión a internet para marcar la salida.',
+          };
+        }
+        if (hasMarcaPuestoCoordinates(marcaRecord)) {
+          const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
+          if (!coords.ok) {
+            return {
+              ok: false,
+              message: coords.message || 'No se pudo obtener la ubicación para marcar salida.',
+            };
+          }
+          lat = coords.latitude;
+          lng = coords.longitude;
+        }
       }
-      lat = coords.latitude;
-      lng = coords.longitude;
     }
+
+    const gpsSalidaEnabled =
+      type === 'salida' ? await getValidateGpsSalidaFromStorage() : false;
 
     const validation = await runLocalValidationForMarca(
       marcaRecord,
@@ -1265,7 +1311,7 @@ export default function MarcarIngresoSalidaScreen() {
         lat,
         lng,
         validateLocationForEntrada: type === 'entrada',
-        validateLocationForSalida: type === 'salida',
+        validateLocationForSalida: type === 'salida' && gpsSalidaEnabled,
       }
     );
 
@@ -1309,21 +1355,6 @@ export default function MarcarIngresoSalidaScreen() {
           message:
             'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.',
         };
-      }
-
-      const isLateLocal = await resolveIsLateFromLocalMarca(
-        attendanceData.marca as Record<string, unknown>,
-        attendanceData.is_late
-      );
-      if (isLateLocal) {
-        const finMs = buildMarcaFinMs(attendanceData.marca);
-        if (finMs != null && nowMs < finMs) {
-          return {
-            ok: false,
-            message:
-              'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno.',
-          };
-        }
       }
     }
 
@@ -1376,30 +1407,40 @@ export default function MarcarIngresoSalidaScreen() {
           return;
         }
 
-        // Geocerca local (misma regla que ingreso) antes de salida normal o anticipada.
+        // Geocerca local solo si validate_gps_salida está activo.
         const marcaRecord = attendanceData.marca as Record<string, unknown>;
-        if (hasMarcaPuestoCoordinates(marcaRecord)) {
-          const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
-          if (!coords.ok) {
-            setLocalCanMarkSalida(false);
-            setErrorMessage(coords.message);
-            setShowLocationRetry(true);
+        const gpsSalidaEnabled = await getValidateGpsSalidaFromStorage();
+        if (gpsSalidaEnabled) {
+          if (!(await evaluateInternetConnection())) {
             Alert.alert(
-              'Ubicación requerida',
-              coords.message || 'No se pudo obtener la ubicación para marcar salida.',
+              'Conexión requerida',
+              'La validación GPS de salida está activa. Debes tener conexión a internet para marcar la salida.'
             );
             return;
           }
-          const loc = validateMarcaLocation(marcaRecord, coords.latitude, coords.longitude);
-          if (!loc.ok) {
-            setLocalCanMarkSalida(false);
-            setErrorMessage(loc.message);
-            setShowLocationRetry(true);
-            Alert.alert('Ubicación no válida', loc.message);
-            return;
+          if (hasMarcaPuestoCoordinates(marcaRecord)) {
+            const coords = await obtainEntradaCoordinates(DEVICE_COORDS_USER_ACTION);
+            if (!coords.ok) {
+              setLocalCanMarkSalida(false);
+              setErrorMessage(coords.message);
+              setShowLocationRetry(true);
+              Alert.alert(
+                'Ubicación requerida',
+                coords.message || 'No se pudo obtener la ubicación para marcar salida.',
+              );
+              return;
+            }
+            const loc = validateMarcaLocation(marcaRecord, coords.latitude, coords.longitude);
+            if (!loc.ok) {
+              setLocalCanMarkSalida(false);
+              setErrorMessage(loc.message);
+              setShowLocationRetry(true);
+              Alert.alert('Ubicación no válida', loc.message);
+              return;
+            }
+            setLocalCanMarkSalida(true);
+            setShowLocationRetry(false);
           }
-          setLocalCanMarkSalida(true);
-          setShowLocationRetry(false);
         }
 
         const next_time_ms = buildMarcaFinMs(attendanceData.marca);
@@ -1407,35 +1448,22 @@ export default function MarcarIngresoSalidaScreen() {
           throw new Error('No se pudo calcular la hora de salida del turno');
         }
 
-        // Validación local de salida anticipada (no se valida en servidor).
-        if (now < next_time_ms) {
-          const isLateLocal = await resolveIsLateFromLocalMarca(
-            attendanceData.marca as Record<string, unknown>,
-            attendanceData.is_late
+        // Validación local de salida anticipada vs normal (tiempo_gracia_marcar_salida).
+        const graciaMinutes = await getTiempoGraciaMarcarSalidaFromStorage();
+        const anticipadaThresholdMs = next_time_ms - graciaMinutes * 60 * 1000;
+        if (now < anticipadaThresholdMs) {
+          Alert.alert(
+            'Salida anticipada',
+            'Aún no llega la hora de salida. Si continúas, deberás indicar el motivo de la salida anticipada.',
+            [
+              { text: 'Cancelar', style: 'cancel' },
+              {
+                text: 'Continuar',
+                onPress: () => setIsModalVisible(true),
+              },
+            ]
           );
-
-          if (isLateLocal) {
-            Alert.alert(
-              'Salida anticipada no permitida',
-              'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno. No se abrirá el formulario de motivo.'
-            );
-            return;
-          }
-
-          if (now < next_time_ms - 15 * 60 * 1000) {
-            Alert.alert(
-              'Salida anticipada',
-              'Aún no llega la hora de salida. Si continúas, deberás indicar el motivo de la salida anticipada.',
-              [
-                { text: 'Cancelar', style: 'cancel' },
-                {
-                  text: 'Continuar',
-                  onPress: () => setIsModalVisible(true),
-                },
-              ]
-            );
-            return;
-          }
+          return;
         }
       }
 
@@ -1540,47 +1568,83 @@ export default function MarcarIngresoSalidaScreen() {
 
     const actionHoraAccion = preCheck.horaAccionMs;
 
-    if (await evaluateInternetConnection()) {
-      const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(actionHoraAccion);
-      if (!hasValidPlanillasToken) {
-        setIsProcessingMark(false);
-        setProcessingType(null);
-        return;
-      }
-
-      data = await saveMarca({
-        data_params: { type, reason, horaAccion: actionHoraAccion },
-        marcaId: attendanceData.marca.id,
-        refreshAccessToken,
-        logout,
-      });
-    } else {
       if (type === 'salida') {
-        const storedPlanillas = await readStoredPlanillasToken();
-        await appendAttendanceAction({
-          type: 'salida',
-          marcaId: attendanceData.marca.id,
-          reason: reason ?? '',
-          horaAccion: actionHoraAccion,
-          planillasToken: storedPlanillas?.token ?? undefined,
-        });
-        const rawMarca = await AsyncStorage.getItem('current_marca');
-        if (rawMarca) {
-          try {
-            const m = JSON.parse(rawMarca);
-            if (Number(m.id) === Number(attendanceData.marca.id)) {
-              m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
-              await persistCurrentMarcaWithFlags(m);
-            }
-          } catch {
-            /* ignore */
-          }
+        const gpsSalidaEnabled = await getValidateGpsSalidaFromStorage();
+        if (gpsSalidaEnabled && !(await evaluateInternetConnection())) {
+          setIsProcessingMark(false);
+          setProcessingType(null);
+          Alert.alert(
+            'Conexión requerida',
+            'La validación GPS de salida está activa. Debes tener conexión a internet para marcar la salida.'
+          );
+          return;
         }
-        data = { status: true, message: 'Salida registrada localmente. Se sincronizará al recuperar conexión.' };
+
+        const finMs = buildMarcaFinMs(attendanceData.marca);
+        const graciaMinutes = await getTiempoGraciaMarcarSalidaFromStorage();
+        const isAnticipada =
+          finMs != null && actionHoraAccion < finMs - graciaMinutes * 60 * 1000;
+
+        if (await evaluateInternetConnection()) {
+          const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(actionHoraAccion);
+          if (!hasValidPlanillasToken) {
+            setIsProcessingMark(false);
+            setProcessingType(null);
+            return;
+          }
+
+          data = await saveMarca({
+            data_params: { type, reason, horaAccion: actionHoraAccion },
+            marcaId: attendanceData.marca.id,
+            refreshAccessToken,
+            logout,
+          });
+        } else {
+          const storedPlanillas = await readStoredPlanillasToken();
+          await appendAttendanceAction({
+            type: 'salida',
+            marcaId: attendanceData.marca.id,
+            reason: reason ?? '',
+            horaAccion: actionHoraAccion,
+            planillasToken: storedPlanillas?.token ?? undefined,
+          });
+          const rawMarca = await AsyncStorage.getItem('current_marca');
+          if (rawMarca) {
+            try {
+              const m = JSON.parse(rawMarca);
+              if (Number(m.id) === Number(attendanceData.marca.id)) {
+                m.hora_salida_digitada = new Date(actionHoraAccion).toISOString();
+                if (isAnticipada) {
+                  m.is_salida_anticipada = true;
+                  m.hora_salida_anticipada = new Date(actionHoraAccion).toISOString();
+                }
+                await persistCurrentMarcaWithFlags(m, {
+                  is_salida_anticipada: isAnticipada || resolveMarcaIsSalidaAnticipada(m),
+                });
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+          data = { status: true, message: 'Salida registrada localmente. Se sincronizará al recuperar conexión.' };
+        }
+      } else if (await evaluateInternetConnection()) {
+        const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(actionHoraAccion);
+        if (!hasValidPlanillasToken) {
+          setIsProcessingMark(false);
+          setProcessingType(null);
+          return;
+        }
+
+        data = await saveMarca({
+          data_params: { type, reason, horaAccion: actionHoraAccion },
+          marcaId: attendanceData.marca.id,
+          refreshAccessToken,
+          logout,
+        });
       } else {
         data = { status: false, message: 'No hay conexión a internet. Por favor, intenta nuevamente.' };
       }
-    }
 
     if (data.status) {
       setRevertMarcaId(null);
@@ -1661,6 +1725,8 @@ export default function MarcarIngresoSalidaScreen() {
         'last_location',
         'monitoring_previous_minutes',
         'monitoring_post_minutes',
+        'tiempo_gracia_marcar_salida',
+        'validate_gps_salida',
         ATTENDANCE_ACTIONS_KEY,
       ];
       const keys = await AsyncStorage.getAllKeys();
@@ -1840,6 +1906,19 @@ const getActivities = async (marcaId: number) => {
     const mid = revertMarcaId ?? attendanceData?.marca?.id ?? null;
     if (mid == null || !Number.isFinite(Number(mid)) || Number(mid) <= 0) return;
 
+    const marca = attendanceData?.marca as Record<string, unknown> | undefined;
+    const isAnticipada =
+      resolveMarcaIsSalidaAnticipada(marca || {}) ||
+      Boolean(attendanceData?.is_salida_anticipada);
+
+    if (isAnticipada) {
+      Alert.alert(
+        'No se puede revertir',
+        'Si desea revertir la salida anticipada, debe contactarse con administración de su puesto.'
+      );
+      return;
+    }
+
     Alert.alert(
       'Confirmar',
       '¿Deseas revertir la salida registrada?',
@@ -1877,20 +1956,6 @@ const getActivities = async (marcaId: number) => {
       Alert.alert(
         'Salida no permitida',
         'Aún no llega la hora de entrada del turno. Solo puedes marcar salida después de esa hora.'
-      );
-      return;
-    }
-
-    const isLateLocal = await resolveIsLateFromLocalMarca(
-      attendanceData.marca as Record<string, unknown>,
-      attendanceData.is_late
-    );
-    if (isLateLocal) {
-      setIsModalVisible(false);
-      setExitReason('');
-      Alert.alert(
-        'Salida anticipada no permitida',
-        'Como hubo tardía al ingresar, solo puedes marcar salida después de la hora de fin del turno.'
       );
       return;
     }
@@ -2746,7 +2811,7 @@ const getActivities = async (marcaId: number) => {
                     </ThemedText>
                     {attendanceData.estado === 'No ingresado' && (
                       <ThemedText style={styles.salidaAnticipadaHintText}>
-                        No puedes marcar ingreso porque esta marca tiene salida anticipada.
+                        Haz marcado la salida  de forma anticipada. Si deseas revertirlo, contacta con la administración de tu puesto.
                       </ThemedText>
                     )}
                   </ThemedView>
