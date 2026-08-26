@@ -271,8 +271,12 @@ export async function GET(req: NextRequest) {
             ...(myEjecutivoCuentaId
               ? [
                   {
-                    // Ejecutivo asignado: visibles aunque no sean partes
-                    ejecutivo_cuenta: myEjecutivoCuentaId,
+                    // Ejecutivo: solo pendientes a firmar / ya firmados (ambos involucrados aceptaron).
+                    AND: [
+                      { ejecutivo_cuenta: myEjecutivoCuentaId },
+                      { ausente_acepta: true },
+                      { reemplaza_acepta: true },
+                    ],
                   },
                 ]
               : []),
@@ -827,18 +831,10 @@ export async function POST(req: NextRequest) {
     });
 
     const recipients = new Set<number>();
-    const employeePlazas = await prisma.c_empleado_plaza.findMany({
-      where: { ejecutivoCuenta_id: ejecutivo_cuenta },
-      select: { empleado_id: true },
-    });
-    
-    recipients.add(createdBy)
+    recipients.add(createdBy);
 
     if (recipients.size > 0) {
-      const empleados_ejecutivos = await prisma.c_empleado.findMany({
-        where: { supervisor_id: ejecutivo_cuenta },
-      });
-
+      // Al crear: notificar solo a los involucrados (no al ejecutivo; se notifica cuando ambos firmen).
       const puestoAusente = await prisma.e_estructura_puesto.findUnique({
         where: { id: Number(marcaAusente.puesto_id) },
       });
@@ -881,7 +877,7 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      const employeeIds = (Array.isArray(empleados_ejecutivos) ? empleados_ejecutivos : []).map((e: any) => e.id);
+      const employeeIds: number[] = [];
       if (empleadoAusente?.id) employeeIds.push(empleadoAusente.id);
       if (empleadoReemplaza?.id) employeeIds.push(empleadoReemplaza.id);
 

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../../utils/prismaClient";
+import axios from "axios";
 const bcrypt = require('bcrypt');
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ token: string }> }) {
@@ -23,13 +24,29 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
         if (!token_recovery) return NextResponse.json({ status: false, message: "Token de recuperación de contraseña no encontrado" });
         const empleado = await prisma.c_empleado.findUnique({ where: { id: token_recovery.empleadoId ?? 0 } });
         if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" });
-        const password_expires_at = empleado.password_expires_at;
-        
-        const now = toZonedTime(new Date(), "America/Costa_Rica");
-        const newDateExpiresAt = toZonedTime(new Date(now.getTime() + 2 * 30 * 24 * 60 * 60 * 1000), "America/Costa_Rica");
 
-        const hashedPassword = await bcrypt.hash(password, 10);
-        await prisma.c_empleado.update({ where: { id: token_recovery.empleadoId ?? 0 }, data: { password: hashedPassword, password_expires_at: newDateExpiresAt } });
+        const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
+        if (!planillasUrl) {
+            return NextResponse.json(
+                { status: false, message: "URL de Planillas no configurada" }
+            );
+        }
+        
+        const planillasResponse = await axios.post(`${planillasUrl}/recover-password`, {
+            correo_usuario: empleado.Email,
+            codigo: token,
+            password: password,
+            repeat_password: password,
+        });
+
+        // Respuesta esperada: {"success":true,"data":{"message":"Contrase\u00f1a actualizada correctamente."}}
+
+        if (planillasResponse.status !== 200 || !planillasResponse.data.success) {
+            return NextResponse.json(
+                { status: false, message: planillasResponse.data.message }
+            );
+        }
+
         await callDynamicPrisma({
             req,
             shouldVerifyAccessToken: false,
@@ -40,6 +57,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ token: 
                 returning: false
             }
         });
+        
         // Retornar éxito con la contraseña actualizada
         return NextResponse.json({ status: true, message: "Contraseña actualizada" });
     } catch (error: unknown) {

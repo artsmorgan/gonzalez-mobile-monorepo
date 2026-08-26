@@ -5,12 +5,10 @@ import { prisma } from "../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
 import { getActivities } from "../../../../utils/createActivities";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
-import { getCoordinadoPorId } from "../../../../utils/getCoordinadoPorId";
-import { createAccionPersonal } from "../../../../utils/createAccionPersonal";
-import getRoleDivision from "../../../../utils/getRoleDivision";
 import { createLoginMarca } from "../../../../utils/createLoginMarca";
 import { getMonitoringPostMinutes } from "../../../../utils/getMonitoringPostMinutes";
 import axios from "axios";
+import { getTiempoGraciaMarcarSalida } from "../../../../utils/getTiempoGraciaMarcarSalida";
 
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
     const empleado = await prisma.c_empleado.findUnique({ where: { id } });
@@ -314,8 +312,9 @@ try {
         }
 
         console.log("endDate", endDate);
+        const tiempoGraciaMarcarSalida = await getTiempoGraciaMarcarSalida(req);
 
-        if (now.getTime() < (endDate.getTime() - 15 * 60 * 1000)) {
+        if (now.getTime() < (endDate.getTime() - tiempoGraciaMarcarSalida * 60 * 1000)) {
             is_early = true;
         }
     }

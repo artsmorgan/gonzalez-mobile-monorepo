@@ -187,7 +187,7 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
   {
     slug: MOBILE_VARIABLES_SLUG,
     label: 'Variables del sistema',
-    description: 'Administra las variables de configuración utilizadas en la aplicación.',
+    description: 'Administra las variables de configuración utilizadas en la aplicación (p. ej. monitoring_previous_minutes, validate_gps_salida).',
     formKind: 'mobile-variable',
   },
 ];
@@ -1154,16 +1154,27 @@ export default function NomencladoresScreen() {
                         Valor ({getMobileVariableInputHint(formVariableType)})
                       </ThemedText>
                       {isBooleanVariableType(formVariableType) ? (
-                        <View style={styles.pickerWrapper}>
-                          <Picker
-                            selectedValue={formVariableValue}
-                            onValueChange={(v) => setFormVariableValue(String(v))}
-                            style={styles.picker}
+                        <TouchableOpacity
+                          style={styles.checkboxRow}
+                          onPress={() =>
+                            setFormVariableValue(formVariableValue === 'true' ? 'false' : 'true')
+                          }
+                          activeOpacity={0.85}
+                        >
+                          <View
+                            style={[
+                              styles.checkboxBox,
+                              formVariableValue === 'true' && styles.checkboxBoxChecked,
+                            ]}
                           >
-                            <Picker.Item label="Verdadero (true)" value="true" color="#000000" />
-                            <Picker.Item label="Falso (false)" value="false" color="#000000" />
-                          </Picker>
-                        </View>
+                            {formVariableValue === 'true' ? (
+                              <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                            ) : null}
+                          </View>
+                          <ThemedText style={styles.checkboxLabel}>
+                            {formVariableValue === 'true' ? 'Habilitado (true)' : 'Deshabilitado (false)'}
+                          </ThemedText>
+                        </TouchableOpacity>
                       ) : (
                         <TextInput
                           style={[styles.input, isJsonVariableType(formVariableType) && styles.textArea]}
@@ -1412,6 +1423,37 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   picker: { color: '#000' },
+  checkboxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxBox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#007AFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxBoxChecked: {
+    backgroundColor: '#007AFF',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#000',
+    fontWeight: '600',
+    flex: 1,
+  },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
   inputFlex: { flex: 1, marginBottom: 0 },
   searchIconBtn: {

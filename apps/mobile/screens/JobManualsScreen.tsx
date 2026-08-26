@@ -578,7 +578,15 @@ export default function JobManualsScreen() {
 
         /** El GET ya filtra por `puesto_id`; no excluir por `corpo_id` del registro (puede diferir del filtro jerárquico). */
         const manualsForListScope = (cacheArr: JobManualRemote[]) =>
-          cacheArr.filter((m) => manualIsVisibleForPuesto(m, puestoIdNum));
+          cacheArr
+            .filter((m) => manualIsVisibleForPuesto(m, puestoIdNum))
+            .sort((a, b) => {
+              const ta = new Date(String(a?.created_at ?? 0)).getTime();
+              const tb = new Date(String(b?.created_at ?? 0)).getTime();
+              const na = Number.isFinite(ta) ? ta : 0;
+              const nb = Number.isFinite(tb) ? tb : 0;
+              return nb - na;
+            });
 
         const isConnected = await getConnectionStatus();
 
@@ -3206,6 +3214,11 @@ export default function JobManualsScreen() {
                       {manual.files?.length || 0} archivo (s)
                     </ThemedText>
                   </ThemedView>
+                  {manual.created_at ? (
+                    <ThemedText style={styles.manualMetaText}>
+                      Creado: {convertDateTimestampToLocalString(new Date(manual.created_at).toISOString())}
+                    </ThemedText>
+                  ) : null}
                 </TouchableOpacity>
                   {roleName !== 'OPERATIVO' && (
                     <ThemedView style={styles.manualActionsRow}>

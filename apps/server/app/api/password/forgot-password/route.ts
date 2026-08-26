@@ -3,6 +3,7 @@ import { transporter } from '../../../../transporter';
 import { toZonedTime } from 'date-fns-tz';
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
+import axios from 'axios';
 
 export async function POST(request: NextRequest) {
     try {
@@ -32,73 +33,32 @@ export async function POST(request: NextRequest) {
                 { status: false, message: "Empleado no tiene email configurado" }
             );
         }
-
-        const caracteres = "0123456789";
-        let token = "";
-        let exists = true;
-
-        while (exists) {
-            for (let i = 0; i < 6; i++) {
-                const indice = Math.floor(Math.random() * caracteres.length);
-                token += caracteres[indice];
-            }
-            const exists_token = await callDynamicPrisma({
-                req: request,
-                shouldVerifyAccessToken: false,
-                data: {
-                    action: "GET",
-                    table: "a_recovery_password_token",
-                    operation: "findFirst",
-                    where: { token: token }
-                }
-            });
-            if (!exists_token) {
-                exists = false;
-            }
-            else {
-                token = "";
-            }
+        
+        const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
+        if (!planillasUrl || !empleado.id) {
+            return NextResponse.json(
+                { status: false, message: "Empleado no tiene id configurado" }
+            );
         }
 
-        // Agregar un registro en la tabla a_recovery_password_token para el empleado
-        await callDynamicPrisma({
-            req: request,
-            shouldVerifyAccessToken: false,
-            data: {
-                action: "POST",
-                table: "a_recovery_password_token",
-                data: {
-                    token: token,
-                    empleadoId: empleado.id,
-                    expira_en: 900000,
-                    creacion: toZonedTime(new Date(), "America/Costa_Rica").toISOString()
-                },
-                returning: false
-            }
+        console.log('planillasUrl', empleado.Email);
+
+        const planillasResponse = await axios.post(`${planillasUrl}/forgot-password`, {
+            correo_usuario: empleado.Email,
         });
 
-        token = token.split("").join(" ");
+        // Respuesta esperada: {"success":true,"data":{"message":"Se ha enviado un correo con el c\u00f3digo de verificaci\u00f3n.","expires_in":900}}
 
-        await transporter.sendMail({
-            from: `Recuperación de contraseña - <${process.env.EMAIL_USER}>`,
-            to: empleado.Email,
-            subject: "Recuperación de contraseña",
-            html: `
-              <h1>Recuperación de contraseña</h1>
-              <p>Hola ${empleado.nombre} ${empleado.primer_apellido} ${empleado.segundo_apellido},</p>
-              <p>Para recuperar tu contraseña, añade el siguiente código a la aplicación:</p><br>
-              <p>${token}</p><br>
-              <p>Si no solicitaste esta recuperación, por favor ignora este mensaje.</p>
-              <p>Gracias,</p>
-              <p>Equipo de Gonzalez</p>
-            `
-        });
-
+        if (planillasResponse.status !== 200 || !planillasResponse.data.success) {
+            return NextResponse.json(
+                { status: false, message: planillasResponse.data.message }
+            );
+        }
         // Retornar éxito con el email del empleado
         return NextResponse.json(
             {
                 status: true,
-                message: `Email de recuperación enviado a ${empleado.Email}`
+                message: `Email de recuperación enviado a ${empleado.Email}`,
             }
         );
 

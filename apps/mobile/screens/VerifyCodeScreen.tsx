@@ -88,7 +88,13 @@ export default function VerifyCodeScreen() {
         return;
       }
 
-      const response = await fetch(`${apiUrl}/api/password/check-recovery-password-token/${fullCode}`, {
+      const correo_usuario = message?.split('@')[0];
+      if (!correo_usuario) {
+        Alert.alert('Error', 'Correo electrónico no válido');
+        return;
+      }
+
+      const response = await fetch(`${apiUrl}/api/password/check-recovery-password-token?token=${fullCode}&cedula=${cedula}`, {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

@@ -115,6 +115,8 @@ export function mapMobileVariableRow(row: unknown): MobileVariableRow | null {
 }
 
 export async function fetchMobileVariablesList(req: NextRequest): Promise<MobileVariableRow[]> {
+    await ensureValidateGpsSalidaVariable(req);
+
     const rows = await callDynamicPrisma({
         req,
         data: {
@@ -128,6 +130,40 @@ export async function fetchMobileVariablesList(req: NextRequest): Promise<Mobile
     return (Array.isArray(rows) ? rows : [])
         .map(mapMobileVariableRow)
         .filter((row): row is MobileVariableRow => row !== null);
+}
+
+async function ensureValidateGpsSalidaVariable(req: NextRequest): Promise<void> {
+    try {
+        const existing = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: MOBILE_VARIABLES_TABLE,
+                operation: "findFirst",
+                where: { variable_name: "validate_gps_salida" },
+            },
+        });
+        if (existing) return;
+
+        const now = new Date();
+        await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: MOBILE_VARIABLES_TABLE,
+                data: {
+                    variable_name: "validate_gps_salida",
+                    slug: "validate-gps-salida",
+                    variable_value: "false",
+                    variable_type: "boolean",
+                    created_at: now,
+                    updated_at: now,
+                },
+            },
+        });
+    } catch (error) {
+        console.error("Error asegurando validate_gps_salida:", error);
+    }
 }
 
 export function parseMobileVariablePayload(
