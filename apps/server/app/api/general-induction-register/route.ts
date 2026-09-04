@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
   e_estructura_empresa: { select: { nombre: true, codigo: true } },
@@ -116,6 +117,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: true, data: [] }, { status: 200 });
       }
     } else {
+      await reportError(req, "api/general-induction-register", "GET", 400, "Debe especificar filtros jerárquicos");
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
@@ -157,7 +159,8 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+    await reportError(req, "api/general-induction-register", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
   }
 }
 
@@ -225,6 +228,7 @@ export async function POST(req: NextRequest) {
     ];
     for (const [k, v] of required) {
       if (v === undefined || v === null || String(v).trim().length === 0) {
+        await reportError(req, "api/general-induction-register", "POST", 400, `El campo ${k} es requerido`);
         return NextResponse.json({ status: false, message: `El campo ${k} es requerido` }, { status: 400 });
       }
     }
@@ -240,11 +244,13 @@ export async function POST(req: NextRequest) {
         (n) => Number.isNaN(n) || n <= 0
       )
     ) {
+      await reportError(req, "api/general-induction-register", "POST", 400, "IDs de jerarquía inválidos");
       return NextResponse.json({ status: false, message: "IDs de jerarquía inválidos" }, { status: 400 });
     }
 
     const fechaParsed = parseFechaInput(fecha);
     if (fecha !== undefined && fecha !== null && !fechaParsed) {
+      await reportError(req, "api/general-induction-register", "POST", 400, "Fecha inválida");
       return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
@@ -416,7 +422,8 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/general-induction-register", "POST", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../utils/reportError";
 import { toZonedTime, format } from "date-fns-tz";
 import path from "path";
 import fs from "fs";
@@ -26,17 +27,20 @@ export async function GET(req: NextRequest) {
 
         const marcaId = req.nextUrl.searchParams.get("m");
         if (!marcaId) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+            await reportError(req, "api/training", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/training", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const marcaObj = marca as any;
         if (!marcaObj.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/training", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         // Obtener la última marca usando callDynamicPrisma directamente
@@ -80,7 +84,8 @@ export async function GET(req: NextRequest) {
         }
 
         if (!lastMarca) {
-            return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
+            await reportError(req, "api/training", "GET", 404, "No se encontró la última marca");
+            return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 404 });
         }
 
         const lastMarcaObj = lastMarca as any;
@@ -93,7 +98,8 @@ export async function GET(req: NextRequest) {
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoId } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
+            await reportError(req, "api/training", "GET", 404, "Corpo no encontrada");
+            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 404 });
         }
 
         const capacitaciones = await callDynamicPrisma({
@@ -305,6 +311,7 @@ export async function GET(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/training", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -371,22 +378,26 @@ export async function POST(req: NextRequest) {
             !Number.isFinite(divId) ||
             !Number.isFinite(conId) ||
             !Number.isFinite(puestoJerId)) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const marcaObj = marca as any;
         if (!marcaObj.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaObj.empleadoFijo_id } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const effectiveEmpresaId =
@@ -404,17 +415,20 @@ export async function POST(req: NextRequest) {
 
         const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: effectiveEmpresaId } });
         if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Empresa no encontrada");
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
         }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: effectiveClienteId } });
         if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Cliente no encontrado");
+            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoIdPost } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
+            await reportError(req, "api/training", "POST", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
         }
 
         const empresaObj = empresa as any;
@@ -547,6 +561,7 @@ export async function POST(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/training", "POST", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

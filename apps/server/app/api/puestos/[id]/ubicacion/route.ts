@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 import { prisma } from "../../../../../utils/prismaClient";
 import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
@@ -21,9 +22,10 @@ export async function PUT(
 
         const planillasToken = await req.headers.get("planillas-token");
         if (!planillasToken) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 400, "Token de Planillas requerido");
             return NextResponse.json(
                 { status: false, message: "Token de Planillas requerido" },
-                { status: 401 }
+                { status: 400 }
             );
         }
 
@@ -31,6 +33,7 @@ export async function PUT(
         const puestoId = parseInt(resolvedParams.id);
 
         if (!puestoId || isNaN(puestoId)) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 400, "ID de puesto inválido");
             return NextResponse.json(
                 { status: false, message: "ID de puesto inválido" },
                 { status: 400 }
@@ -48,6 +51,7 @@ export async function PUT(
             : toZonedTime(new Date(), "America/Costa_Rica");
 
         if (latitud === undefined || longitud === undefined) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 400, "Latitud y longitud son requeridas");
             return NextResponse.json(
                 { status: false, message: "Latitud y longitud son requeridas" },
                 { status: 400 }
@@ -56,6 +60,7 @@ export async function PUT(
 
         const clearing = latitud === null && longitud === null;
         if (!clearing && (latitud === null || longitud === null)) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 400, "Latitud y longitud deben enviarse ambas o ambas en null para borrar");
             return NextResponse.json(
                 { status: false, message: "Latitud y longitud deben enviarse ambas o ambas en null para borrar" },
                 { status: 400 }
@@ -65,6 +70,7 @@ export async function PUT(
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
 
         if (!puesto) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 404, "Puesto no encontrado");
             return NextResponse.json(
                 { status: false, message: "Puesto no encontrado" },
                 { status: 404 }
@@ -84,6 +90,7 @@ export async function PUT(
         });
 
         if (!planillasResponse.data.success) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 500, "Error al actualizar la ubicación del puesto");
             return NextResponse.json(
                 { status: false, message: "Error al actualizar la ubicación del puesto" },
                 { status: 500 }
@@ -138,6 +145,7 @@ export async function PUT(
 
         const updatedPuesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
         if (!updatedPuesto) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 404, "Puesto no encontrado");
             return NextResponse.json(
                 { status: false, message: "Puesto no encontrado" },
                 { status: 404 }
@@ -164,6 +172,7 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error updating puesto ubicacion:", errorMessage);
+        await reportError(req, "api/puestos/[id]/ubicacion", "PUT", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

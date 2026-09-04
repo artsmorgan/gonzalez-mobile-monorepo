@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../utils/reportError";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -22,7 +23,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const body = await req.json();
@@ -43,13 +45,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     } = body ?? {};
 
     if (cliente_id == null || corpo_id == null) {
-      return NextResponse.json({ status: false, message: "cliente_id y corpo_id son obligatorios" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 400, "cliente_id y corpo_id son obligatorios");
+      return NextResponse.json({ status: false, message: "cliente_id y corpo_id son obligatorios" }, { status: 400 });
     }
 
     const clienteIdNum = parseInt(String(cliente_id), 10);
     const corpoIdNum = parseInt(String(corpo_id), 10);
     if (!Number.isFinite(clienteIdNum) || clienteIdNum <= 0 || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) {
-      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 400, "cliente_id o corpo_id inválidos");
+      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -62,16 +66,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existing || !existing.id) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     if (existing.cliente_id !== clienteIdNum || existing.corpo_id !== corpoIdNum) {
-      return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 400, "No autorizado para modificar este registro");
+      return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 400 });
     }
 
     const fechaDate = fecha ? parseDateOnly(fecha) : null;
     if (fecha && !fechaDate) {
-      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "PUT", 400, "Fecha inválida");
+      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
     const existingFecha = existing.fecha instanceof Date ? existing.fecha : new Date(existing.fecha);
@@ -175,6 +182,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/documentos-entregados/[id]:", errorMessage);
+    await reportError(req, "api/documentos-entregados/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -189,19 +197,22 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     const clienteIdStr = req.nextUrl.searchParams.get("cliente_id");
     if (!corpoIdStr || !clienteIdStr) {
-      return NextResponse.json({ status: false, message: "corpo_id y cliente_id son obligatorios" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "DELETE", 400, "corpo_id y cliente_id son obligatorios");
+      return NextResponse.json({ status: false, message: "corpo_id y cliente_id son obligatorios" }, { status: 400 });
     }
 
     const corpoIdNum = parseInt(corpoIdStr, 10);
     const clienteIdNum = parseInt(clienteIdStr, 10);
     if (!Number.isFinite(corpoIdNum) || corpoIdNum <= 0 || !Number.isFinite(clienteIdNum) || clienteIdNum <= 0) {
-      return NextResponse.json({ status: false, message: "corpo_id o cliente_id inválidos" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "DELETE", 400, "corpo_id o cliente_id inválidos");
+      return NextResponse.json({ status: false, message: "corpo_id o cliente_id inválidos" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -214,11 +225,13 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       },
     });
     if (!existing || !existing.id) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     if (existing.cliente_id !== clienteIdNum || existing.corpo_id !== corpoIdNum) {
-      return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados/[id]", "DELETE", 400, "No autorizado para eliminar este registro");
+      return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 400 });
     }
 
     // Registrar cambio de eliminación antes de eliminar
@@ -266,6 +279,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/documentos-entregados/[id]:", errorMessage);
+    await reportError(req, "api/documentos-entregados/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

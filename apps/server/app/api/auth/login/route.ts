@@ -7,6 +7,8 @@ import { prisma } from "../../../../utils/prismaClient";
 import { resolveServerBaseUrl } from "../../../../utils/resolveServerBaseUrl";
 import { createTokenPlanillas } from "../../../../utils/createTokenPlanillas";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import dotenv from "dotenv";
+dotenv.config();
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const jwt = require("jsonwebtoken");
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -147,8 +149,13 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ status: false, message: "Error al iniciar sesión en Planillas" }, { status: 500 });
         }
 
+        // `toZonedTime` ya desplaza el instante para que sus getters UTC devuelvan la hora de
+        // reloj de Costa Rica; restar 6 horas otra vez aquí duplicaba el desplazamiento y dejaba
+        // el token de Planillas "vencido" casi de inmediato (mismo bug que en createTokenPlanillas.ts).
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        if (process.env.NODE_ENV === "development") {
+            now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+        }
         const expiresInSec = Number(response_planillas_login.data.data.expires_in);
         const expiresInMs = expiresInSec * 1000;
         const planillasTokenExpiresAt_planillas_login = now.getTime() + expiresInMs;

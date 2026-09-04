@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { findContributionIncidents } from "../../../../../utils/findContributionIncidents";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -36,13 +37,19 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
-    if (!incidentId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!incidentId) {
+      await reportError(req, "api/incidents/[id]/contributions", "GET", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
 
     const incident = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
     });
-    if (!incident) return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
+    if (!incident) {
+      await reportError(req, "api/incidents/[id]/contributions", "GET", 404, "Incidente no encontrado");
+      return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 404 });
+    }
 
     const mapped = await findContributionIncidents(req, incidentId);
 
@@ -50,6 +57,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/incidents/[id]/contributions:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -61,27 +69,38 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const { id } = await context.params;
     const incidentId = parseInt(id, 10);
-    if (!incidentId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!incidentId) {
+      await reportError(req, "api/incidents/[id]/contributions", "POST", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
 
     const incident = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
     });
-    if (!incident) return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
+    if (!incident) {
+      await reportError(req, "api/incidents/[id]/contributions", "POST", 404, "Incidente no encontrado");
+      return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 404 });
+    }
 
     const body = await req.json();
     const { aporte, rol_aporte, archivos, nombre_aporte, firma_aporte_tercero } = body ?? {};
 
     const empleadoId = parseInt(String((payload as any)?.id ?? (payload as any)?.empleado_id ?? "0"), 10);
-    if (!empleadoId) return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 200 });
+    if (!empleadoId) {
+      await reportError(req, "api/incidents/[id]/contributions", "POST", 400, "Empleado no identificado");
+      return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 400 });
+    }
 
     if (!aporte || String(aporte).trim().length === 0) {
-      return NextResponse.json({ status: false, message: "Aporte requerido" }, { status: 200 });
+      await reportError(req, "api/incidents/[id]/contributions", "POST", 400, "Aporte requerido");
+      return NextResponse.json({ status: false, message: "Aporte requerido" }, { status: 400 });
     }
 
     const roleStr = (typeof rol_aporte === "string" ? rol_aporte : "").trim();
     if (roleStr.length === 0) {
-      return NextResponse.json({ status: false, message: "Rol de aporte requerido" }, { status: 200 });
+      await reportError(req, "api/incidents/[id]/contributions", "POST", 400, "Rol de aporte requerido");
+      return NextResponse.json({ status: false, message: "Rol de aporte requerido" }, { status: 400 });
     }
 
     let filesParsed: ContributionFileInput[] = [];
@@ -179,6 +198,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/incidents/[id]/contributions:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

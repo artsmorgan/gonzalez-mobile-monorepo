@@ -2,6 +2,8 @@ import axios from "axios";
 import { toZonedTime } from "date-fns-tz";
 import { NextRequest } from "next/server";
 import { callDynamicPrisma } from "./callDynamicPrisma";
+import dotenv from "dotenv";
+dotenv.config();
 
 type EmpleadoPlanillasRef = {
     id: number;
@@ -42,8 +44,16 @@ export async function createTokenPlanillas(
         throw new Error("Error al iniciar sesión en Planillas");
     }
 
+    // `toZonedTime` ya desplaza el instante para que sus getters UTC devuelvan la hora de reloj
+    // de Costa Rica; restar 6 horas otra vez aquí duplicaba el desplazamiento (mismo bug que
+    // había en `/api/server-time`). Eso hacía que `planillasTokenExpiresAt` quedara ~6 horas
+    // por detrás de la hora que usa el móvil (`getHoraAccion`), así que el token se veía vencido
+    // casi de inmediato y la app pedía la contraseña de Planillas constantemente.
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
+
     const expiresInSec = Number(response.data.data.expires_in);
     const expiresInMs = expiresInSec * 1000;
     const planillasTokenExpiresAt = now.getTime() + expiresInMs;

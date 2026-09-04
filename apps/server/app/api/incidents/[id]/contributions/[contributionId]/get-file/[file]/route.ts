@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { fetchDynamicFile } from "../../../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export async function GET(
     const fileName = path.basename(decodeURIComponent(file));
 
     if (!incidentId || !aporteId || !fileName) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-file/[file]", "GET", 400, "IDs o archivo faltante");
       return NextResponse.json({ status: false, message: "IDs o archivo faltante" }, { status: 400 });
     }
 
@@ -30,7 +32,10 @@ export async function GET(
           where: { id: aporteId, incidente_id: incidentId },
         },
       });
-      if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+      if (!aporte) {
+        await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-file/[file]", "GET", 404, "Aporte no encontrado");
+        return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+      }
 
       fileRecord = await callDynamicPrisma({
         req,
@@ -41,7 +46,10 @@ export async function GET(
           where: { contribucion_id: aporteId, name: fileName },
         },
       });
-      if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+      if (!fileRecord) {
+        await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-file/[file]", "GET", 404, "Archivo no encontrado");
+        return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+      }
     } catch (dbError: any) {
       const msg = String(dbError?.message || "");
       if (!msg.toLowerCase().includes("token no proporcionado")) {
@@ -67,6 +75,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/incidents/[id]/contributions/[contributionId]/get-file/[file]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-file/[file]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { fetchDynamicFile } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -24,11 +25,13 @@ export async function GET(
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
     if (!idNum) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 400, "Empleado inválido");
       return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
     }
 
@@ -42,9 +45,11 @@ export async function GET(
       },
     });
     if (!record) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 404, "Solicitud no encontrada");
       return NextResponse.json({ status: false, message: "Solicitud no encontrada" }, { status: 404 });
     }
     if ((record as any).isActive === false) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 404, "Solicitud no disponible");
       return NextResponse.json({ status: false, message: "Solicitud no disponible" }, { status: 404 });
     }
     const mainFile = await callDynamicPrisma({
@@ -58,6 +63,7 @@ export async function GET(
       },
     });
     if (!mainFile?.name) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 404, "La solicitud no tiene archivo adjunto");
       return NextResponse.json({ status: false, message: "La solicitud no tiene archivo adjunto" }, { status: 404 });
     }
 
@@ -65,9 +71,10 @@ export async function GET(
     const myEjecutivoCuentaId = parseIntStrict(empleado?.supervisor_id);
     const isExecutive = myEjecutivoCuentaId && Number(record.ejecutivo_cuenta) === Number(myEjecutivoCuentaId);
     if (!isExecutive) {
+      await reportError(req, "api/permit-request/[id]/file", "GET", 400, "Solo el ejecutivo asignado puede descargar este archivo");
       return NextResponse.json(
         { status: false, message: "Solo el ejecutivo asignado puede descargar este archivo" },
-        { status: 403 }
+        { status: 400 }
       );
     }
 
@@ -85,6 +92,7 @@ export async function GET(
     return new NextResponse(fetched.buffer, { status: 200, headers });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/permit-request/[id]/file", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

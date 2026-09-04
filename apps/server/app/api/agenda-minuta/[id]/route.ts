@@ -3,11 +3,14 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
 import { toZonedTime } from "date-fns-tz";
+import { saveAgendaMinutaImages, type AgendaMinutaImageInput } from "../../../../utils/agendaMinutaImages";
+import { reportError } from "../../../../utils/reportError";
 
 const AGENDA_MINUTA_ESTRUCTURA_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
   e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
   e_estructura_puesto: { select: { nombre: true, codigo: true } },
+  c_imagenes_agenda_minuta: { select: { id: true, name: true, original_name: true } },
 };
 
 function parseFechaInput(fecha: any): Date | undefined {
@@ -84,6 +87,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const idNum = parseInt(String(resolvedParams.id), 10);
     if (Number.isNaN(idNum) || idNum <= 0) {
+      await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -98,60 +102,91 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existingRecord || !existingRecord.id) {
+      await reportError(req, "api/agenda-minuta/[id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const data: any = {};
     if (body.empresa_id !== undefined) {
       const n = parseInt(String(body.empresa_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "empresa_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "empresa_id inválido");
+        return NextResponse.json({ status: false, message: "empresa_id inválido" }, { status: 400 });
+      }
       data.empresa_id = n;
     }
     if (body.cliente_id !== undefined) {
       const n = parseInt(String(body.cliente_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "cliente_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "cliente_id inválido");
+        return NextResponse.json({ status: false, message: "cliente_id inválido" }, { status: 400 });
+      }
       data.cliente_id = n;
     }
     if (body.division_id !== undefined) {
       const n = parseInt(String(body.division_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "division_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "division_id inválido");
+        return NextResponse.json({ status: false, message: "division_id inválido" }, { status: 400 });
+      }
       data.division_id = n;
     }
     if (body.contrato_id !== undefined) {
       const n = parseInt(String(body.contrato_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "contrato_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "contrato_id inválido");
+        return NextResponse.json({ status: false, message: "contrato_id inválido" }, { status: 400 });
+      }
       data.contrato_id = n;
     }
     if (body.corpo_id !== undefined) {
       const n = parseInt(String(body.corpo_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "corpo_id inválido");
+        return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
+      }
       data.corpo_id = n;
     }
     if (body.puesto_id !== undefined) {
       const n = parseInt(String(body.puesto_id), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "puesto_id inválido");
+        return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 400 });
+      }
       data.puesto_id = n;
     }
     if (body.numero !== undefined) {
       const n = parseInt(String(body.numero), 10);
-      if (Number.isNaN(n) || n <= 0) return NextResponse.json({ status: false, message: "numero inválido" }, { status: 400 });
+      if (Number.isNaN(n) || n <= 0) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "numero inválido");
+        return NextResponse.json({ status: false, message: "numero inválido" }, { status: 400 });
+      }
       data.numero = n;
     }
     if (body.titulo !== undefined) data.titulo = String(body.titulo).trim();
 
     if (body.fecha !== undefined) {
       const d = parseFechaInput(body.fecha);
-      if (!d) return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
+      if (!d) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "Fecha inválida");
+        return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
+      }
       data.fecha = d instanceof Date ? d.toISOString() : d;
     }
     if (body.hora_inicio !== undefined) {
       const t = parseTimeInput(body.hora_inicio);
-      if (!t) return NextResponse.json({ status: false, message: "Hora inicio inválida" }, { status: 400 });
+      if (!t) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "Hora inicio inválida");
+        return NextResponse.json({ status: false, message: "Hora inicio inválida" }, { status: 400 });
+      }
       data.hora_inicio = t instanceof Date ? t.toISOString() : t;
     }
     if (body.hora_fin !== undefined) {
       const t = parseTimeInput(body.hora_fin);
-      if (!t) return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
+      if (!t) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "Hora fin inválida");
+        return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
+      }
       data.hora_fin = t instanceof Date ? t.toISOString() : t;
     }
     if (body.autor !== undefined) data.autor = String(body.autor);
@@ -163,6 +198,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (body.estado !== undefined) {
       const estadoVal = parseBooleanInput(body.estado);
       if (estadoVal === undefined) {
+        await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, "estado inválido");
         return NextResponse.json({ status: false, message: "estado inválido" }, { status: 400 });
       }
       data.estado = estadoVal;
@@ -207,6 +243,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     });
     await hydratePreexistentRelations(updatedRecord, preexistentSpecs);
 
+    await saveAgendaMinutaImages(req, idNum, body.imagenes as AgendaMinutaImageInput[] | null | undefined);
+
     // Registrar cambios si hay alguno
     if (cambiosArr.length > 0) {
       const createdBy = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
@@ -228,6 +266,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     const updatedAny = updatedRecord as any;
+    const currentImages = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_imagenes_agenda_minuta",
+        operation: "findMany",
+        where: { agenda_id: idNum },
+      },
+    });
     return NextResponse.json(
       {
         status: true,
@@ -244,6 +291,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
           puesto_nombre: updatedAny.e_estructura_puesto
             ? `${updatedAny.e_estructura_puesto.codigo ? `${updatedAny.e_estructura_puesto.codigo} - ` : ""}${updatedAny.e_estructura_puesto.nombre}`
             : null,
+          imagenes: Array.isArray(currentImages) ? currentImages : [],
         },
       },
       { status: 200 }
@@ -251,6 +299,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/agenda-minuta/[id]", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
@@ -263,6 +312,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const idNum = parseInt(String(resolvedParams.id), 10);
     if (Number.isNaN(idNum) || idNum <= 0) {
+      await reportError(req, "api/agenda-minuta/[id]", "DELETE", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -276,6 +326,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       },
     });
     if (!existingRecord || !existingRecord.id) {
+      await reportError(req, "api/agenda-minuta/[id]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -333,6 +384,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/agenda-minuta/[id]", "DELETE", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

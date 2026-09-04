@@ -340,8 +340,12 @@ export function attachBitacorasToVehicleForDisplay(vehicle: any, bitacorasSucurs
   return { ...vehicle, usos: next, c_usos_vehiculos_corporativos: next };
 }
 
-export async function readCorporateVehiclesForSucursalFromMainStructure(sucursalId: number): Promise<any[]> {
-  const tree = await loadMainStructureTree();
+/**
+ * Extrae los vehículos de una sucursal a partir de un árbol ya cargado en memoria
+ * (evita releer y re-mergear todo `main_structure` desde AsyncStorage cuando el
+ * llamador ya tiene el árbol reciente, p. ej. justo después de `fetchMainStructure`).
+ */
+export function extractCorporateVehiclesForSucursalFromTree(tree: any[], sucursalId: number): any[] {
   const suc = findSucursalInTree(tree, sucursalId);
   if (!suc) return [];
   const key = mainStructureCorporateVehiculosKey(suc);
@@ -358,6 +362,11 @@ export async function readCorporateVehiclesForSucursalFromMainStructure(sucursal
       synced: !isCorporateVehicleLocalDraft(v),
     };
     });
+}
+
+export async function readCorporateVehiclesForSucursalFromMainStructure(sucursalId: number): Promise<any[]> {
+  const tree = await loadMainStructureTree();
+  return extractCorporateVehiclesForSucursalFromTree(tree, sucursalId);
 }
 
 /**

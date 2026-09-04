@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -73,6 +74,7 @@ export async function PUT(
         } = await req.json();
 
         if (!id) {
+            await reportError(req, "api/opening-closing-position/[id]", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -156,6 +158,7 @@ export async function PUT(
             },
         });
         if (!existing) {
+            await reportError(req, "api/opening-closing-position/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
         const existingObj = existing as any;
@@ -312,6 +315,7 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/opening-closing-position/[id]", "PUT", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 }
@@ -329,6 +333,7 @@ export async function DELETE(
         const id = parseInt(resolvedParams.id, 10);
 
         if (!id) {
+            await reportError(req, "api/opening-closing-position/[id]", "DELETE", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -342,6 +347,7 @@ export async function DELETE(
             },
         });
         if (!existing) {
+            await reportError(req, "api/opening-closing-position/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
@@ -413,6 +419,7 @@ export async function DELETE(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/opening-closing-position/[id]", "DELETE", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 }

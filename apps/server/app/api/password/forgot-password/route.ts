@@ -43,9 +43,26 @@ export async function POST(request: NextRequest) {
 
         console.log('planillasUrl', empleado.Email);
 
-        const planillasResponse = await axios.post(`${planillasUrl}/forgot-password`, {
-            correo_usuario: empleado.Email,
-        });
+        let planillasResponse;
+        try {
+            planillasResponse = await axios.post(`${planillasUrl}/forgot-password`, {
+                correo_usuario: empleado.Email,
+            });
+        } catch (planillasError) {
+            // Planillas responde con error HTTP (p.ej. 404 EMPLEADO_NOT_FOUND): no debe colapsar,
+            // se debe reenviar el mensaje real al cliente en vez de un error gen\u00e9rico.
+            if (axios.isAxiosError(planillasError) && planillasError.response) {
+                const data = planillasError.response.data;
+                const message =
+                    data?.error?.message ||
+                    data?.message ||
+                    "No se pudo enviar el correo de recuperaci\u00f3n.";
+                return NextResponse.json(
+                    { status: false, message }
+                );
+            }
+            throw planillasError;
+        }
 
         // Respuesta esperada: {"success":true,"data":{"message":"Se ha enviado un correo con el c\u00f3digo de verificaci\u00f3n.","expires_in":900}}
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -12,7 +13,8 @@ export async function GET(
     const { id, name } = await context.params;
     const checklistId = parseInt(String(id), 10);
     if (!checklistId || !name) {
-      return NextResponse.json({ status: false, message: "ID o nombre de archivo no especificado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]/get-image/[name]", "GET", 400, "ID o nombre de archivo no especificado");
+      return NextResponse.json({ status: false, message: "ID o nombre de archivo no especificado" }, { status: 400 });
     }
 
     // Token desde querystring (estándar para consumo desde mobile, p. ej. Image source={{ uri: url?token=... }})
@@ -30,6 +32,7 @@ export async function GET(
       },
     });
     if (!checklist) {
+      await reportError(req, "api/checklist-supervision/[id]/get-image/[name]", "GET", 404, "Checklist no encontrado");
       return NextResponse.json({ status: false, message: "Checklist no encontrado" }, { status: 404 });
     }
 
@@ -45,6 +48,7 @@ export async function GET(
       },
     });
     if (!imageRecord) {
+      await reportError(req, "api/checklist-supervision/[id]/get-image/[name]", "GET", 404, "Imagen no encontrada");
       return NextResponse.json({ status: false, message: "Imagen no encontrada" }, { status: 404 });
     }
 
@@ -64,6 +68,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/checklist-supervision/[id]/get-image/[name]:", errorMessage);
+    await reportError(req, "api/checklist-supervision/[id]/get-image/[name]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

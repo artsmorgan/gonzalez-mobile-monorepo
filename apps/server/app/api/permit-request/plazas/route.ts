@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 const parseIntStrict = (value: unknown): number | null => {
   const n = parseInt(String(value), 10);
@@ -15,6 +16,7 @@ export async function GET(req: NextRequest) {
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) {
+      await reportError(req, "api/permit-request/plazas", "GET", 400, "Empleado inválido");
       return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
     }
 
@@ -136,6 +138,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Plazas obtenidas", data }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+    await reportError(req, "api/permit-request/plazas", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
   }
 }

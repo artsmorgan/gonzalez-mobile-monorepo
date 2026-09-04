@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { hydrateAgendaMinutaRequestData } from '@/hooks/agendaMinutaImageHydration';
 
 interface CreateEvaluationParams {
   requestData: {
@@ -3705,6 +3706,8 @@ interface CreateAgendaMinutaParams {
     observaciones: string;
     firma_responsable: string;
     estado?: boolean;
+    /** Referencias livianas a expo-file-system (`localFileName`); nunca base64 aquí. */
+    imagenes?: { localFileName: string; extension: string; original_name?: string }[];
   };
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
@@ -3719,6 +3722,13 @@ interface UpdateAgendaMinutaParams {
 
 interface DeleteAgendaMinutaParams {
   id: string | number;
+  refreshAccessToken: () => Promise<boolean>;
+  logout: () => Promise<any>;
+}
+
+interface DeleteAgendaMinutaImageParams {
+  agendaId: string | number;
+  imageId: number;
   refreshAccessToken: () => Promise<boolean>;
   logout: () => Promise<any>;
 }
@@ -3750,6 +3760,8 @@ export const createAgendaMinuta = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
+    const hydratedRequestData = await hydrateAgendaMinutaRequestData(requestData);
+
     const response = await fetch(`${apiUrl}/api/agenda-minuta`, {
       method: 'POST',
       headers: {
@@ -3757,7 +3769,7 @@ export const createAgendaMinuta = async ({
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': '69420',
       },
-      body: JSON.stringify(requestData),
+      body: JSON.stringify(hydratedRequestData),
     });
 
     if (response.status === 401) {
@@ -3813,6 +3825,8 @@ export const updateAgendaMinuta = async ({
       token = await AsyncStorage.getItem('access_token');
     }
 
+    const hydratedRequestData = await hydrateAgendaMinutaRequestData(requestData);
+
     const response = await fetch(`${apiUrl}/api/agenda-minuta/${id}`, {
       method: 'PUT',
       headers: {
@@ -3820,7 +3834,7 @@ export const updateAgendaMinuta = async ({
         'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': '69420',
       },
-      body: JSON.stringify(requestData),
+      body: JSON.stringify(hydratedRequestData),
     });
 
     if (response.status === 401) {
@@ -3911,6 +3925,68 @@ export const deleteAgendaMinuta = async ({
     return {
       status: false,
       message: error instanceof Error ? error.message : 'Error al eliminar la agenda minuta',
+    };
+  }
+};
+
+export const deleteAgendaMinutaImage = async ({
+  agendaId,
+  imageId,
+  refreshAccessToken,
+  logout,
+}: DeleteAgendaMinutaImageParams): Promise<ApiResponse> => {
+  try {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+
+    let token = await AsyncStorage.getItem('access_token');
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        if (logout) await logout();
+        throw new Error('Sesión expirada');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    const response = await fetch(`${apiUrl}/api/agenda-minuta/${agendaId}/image/${imageId}`, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    if (response.status === 401) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return deleteAgendaMinutaImage({ agendaId, imageId, refreshAccessToken, logout });
+      } else {
+        await logout();
+        throw new Error('Sesión expirada');
+      }
+    }
+
+    if (response.status === 403) {
+      await logout();
+      throw new Error('Acceso denegado');
+    }
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+    }
+
+    const data: ApiResponse = await response.json();
+    return data;
+  } catch (error) {
+    console.error('Error deleting agenda minuta image:', error);
+    return {
+      status: false,
+      message: error instanceof Error ? error.message : 'Error al eliminar la imagen',
     };
   }
 };

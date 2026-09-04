@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -13,7 +14,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id } });
-        if (!corpo) return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
+        if (!corpo) {
+            await reportError(req, "api/empleados/corpo/[id]", "GET", 404, "Corpo no encontrado");
+            return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
+        }
 
         const empleados_return: { id: number, nombre: string, cedula: string, codigo: string, fecha_contratacion: string }[] = [];
         const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: corpo.id } });
@@ -45,6 +49,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: true, empleados: empleados_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/empleados/corpo/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

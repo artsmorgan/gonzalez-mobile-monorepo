@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -15,6 +16,7 @@ export async function GET(
     const { corpo_id } = await context.params;
     const sucursalId = parseInt(String(corpo_id), 10);
     if (!sucursalId) {
+      await reportError(req, "api/corporate-vehicles/corpo/[corpo_id]", "GET", 400, "Sucursal no especificada");
       return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 400 });
     }
 
@@ -71,7 +73,8 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/corporate-vehicles/corpo/[corpo_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/corpo/[corpo_id]", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

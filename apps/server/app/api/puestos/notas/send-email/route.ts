@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { fetchDynamicFile } from "../../../../../utils/callDynamicFilesApi";
 import { transporter } from "../../../../../transporter";
+import { reportError } from "../../../../../utils/reportError";
 import {
     mergeNotesWhereWithDateRange,
     validateNotesDateRange,
@@ -40,19 +41,23 @@ export async function POST(req: NextRequest) {
     const { puesto_id, email, fecha_inicio, fecha_fin } = await req.json();
     const puestoId = parseInt(String(puesto_id), 10);
     if (!puestoId || Number.isNaN(puestoId)) {
+      await reportError(req, "api/puestos/notas/send-email", "POST", 400, "Puesto inválido");
       return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
     }
     if (!email || String(email).trim().length === 0) {
+      await reportError(req, "api/puestos/notas/send-email", "POST", 400, "Email requerido");
       return NextResponse.json({ status: false, message: "Email requerido" }, { status: 400 });
     }
 
     const rangeValidation = validateNotesDateRange(fecha_inicio, fecha_fin);
     if (!rangeValidation.valid) {
+      await reportError(req, "api/puestos/notas/send-email", "POST", 400, rangeValidation.message);
       return NextResponse.json({ status: false, message: rangeValidation.message }, { status: 400 });
     }
 
     const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
     if (!puesto) {
+      await reportError(req, "api/puestos/notas/send-email", "POST", 404, "Puesto no encontrado");
       return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
     }
 
@@ -162,6 +167,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Correo enviado correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/puestos/notas/send-email", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

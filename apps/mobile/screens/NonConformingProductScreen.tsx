@@ -18,6 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { resolveAppConnectivity } from '@/hooks/resolveAppConnectivity';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
@@ -421,6 +422,41 @@ export default function NonConformingProductScreen() {
   const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
   const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
   const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+
+  const [isPncCameraVisible, setIsPncCameraVisible] = useState(false);
+  const [pncCameraPermission, requestPncCameraPermission] = useCameraPermissions();
+  const pncCameraRef = useRef<CameraView | null>(null);
+  const pendingPncCameraHandlerRef = useRef<((asset: { uri: string; name?: string; mimeType?: string }) => void) | null>(null);
+
+  const openPncCamera = async (onCaptured: (asset: { uri: string; name?: string; mimeType?: string }) => void) => {
+    if (!pncCameraPermission?.granted) {
+      const res = await requestPncCameraPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+        return;
+      }
+    }
+    pendingPncCameraHandlerRef.current = onCaptured;
+    setIsPncCameraVisible(true);
+  };
+
+  const capturePncPhoto = async () => {
+    if (!pncCameraRef.current) return;
+    try {
+      const photo = await pncCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+      setIsPncCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const handler = pendingPncCameraHandlerRef.current;
+      pendingPncCameraHandlerRef.current = null;
+      handler?.({ uri: photo.uri, name: `foto_${Date.now()}.jpg`, mimeType: 'image/jpeg' });
+    } catch (e: any) {
+      setIsPncCameraVisible(false);
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
 
   // modal firma dibujada
   const [signatureModalVisible, setSignatureModalVisible] = useState(false);
@@ -1118,6 +1154,54 @@ export default function NonConformingProductScreen() {
   };
 
   // --------- archivos ---------
+  /**
+   * Procesa un asset ya elegido (por DocumentPicker o por la cámara) y lo agrega a la lista
+   * correspondiente. Compartido por `handleAddFile` (adjuntar) y la cámara para no duplicar el
+   * guardado/registro del archivo.
+   */
+  const addPickedPncFileAsset = async (
+    type: LocalFile['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
+    try {
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+
+      const displayName = asset.name || `archivo.${extension || 'dat'}`;
+      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
+      const extNorm = String(extension || 'dat').replace(/^\./, '');
+
+      const storedFileName = await saveFile({
+        uri: asset.uri,
+        originalName: stem.trim() || 'archivo',
+        extension: extNorm,
+        type: mapPncPickerTypeToStoredFileType(type),
+        prefix: NON_CONFORMING_PRODUCT_FILE_STORAGE_PREFIX,
+      });
+      const savedUri = getLocalFileDisplayUri(storedFileName) || '';
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const newFile: LocalFile = {
+        id: localId,
+        type,
+        name: displayName,
+        extension: extNorm,
+        storedFileName,
+        uri: savedUri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setImageFiles((p) => [...p, newFile]);
+      else if (type === 'audio') setAudioFiles((p) => [...p, newFile]);
+      else if (type === 'video') setVideoFiles((p) => [...p, newFile]);
+      else setDocumentFiles((p) => [...p, newFile]);
+    } catch (e) {
+      console.error('Error adding file (PNC):', e);
+      Alert.alert('Error', 'No se pudo agregar el archivo.');
+    }
+  };
+
   const handleAddFile = async (type: LocalFile['type']) => {
     try {
       let pickerTypes: string | string[] | undefined;
@@ -1152,38 +1236,7 @@ export default function NonConformingProductScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      let extension = '';
-      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
-      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
-
-      const displayName = asset.name || `archivo.${extension || 'dat'}`;
-      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
-      const extNorm = String(extension || 'dat').replace(/^\./, '');
-
-      const storedFileName = await saveFile({
-        uri: asset.uri,
-        originalName: stem.trim() || 'archivo',
-        extension: extNorm,
-        type: mapPncPickerTypeToStoredFileType(type),
-        prefix: NON_CONFORMING_PRODUCT_FILE_STORAGE_PREFIX,
-      });
-      const savedUri = getLocalFileDisplayUri(storedFileName) || '';
-
-      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const newFile: LocalFile = {
-        id: localId,
-        type,
-        name: displayName,
-        extension: extNorm,
-        storedFileName,
-        uri: savedUri,
-        mimeType: asset.mimeType,
-      };
-
-      if (type === 'image') setImageFiles((p) => [...p, newFile]);
-      else if (type === 'audio') setAudioFiles((p) => [...p, newFile]);
-      else if (type === 'video') setVideoFiles((p) => [...p, newFile]);
-      else setDocumentFiles((p) => [...p, newFile]);
+      await addPickedPncFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
     } catch (e) {
       console.error('Error picking file (PNC):', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo.');
@@ -2018,6 +2071,12 @@ export default function NonConformingProductScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
             <Ionicons name="image-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.fileIconButton}
+            onPress={() => openPncCamera((asset) => void addPickedPncFileAsset('image', asset))}
+          >
+            <Ionicons name="camera-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2532,6 +2591,41 @@ export default function NonConformingProductScreen() {
       />
 
       {QRScannerComponent}
+
+      <Modal
+        visible={isPncCameraVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setIsPncCameraVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          {pncCameraPermission?.granted ? (
+            <CameraView ref={pncCameraRef} style={{ flex: 1 }} facing="back">
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsPncCameraVisible(false)}
+              >
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={capturePncPhoto}>
+                <View style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <View style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>
+                Se necesita permiso para usar la cámara
+              </ThemedText>
+              <TouchableOpacity
+                style={styles.cameraPermissionBtn}
+                onPress={requestPncCameraPermission}
+              >
+                <ThemedText style={styles.cameraPermissionBtnText}>Conceder permiso</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -2967,6 +3061,55 @@ const styles = StyleSheet.create({
   signatureSave: { backgroundColor: '#34C759' },
   signatureClear: { backgroundColor: '#607D8B' },
   signatureActionText: { color: '#FFFFFF', fontWeight: '800' },
+
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: 8,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
+  cameraPermissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#000',
+  },
+  cameraPermissionText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  cameraPermissionBtn: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  cameraPermissionBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
 });
 
 

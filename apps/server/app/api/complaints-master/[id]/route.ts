@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { mapComplaintMasterPublicRow } from "../mapPublicRow";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -43,7 +44,8 @@ export async function PUT(
         const { id } = resolvedParams;
         const complaintId = parseInt(id, 10);
         if (!complaintId) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/complaints-master/[id]", "PUT", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
         const {
             sociedad,
@@ -93,6 +95,7 @@ export async function PUT(
         });
 
         if (!existingRecord) {
+            await reportError(req, "api/complaints-master/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json(
                 { status: false, message: "Registro no encontrado" },
                 { status: 404 }
@@ -274,7 +277,8 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/complaints-master/[id]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -291,7 +295,8 @@ export async function DELETE(
         const { id } = resolvedParams;
         const complaintId = parseInt(id, 10);
         if (!complaintId) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/complaints-master/[id]", "DELETE", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const existingRecord = await callDynamicPrisma({
@@ -305,6 +310,7 @@ export async function DELETE(
         });
 
         if (!existingRecord) {
+            await reportError(req, "api/complaints-master/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json(
                 { status: false, message: "Registro no encontrado" },
                 { status: 404 }
@@ -387,7 +393,8 @@ export async function DELETE(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/complaints-master/[id]", "DELETE", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

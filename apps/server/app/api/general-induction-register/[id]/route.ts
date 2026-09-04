@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../utils/reportError";
 
 const GENERAL_INDUCTION_ESTRUCTURA_INCLUDE = {
   e_estructura_empresa: { select: { nombre: true, codigo: true } },
@@ -82,6 +83,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const idNum = parseInt(String(resolvedParams.id), 10);
     if (Number.isNaN(idNum) || idNum <= 0) {
+      await reportError(req, "api/general-induction-register/[id]", "PUT", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -112,15 +114,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existing) {
+      await reportError(req, "api/general-induction-register/[id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     const existingObj = existing as any;
     if (existingObj.isActive === false) {
+      await reportError(req, "api/general-induction-register/[id]", "PUT", 404, "Registro no disponible");
       return NextResponse.json({ status: false, message: "Registro no disponible" }, { status: 404 });
     }
 
     const fechaParsed = parseFechaInput(fecha);
     if (fecha !== undefined && fecha !== null && !fechaParsed) {
+      await reportError(req, "api/general-induction-register/[id]", "PUT", 400, "Fecha inválida");
       return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
@@ -289,7 +294,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/general-induction-register/[id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -303,6 +309,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const idNum = parseInt(String(resolvedParams.id), 10);
     if (Number.isNaN(idNum) || idNum <= 0) {
+      await reportError(req, "api/general-induction-register/[id]", "DELETE", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -316,6 +323,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       },
     });
     if (!existing) {
+      await reportError(req, "api/general-induction-register/[id]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -368,7 +376,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/general-induction-register/[id]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

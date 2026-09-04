@@ -7,8 +7,11 @@ import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { sanitizeArticulosPuestoForPersistence } from "../../../utils/sanitizeArticulosPuestoForPersistence";
 import { processEntregaPuestosArticulosMantenimiento } from "./articulosMantenimiento";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../utils/reportError";
 import { v4 as uuidv4 } from "uuid";
 import axios from "axios";
+import dotenv from "dotenv";
+dotenv.config();
 
 export const runtime = "nodejs";
 
@@ -104,6 +107,7 @@ export async function GET(req: NextRequest) {
         if (puestoIdParam) {
             const puestoId = parseInt(puestoIdParam, 10);
             if (isNaN(puestoId)) {
+                await reportError(req, "api/entrega-puestos", "GET", 400, "puesto_id inválido");
                 return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 400 });
             }
 
@@ -179,13 +183,15 @@ export async function GET(req: NextRequest) {
         }
 
         if (!marcaId) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
         const planillasToken =
             decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "").trim() ||
             null;
         if (!planillasToken) {
+            await reportError(req, "api/entrega-puestos", "GET", 401, "Token de Planillas requerido");
             return NextResponse.json(
                 { status: false, message: "Token de Planillas requerido" },
                 { status: 401 }
@@ -196,12 +202,14 @@ export async function GET(req: NextRequest) {
             where: { id: parseInt(marcaId) },
         });
         if (!marca || !marca.id) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         // Validar que la marca tenga los datos necesarios
         if (!marca.fecha || !marca.hora_inicio || !marca.hora_fin || !marca.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "La marca no tiene los datos necesarios para buscar el registro anterior" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 400, "La marca no tiene los datos necesarios para buscar el registro anterior");
+            return NextResponse.json({ status: false, message: "La marca no tiene los datos necesarios para buscar el registro anterior" }, { status: 400 });
         }
 
         const entregaPuestos = await callDynamicPrisma({
@@ -215,12 +223,14 @@ export async function GET(req: NextRequest) {
         });
         const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
         if (entregaPuestosArray.length > 0) {
-            return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Ya has registrado la entrega de puesto para este turno");
+            return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 400 });
         }
 
         // Construir la fecha de la marca actual para comparación
         const marcaFecha = marca.fecha instanceof Date ? marca.fecha : new Date(marca.fecha);
         if (isNaN(marcaFecha.getTime())) {
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Fecha de marca inválida");
             return NextResponse.json({ status: false, message: "Fecha de marca inválida" }, { status: 400 });
         }
         const marcaFechaStr = marcaFecha.toISOString().split("T")[0];
@@ -277,18 +287,20 @@ export async function GET(req: NextRequest) {
         });
 
         if (!marcaAnterior || !marcaAnterior.id) {
-            return NextResponse.json({ status: false, message: "No se encontró el registro anterior" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 404, "No se encontró el registro anterior");
+            return NextResponse.json({ status: false, message: "No se encontró el registro anterior" }, { status: 404 });
         }
 
         let previous_employee: {
             id: number;
             nombre: string;
             codigo?: string | null;
+            cedula?: string | null;
             foto?: string | null;
-        } = { id: 0, nombre: "Desconocido", codigo: null, foto: null };
+        } = { id: 0, nombre: "Desconocido", codigo: null, cedula: null, foto: null };
 
         const resolveEmployeeWithFoto = async (empleadoId: number | null | undefined) => {
-            const empty = { id: 0, nombre: "Desconocido", codigo: null as string | null, foto: null as string | null };
+            const empty = { id: 0, nombre: "Desconocido", codigo: null as string | null, cedula: null as string | null, foto: null as string | null };
             if (!empleadoId) return empty;
             const empleado_bd = await prisma.c_empleado.findUnique({
                 where: { id: empleadoId },
@@ -299,6 +311,7 @@ export async function GET(req: NextRequest) {
                 id: empleado_bd.id,
                 nombre: (empleado_bd.nombre || "") + " " + (empleado_bd.primer_apellido || "") + " " + (empleado_bd.segundo_apellido || ""),
                 codigo: empleado_bd.codigo ?? null,
+                cedula: empleado_bd.cedula ?? null,
                 foto: null as string | null,
             };
 
@@ -330,6 +343,7 @@ export async function GET(req: NextRequest) {
 
         const marcaAnteriorFecha = marcaAnterior.fecha instanceof Date ? marcaAnterior.fecha : new Date(marcaAnterior.fecha);
         if (isNaN(marcaAnteriorFecha.getTime())) {
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Fecha de marca anterior inválida");
             return NextResponse.json({ status: false, message: "Fecha de marca anterior inválida" }, { status: 400 });
         }
         const marcaAnteriorHoraInicio = parseTimeValue(marcaAnterior.hora_inicio);
@@ -343,10 +357,12 @@ export async function GET(req: NextRequest) {
 
         const fechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`);
         if (isNaN(fechaHoraInicio.getTime())) {
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Fecha/hora de inicio inválida");
             return NextResponse.json({ status: false, message: "Fecha/hora de inicio inválida" }, { status: 400 });
         }
         let fechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
         if (isNaN(fechaHoraFin.getTime())) {
+            await reportError(req, "api/entrega-puestos", "GET", 400, "Fecha/hora de fin inválida");
             return NextResponse.json({ status: false, message: "Fecha/hora de fin inválida" }, { status: 400 });
         }
 
@@ -508,14 +524,16 @@ export async function GET(req: NextRequest) {
         }
 
         if (!marcaAnterior.puesto_id) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
         const puesto = await prisma.e_estructura_puesto.findUnique({
             where: { id: marcaAnterior.puesto_id },
         });
         if (!puesto || !puesto.id) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/entrega-puestos", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
         const articulos_return: {
@@ -694,6 +712,7 @@ export async function GET(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log("Error in GET /api/entrega-puestos:", errorMessage);
+        await reportError(req, "api/entrega-puestos", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -748,6 +767,7 @@ export async function POST(req: NextRequest) {
             String(oficial_entrega ?? "").trim() === "";
 
         if (!cliente_id || !corpo_id || !puesto_id || !oficial_recibe || !firmaRecibeFinal) {
+            await reportError(req, "api/entrega-puestos", "POST", 400, "Faltan campos requeridos");
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
@@ -755,12 +775,14 @@ export async function POST(req: NextRequest) {
         const imageDeliveryRaw = !isSelfDelivery ? stripBase64Payload(image_delivery) : "";
 
         if (!isSelfDelivery && !oficial_entrega) {
+            await reportError(req, "api/entrega-puestos", "POST", 400, "Faltan campos requeridos");
             return NextResponse.json({ status: false, message: "Faltan campos requeridos" }, { status: 400 });
         }
 
         // Obtener empleado_id del token
         const empleadoId = payload?.empleadoId || payload?.id;
         if (!empleadoId || typeof empleadoId !== 'number') {
+            await reportError(req, "api/entrega-puestos", "POST", 401, "No se pudo obtener el ID del empleado");
             return NextResponse.json({ status: false, message: "No se pudo obtener el ID del empleado" }, { status: 401 });
         }
 
@@ -780,7 +802,8 @@ export async function POST(req: NextRequest) {
             });
             const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
             if (entregaPuestosArray.length > 0) {
-                return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
+                await reportError(req, "api/entrega-puestos", "POST", 409, "Ya has registrado la entrega de puesto para este turno");
+                return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 409 });
             }
         } else if (marca_id) {
             const marca = await prisma.c_marca_dia.findUnique({
@@ -789,6 +812,7 @@ export async function POST(req: NextRequest) {
             if (marca && marca.id && marca.empleadoFijo_id) {
                 const marcaFecha = marca.fecha instanceof Date ? marca.fecha : new Date(marca.fecha);
                 if (isNaN(marcaFecha.getTime())) {
+                    await reportError(req, "api/entrega-puestos", "POST", 400, "Fecha de marca inválida");
                     return NextResponse.json({ status: false, message: "Fecha de marca inválida" }, { status: 400 });
                 }
                 const marcaHoraInicio = parseTimeValue(marca.hora_inicio);
@@ -802,10 +826,12 @@ export async function POST(req: NextRequest) {
 
                 const marcaFechaHoraInicio = new Date(`${dateInicioString}T${timeInicioString}`);
                 if (isNaN(marcaFechaHoraInicio.getTime())) {
+                    await reportError(req, "api/entrega-puestos", "POST", 400, "Fecha/hora de inicio inválida");
                     return NextResponse.json({ status: false, message: "Fecha/hora de inicio inválida" }, { status: 400 });
                 }
                 let marcaFechaHoraFin = new Date(`${dateFinString}T${timeFinString}`);
                 if (isNaN(marcaFechaHoraFin.getTime())) {
+                    await reportError(req, "api/entrega-puestos", "POST", 400, "Fecha/hora de fin inválida");
                     return NextResponse.json({ status: false, message: "Fecha/hora de fin inválida" }, { status: 400 });
                 }
 
@@ -829,12 +855,16 @@ export async function POST(req: NextRequest) {
                 });
                 const entregaPuestosArray = Array.isArray(entregaPuestos) ? entregaPuestos : [];
                 if (entregaPuestosArray.length > 0) {
-                    return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 200 });
+                    await reportError(req, "api/entrega-puestos", "POST", 409, "Ya has registrado la entrega de puesto para este turno");
+                    return NextResponse.json({ status: false, message: "Ya has registrado la entrega de puesto para este turno" }, { status: 409 });
                 }
             }
         }
 
-        const now = toZonedTime(new Date(), 'America/Costa_Rica');
+        let now = toZonedTime(new Date(), "America/Costa_Rica").getTime();
+        if (process.env.NODE_ENV === "development") {
+            now = toZonedTime(new Date(now - 6 * 60 * 60 * 1000), "America/Costa_Rica").getTime();
+        }
 
         const fechaEntradaRecibeParsed = parseDateValue(fecha_entrada_recibe);
         const fechaSalidaRecibeParsed = parseDateValue(fecha_salida_recibe);
@@ -855,6 +885,7 @@ export async function POST(req: NextRequest) {
             const horaSalidaEntregaParsed = hora_salida_entrega ? `${hora_salida_entrega}:00.000Z` : null;
 
             if (!fechaEntradaEntregaParsed || !fechaSalidaEntregaParsed || !horaEntradaEntregaParsed || !horaSalidaEntregaParsed) {
+                await reportError(req, "api/entrega-puestos", "POST", 400, "Una o más fechas u horas de entrega son inválidas. Verifique el formato de los datos enviados.");
                 return NextResponse.json({
                     status: false,
                     message: "Una o más fechas u horas de entrega son inválidas. Verifique el formato de los datos enviados."
@@ -870,6 +901,7 @@ export async function POST(req: NextRequest) {
         }
 
         if (!fechaEntradaRecibeParsed || !fechaSalidaRecibeParsed || !horaEntradaRecibeParsed || !horaSalidaRecibeParsed) {
+            await reportError(req, "api/entrega-puestos", "POST", 400, "Una o más fechas u horas de recepción son inválidas. Verifique el formato de los datos enviados.");
             return NextResponse.json({
                 status: false,
                 message: "Una o más fechas u horas de recepción son inválidas. Verifique el formato de los datos enviados."
@@ -915,7 +947,7 @@ export async function POST(req: NextRequest) {
                     firma_responsable: firmaResponsableFinal,
                     image_receives: imageReceivesFileName,
                     image_delivery: imageDeliveryFileName,
-                    created_at: now.toISOString(),
+                    created_at: new Date(now).toISOString(),
                     created_by: empleadoId,
                 },
             },
@@ -946,6 +978,7 @@ export async function POST(req: NextRequest) {
                     const imageMsg =
                         imageError instanceof Error ? imageError.message : "Error al subir imágenes";
                     console.error("Error uploading entrega-puestos images:", imageMsg);
+                    await reportError(req, "api/entrega-puestos", "POST", 500, `El registro se creó (id ${registroId}) pero falló la carga de imágenes: ${imageMsg}`);
                     return NextResponse.json(
                         {
                             status: false,
@@ -1008,7 +1041,7 @@ export async function POST(req: NextRequest) {
                                     },
                                     data: {
                                         marcada: true,
-                                        updated_at: now.toISOString(),
+                                        updated_at: new Date(now).toISOString(),
                                     },
                                     returning: false,
                                 },
@@ -1045,7 +1078,7 @@ export async function POST(req: NextRequest) {
             const mantResult = await processEntregaPuestosArticulosMantenimiento(
                 req,
                 articulos_puesto,
-                now,
+                new Date(now),
                 {
                     puesto_id: parseInt(String(puesto_id)),
                     corpo_id: parseInt(String(corpo_id)),
@@ -1088,6 +1121,7 @@ export async function POST(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/entrega-puestos", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { fetchBitacoraRevisionImage } from "../../../../../../utils/bitacoraRevisionImages";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,7 @@ export async function GET(
     const id = parseInt(resolvedParams.id, 10);
     const image = decodeURIComponent(resolvedParams.image || "");
     if (!id || !image) {
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]/get-image/[image]", "GET", 400, "ID o imagen faltante");
       return NextResponse.json({ status: false, message: "ID o imagen faltante" }, { status: 400 });
     }
 
@@ -29,6 +31,7 @@ export async function GET(
       },
     });
     if (!bitacora) {
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]/get-image/[image]", "GET", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -43,6 +46,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("GET bitacora revision image:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido/[id]/get-image/[image]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

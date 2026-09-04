@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteUploadsFileByRelativePath } from "../../../../../utils/deleteUploadsFileByRelativePath";
+import { reportError } from "../../../../../../utils/reportError";
 
 export async function DELETE(
   req: NextRequest,
@@ -18,6 +19,7 @@ export async function DELETE(
     const controlId = parseInt(String(id), 10);
     const imgId = parseInt(String(imageId), 10);
     if (!Number.isFinite(controlId) || controlId <= 0 || !Number.isFinite(imgId) || imgId <= 0) {
+      await reportError(req, "api/attendance-control/[id]/images/[imageId]", "DELETE", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -31,6 +33,7 @@ export async function DELETE(
       },
     });
     if (!existing || !(existing as any).id) {
+      await reportError(req, "api/attendance-control/[id]/images/[imageId]", "DELETE", 404, "Control no encontrado");
       return NextResponse.json({ status: false, message: "Control no encontrado" }, { status: 404 });
     }
 
@@ -47,6 +50,7 @@ export async function DELETE(
     const rowsArray = Array.isArray(rows) ? rows : [];
     const row = rowsArray[0];
     if (!row || !(row as any).id) {
+      await reportError(req, "api/attendance-control/[id]/images/[imageId]", "DELETE", 404, "Imagen no encontrada");
       return NextResponse.json({ status: false, message: "Imagen no encontrada" }, { status: 404 });
     }
 
@@ -55,6 +59,7 @@ export async function DELETE(
       const relative = `attendance-control/${controlId}/${fileName}`;
       const del = deleteUploadsFileByRelativePath(relative);
       if (!del.ok) {
+        await reportError(req, "api/attendance-control/[id]/images/[imageId]", "DELETE", 400, del.message || "No se pudo eliminar el archivo");
         return NextResponse.json({ status: false, message: del.message || "No se pudo eliminar el archivo" }, { status: 400 });
       }
     }
@@ -76,6 +81,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE /api/attendance-control/[id]/images/[imageId]:", errorMessage);
+    await reportError(req, "api/attendance-control/[id]/images/[imageId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

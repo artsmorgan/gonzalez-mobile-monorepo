@@ -11,6 +11,7 @@ import {
     assertCorpoAllowedForMarca,
     resolveClienteYPuestoParaAlta,
 } from "../../../utils/registroCorpoPuesto";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -22,25 +23,32 @@ export async function GET(req: NextRequest) {
         const corpoParam = searchParams.get("corpo_id");
 
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+            // No se corrige a 400: el cliente móvil (visitorsCacheHelpers.ts) revisa
+            // `!response.ok` antes de leer el body y perdería este mensaje específico.
+            await reportError(req, "api/visitors", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
         const corpoIdReq = corpoParam != null && corpoParam !== "" ? parseInt(String(corpoParam), 10) : NaN;
         if (!Number.isFinite(corpoIdReq) || corpoIdReq <= 0) {
-            return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 200 });
+            await reportError(req, "api/visitors", "GET", 400, "Sucursal no especificada");
+            return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 400 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca) } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/visitors", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const corpoOk = await assertCorpoAllowedForMarca(req, marcaDia, corpoIdReq);
         if (!corpoOk.ok) {
-            return NextResponse.json({ status: false, message: corpoOk.message }, { status: 200 });
+            await reportError(req, "api/visitors", "GET", 400, corpoOk.message);
+            return NextResponse.json({ status: false, message: corpoOk.message }, { status: 400 });
         }
 
         if (!marcaDia.empleadoFijo_id) {
+            await reportError(req, "api/visitors", "GET", 404, "Empleado no encontrado");
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
                 { status: 200 }
@@ -98,6 +106,14 @@ export async function GET(req: NextRequest) {
                 puesto_nombre = puestoRow?.nombre != null ? String(puestoRow.nombre) : null;
             }
 
+            let puesto_salida: { id: number; nombre: string; codigo: string | null } | null = null;
+            if (v.puesto_salida_id) {
+                const puestoSalidaRow = await prisma.e_estructura_puesto.findUnique({ where: { id: v.puesto_salida_id } });
+                if (puestoSalidaRow) {
+                    puesto_salida = { id: puestoSalidaRow.id, nombre: puestoSalidaRow.nombre, codigo: puestoSalidaRow.codigo };
+                }
+            }
+
             visitas_return.push({
                 id: v.id,
                 nombre: v.nombre,
@@ -121,6 +137,8 @@ export async function GET(req: NextRequest) {
                 corpo_id: v.corpo_id,
                 puesto_id: v.puesto_id,
                 puesto_nombre,
+                puesto_salida_id: v.puesto_salida_id ?? null,
+                puesto_salida,
                 id_local: "",
                 empresa_id: v.empresa_id,
                 division_id: v.division_id,
@@ -160,9 +178,23 @@ export async function POST(req: NextRequest) {
             foto_cedula, // viene en base64 y opcional
             firma_visitante, // viene en base64 y opcional
             activos,
+            puesto_salida_id,
         } = await req.json();
 
         console.log(activos);
+
+        let puestoSalidaIdFinal: number | null = null;
+        if (puesto_salida_id != null && puesto_salida_id !== "") {
+            const parsedPuestoSalida = parseInt(String(puesto_salida_id), 10);
+            if (!Number.isFinite(parsedPuestoSalida) || parsedPuestoSalida <= 0) {
+                return NextResponse.json({ status: false, message: "Puesto de salida inválido" }, { status: 200 });
+            }
+            const puestoSalidaBd = await prisma.e_estructura_puesto.findUnique({ where: { id: parsedPuestoSalida } });
+            if (!puestoSalidaBd) {
+                return NextResponse.json({ status: false, message: "El puesto de salida no existe" }, { status: 200 });
+            }
+            puestoSalidaIdFinal = parsedPuestoSalida;
+        }
 
 
         // Verificar marca
@@ -237,6 +269,7 @@ export async function POST(req: NextRequest) {
                     pers_autoriza_salida,
                     firma_visitante,
                     isActive: true,
+                    puesto_salida_id: puestoSalidaIdFinal,
                 }
             }
         });

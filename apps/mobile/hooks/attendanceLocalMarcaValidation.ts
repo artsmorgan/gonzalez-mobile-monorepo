@@ -276,7 +276,7 @@ export function evaluateLocalMarcaRules(
         canMarkEntrada: false,
         canMarkSalida: false,
         message:
-          `Aún no puedes marcar entrada. Debes estar mínimo ${monitoringPreviousMinutes} minutos antes del inicio del turno.`,
+          `Aún no puedes marcar entrada. Se habilitará  ${monitoringPreviousMinutes} minutos antes del inicio de tu jornada.`,
       };
     }
   }

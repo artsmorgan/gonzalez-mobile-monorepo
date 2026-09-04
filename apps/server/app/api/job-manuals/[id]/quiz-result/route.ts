@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function PUT(
   req: NextRequest,
@@ -18,9 +19,10 @@ export async function PUT(
     const resolvedParams = await context.params;
     const manualId = parseInt(resolvedParams.id, 10);
     if (!manualId) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "Manual no especificado");
       return NextResponse.json(
         { status: false, message: "Manual no especificado" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -35,17 +37,19 @@ export async function PUT(
     });
 
     if (!manual) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 404, "Manual o quiz no encontrado");
       return NextResponse.json(
         { status: false, message: "Manual o quiz no encontrado" },
-        { status: 200 }
+        { status: 404 }
       );
     }
 
     const manualObj = manual as any;
     if (manualObj.quiz === null) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 404, "Manual o quiz no encontrado");
       return NextResponse.json(
         { status: false, message: "Manual o quiz no encontrado" },
-        { status: 200 }
+        { status: 404 }
       );
     }
 
@@ -55,23 +59,26 @@ export async function PUT(
     const approved = body?.approved;
 
     if (!marca_id || Number.isNaN(marca_id)) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "Marca no especificada");
       return NextResponse.json(
         { status: false, message: "Marca no especificada" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
     if (!empleado_id || Number.isNaN(empleado_id)) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "Empleado no especificado");
       return NextResponse.json(
         { status: false, message: "Empleado no especificado" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
     if (typeof approved !== "boolean") {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "El campo approved debe ser boolean");
       return NextResponse.json(
         { status: false, message: "El campo approved debe ser boolean" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -81,9 +88,10 @@ export async function PUT(
       tokenEmpleadoId > 0 &&
       tokenEmpleadoId === empleado_id
     ) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 400, "No puedes calificar tu propio intento de quiz");
       return NextResponse.json(
         { status: false, message: "No puedes calificar tu propio intento de quiz" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -101,9 +109,10 @@ export async function PUT(
     });
 
     if (!existing) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 404, "Registro de visualización no encontrado");
       return NextResponse.json(
         { status: false, message: "Registro de visualización no encontrado" },
-        { status: 200 }
+        { status: 404 }
       );
     }
 
@@ -128,9 +137,10 @@ export async function PUT(
       where: { id: marca_id },
     });
     if (!marca) {
+      await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 404, "Marca no encontrada");
       return NextResponse.json(
         { status: false, message: "Marca no encontrada" },
-        { status: 200 }
+        { status: 404 }
       );
     }
 
@@ -150,6 +160,7 @@ export async function PUT(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/job-manuals/[id]/quiz-result:", errorMessage);
+    await reportError(req, "api/job-manuals/[id]/quiz-result", "PUT", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }

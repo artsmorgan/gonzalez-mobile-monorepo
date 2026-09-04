@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -13,7 +14,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         const corpo = await prisma.e_estructura_sucursal.findFirst({ where: { id } });
-        if (!corpo) return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
+        if (!corpo) {
+            await reportError(req, "api/evaluation/corpo/[id]", "GET", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
+        }
 
         const evaluaciones = await callDynamicPrisma({
             req,
@@ -87,6 +91,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: true, evaluaciones: evaluaciones_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/evaluation/corpo/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

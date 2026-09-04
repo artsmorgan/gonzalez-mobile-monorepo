@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -58,6 +59,7 @@ export async function GET(
     const { use_id } = await context.params;
     const usoId = parseInt(String(use_id), 10);
     if (!usoId) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "GET", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -71,6 +73,7 @@ export async function GET(
       },
     });
     if (!uso) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "GET", 404, "Uso no encontrado");
       return NextResponse.json({ status: false, message: "Uso no encontrado" }, { status: 404 });
     }
 
@@ -99,7 +102,8 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/corporate-vehicles/uses/[use_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/uses/[use_id]", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -114,6 +118,7 @@ export async function PUT(
     const { use_id } = await context.params;
     const usoId = parseInt(String(use_id), 10);
     if (!usoId) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "PUT", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -127,6 +132,7 @@ export async function PUT(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     const existingObj = existing as any;
@@ -282,7 +288,8 @@ export async function PUT(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/corporate-vehicles/uses/[use_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/uses/[use_id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -297,6 +304,7 @@ export async function DELETE(
     const { use_id } = await context.params;
     const usoId = parseInt(String(use_id), 10);
     if (!usoId) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "DELETE", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -310,6 +318,7 @@ export async function DELETE(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/uses/[use_id]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -372,7 +381,8 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/corporate-vehicles/uses/[use_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/uses/[use_id]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

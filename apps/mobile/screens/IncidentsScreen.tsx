@@ -8,6 +8,7 @@ import Ionicons from '@expo/vector-icons/build/Ionicons';
 import SignatureScreen from 'react-native-signature-canvas';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -36,7 +37,7 @@ import type {
   IncidentContributionFileInput,
   IncidentFileInput,
 } from '@/hooks/incidentsTypes';
-import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, deleteIncidentFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncidentContribution } from '@/hooks/incidentsFunctions';
+import { createIncident, createIncidentContribution, deleteIncident, deleteIncidentContribution, deleteIncidentContributionFile, deleteIncidentFile, listExecutives, listIncidentClassifications, listIncidentContributions, listIncidentsByCorpo, updateIncident, updateIncidentContribution } from '@/hooks/incidentsFunctions';
 import { deleteFile, getLocalFileDisplayUri, saveFile, type StoredFileType } from '@/hooks/fileStorage';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { findHierarchyByPuestoIn } from '@/hooks/llavesMainStructureHelpers';
@@ -256,6 +257,11 @@ export default function IncidentsScreen() {
   const [deletingIncidentKey, setDeletingIncidentKey] = useState<string | null>(null);
   const [deletingAporteKey, setDeletingAporteKey] = useState<string | null>(null);
   const [isAportesVisible, setIsAportesVisible] = useState(false);
+
+  // Solucionar incidente: reutiliza el formulario existente (renderIncidentForm) con las
+  // secciones de solución ocultas salvo que se esté completando un incidente propio (i.owned).
+  const [resolvingIncidentId, setResolvingIncidentId] = useState<number | null>(null);
+  const [isSubmittingSolucion, setIsSubmittingSolucion] = useState(false);
   const [selectedIncidentForAportes, setSelectedIncidentForAportes] = useState<Incident | null>(null);
   const [isLoadingAportes, setIsLoadingAportes] = useState(false);
   const [aportes, setAportes] = useState<IncidentContribution[]>([]);
@@ -312,10 +318,50 @@ export default function IncidentsScreen() {
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
   const [videoFiles, setVideoFiles] = useState<ManualFileLocal[]>([]);
 
+  // Cámara reutilizable (una foto por apertura, igual que ChecklistSupervisionScreen.tsx): sirve
+  // tanto para las imágenes del incidente como para las de un aporte, mediante el callback
+  // guardado en `pendingIncidentCameraHandlerRef`, sin duplicar la cámara ni el guardado.
+  const [isIncidentCameraVisible, setIsIncidentCameraVisible] = useState(false);
+  const [incidentCameraPermission, requestIncidentCameraPermission] = useCameraPermissions();
+  const incidentCameraRef = useRef<CameraView | null>(null);
+  const pendingIncidentCameraHandlerRef = useRef<((asset: { uri: string; name?: string; mimeType?: string }) => void) | null>(null);
+
+  const openIncidentCamera = async (onCaptured: (asset: { uri: string; name?: string; mimeType?: string }) => void) => {
+    if (!incidentCameraPermission?.granted) {
+      const res = await requestIncidentCameraPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+        return;
+      }
+    }
+    pendingIncidentCameraHandlerRef.current = onCaptured;
+    setIsIncidentCameraVisible(true);
+  };
+
+  const captureIncidentPhoto = async () => {
+    if (!incidentCameraRef.current) return;
+    try {
+      const photo = await incidentCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+      setIsIncidentCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const handler = pendingIncidentCameraHandlerRef.current;
+      pendingIncidentCameraHandlerRef.current = null;
+      handler?.({ uri: photo.uri, name: `foto_${Date.now()}.jpg`, mimeType: 'image/jpeg' });
+    } catch (e: any) {
+      setIsIncidentCameraVisible(false);
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
+
   // Date pickers state
   const [showFechaIncidentePicker, setShowFechaIncidentePicker] = useState(false);
   const [showFechaReportePicker, setShowFechaReportePicker] = useState(false);
   const [showLibroFechaPicker, setShowLibroFechaPicker] = useState(false);
+  const [showFechaSolucionPicker, setShowFechaSolucionPicker] = useState(false);
+  const [showFechaRealSolucionPicker, setShowFechaRealSolucionPicker] = useState(false);
   const [showFilterFechaIncidentePicker, setShowFilterFechaIncidentePicker] = useState(false);
   const [showFilterFechaReportePicker, setShowFilterFechaReportePicker] = useState(false);
 
@@ -890,6 +936,7 @@ export default function IncidentsScreen() {
     await applyCurrentMarcaToFormHierarchy(tree);
     const today = isoDateOnly(new Date(horaAccion));
     setChecklistIncidentLink(null);
+    setResolvingIncidentId(null);
     setIsCreating(true);
     setTextFiles([]);
     setImageFiles([]);
@@ -1006,6 +1053,7 @@ export default function IncidentsScreen() {
 
   const cancelCreating = () => {
     setIsCreating(false);
+    setResolvingIncidentId(null);
     clearFormHierarchy();
     setTextFiles([]);
     setImageFiles([]);
@@ -1073,6 +1121,51 @@ export default function IncidentsScreen() {
     }
   };
 
+  /**
+   * Procesa un asset ya elegido (por DocumentPicker o por la cámara) y lo agrega a la lista
+   * correspondiente. Compartido por `handleAddFile` (adjuntar) y la cámara para no duplicar el
+   * guardado/registro del archivo.
+   */
+  const addPickedIncidentFileAsset = async (
+    type: ManualFileLocal['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
+    try {
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const ext = extension || 'dat';
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || `archivo.${ext}`,
+        extension: ext,
+        type: mapManualTypeToStored(type),
+        prefix: 'incident',
+      });
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const file: ManualFileLocal = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${ext}`,
+        extension: ext,
+        base64: '',
+        localFileName,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setImageFiles(prev => [...prev, file]);
+      else if (type === 'audio') setAudioFiles(prev => [...prev, file]);
+      else if (type === 'video') setVideoFiles(prev => [...prev, file]);
+      else setTextFiles(prev => [...prev, file]);
+    } catch (e) {
+      console.error('Error adding file for incident:', e);
+      Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
+    }
+  };
+
   const handleAddFile = async (type: ManualFileLocal['type']) => {
     try {
       let pickerTypes: string | string[] | undefined;
@@ -1106,36 +1199,7 @@ export default function IncidentsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-
-      let extension = '';
-      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
-      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
-      const ext = extension || 'dat';
-
-      const localFileName = await saveFile({
-        uri: asset.uri,
-        originalName: asset.name || `archivo.${ext}`,
-        extension: ext,
-        type: mapManualTypeToStored(type),
-        prefix: 'incident',
-      });
-
-      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const file: ManualFileLocal = {
-        id: localId,
-        type,
-        name: asset.name || `archivo.${ext}`,
-        extension: ext,
-        base64: '',
-        localFileName,
-        uri: asset.uri,
-        mimeType: asset.mimeType,
-      };
-
-      if (type === 'image') setImageFiles(prev => [...prev, file]);
-      else if (type === 'audio') setAudioFiles(prev => [...prev, file]);
-      else if (type === 'video') setVideoFiles(prev => [...prev, file]);
-      else setTextFiles(prev => [...prev, file]);
+      await addPickedIncidentFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
     } catch (e) {
       console.error('Error picking file for incident:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
@@ -1515,6 +1579,109 @@ export default function IncidentsScreen() {
     }
   };
 
+  /** Abre el formulario existente (el mismo de "Nuevo incidente") con las secciones de
+   * solución visibles, precargado con los datos del incidente a completar/solucionar. */
+  const startResolvingIncident = async (incident: Incident) => {
+    if (!(incident.id > 0)) {
+      Alert.alert('Error', 'Este incidente aún no se ha sincronizado con el servidor.');
+      return;
+    }
+    const tree = await fetchMainStructure();
+    await applyCurrentMarcaToFormHierarchy(tree);
+    setChecklistIncidentLink(null);
+    setResolvingIncidentId(incident.id);
+    setIsCreating(true);
+    setTextFiles([]);
+    setImageFiles([]);
+    setAudioFiles([]);
+    setVideoFiles([]);
+    ejecutivoRef.current = incident.ejecutivo?.id ?? null;
+    fechaIncidenteRef.current = incident.fecha_incidente || '';
+    fechaReporteRef.current = incident.fecha_reporte || '';
+    nombreResponsableRef.current = incident.nombre_responsable || '';
+    clasificacionRef.current = incident.clasificacion?.id ?? null;
+    descripcionRef.current = incident.descripcion || '';
+    nombreResponsableAtencionRef.current = incident.nombre_responsable_atencion || '';
+    setNewIncident(prev => ({
+      ...prev,
+      id: incident.id,
+      id_local: incident.id_local || '',
+      estado: incident.estado,
+      ejecutivo_id: incident.ejecutivo?.id ?? null,
+      fecha_incidente: incident.fecha_incidente || '',
+      fecha_reporte: incident.fecha_reporte || '',
+      nombre_responsable: incident.nombre_responsable || '',
+      clasificacion_id: incident.clasificacion?.id ?? null,
+      descripcion: incident.descripcion || '',
+      involucrados: (incident.involucrados || []).map((iv) => ({ codigo: iv.codigo || '', nombre: iv.nombre })),
+      libro_fecha: incident.fecha_libro_novedades?.fecha || '',
+      libro_numero: incident.fecha_libro_novedades?.numero || '',
+      nombre_responsable_atencion: incident.nombre_responsable_atencion || '',
+      solucion: incident.solucion || '',
+      fecha_solucion: incident.fecha_solucion || '',
+      fecha_real_solucion: incident.fecha_solucion_real || '',
+      costo_asociado: incident.costo_asociado || '',
+      consecutivo_informe: incident.consecutivo_informe || '',
+      link_informe: incident.link_informe || '',
+      owned: incident.owned,
+    }));
+  };
+
+  const handleUpdateSolucion = async () => {
+    if (isSubmittingSolucion || !resolvingIncidentId) return;
+    if (!newIncident.solucion.trim()) {
+      setSubmitResponse({ type: 'error', message: 'Indique la solución del incidente' });
+      return;
+    }
+    setIsSubmittingSolucion(true);
+    setSubmitResponse(null);
+    try {
+      const marcaId = await getCurrentMarcaId();
+      if (!marcaId) {
+        setSubmitResponse({ type: 'error', message: 'No se encontró la marca actual' });
+        return;
+      }
+      const horaAccion = await getHoraAccion();
+      const res = await updateIncident({
+        requestData: {
+          marca_id: marcaId,
+          solucion: newIncident.solucion.trim(),
+          fecha_solucion: newIncident.fecha_solucion || new Date(horaAccion || Date.now()).toISOString(),
+          fecha_real_solucion: newIncident.fecha_real_solucion || new Date(horaAccion || Date.now()).toISOString(),
+          costo_asociado: newIncident.costo_asociado || '',
+          consecutivo_informe: newIncident.consecutivo_informe || '',
+          link_informe: newIncident.link_informe || '',
+        },
+        incidentId: resolvingIncidentId,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        Alert.alert('Éxito', 'Solución guardada correctamente');
+        cancelCreating();
+        await fetchAll();
+      } else {
+        setSubmitResponse({ type: 'error', message: res.message || 'No se pudo guardar la solución' });
+      }
+    } catch (e: any) {
+      setSubmitResponse({ type: 'error', message: e?.message || 'No se pudo guardar la solución' });
+    } finally {
+      setIsSubmittingSolucion(false);
+    }
+  };
+
+  const handleUpdateSolucionWithConfirm = () => {
+    if (isSubmittingSolucion) return;
+    if (!newIncident.solucion.trim()) {
+      setSubmitResponse({ type: 'error', message: 'Indique la solución del incidente' });
+      return;
+    }
+    Alert.alert('Confirmar', '¿Estás seguro de que deseas guardar la solución de este incidente?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Aceptar', onPress: () => void handleUpdateSolucion() },
+    ]);
+  };
+
   const handleDelete = (incident: Incident) => {
     Alert.alert('Confirmar eliminación', '¿Estás seguro de que deseas eliminar este incidente?', [
       { text: 'Cancelar', style: 'cancel' },
@@ -1752,6 +1919,47 @@ export default function IncidentsScreen() {
     setIsReadingAporteSignature(false);
   };
 
+  /** Compartido por `handleAddAporteFile` (adjuntar) y la cámara, para no duplicar el guardado. */
+  const addPickedAporteFileAsset = async (
+    type: ManualFileLocal['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
+    try {
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
+      const ext = extension || 'dat';
+
+      const localFileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || `archivo.${ext}`,
+        extension: ext,
+        type: mapManualTypeToStored(type),
+        prefix: 'incident_aporte',
+      });
+
+      const localId = `local_aporte_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const file: ManualFileLocal = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${ext}`,
+        extension: ext,
+        base64: '',
+        localFileName,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') setAporteImageFiles(prev => [...prev, file]);
+      else if (type === 'audio') setAporteAudioFiles(prev => [...prev, file]);
+      else if (type === 'video') setAporteVideoFiles(prev => [...prev, file]);
+      else setAporteTextFiles(prev => [...prev, file]);
+    } catch (e) {
+      console.error('Error adding file for aporte:', e);
+      Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
+    }
+  };
+
   const handleAddAporteFile = async (type: ManualFileLocal['type']) => {
     try {
       let pickerTypes: string | string[] | undefined;
@@ -1785,36 +1993,7 @@ export default function IncidentsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-
-      let extension = '';
-      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
-      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
-      const ext = extension || 'dat';
-
-      const localFileName = await saveFile({
-        uri: asset.uri,
-        originalName: asset.name || `archivo.${ext}`,
-        extension: ext,
-        type: mapManualTypeToStored(type),
-        prefix: 'incident_aporte',
-      });
-
-      const localId = `local_aporte_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const file: ManualFileLocal = {
-        id: localId,
-        type,
-        name: asset.name || `archivo.${ext}`,
-        extension: ext,
-        base64: '',
-        localFileName,
-        uri: asset.uri,
-        mimeType: asset.mimeType,
-      };
-
-      if (type === 'image') setAporteImageFiles(prev => [...prev, file]);
-      else if (type === 'audio') setAporteAudioFiles(prev => [...prev, file]);
-      else if (type === 'video') setAporteVideoFiles(prev => [...prev, file]);
-      else setAporteTextFiles(prev => [...prev, file]);
+      await addPickedAporteFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
     } catch (e) {
       console.error('Error picking file for aporte:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
@@ -2312,6 +2491,12 @@ export default function IncidentsScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
             <Ionicons name="image-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.fileIconButton}
+            onPress={() => openIncidentCamera((asset) => void addPickedIncidentFileAsset('image', asset))}
+          >
+            <Ionicons name="camera-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2391,6 +2576,12 @@ export default function IncidentsScreen() {
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddAporteFile('image')}>
             <Ionicons name="image-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.fileIconButton}
+            onPress={() => openIncidentCamera((asset) => void addPickedAporteFileAsset('image', asset))}
+          >
+            <Ionicons name="camera-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddAporteFile('audio')}>
             <Ionicons name="mic-outline" size={20} color="#007AFF" />
           </TouchableOpacity>
@@ -2461,13 +2652,20 @@ export default function IncidentsScreen() {
     const formKey = incident.id_local || String(incident.id ?? 'new');
     const fromChecklist = Boolean(checklistIncidentLink);
     const showFormHierarchy = fromChecklist || !isOperativoUser;
+    const isResolving = resolvingIncidentId != null;
 
     return (
       <ThemedView style={[styles.card, styles.formCard]}>
         <ThemedText style={styles.formTitle}>
-          {fromChecklist ? 'Nuevo incidente (desde Checklist)' : 'Nuevo Incidente'}
+          {isResolving
+            ? 'Completar / solucionar incidente'
+            : fromChecklist ? 'Nuevo incidente (desde Checklist)' : 'Nuevo Incidente'}
         </ThemedText>
 
+        {/* Datos ya existentes: ocultos al completar/solucionar un incidente propio — el
+            formulario de resolución solo complementa datos, no permite editar los ya habidos. */}
+        {!isResolving && (
+        <>
         {fromChecklist ? (
           <ThemedView style={styles.checklistLinkBanner}>
             <Ionicons name="information-circle-outline" size={20} color="#007AFF" style={{ marginRight: 8 }} />
@@ -2671,6 +2869,114 @@ export default function IncidentsScreen() {
             key={`nra-create-${formKey}`}
           />
         </ThemedView>
+        </>
+        )}
+
+        {/* Secciones de solución: ocultas salvo que se esté completando/solucionando un incidente propio. */}
+        {isResolving && (
+          <>
+            <ThemedText style={styles.sectionTitle}>Solución del incidente</ThemedText>
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Solución:</ThemedText>
+              <TextInput
+                style={[styles.formInput, styles.textArea]}
+                defaultValue={incident.solucion}
+                onChangeText={(t) => setNewIncident(prev => ({ ...prev, solucion: t }))}
+                placeholder="Describa la solución aplicada"
+                placeholderTextColor="#999"
+                multiline
+                numberOfLines={4}
+                key={`sol-${formKey}`}
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Fecha de solución:</ThemedText>
+              <TouchableOpacity
+                style={styles.dateButton}
+                onPress={async () => {
+                  const horaAccion = await getHoraAccion();
+                  if (!horaAccion) {
+                    Alert.alert('Error', 'No se pudo obtener la hora');
+                    return;
+                  }
+                  setPickerDateValue(incident.fecha_solucion ? new Date(incident.fecha_solucion) : new Date(horaAccion));
+                  setShowFechaSolucionPicker(true);
+                }}
+              >
+                <ThemedText style={styles.dateButtonText}>
+                  {incident.fecha_solucion ? dateLabel(incident.fecha_solucion) : 'Seleccionar fecha'}
+                </ThemedText>
+                <Ionicons name="calendar" size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {renderDatePicker(showFechaSolucionPicker, () => setShowFechaSolucionPicker(false), (iso) => {
+                setNewIncident(prev => ({ ...prev, fecha_solucion: iso }));
+              })}
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Fecha real de solución:</ThemedText>
+              <TouchableOpacity
+                style={styles.dateButton}
+                onPress={async () => {
+                  const horaAccion = await getHoraAccion();
+                  if (!horaAccion) {
+                    Alert.alert('Error', 'No se pudo obtener la hora');
+                    return;
+                  }
+                  setPickerDateValue(incident.fecha_real_solucion ? new Date(incident.fecha_real_solucion) : new Date(horaAccion));
+                  setShowFechaRealSolucionPicker(true);
+                }}
+              >
+                <ThemedText style={styles.dateButtonText}>
+                  {incident.fecha_real_solucion ? dateLabel(incident.fecha_real_solucion) : 'Seleccionar fecha'}
+                </ThemedText>
+                <Ionicons name="calendar" size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {renderDatePicker(showFechaRealSolucionPicker, () => setShowFechaRealSolucionPicker(false), (iso) => {
+                setNewIncident(prev => ({ ...prev, fecha_real_solucion: iso }));
+              })}
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Costo asociado:</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                defaultValue={incident.costo_asociado}
+                onChangeText={(t) => setNewIncident(prev => ({ ...prev, costo_asociado: t }))}
+                placeholder="Costo asociado"
+                placeholderTextColor="#999"
+                keyboardType="numeric"
+                key={`costo-${formKey}`}
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Consecutivo de informe:</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                defaultValue={incident.consecutivo_informe}
+                onChangeText={(t) => setNewIncident(prev => ({ ...prev, consecutivo_informe: t }))}
+                placeholder="Consecutivo de informe"
+                placeholderTextColor="#999"
+                key={`consec-${formKey}`}
+              />
+            </ThemedView>
+
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Enlace de informe:</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                defaultValue={incident.link_informe}
+                onChangeText={(t) => setNewIncident(prev => ({ ...prev, link_informe: t }))}
+                placeholder="https://..."
+                placeholderTextColor="#999"
+                autoCapitalize="none"
+                key={`link-${formKey}`}
+              />
+            </ThemedView>
+          </>
+        )}
 
         {submitResponse && (
           <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
@@ -2682,20 +2988,20 @@ export default function IncidentsScreen() {
         )}
         <ThemedView style={styles.buttonRow}>
           <TouchableOpacity
-            style={[styles.confirmButton, isSubmitting && styles.buttonDisabled]}
-            onPress={handleCreateWithConfirm}
-            disabled={isSubmitting}
+            style={[styles.confirmButton, (isResolving ? isSubmittingSolucion : isSubmitting) && styles.buttonDisabled]}
+            onPress={isResolving ? handleUpdateSolucionWithConfirm : handleCreateWithConfirm}
+            disabled={isResolving ? isSubmittingSolucion : isSubmitting}
           >
-            {isSubmitting ? (
+            {(isResolving ? isSubmittingSolucion : isSubmitting) ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <ThemedText style={styles.confirmButtonText}>{getActionIcon('confirm')}</ThemedText>
             )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.cancelButton, isSubmitting && styles.buttonDisabled]}
+            style={[styles.cancelButton, (isResolving ? isSubmittingSolucion : isSubmitting) && styles.buttonDisabled]}
             onPress={cancelCreating}
-            disabled={isSubmitting}
+            disabled={isResolving ? isSubmittingSolucion : isSubmitting}
           >
             <ThemedText style={styles.cancelButtonText}>{getActionIcon('cancel')}</ThemedText>
           </TouchableOpacity>
@@ -2882,6 +3188,9 @@ export default function IncidentsScreen() {
                     <ThemedText style={styles.cardInfo}>Reporta: {i.nombre_responsable || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo}>Atención: {i.nombre_responsable_atencion || '-'}</ThemedText>
                     <ThemedText style={styles.cardInfo} numberOfLines={3}>Descripción: {i.descripcion || '-'}</ThemedText>
+                    {!!i.solucion && (
+                      <ThemedText style={styles.cardInfo} numberOfLines={3}>Solución: {i.solucion}</ThemedText>
+                    )}
 
                     {Array.isArray(i.files) && i.files.length > 0 && (
                       <IncidentFilesViewer
@@ -2901,6 +3210,14 @@ export default function IncidentsScreen() {
                       <TouchableOpacity style={styles.aportesButton} onPress={() => openAportesModal(i)}>
                         <Ionicons name="chatbubble-ellipses" size={20} color="#FFFFFF" />
                       </TouchableOpacity>
+                      {i.owned && (
+                        <TouchableOpacity
+                          style={[styles.aportesButton, { backgroundColor: i.solucion ? '#34C759' : '#FF9500' }]}
+                          onPress={() => void startResolvingIncident(i)}
+                        >
+                          <Ionicons name="checkmark-done" size={20} color="#FFFFFF" />
+                        </TouchableOpacity>
+                      )}
                       <TouchableOpacity
                         style={styles.deleteButton}
                         onPress={() => handleDelete(i)}
@@ -3151,6 +3468,40 @@ export default function IncidentsScreen() {
             </ThemedView>
           </ThemedView>
         </View>
+      </Modal>
+
+      {/* Cámara reutilizable (una foto por apertura, igual que ChecklistSupervisionScreen.tsx) */}
+      <Modal
+        visible={isIncidentCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsIncidentCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          {incidentCameraPermission?.granted ? (
+            <CameraView ref={incidentCameraRef} style={{ flex: 1 }} facing="back">
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsIncidentCameraVisible(false)}
+              >
+                <Ionicons name="close" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureIncidentPhoto}>
+                <ThemedView style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <ThemedView style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>Se requiere permiso de cámara</ThemedText>
+              <TouchableOpacity
+                style={styles.cameraPermissionBtn}
+                onPress={requestIncidentCameraPermission}
+                activeOpacity={0.85}
+              >
+                <ThemedText style={styles.cameraPermissionBtnText}>Solicitar permiso</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+        </ThemedView>
       </Modal>
 
       <AppFooter />
@@ -3479,6 +3830,36 @@ const styles = StyleSheet.create({
   playButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#007AFF', justifyContent: 'center', alignItems: 'center' },
   audioTime: { fontSize: 14, fontWeight: '500', color: '#007AFF', flex: 1 },
   resetAudioButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 8, borderRadius: 8, backgroundColor: '#007AFF' },
+  // Cámara (mismo estándar que ChecklistSupervisionScreen.tsx/PhysicalMinuteAgendaScreen.tsx)
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 20,
+    padding: 6,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+  },
+  cameraPermissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  cameraPermissionText: { fontSize: 16, color: '#FFFFFF', marginBottom: 20, textAlign: 'center' },
+  cameraPermissionBtn: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+  cameraPermissionBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
 });
 
 // Componente para visualizar archivos de un incidente

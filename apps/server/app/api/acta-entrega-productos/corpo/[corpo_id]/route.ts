@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyAccessTokenByApi } from '../../../../../utils/verifyAccessTokenByApi';
 import { callDynamicPrisma } from '../../../../../utils/callDynamicPrisma';
 import { mapActaEntregaImagesForClient } from '../../mapActaEntregaImagesForClient';
+import { reportError } from '../../../../../utils/reportError';
 
 export async function GET(req: NextRequest, context: { params: Promise<{ corpo_id: string }> }) {
   try {
@@ -10,7 +11,10 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
 
     const resolvedParams = await context.params;
     const corpoId = parseInt(resolvedParams.corpo_id, 10);
-    if (!corpoId) return NextResponse.json({ status: false, message: 'corpo_id inválido' }, { status: 400 });
+    if (!corpoId) {
+      await reportError(req, "api/acta-entrega-productos/corpo/[corpo_id]", "GET", 400, "corpo_id inválido");
+      return NextResponse.json({ status: false, message: 'corpo_id inválido' }, { status: 400 });
+    }
 
     const records = await callDynamicPrisma({
       req,
@@ -39,6 +43,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error(errorMessage);
+    await reportError(req, "api/acta-entrega-productos/corpo/[corpo_id]", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

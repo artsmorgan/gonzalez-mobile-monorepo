@@ -33,14 +33,17 @@ import {
 } from "../../../../../utils/nomenclatorsTipoMantenimientoArticulo";
 import { deleteSuperAdmin } from "../../../../../utils/nomenclatorsSuperAdmins";
 import { isSuperAdminEmpleado } from "../../../../../utils/isSuperAdminEmpleado";
+import { reportError } from "../../../../../utils/reportError";
 
-async function requireCallerSuperAdmin(req: NextRequest, payload: any): Promise<NextResponse | null> {
+async function requireCallerSuperAdmin(req: NextRequest, payload: any, method: string): Promise<NextResponse | null> {
     const empleadoId = payload?.id != null ? Number(payload.id) : 0;
     if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+        await reportError(req, "api/nomenclators/[tipo]/[id]", method, 403, "Usuario no autorizado");
         return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
     const ok = await isSuperAdminEmpleado(req, empleadoId);
     if (!ok) {
+        await reportError(req, "api/nomenclators/[tipo]/[id]", method, 403, "Se requiere rol SUPER_ADMIN para administrar este nomenclador");
         return NextResponse.json(
             { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },
             { status: 403 }
@@ -65,6 +68,7 @@ export async function GET(
         const { tipo, id } = await context.params;
         const table = resolveNomenclatorTable(tipo);
         if (!table) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 400, "Tipo de nomenclador no válido");
             return NextResponse.json(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
@@ -73,6 +77,7 @@ export async function GET(
 
         const idNum = parseInt(String(id), 10);
         if (Number.isNaN(idNum) || idNum <= 0) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -82,6 +87,7 @@ export async function GET(
             const row = await findEmpleadoEjecutivoById(req, idNum);
             const mapped = await mapEmpleadoEjecutivoRow(req, row);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
@@ -100,6 +106,7 @@ export async function GET(
         if (kind === "ejecutivo-coordinador") {
             const mapped = await mapEjecutivoCoordinadorRow(req, row);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
@@ -108,6 +115,7 @@ export async function GET(
         if (kind === "mobile-variable") {
             const mapped = mapMobileVariableRow(row);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
@@ -116,6 +124,7 @@ export async function GET(
         if (kind === "tipo-mantenimiento-articulo") {
             const mapped = await mapTipoMantenimientoArticuloRow(req, row);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
             return NextResponse.json({ status: true, data: mapped }, { status: 200 });
@@ -123,6 +132,7 @@ export async function GET(
 
         const mapped = mapNomenclatorRow(row);
         if (!mapped) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
@@ -130,6 +140,7 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(`Error in GET /api/nomenclators/[tipo]/[id]:`, errorMessage);
+        await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -150,6 +161,7 @@ export async function PUT(
         const { tipo, id } = await context.params;
         const table = resolveNomenclatorTable(tipo);
         if (!table) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "Tipo de nomenclador no válido");
             return NextResponse.json(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
@@ -158,6 +170,7 @@ export async function PUT(
 
         const idNum = parseInt(String(id), 10);
         if (Number.isNaN(idNum) || idNum <= 0) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -165,6 +178,7 @@ export async function PUT(
         const body = await req.json();
 
         if (kind === "super-admin") {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 405, "Los super admins no se editan; elimine y cree de nuevo");
             return NextResponse.json(
                 { status: false, message: "Los super admins no se editan; elimine y cree de nuevo" },
                 { status: 405 }
@@ -176,6 +190,7 @@ export async function PUT(
                 decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
                 null;
             if (!planillasToken) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 401, "Token de Planillas requerido");
                 return NextResponse.json(
                     { status: false, message: "Token de Planillas requerido" },
                     { status: 401 }
@@ -184,11 +199,13 @@ export async function PUT(
 
             const existing = await findEmpleadoEjecutivoById(req, idNum);
             if (!existing) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
 
             const payload = parseEmpleadoEjecutivoPayload(body, idNum);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "Debe seleccionar un ejecutivo de cuenta válido");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un ejecutivo de cuenta válido" },
                     { status: 400 }
@@ -218,12 +235,14 @@ export async function PUT(
             },
         });
         if (!existing) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
         if (kind === "ejecutivo-coordinador") {
             const payload = parseEjecutivoCoordinadorPayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "Debe seleccionar un ejecutivo de cuenta y un coordinador válidos");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un ejecutivo de cuenta y un coordinador válidos" },
                     { status: 400 }
@@ -237,6 +256,7 @@ export async function PUT(
                 idNum
             );
             if (!validation.valid) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 409, validation.message);
                 return NextResponse.json(
                     { status: false, message: validation.message },
                     { status: 409 }
@@ -259,6 +279,7 @@ export async function PUT(
 
             const mapped = await mapEjecutivoCoordinadorRow(req, updated);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 500, "No se pudo actualizar el registro");
                 return NextResponse.json(
                     { status: false, message: "No se pudo actualizar el registro" },
                     { status: 500 }
@@ -274,6 +295,7 @@ export async function PUT(
         if (kind === "mobile-variable") {
             const payload = parseMobileVariablePayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "Debe indicar un valor para la variable");
                 return NextResponse.json(
                     { status: false, message: "Debe indicar un valor para la variable" },
                     { status: 400 }
@@ -288,6 +310,7 @@ export async function PUT(
                 );
             } catch (error: unknown) {
                 const errorMessage = error instanceof Error ? error.message : "No se pudo actualizar la variable";
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, errorMessage);
                 return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
             }
         }
@@ -295,6 +318,7 @@ export async function PUT(
         if (kind === "tipo-mantenimiento-articulo") {
             const payload = parseTipoMantenimientoArticuloPayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "Debe seleccionar un artículo e indicar un nombre válido");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un artículo e indicar un nombre válido" },
                     { status: 400 }
@@ -303,6 +327,7 @@ export async function PUT(
 
             const exists = await articuloCorpoPuestoExists(req, payload.articulo_id);
             if (!exists) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "El artículo seleccionado no existe");
                 return NextResponse.json(
                     { status: false, message: "El artículo seleccionado no existe" },
                     { status: 400 }
@@ -325,6 +350,7 @@ export async function PUT(
 
             const mapped = await mapTipoMantenimientoArticuloRow(req, updated);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 500, "No se pudo actualizar el registro");
                 return NextResponse.json(
                     { status: false, message: "No se pudo actualizar el registro" },
                     { status: 500 }
@@ -339,6 +365,7 @@ export async function PUT(
 
         const nombre = String(body?.nombre ?? "").trim();
         if (!nombre) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, "El nombre es obligatorio");
             return NextResponse.json(
                 { status: false, message: "El nombre es obligatorio" },
                 { status: 400 }
@@ -358,6 +385,7 @@ export async function PUT(
 
         const mapped = mapNomenclatorRow(updated);
         if (!mapped) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 500, "No se pudo actualizar el registro");
             return NextResponse.json(
                 { status: false, message: "No se pudo actualizar el registro" },
                 { status: 500 }
@@ -371,7 +399,8 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(`Error in PUT /api/nomenclators/[tipo]/[id]:`, errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -391,6 +420,7 @@ export async function DELETE(
         const { tipo, id } = await context.params;
         const table = resolveNomenclatorTable(tipo);
         if (!table) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 400, "Tipo de nomenclador no válido");
             return NextResponse.json(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
@@ -399,17 +429,19 @@ export async function DELETE(
 
         const idNum = parseInt(String(id), 10);
         if (Number.isNaN(idNum) || idNum <= 0) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
         const kind = resolveNomenclatorKind(tipo);
 
         if (kind === "super-admin") {
-            const denied = await requireCallerSuperAdmin(req, payload);
+            const denied = await requireCallerSuperAdmin(req, payload, "DELETE");
             if (denied) return denied;
 
             const result = await deleteSuperAdmin(req, idNum);
             if (!result.ok) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", result.status, result.message);
                 return NextResponse.json(
                     { status: false, message: result.message },
                     { status: result.status }
@@ -426,6 +458,7 @@ export async function DELETE(
                 decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
                 null;
             if (!planillasToken) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 401, "Token de Planillas requerido");
                 return NextResponse.json(
                     { status: false, message: "Token de Planillas requerido" },
                     { status: 401 }
@@ -434,6 +467,7 @@ export async function DELETE(
 
             const existing = await findEmpleadoEjecutivoById(req, idNum);
             if (!existing) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
             }
 
@@ -454,10 +488,12 @@ export async function DELETE(
             },
         });
         if (!existing) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
         if (kind === "mobile-variable") {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 405, "No se pueden eliminar variables del sistema desde esta pantalla");
             return NextResponse.json(
                 { status: false, message: "No se pueden eliminar variables del sistema desde esta pantalla" },
                 { status: 405 }
@@ -480,6 +516,7 @@ export async function DELETE(
         );
     } catch (error: unknown) {
         if (isForeignKeyConstraintError(error)) {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 409, NOMENCLATOR_DELETE_BLOCKED_MESSAGE);
             return NextResponse.json(
                 { status: false, message: NOMENCLATOR_DELETE_BLOCKED_MESSAGE },
                 { status: 409 }
@@ -488,9 +525,10 @@ export async function DELETE(
 
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(`Error in DELETE /api/nomenclators/[tipo]/[id]:`, errorMessage);
+        await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 500, "No se pudo eliminar el registro");
         return NextResponse.json(
             { status: false, message: "No se pudo eliminar el registro" },
-            { status: 400 }
+            { status: 500 }
         );
     }
 }

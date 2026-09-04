@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../utils/reportError";
 import axios from "axios";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -10,7 +11,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const { id } = await context.params;
         const idNum = parseInt(String(id), 10);
-        if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+        if (!idNum) {
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 400, "ID inválido");
+            return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+        }
 
         let horaAccion: number | undefined;
         let planillasToken = null;
@@ -20,7 +24,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             // Planillas token deben ser obtenido del header de la request
             planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
             if (!planillasToken) {
-                return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+                await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Token de Planillas no encontrado");
+                return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 404 });
             }
             const n = raw != null ? Number(raw) : NaN;
             if (Number.isFinite(n)) horaAccion = n;
@@ -28,22 +33,33 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             console.log("cuerpo vacío permitido por compatibilidad");
         }
         if (horaAccion == null || !Number.isFinite(horaAccion)) {
-            return NextResponse.json({ status: false, message: "horaAccion requerida" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 400, "horaAccion requerida");
+            return NextResponse.json({ status: false, message: "horaAccion requerida" }, { status: 400 });
         }
 
         if (planillasToken == null) {
-            return NextResponse.json({ status: false, message: "planillasToken requerido" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 400, "planillasToken requerido");
+            return NextResponse.json({ status: false, message: "planillasToken requerido" }, { status: 400 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: idNum } });
 
-        if (!marcaDia) return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
+        if (!marcaDia) {
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Marca del dia no encontrada");
+            return NextResponse.json({ status: false, message: "Marca del dia no encontrada" }, { status: 404 });
+        }
 
-        if (!marcaDia.empleadoFijo_id) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        if (!marcaDia.empleadoFijo_id) {
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoFijo_id } });
-        
-        if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+
+        if (!empleado) {
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
 
         const planillasResponse = await axios.post(`${process.env.PLANILLAS_URL}/marcas/revertir`, {
             marca_id: marcaDia.id,
@@ -57,7 +73,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         });
 
         if (!planillasResponse.data.success) {
-            return NextResponse.json({ status: false, message: "Error al marcar la salida en Planillas" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 500, "Error al marcar la salida en Planillas");
+            return NextResponse.json({ status: false, message: "Error al marcar la salida en Planillas" }, { status: 500 });
         }
 
         return NextResponse.json({ status: true, message: "Salida revertida correctamente" }, { status: 200 });
@@ -65,6 +82,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/attendance/[id]/revert-leaving", "PUT", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

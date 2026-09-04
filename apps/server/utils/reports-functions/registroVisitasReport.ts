@@ -241,7 +241,8 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
     const conIds = [...new Set(raw.map((r) => Number(r.contrato_id)).filter((n) => n > 0))];
-    const [emps, divs, cons] = await Promise.all([
+    const puestoSalidaIds = [...new Set(raw.map((r) => Number(r.puesto_salida_id)).filter((n) => n > 0))];
+    const [emps, divs, cons, puestosSalida] = await Promise.all([
         empIds.length
             ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empIds } }, select: { id: true, nombre: true } })
             : [],
@@ -249,20 +250,30 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
         conIds.length
             ? prisma.e_estructura_contrato.findMany({ where: { id: { in: conIds } }, select: { id: true, nombre: true } })
             : [],
+        puestoSalidaIds.length
+            ? prisma.e_estructura_puesto.findMany({ where: { id: { in: puestoSalidaIds } }, select: { id: true, nombre: true, codigo: true } })
+            : [],
     ]);
     const empMap = new Map(emps.map((e) => [e.id, e.nombre]));
     const divMap = new Map(divs.map((e) => [e.id, e.nombre]));
     const conMap = new Map(cons.map((e) => [e.id, e.nombre]));
-    return raw.map((r) => ({
-        ...r,
-        empresa_nombre: empMap.get(r.empresa_id) ?? "",
-        division_nombre: divMap.get(r.division_id) ?? "",
-        contrato_nombre: conMap.get(r.contrato_id) ?? "",
-        responsable_label: r.c_empleado
-            ? [r.c_empleado.nombre, r.c_empleado.primer_apellido, r.c_empleado.segundo_apellido].filter(Boolean).join(" ").trim() ||
-              r.c_empleado.codigo
-            : "",
-    }));
+    const puestoSalidaMap = new Map(puestosSalida.map((p) => [p.id, p]));
+    return raw.map((r) => {
+        const puestoSalida = r.puesto_salida_id ? puestoSalidaMap.get(Number(r.puesto_salida_id)) : null;
+        return {
+            ...r,
+            empresa_nombre: empMap.get(r.empresa_id) ?? "",
+            division_nombre: divMap.get(r.division_id) ?? "",
+            contrato_nombre: conMap.get(r.contrato_id) ?? "",
+            responsable_label: r.c_empleado
+                ? [r.c_empleado.nombre, r.c_empleado.primer_apellido, r.c_empleado.segundo_apellido].filter(Boolean).join(" ").trim() ||
+                  r.c_empleado.codigo
+                : "",
+            puesto_salida_nombre: puestoSalida
+                ? `${puestoSalida.codigo ? `${puestoSalida.codigo} - ` : ""}${puestoSalida.nombre}`
+                : "",
+        };
+    });
 }
 
 export async function queryRegistroVisitasRows(
@@ -284,7 +295,14 @@ export async function queryRegistroVisitasRows(
     if (filters.divisionIds?.length) where.division_id = { in: filters.divisionIds };
     if (filters.contratoIds?.length) where.contrato_id = { in: filters.contratoIds };
     if (filters.corpoIds?.length) where.corpo_id = { in: filters.corpoIds };
-    if (filters.puestoIds?.length) where.puesto_id = { in: filters.puestoIds };
+    if (filters.puestoIds?.length) {
+        // Una persona puede ingresar por un puesto y salir por otro: el filtro de puesto
+        // debe considerar tanto `puesto_id` (ingreso) como `puesto_salida_id` (salida).
+        where.OR = [
+            { puesto_id: { in: filters.puestoIds } },
+            { puesto_salida_id: { in: filters.puestoIds } },
+        ];
+    }
     if (filters.responsableIds?.length) where.responsable_id = { in: filters.responsableIds };
     if (filters.cedulaVisitante && filters.cedulaVisitante.trim() !== "") {
         where.cedula = { contains: filters.cedulaVisitante.trim() };
@@ -538,6 +556,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
         "Firma",
         "Hora entrada",
         "Hora salida",
+        "Puesto de salida",
         "Motivo / visita",
         "Depto / pers. visita",
         "Funcionario",
@@ -548,7 +567,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
     ];
     const fotoCedulaCol = 10;
     const firmaCol = 11;
-    const activosLinkCol = 20;
+    const activosLinkCol = 21;
 
     const h = wsMain.addRow(mainHeaders);
     styleConsolidadoHeaderRow(h);
@@ -571,6 +590,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
         { width: 22 },
         { width: 16 },
         { width: 16 },
+        { width: 22 },
         { width: 26 },
         { width: 28 },
         { width: 12 },
@@ -597,6 +617,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
             "",
             formatDt(r.hora_entrada),
             formatDt(r.hora_salida),
+            excelCellString(r.puesto_salida_nombre),
             excelCellString(r.razon_visita),
             [r.dep_pers_visita, r.pers_autoriza_salida].filter(Boolean).join(" / "),
             r.es_funcionario ? "Sí" : "No",

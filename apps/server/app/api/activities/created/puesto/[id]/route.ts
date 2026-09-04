@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../utils/prismaClient";
+import { reportError } from "../../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -13,7 +14,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const puestoId = Number(resolvedParams.id);
     if (!Number.isFinite(puestoId) || puestoId <= 0) {
-      return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
+      await reportError(req, "api/activities/created/puesto/[id]", "GET", 500, "Puesto inválido");
+      return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 500 });
     }
 
     const links = await callDynamicPrisma({
@@ -108,6 +110,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     return NextResponse.json({ status: true, actividades: enriched }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/puesto/[id]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

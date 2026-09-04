@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { fetchDynamicFile } from "../../../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export async function GET(
     const safeAudioName = path.basename(decodeURIComponent(audio));
 
     if (!incidentId || !aporteId || !safeAudioName) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-audio/[audio]", "GET", 400, "IDs o audio faltante");
       return NextResponse.json({ status: false, message: "IDs o audio faltante" }, { status: 400 });
     }
 
@@ -29,7 +31,10 @@ export async function GET(
           where: { id: aporteId, incidente_id: incidentId },
         },
       });
-      if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+      if (!aporte) {
+        await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-audio/[audio]", "GET", 404, "Aporte no encontrado");
+        return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+      }
 
       const fileRecord = await callDynamicPrisma({
         req,
@@ -40,7 +45,10 @@ export async function GET(
           where: { contribucion_id: aporteId, name: safeAudioName },
         },
       });
-      if (!fileRecord) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+      if (!fileRecord) {
+        await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-audio/[audio]", "GET", 404, "Archivo no encontrado");
+        return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+      }
     } catch (dbError: any) {
       const msg = String(dbError?.message || "");
       if (!msg.toLowerCase().includes("token no proporcionado")) {
@@ -65,6 +73,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/incidents/[id]/contributions/[contributionId]/get-audio/[audio]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]/get-audio/[audio]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

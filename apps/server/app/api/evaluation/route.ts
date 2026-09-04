@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
+import { reportError } from "../../../utils/reportError";
 
 export async function POST(req: NextRequest) {
     try {
@@ -22,16 +23,19 @@ export async function POST(req: NextRequest) {
                 multipartForm = formData;
                 const rawMeta = formData.get("metadata");
                 if (typeof rawMeta !== "string") {
+                    await reportError(req, "api/evaluation", "POST", 400, "metadata faltante o inválido");
                     return NextResponse.json({ message: "metadata faltante o inválido" }, { status: 400 });
                 }
                 body = JSON.parse(rawMeta);
             } catch {
+                await reportError(req, "api/evaluation", "POST", 400, "Cuerpo multipart inválido");
                 return NextResponse.json({ message: "Cuerpo multipart inválido" }, { status: 400 });
             }
         } else {
             try {
                 body = await req.json();
             } catch {
+                await reportError(req, "api/evaluation", "POST", 400, "JSON inválido");
                 return NextResponse.json({ message: "JSON inválido" }, { status: 400 });
             }
         }
@@ -76,14 +80,21 @@ export async function POST(req: NextRequest) {
         console.log("--------------------------------");
         if (!marca_id || !nombre_colaborador || !cedula_colaborador || !tipo || !empleado_id || !evaluador_id || !fecha_ingreso || !fecha_evaluacion || !evaluacion || !firma_evaluador) {
             console.log("Datos incompletos");
+            await reportError(req, "api/evaluation", "POST", 400, "Datos incompletos");
             return NextResponse.json({ message: "Datos incompletos" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
-        if (!marca || !marca.cliente_id) return NextResponse.json({ message: "Marca no encontrada o cliente" }, { status: 404 });
+        if (!marca || !marca.cliente_id) {
+            await reportError(req, "api/evaluation", "POST", 404, "Marca no encontrada o cliente");
+            return NextResponse.json({ message: "Marca no encontrada o cliente" }, { status: 404 });
+        }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marca.cliente_id } });
-        if (!cliente) return NextResponse.json({ message: "Cliente no encontrado" }, { status: 404 });
+        if (!cliente) {
+            await reportError(req, "api/evaluation", "POST", 404, "Cliente no encontrado");
+            return NextResponse.json({ message: "Cliente no encontrado" }, { status: 404 });
+        }
 
         const corpoIdToUse = corpo_id ?? marca.corpo_id;
         const puestoIdToUse = puesto_id ?? marca.puesto_id;
@@ -98,28 +109,59 @@ export async function POST(req: NextRequest) {
             divisionIdToUse == null || !Number.isFinite(divisionIdToUse) ||
             contratoIdToUse == null || !Number.isFinite(contratoIdToUse)
         ) {
+            await reportError(req, "api/evaluation", "POST", 400, "Jerarquía incompleta (empresa, cliente, división y contrato requeridos)");
             return NextResponse.json({ message: "Jerarquía incompleta (empresa, cliente, división y contrato requeridos)" }, { status: 400 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdToUse } });
-        if (!corpo) return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
+        if (!corpo) {
+            await reportError(req, "api/evaluation", "POST", 404, "Corpo no encontrado");
+            return NextResponse.json({ message: "Corpo no encontrado" }, { status: 404 });
+        }
 
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdToUse } });
-        if (!puesto) return NextResponse.json({ message: "Puesto no encontrado" }, { status: 404 });
+        if (!puesto) {
+            await reportError(req, "api/evaluation", "POST", 404, "Puesto no encontrado");
+            return NextResponse.json({ message: "Puesto no encontrado" }, { status: 404 });
+        }
 
         const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: plazaIdToUse } });
-        if (!plaza) return NextResponse.json({ message: "Plaza no encontrada" }, { status: 404 });
+        if (!plaza) {
+            await reportError(req, "api/evaluation", "POST", 404, "Plaza no encontrada");
+            return NextResponse.json({ message: "Plaza no encontrada" }, { status: 404 });
+        }
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
-        if (!empleado) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
-        if (empleado.fecha_contratacion == null) return NextResponse.json({ message: "Empleado no ha sido contratado" }, { status: 400 });
-        if (empleado.estado == "BA") return NextResponse.json({ message: "Empleado fue dado de baja" }, { status: 400 });
+        if (!empleado) {
+            await reportError(req, "api/evaluation", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
+        }
+        if (empleado.fecha_contratacion == null) {
+            await reportError(req, "api/evaluation", "POST", 400, "Empleado no ha sido contratado");
+            return NextResponse.json({ message: "Empleado no ha sido contratado" }, { status: 400 });
+        }
+        if (empleado.estado == "BA") {
+            await reportError(req, "api/evaluation", "POST", 400, "Empleado fue dado de baja");
+            return NextResponse.json({ message: "Empleado fue dado de baja" }, { status: 400 });
+        }
 
         const evaluador = await prisma.c_empleado.findUnique({ where: { id: evaluador_id } });
-        if (!evaluador) return NextResponse.json({ message: "Evaluador no encontrado" }, { status: 404 });
-        if (evaluador.fecha_contratacion == null) return NextResponse.json({ message: "Evaluador no ha sido contratado" }, { status: 400 });
-        if (evaluador.estado == "BA") return NextResponse.json({ message: "Evaluador fue dado de baja" }, { status: 400 });
-        if (!evaluador.nombre) return NextResponse.json({ message: "Evaluador no tiene nombre" }, { status: 400 });
+        if (!evaluador) {
+            await reportError(req, "api/evaluation", "POST", 404, "Evaluador no encontrado");
+            return NextResponse.json({ message: "Evaluador no encontrado" }, { status: 404 });
+        }
+        if (evaluador.fecha_contratacion == null) {
+            await reportError(req, "api/evaluation", "POST", 400, "Evaluador no ha sido contratado");
+            return NextResponse.json({ message: "Evaluador no ha sido contratado" }, { status: 400 });
+        }
+        if (evaluador.estado == "BA") {
+            await reportError(req, "api/evaluation", "POST", 400, "Evaluador fue dado de baja");
+            return NextResponse.json({ message: "Evaluador fue dado de baja" }, { status: 400 });
+        }
+        if (!evaluador.nombre) {
+            await reportError(req, "api/evaluation", "POST", 400, "Evaluador no tiene nombre");
+            return NextResponse.json({ message: "Evaluador no tiene nombre" }, { status: 400 });
+        }
 
         const evaluacion_empleado = await callDynamicPrisma({
             req,
@@ -167,6 +209,7 @@ export async function POST(req: NextRequest) {
                     for (const idx of uniqueSorted) {
                         const part = multipartForm.get(`file_${idx}`);
                         if (part == null || typeof part === "string") {
+                            await reportError(req, "api/evaluation", "POST", 400, `Archivo file_${idx} faltante`);
                             return NextResponse.json({ message: `Archivo file_${idx} faltante` }, { status: 400 });
                         }
                         const fileBlob = part as unknown as Blob;
@@ -184,6 +227,7 @@ export async function POST(req: NextRequest) {
                     const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
                     for (let i = 0; i < uniqueSorted.length; i++) {
                         if (!uploaded[i] || !uploaded[i].name) {
+                            await reportError(req, "api/evaluation", "POST", 500, "Error al subir imágenes");
                             return NextResponse.json({ message: "Error al subir imágenes" }, { status: 500 });
                         }
                     }
@@ -264,7 +308,8 @@ export async function POST(req: NextRequest) {
             });
         }
         if (!evaluacion_empleado) {
-            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 400 });
+            await reportError(req, "api/evaluation", "POST", 500, "No se pudo crear el registro");
+            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 500 });
         }
 
         const finalRow = await callDynamicPrisma({
@@ -309,6 +354,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/evaluation", "POST", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

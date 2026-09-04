@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../utils/reportError";
 
 function parseFechaInput(fecha: any): Date | undefined {
     if (!fecha) return undefined;
@@ -34,6 +35,7 @@ export async function PUT(
         const { id } = resolvedParams;
         const idNum = parseInt(String(id), 10);
         if (Number.isNaN(idNum)) {
+            await reportError(req, "api/induction-tour-record/[id]", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -69,12 +71,14 @@ export async function PUT(
             },
         });
         if (!existing) {
+            await reportError(req, "api/induction-tour-record/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
         const existingObj = existing as any;
 
         const fechaParsed = parseFechaInput(fecha);
         if (fecha !== undefined && fecha !== null && !fechaParsed) {
+            await reportError(req, "api/induction-tour-record/[id]", "PUT", 400, "Fecha inválida");
             return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
         }
 
@@ -89,6 +93,7 @@ export async function PUT(
         if (empleado_id !== undefined) {
             const empleadoIdNum = Number(empleado_id);
             if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
+                await reportError(req, "api/induction-tour-record/[id]", "PUT", 400, "empleado_id inválido");
                 return NextResponse.json({ status: false, message: "empleado_id inválido" }, { status: 400 });
             }
             updateData.empleado_id = empleadoIdNum;
@@ -183,7 +188,8 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/induction-tour-record/[id]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -200,6 +206,7 @@ export async function DELETE(
         const { id } = resolvedParams;
         const idNum = parseInt(String(id), 10);
         if (Number.isNaN(idNum)) {
+            await reportError(req, "api/induction-tour-record/[id]", "DELETE", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -213,6 +220,7 @@ export async function DELETE(
             },
         });
         if (!existing) {
+            await reportError(req, "api/induction-tour-record/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
@@ -277,7 +285,8 @@ export async function DELETE(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/induction-tour-record/[id]", "DELETE", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

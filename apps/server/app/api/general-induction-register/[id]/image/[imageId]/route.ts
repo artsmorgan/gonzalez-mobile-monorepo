@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,7 @@ export async function DELETE(
     const registroId = parseInt(String(resolvedParams.id), 10);
     const imageRowId = parseInt(String(resolvedParams.imageId), 10);
     if (Number.isNaN(registroId) || registroId <= 0 || Number.isNaN(imageRowId) || imageRowId <= 0) {
+      await reportError(req, "api/general-induction-register/[id]/image/[imageId]", "DELETE", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -32,6 +34,7 @@ export async function DELETE(
       },
     });
     if (!registro || (registro as any).isActive === false) {
+      await reportError(req, "api/general-induction-register/[id]/image/[imageId]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -45,6 +48,7 @@ export async function DELETE(
       },
     });
     if (!imgRow) {
+      await reportError(req, "api/general-induction-register/[id]/image/[imageId]", "DELETE", 404, "Imagen no encontrada");
       return NextResponse.json({ status: false, message: "Imagen no encontrada" }, { status: 404 });
     }
 
@@ -74,6 +78,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/general-induction-register/[id]/image/[imageId]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

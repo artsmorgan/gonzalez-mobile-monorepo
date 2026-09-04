@@ -2032,6 +2032,51 @@ export default function ChecklistSupervisionScreen() {
     );
   }, []);
 
+  /** Resuelve `supervisor_nombre` (nombre del empleado en `created_by`) vía `/api/empleados` para filas que aún no lo tienen. */
+  const enrichChecklistsWithSupervisorNames = useCallback(
+    async (rows: ChecklistSupervisionUI[]): Promise<ChecklistSupervisionUI[]> => {
+      const missingIds = Array.from(
+        new Set(
+          rows
+            .filter((r) => !String((r as any).supervisor_nombre ?? '').trim() && Number(r.created_by) > 0)
+            .map((r) => Number(r.created_by)),
+        ),
+      );
+      if (missingIds.length === 0) return rows;
+
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return rows;
+        const response = await authedFetch({
+          url: `${apiUrl}/api/empleados?ids=${missingIds.join(',')}`,
+          init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+          refreshAccessToken: () => refreshAccessTokenRef.current(),
+          logout: () => logoutRef.current(),
+        });
+        if (!response || !response.ok) return rows;
+        const result = await response.json().catch(() => null);
+        if (!result?.status || !Array.isArray(result.data)) return rows;
+
+        const nameById = new Map<number, string>();
+        for (const emp of result.data) {
+          const nombre = String(emp?.nombre ?? '').trim();
+          if (nombre) nameById.set(Number(emp.id), nombre);
+        }
+        if (nameById.size === 0) return rows;
+
+        return rows.map((r) => {
+          if (String((r as any).supervisor_nombre ?? '').trim()) return r;
+          const nombre = nameById.get(Number(r.created_by));
+          return nombre ? { ...r, supervisor_nombre: nombre } : r;
+        });
+      } catch (e) {
+        console.error('Error resolving supervisor names (ChecklistSupervision):', e);
+        return rows;
+      }
+    },
+    [],
+  );
+
   // Cargar checklists: caché por puesto (offline) + API (online). `checklists` queda acotado al puesto activo.
   const fetchChecklists = useCallback(async (scopeOverride?: ChecklistListPuestoScope | null) => {
     
@@ -2078,8 +2123,9 @@ export default function ChecklistSupervisionScreen() {
         const list = dedupeChecklistRows(
           normalizeApiChecklistRows(rawRows, puestoScope) as ChecklistSupervisionItem[],
         );
-        setChecklists(list as ChecklistSupervisionUI[]);
-        await mergeChecklistSupervisionServerIntoCacheForPuesto(puestoScope, list);
+        const enrichedList = await enrichChecklistsWithSupervisorNames(list as ChecklistSupervisionUI[]);
+        setChecklists(enrichedList);
+        await mergeChecklistSupervisionServerIntoCacheForPuesto(puestoScope, enrichedList);
       } else if (!result.status) {
         setError(result.message || 'Error al cargar checklists');
       }
@@ -2088,7 +2134,7 @@ export default function ChecklistSupervisionScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [normalizeApiChecklistRows]);
+  }, [normalizeApiChecklistRows, enrichChecklistsWithSupervisorNames]);
 
   const fetchChecklistsRef = useRef(fetchChecklists);
   fetchChecklistsRef.current = fetchChecklists;
@@ -3933,6 +3979,7 @@ export default function ChecklistSupervisionScreen() {
             firma_responsable: firmaResponsable,
             created_by: typeof employee?.id === 'number' ? employee.id : (employee?.id ? Number(employee.id) : 0),
             created_at: new Date(horaAccion).toISOString(),
+            supervisor_nombre: employee?.name ?? null,
             empleado_id: empleadoSel.id,
             empleado_nombre: empleadoSel.nombre,
             empleado_codigo: empleadoSel.codigo,
@@ -4307,6 +4354,7 @@ export default function ChecklistSupervisionScreen() {
     const horaFinStr = normalizeTimeToHHmm((it as any).hora_fin) || '—';
     const empleadoNombre = String((it as any).empleado_nombre ?? '').trim();
     const empleadoCodigo = String((it as any).empleado_codigo ?? '').trim();
+    const supervisorNombre = String((it as any).supervisor_nombre ?? '').trim();
     const evaluationSections = parseEvaluation(it.evaluacion);
 
     const lbl = resolveChecklistHierarchyLabels(structure, it.puesto_id);
@@ -4323,6 +4371,10 @@ export default function ChecklistSupervisionScreen() {
         <ThemedText style={styles.bitLine}>
           <ThemedText style={styles.bitLabel}>Fecha: </ThemedText>
           <ThemedText style={styles.bitValue}>{fechaStr}</ThemedText>
+        </ThemedText>
+        <ThemedText style={styles.bitLine}>
+          <ThemedText style={styles.bitLabel}>Supervisor: </ThemedText>
+          <ThemedText style={styles.bitValue}>{supervisorNombre || '—'}</ThemedText>
         </ThemedText>
         <ThemedText style={styles.bitLine}>
           <ThemedText style={styles.bitLabel}>Empleado: </ThemedText>
@@ -4813,25 +4865,44 @@ export default function ChecklistSupervisionScreen() {
                 />
               )}
 
-              <ThemedText style={styles.label}>Hora fin *</ThemedText>
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerFin(true)}>
-                <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaFin)}</ThemedText>
-                <Ionicons name="time-outline" size={18} color="#007AFF" />
-              </TouchableOpacity>
-              {showTimePickerFin && (
-                <DateTimePicker
-                  value={horaFin}
-                  mode="time"
-                  is24Hour={true}
-                  display="default"
-                  onChange={(_event, selectedDate) => {
-                    if (Platform.OS === 'android') setShowTimePickerFin(false);
-                    if (selectedDate) {
-                      setHoraFin(timeDateFromPicker(selectedDate));
-                    }
-                  }}
-                />
-              )}
+              <ThemedView style={styles.draftActionsRow}>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void saveFormDraft()}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  {isSavingFormDraft ? (
+                    <ActivityIndicator size="small" color="#007AFF" />
+                  ) : (
+                    <>
+                      <Ionicons name="bookmark-outline" size={16} color="#007AFF" />
+                      <ThemedText style={styles.draftActionButtonText}>Guardar borrador</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void saveFormDraft({ closeForm: true })}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  <Ionicons name="exit-outline" size={16} color="#007AFF" />
+                  <ThemedText style={styles.draftActionButtonText}>Guardar y cerrar</ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.draftActionButton, styles.draftActionReset, (isResettingFormDraft || isSubmitting) && styles.buttonDisabled]}
+                  onPress={() => void resetFormWithDraftClear()}
+                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
+                >
+                  {isResettingFormDraft ? (
+                    <ActivityIndicator size="small" color="#FF3B30" />
+                  ) : (
+                    <>
+                      <Ionicons name="refresh-outline" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.draftActionResetText}>Reestablecer</ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ThemedView>
 
               {showReportIncidentOption ? (
                 <ThemedView style={styles.reportIncidentBox}>
@@ -5248,44 +5319,25 @@ export default function ChecklistSupervisionScreen() {
                 </ThemedView>
               )}
 
-              <ThemedView style={styles.draftActionsRow}>
-                <TouchableOpacity
-                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
-                  onPress={() => void saveFormDraft()}
-                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
-                >
-                  {isSavingFormDraft ? (
-                    <ActivityIndicator size="small" color="#007AFF" />
-                  ) : (
-                    <>
-                      <Ionicons name="bookmark-outline" size={16} color="#007AFF" />
-                      <ThemedText style={styles.draftActionButtonText}>Guardar borrador</ThemedText>
-                    </>
-                  )}
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.draftActionButton, (isSavingFormDraft || isSubmitting) && styles.buttonDisabled]}
-                  onPress={() => void saveFormDraft({ closeForm: true })}
-                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
-                >
-                  <Ionicons name="exit-outline" size={16} color="#007AFF" />
-                  <ThemedText style={styles.draftActionButtonText}>Guardar y cerrar</ThemedText>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.draftActionButton, styles.draftActionReset, (isResettingFormDraft || isSubmitting) && styles.buttonDisabled]}
-                  onPress={() => void resetFormWithDraftClear()}
-                  disabled={isSavingFormDraft || isSubmitting || isRestoringFormDraft || isResettingFormDraft}
-                >
-                  {isResettingFormDraft ? (
-                    <ActivityIndicator size="small" color="#FF3B30" />
-                  ) : (
-                    <>
-                      <Ionicons name="refresh-outline" size={16} color="#FF3B30" />
-                      <ThemedText style={styles.draftActionResetText}>Reestablecer</ThemedText>
-                    </>
-                  )}
-                </TouchableOpacity>
-              </ThemedView>
+              <ThemedText style={styles.label}>Hora fin *</ThemedText>
+              <TouchableOpacity style={styles.dateButton} onPress={() => setShowTimePickerFin(true)}>
+                <ThemedText style={styles.dateButtonText}>{formatTimeHHmm(horaFin)}</ThemedText>
+                <Ionicons name="time-outline" size={18} color="#007AFF" />
+              </TouchableOpacity>
+              {showTimePickerFin && (
+                <DateTimePicker
+                  value={horaFin}
+                  mode="time"
+                  is24Hour={true}
+                  display="default"
+                  onChange={(_event, selectedDate) => {
+                    if (Platform.OS === 'android') setShowTimePickerFin(false);
+                    if (selectedDate) {
+                      setHoraFin(timeDateFromPicker(selectedDate));
+                    }
+                  }}
+                />
+              )}
 
               <ThemedView style={styles.formActions}>
                 <TouchableOpacity

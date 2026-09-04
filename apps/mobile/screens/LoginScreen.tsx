@@ -79,11 +79,11 @@ export default function LoginScreen() {
         } else {
           navigation.replace('MarcarIngresoSalida');
         }
+      } else if (result.passwordExpired) {
+        Alert.alert('Contraseña vencida', result.error || 'Su contraseña ha vencido y debe cambiarla.');
+        navigation.navigate('ForgotPassword');
       } else {
         Alert.alert('Error de autenticación', result.error || 'Credenciales incorrectas');
-        if (result.passwordExpired) {
-          navigation.navigate('ForgotPassword');
-        }
       }
     } catch (error) {
       Alert.alert('Error', 'Ocurrió un error inesperado');

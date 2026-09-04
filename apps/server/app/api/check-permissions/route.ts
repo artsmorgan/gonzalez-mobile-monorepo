@@ -3,6 +3,7 @@ import { actions } from "../../../public/actions";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(request: NextRequest) {
     try {
@@ -14,11 +15,13 @@ export async function GET(request: NextRequest) {
         const actionsInParams = searchParams.get("actions");
 
         if (!id) {
-            return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Usuario no especificado");
+            return NextResponse.json({ message: "Usuario no especificado" }, { status: 400 });
         }
         const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(id ?? "0") } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 401 });
+            await reportError(request, "api/check-permissions", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const empleado_plaza = await prisma.c_empleado_plaza.findMany({ where: { empleado_id: empleado.id } });
@@ -82,11 +85,13 @@ export async function GET(request: NextRequest) {
         }
 
         if (!id) {
-            return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Usuario no especificado");
+            return NextResponse.json({ message: "Usuario no especificado" }, { status: 400 });
         }
 
         if (!actionsInParams) {
-            return NextResponse.json({ message: "Acciones no especificadas" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Acciones no especificadas");
+            return NextResponse.json({ message: "Acciones no especificadas" }, { status: 400 });
         }
 
 
@@ -95,7 +100,8 @@ export async function GET(request: NextRequest) {
         // Verificar que todos los actionsInParams estén en el array de actions
         for (const action of actionParams) {
             if (!actions.find(a => a.nombre === action)) {
-                return NextResponse.json({ message: "Acción no encontrada" }, { status: 404 });
+                await reportError(request, "api/check-permissions", "GET", 400, "Acción no encontrada");
+                return NextResponse.json({ message: "Acción no encontrada" }, { status: 400 });
             }
         }
 
@@ -115,6 +121,7 @@ export async function GET(request: NextRequest) {
         return NextResponse.json(actionsForUserWithValidate, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(request, "api/check-permissions", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -28,6 +29,13 @@ export async function DELETE(
       .trim()
       .toLowerCase();
     if (!maintenanceId || (slot !== "antes" && slot !== "despues")) {
+      await reportError(
+        req,
+        "api/corporate-vehicles/maintenances/[maintenance_id]/image/[slot]",
+        "DELETE",
+        400,
+        "ID de mantenimiento o slot inválido (use antes|despues)"
+      );
       return NextResponse.json(
         { status: false, message: "ID de mantenimiento o slot inválido (use antes|despues)" },
         { status: 400 }
@@ -46,12 +54,14 @@ export async function DELETE(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]/image/[slot]", "DELETE", 404, "Mantenimiento no encontrado");
       return NextResponse.json({ status: false, message: "Mantenimiento no encontrado" }, { status: 404 });
     }
     const row = existing as any;
     const vehiculoId = Number(row.vehiculo_id);
     if (!vehiculoId) {
-      return NextResponse.json({ status: false, message: "vehiculo_id inválido" }, { status: 400 });
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]/image/[slot]", "DELETE", 500, "vehiculo_id inválido");
+      return NextResponse.json({ status: false, message: "vehiculo_id inválido" }, { status: 500 });
     }
 
     const fileName = String(row[field] ?? "").trim();
@@ -86,6 +96,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE /api/corporate-vehicles/maintenances/.../image/[slot]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]/image/[slot]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

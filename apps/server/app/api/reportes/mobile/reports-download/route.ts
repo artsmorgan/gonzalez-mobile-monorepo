@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicReportsDownload } from "../../../../../utils/callDynamicFilesApi";
 import { getAuthForDynamicReportesApi } from "../../../../../utils/callDynamicReportesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -23,15 +24,18 @@ export async function GET(req: NextRequest) {
         const ids = parseReportIdsParam(searchParams.get("ids") || searchParams.get("report_ids"));
 
         if (!ids.length) {
+            await reportError(req, "api/reportes/mobile/reports-download", "GET", 400, "ids es obligatorio");
             return NextResponse.json({ status: false, message: "ids es obligatorio" }, { status: 400 });
         }
 
         const { accessToken } = getAuthForDynamicReportesApi(req);
         const mobileAccessToken = (process.env.MOBILE_ACCESS_TOKEN || "").trim();
         if (!mobileAccessToken) {
+            await reportError(req, "api/reportes/mobile/reports-download", "GET", 500, "MOBILE_ACCESS_TOKEN no configurado");
             return NextResponse.json({ status: false, message: "MOBILE_ACCESS_TOKEN no configurado" }, { status: 500 });
         }
         if (!accessToken) {
+            await reportError(req, "api/reportes/mobile/reports-download", "GET", 401, "Token de acceso requerido");
             return NextResponse.json({ status: false, message: "Token de acceso requerido" }, { status: 401 });
         }
 
@@ -52,6 +56,7 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/reportes/mobile/reports-download:", errorMessage);
+        await reportError(req, "api/reportes/mobile/reports-download", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../../../utils/reportError";
 import fs from "fs";
 import path from "path";
 
@@ -19,7 +20,8 @@ export async function DELETE(
     const aporteId = parseInt(contributionId, 10);
     const archivoId = parseInt(fileId, 10);
     if (!incidentId || !aporteId || !archivoId) {
-      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 400, "IDs no especificados");
+      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 400 });
     }
 
     const file = await callDynamicPrisma({
@@ -31,7 +33,10 @@ export async function DELETE(
         where: { id: archivoId, contribucion_id: aporteId }
       }
     });
-    if (!file) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
+    if (!file) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 404, "Archivo no encontrado");
+      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+    }
 
     await callDynamicPrisma({
       req,
@@ -60,6 +65,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/incidents/[id]/contributions/[contributionId]/files/[fileId]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]/files/[fileId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(
     req: NextRequest,
@@ -15,6 +16,7 @@ export async function GET(
         const { corpo_id } = resolvedParams;
         const corpoIdNum = parseInt(String(corpo_id), 10);
         if (Number.isNaN(corpoIdNum)) {
+            await reportError(req, "api/induction-tour-record/corpo/[corpo_id]", "GET", 400, "Corpo inválido");
             return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
         }
 
@@ -49,7 +51,8 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+        await reportError(req, "api/induction-tour-record/corpo/[corpo_id]", "GET", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
     }
 }
 

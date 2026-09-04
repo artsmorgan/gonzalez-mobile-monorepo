@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { fetchArticuloCorpoPuestoOptions } from "../../../../../utils/nomenclatorsTipoMantenimientoArticulo";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/nomenclators/tipos-mantenimiento-articulos/options:", errorMessage);
+        await reportError(req, "api/nomenclators/tipos-mantenimiento-articulos/options", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

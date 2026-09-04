@@ -30,7 +30,6 @@ import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import Constants from 'expo-constants';
 import { Picker } from '@react-native-picker/picker';
-import * as DocumentPicker from 'expo-document-picker';
 import { useAuth } from '@/contexts/AuthContext';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -51,6 +50,7 @@ import { deleteFile, getFile, getLocalFileDisplayUri, saveFile } from '@/hooks/f
 import {
   readCorporateVehiclesForSucursalFromMainStructure,
   readCorporateVehiclesForSucursalFromFragmentStorage,
+  extractCorporateVehiclesForSucursalFromTree,
   mergeCorporateVehiclesForSucursalFromServer,
   upsertCorporateVehicleInMainStructure,
   moveCorporateVehicleInMainStructure,
@@ -860,7 +860,7 @@ export default function CorporateVehiclesScreen() {
   // cámara para fotos
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [isCameraVisible, setIsCameraVisible] = useState(false);
-  const [cameraType, setCameraType] = useState<'antes' | 'despues' | null>(null);
+  const [cameraType, setCameraType] = useState<'antes' | 'despues' | 'nueva_imagen' | null>(null);
   const cameraRef = useRef<any>(null);
 
   // signature modal para firma_mecanico
@@ -1787,15 +1787,18 @@ export default function CorporateVehiclesScreen() {
         return;
       }
 
-        const listFromFragment = await readCorporateVehiclesForSucursalFromFragmentStorage(Number(corpoId));
-        const listFromMainStructure = await readCorporateVehiclesForSucursalFromMainStructure(Number(corpoId));
+        // Usa el árbol ya cargado por fetchMainStructure() en vez de releer/re-mergear todo main_structure de nuevo.
+        const listFromMainStructure = extractCorporateVehiclesForSucursalFromTree(structureRef.current, Number(corpoId));
+        const [listFromFragment, fromCorpoCache, isConnected] = await Promise.all([
+          readCorporateVehiclesForSucursalFromFragmentStorage(Number(corpoId)),
+          getCorporateVehiclesForCorpo(Number(corpoId)),
+          getConnectionStatus(),
+        ]);
         const listOfflineSource = mergeCorporateVehicleDisplayLists(
           listFromFragment as VehicleRecord[],
           listFromMainStructure as VehicleRecord[]
         );
-        const fromCorpoCache = await getCorporateVehiclesForCorpo(Number(corpoId));
 
-      const isConnected = await getConnectionStatus();
       if (!isConnected) {
           setRecords(
             mergeCorporateVehicleDisplayLists(listOfflineSource, fromCorpoCache as VehicleRecord[])
@@ -1917,27 +1920,43 @@ export default function CorporateVehiclesScreen() {
     setSelectedPuestoId(v.puestoId ?? null);
   }, []);
 
+  // Refs con las últimas versiones de estas funciones: evita que useFocusEffect
+  // dispare una segunda petición inicial cuando `fetchRecords`/`syncMarcaFromStorage`
+  // cambian de identidad (p.ej. al setear los filtros desde la marca actual).
+  const syncMarcaFromStorageRef = useRef(syncMarcaFromStorage);
+  const runFetchRecordsRef = useRef(runFetchRecords);
+  const fetchRecordsRef = useRef(fetchRecords);
+  useEffect(() => {
+    syncMarcaFromStorageRef.current = syncMarcaFromStorage;
+  }, [syncMarcaFromStorage]);
+  useEffect(() => {
+    runFetchRecordsRef.current = runFetchRecords;
+  }, [runFetchRecords]);
+  useEffect(() => {
+    fetchRecordsRef.current = fetchRecords;
+  }, [fetchRecords]);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
       void (async () => {
         if (!listFiltersSyncedFromMarcaOnceRef.current) {
-          const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: true });
+          const snap = await syncMarcaFromStorageRef.current({ applyFiltersFromMarca: true });
           if (cancelled) return;
           listFiltersSyncedFromMarcaOnceRef.current = true;
-          if (snap) await runFetchRecords(snap);
-          else await fetchRecords();
+          if (snap) await runFetchRecordsRef.current(snap);
+          else await fetchRecordsRef.current();
         } else {
-          await fetchRecords();
+          await fetchRecordsRef.current();
         }
       })();
-      const handler = () => void fetchRecords();
+      const handler = () => void fetchRecordsRef.current();
       eventBus.on('connectionRestored', handler);
       return () => {
         cancelled = true;
         eventBus.off('connectionRestored', handler);
       };
-    }, [syncMarcaFromStorage, runFetchRecords, fetchRecords])
+    }, [])
   );
 
   const resetForm = () => {
@@ -3287,7 +3306,7 @@ export default function CorporateVehiclesScreen() {
   };
 
   // Funciones para cámara
-  const openCamera = async (type: 'antes' | 'despues') => {
+  const openCamera = async (type: 'antes' | 'despues' | 'nueva_imagen') => {
     if (!cameraPermission?.granted) {
       const result = await requestCameraPermission();
       if (!result.granted) {
@@ -3307,34 +3326,53 @@ export default function CorporateVehiclesScreen() {
         base64: false,
       });
       if (photo?.uri) {
-        const fileName = await saveFile({
-          uri: photo.uri,
-          originalName: `maintenance-${cameraType || 'image'}`,
-          extension: 'jpg',
-          type: 'image',
-          prefix: 'corporate_vehicle_maintenance',
-        });
-        const previewUri = getLocalFileDisplayUri(fileName) || photo.uri;
-        if (cameraType === 'antes') {
-          if (maintenanceImagenAntesRef) {
-            try {
-              await deleteFile(maintenanceImagenAntesRef);
-            } catch {
-              // ignore
-            }
-          }
-          setMaintenanceImagenAntesRef(fileName);
-          setMaintenanceImagenAntes(previewUri);
+        if (cameraType === 'nueva_imagen') {
+          const localFileName = await saveFile({
+            uri: photo.uri,
+            originalName: 'vehiculo-imagen',
+            extension: 'jpg',
+            type: 'image',
+            prefix: CORPORATE_VEHICLE_IMAGE_PREFIX,
+          });
+          const localId = `local_img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const newFile: LocalImage = {
+            id: localId,
+            name: `vehiculo-imagen-${localId}.jpg`,
+            extension: 'jpg',
+            mimeType: 'image/jpeg',
+            localFileName,
+          };
+          setImageFiles((p) => [...p, newFile]);
         } else {
-          if (maintenanceImagenDespuesRef) {
-            try {
-              await deleteFile(maintenanceImagenDespuesRef);
-            } catch {
-              // ignore
+          const fileName = await saveFile({
+            uri: photo.uri,
+            originalName: `maintenance-${cameraType || 'image'}`,
+            extension: 'jpg',
+            type: 'image',
+            prefix: 'corporate_vehicle_maintenance',
+          });
+          const previewUri = getLocalFileDisplayUri(fileName) || photo.uri;
+          if (cameraType === 'antes') {
+            if (maintenanceImagenAntesRef) {
+              try {
+                await deleteFile(maintenanceImagenAntesRef);
+              } catch {
+                // ignore
+              }
             }
+            setMaintenanceImagenAntesRef(fileName);
+            setMaintenanceImagenAntes(previewUri);
+          } else {
+            if (maintenanceImagenDespuesRef) {
+              try {
+                await deleteFile(maintenanceImagenDespuesRef);
+              } catch {
+                // ignore
+              }
+            }
+            setMaintenanceImagenDespuesRef(fileName);
+            setMaintenanceImagenDespues(previewUri);
           }
-          setMaintenanceImagenDespuesRef(fileName);
-          setMaintenanceImagenDespues(previewUri);
         }
       }
       setIsCameraVisible(false);
@@ -3630,44 +3668,7 @@ export default function CorporateVehiclesScreen() {
   };
 
   const handleAddImage = async () => {
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/*'],
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
-      if (result.canceled || !result.assets || result.assets.length === 0) return;
-
-      const asset = result.assets[0];
-      let extension = '';
-      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
-      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
-      const displayName = asset.name || `imagen.${extension || 'jpg'}`;
-      const stem = displayName.includes('.') ? displayName.slice(0, displayName.lastIndexOf('.')) : displayName;
-      const extNorm = String(extension || 'jpg').replace(/^\./, '');
-
-      const localFileName = await saveFile({
-        uri: asset.uri,
-        originalName: stem.trim() || 'imagen',
-        extension: extNorm,
-        type: 'image',
-        prefix: CORPORATE_VEHICLE_IMAGE_PREFIX,
-      });
-
-      const localId = `local_img_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const newFile: LocalImage = {
-        id: localId,
-        name: displayName,
-        extension: extNorm,
-        mimeType: asset.mimeType,
-        localFileName,
-      };
-
-      setImageFiles((p) => [...p, newFile]);
-    } catch (e) {
-      console.error('Error picking image (CorporateVehicles):', e);
-      Alert.alert('Error', 'No se pudo seleccionar la imagen.');
-    }
+    await openCamera('nueva_imagen');
   };
 
   const buildImagenesForOfflineQueueFromList = (list: LocalImage[]): any[] => {
@@ -4665,8 +4666,8 @@ export default function CorporateVehiclesScreen() {
                   : 'Las imágenes se guardan en el dispositivo y se suben al confirmar.'}
               </ThemedText>
               <TouchableOpacity style={styles.attachButton} onPress={handleAddImage} activeOpacity={0.85}>
-                <Ionicons name="image-outline" size={20} color="#007AFF" />
-                <ThemedText style={styles.attachButtonText}>Adjuntar imagen</ThemedText>
+                <Ionicons name="camera-outline" size={20} color="#007AFF" />
+                <ThemedText style={styles.attachButtonText}>Tomar foto</ThemedText>
               </TouchableOpacity>
 
               {imageFiles.length > 0 ? (

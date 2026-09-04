@@ -6,6 +6,7 @@ import { toZonedTime } from 'date-fns-tz';
 import { sendNotificationByRole } from '../../../utils/sendNotification';
 import { uploadDynamicFiles } from '../../../utils/callDynamicFilesApi';
 import { mapActaEntregaImagesForClient } from './mapActaEntregaImagesForClient';
+import { reportError } from '../../../utils/reportError';
 
 export const runtime = 'nodejs';
 
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: true, data: [] }, { status: 200 });
       }
     } else {
+      await reportError(req, "api/acta-entrega-productos", "GET", 400, "Debe especificar filtros jerárquicos");
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
@@ -91,6 +93,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/acta-entrega-productos", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }
@@ -138,12 +141,18 @@ export async function POST(req: NextRequest) {
       imagenes,
     } = await req.json();
 
-    if (!marca_id) return NextResponse.json({ status: false, message: 'Marca no especificada' }, { status: 400 });
+    if (!marca_id) {
+      await reportError(req, "api/acta-entrega-productos", "POST", 400, "Marca no especificada");
+      return NextResponse.json({ status: false, message: 'Marca no especificada' }, { status: 400 });
+    }
 
     const marcaDia = await prisma.c_marca_dia.findUnique({
       where: { id: parseInt(String(marca_id), 10) },
     });
-    if (!marcaDia) return NextResponse.json({ status: false, message: 'Marca no encontrada' }, { status: 404 });
+    if (!marcaDia) {
+      await reportError(req, "api/acta-entrega-productos", "POST", 404, "Marca no encontrada");
+      return NextResponse.json({ status: false, message: 'Marca no encontrada' }, { status: 404 });
+    }
 
     // Validaciones mínimas (campos NOT NULL en prisma). firma_entrega y firma_recibe son opcionales.
     const required: Array<[string, any]> = [
@@ -167,6 +176,7 @@ export async function POST(req: NextRequest) {
     ];
     for (const [k, v] of required) {
       if (v === undefined || v === null || String(v).trim().length === 0) {
+        await reportError(req, "api/acta-entrega-productos", "POST", 400, `El campo ${k} es requerido`);
         return NextResponse.json({ status: false, message: `El campo ${k} es requerido` }, { status: 400 });
       }
     }
@@ -349,6 +359,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error(errorMessage);
+    await reportError(req, "api/acta-entrega-productos", "POST", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

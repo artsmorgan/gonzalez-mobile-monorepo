@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
+import { reportError } from "../../../../../utils/reportError";
 
 const parseDateInputToDate = (input: unknown): Date | null => {
     if (!input) return null;
@@ -27,6 +28,7 @@ export async function PUT(
         const resolvedParams = await context.params;
         const idNum = parseInt(String(resolvedParams.id), 10);
         if (!idNum) {
+            await reportError(req, "api/permit-request/[id]/reject", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -40,11 +42,13 @@ export async function PUT(
             },
         });
         if (!existing) {
+            await reportError(req, "api/permit-request/[id]/reject", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
         const currentEmployeeId = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         if (!currentEmployeeId) {
+            await reportError(req, "api/permit-request/[id]/reject", "PUT", 400, "Empleado inválido");
             return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
         }
 
@@ -54,11 +58,13 @@ export async function PUT(
             Number(existing.ejecutivo_cuenta) === currentEmployeeId ||
             (myEjecutivoCuentaId != null && Number(existing.ejecutivo_cuenta) === myEjecutivoCuentaId);
         if (!isExecutive) {
-            return NextResponse.json({ status: false, message: "No autorizado para rechazar esta solicitud" }, { status: 403 });
+            await reportError(req, "api/permit-request/[id]/reject", "PUT", 400, "No autorizado para rechazar esta solicitud");
+            return NextResponse.json({ status: false, message: "No autorizado para rechazar esta solicitud" }, { status: 400 });
         }
 
         const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase();
         if (estadoActual !== "pendiente") {
+            await reportError(req, "api/permit-request/[id]/reject", "PUT", 400, "Solo se pueden rechazar solicitudes pendientes");
             return NextResponse.json({ status: false, message: "Solo se pueden rechazar solicitudes pendientes" }, { status: 400 });
         }
 
@@ -171,6 +177,7 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/permit-request/[id]/reject", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

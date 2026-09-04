@@ -18,6 +18,9 @@ import SignatureScreen from 'react-native-signature-canvas';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
+import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { saveFile, deleteFile, getLocalFileDisplayUri } from '@/hooks/fileStorage';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
@@ -36,7 +39,8 @@ import { RootStackParamList } from '../App';
 import { eventBus } from '@/hooks/eventBus';
 import getHoraAccion from '@/hooks/getHoraAccion';
 import { useQRScanner } from '@/hooks/useQRScanner';
-import { createAgendaMinuta, deleteAgendaMinuta, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
+import { createAgendaMinuta, deleteAgendaMinuta, deleteAgendaMinutaImage, listAgendaMinutaByCorpo, updateAgendaMinuta } from '@/hooks/evaluationFunctions';
+import { collectAgendaMinutaImageLocalFileNames, type AgendaMinutaImageRef } from '@/hooks/agendaMinutaImageHydration';
 import {
   filterAgendaFromEvaluationsCacheByCorpo,
   mergeEvaluationsCacheAgendaMinutaForCorpo,
@@ -81,6 +85,27 @@ type AgendaMinutaRecord = {
   cliente_nombre?: string | null;
   corpo_nombre?: string | null;
   puesto_nombre?: string | null;
+  /**
+   * Antes de sincronizar: referencias locales (`localFileName`, sin base64) — se muestran en el
+   * listado leyéndolas de expo-file-system. Tras sincronizar: metadata de servidor (`id`/`name`),
+   * mostradas vía "get-image" como el resto de módulos.
+   */
+  imagenes?: (
+    | { id: number; name: string; original_name: string }
+    | { localFileName: string; extension: string; original_name?: string }
+  )[];
+};
+
+type LocalAgendaImage = {
+  id: string;
+  extension: string;
+  original_name: string;
+  mimeType?: string;
+  /** Archivo local pendiente de subir (`fileStorage.saveFile`). */
+  localFileName?: string;
+  /** Imagen ya persistida en servidor. */
+  serverImageId?: number;
+  serverImageName?: string;
 };
 
 type ParticipanteItem = { id_local: string; nombre: string; puesto: string; firma: string | null };
@@ -121,6 +146,12 @@ function getNonEmptyLocalKey(value: any): string | null {
   return s.length > 0 ? s : null;
 }
 
+/**
+ * `payload.imagenes` (si viene) son referencias livianas (`localFileName`), nunca base64: la cola
+ * en `evaluations_actions` no debe llevar base64 en ninguna de sus formas. App.tsx borra esos
+ * archivos locales leyendo `action.payload.imagenes[].localFileName` una vez que la acción
+ * finalmente sincroniza.
+ */
 async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, payload: any) {
   const actionsStr = await AsyncStorage.getItem('evaluations_actions');
   let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
@@ -164,7 +195,7 @@ async function mergeOrPushAgendaMinutaCreateEvaluationsActions(localId: string, 
 }
 
 const getConnectionStatus = async (): Promise<boolean> => {
-  //return false;
+    //return false;
     const networkState = await Network.getNetworkStateAsync();
 
     return (
@@ -242,6 +273,26 @@ const safeJsonParse = <T,>(value: any, fallback: T): T => {
     return value as T;
   } catch {
     return fallback;
+  }
+};
+
+/**
+ * Quita la firma (imagen base64) de cada participante antes de persistir en `evaluations_cache`.
+ * El fetch por corpo trae TODOS los registros históricos del corpo en cada consulta, y cada firma
+ * pesa varios KB por participante: guardarlas todas indefinidamente en AsyncStorage es lo que
+ * termina llenando el almacenamiento local (SQLITE_FULL). Igual que las imágenes de la bitácora,
+ * la firma queda disponible en pantalla solo mientras el registro está en memoria (recién
+ * consultado); no se conserva en el caché en disco.
+ */
+const stripFirmaFromParticipantesJson = (value: any): any => {
+  if (typeof value !== 'string' || !value) return value;
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return value;
+    const stripped = parsed.map((p: any) => (p && typeof p === 'object' ? { ...p, firma: null } : p));
+    return JSON.stringify(stripped);
+  } catch {
+    return value;
   }
 };
 
@@ -337,7 +388,17 @@ const resolveHierarchyByPuestoId = (tree: StructureTree, puestoId: number | null
 };
 
 export default function PhysicalMinuteAgendaScreen() {
-  const { employee, refreshAccessToken, logout } = useAuth();
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  // `<Image>` no puede enviar cabecera Authorization: el token se agrega como query param,
+  // igual que en ChecklistSupervisionScreen.tsx/VehiclesScreen.tsx, porque el endpoint
+  // "get-image" lo exige ahí ("Token no proporcionado" si falta).
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
   const navigation = useNavigation<PhysicalMinuteAgendaScreenNavigationProp>();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
 
@@ -438,12 +499,20 @@ export default function PhysicalMinuteAgendaScreen() {
   const [firmaResponsable, setFirmaResponsable] = useState<string>('');
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
 
+  // imágenes (cámara + adjuntar), mismo patrón que otros módulos
+  const [agendaImagenes, setAgendaImagenes] = useState<LocalAgendaImage[]>([]);
+  const [isAgendaCameraVisible, setIsAgendaCameraVisible] = useState(false);
+  const [agendaCameraPermission, requestAgendaCameraPermission] = useCameraPermissions();
+  const agendaCameraRef = useRef<CameraView | null>(null);
+
   // UI collapsables in list items
   const [expandedParticipantesById, setExpandedParticipantesById] = useState<Record<string, boolean>>({});
   const [codigoParticipante, setCodigoParticipante] = useState<string>('');
   const [expandedAcuerdosById, setExpandedAcuerdosById] = useState<Record<string, boolean>>({});
   const [expandedTemasById, setExpandedTemasById] = useState<Record<string, boolean>>({});
   const [expandedFirmaById, setExpandedFirmaById] = useState<Record<string, boolean>>({});
+  const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
+  const [deletingImageKey, setDeletingImageKey] = useState<string | null>(null);
 
   // Modal: ver cambios (auditoría)
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
@@ -990,6 +1059,7 @@ export default function PhysicalMinuteAgendaScreen() {
     setAcuerdos([]);
     setTemasATratar([]);
     setFirmaResponsable('');
+    setAgendaImagenes([]);
   };
 
   const startCreate = async () => {
@@ -1087,6 +1157,215 @@ export default function PhysicalMinuteAgendaScreen() {
       }))
     );
     setFirmaResponsable(r.firma_responsable || '');
+    // Las imágenes no se cargan en el formulario de edición: solo se agregan al crear y se
+    // visualizan/eliminan desde la tarjeta del listado (sección colapsable con get-image).
+    setAgendaImagenes([]);
+  };
+
+  // --- Imágenes: cámara (1 o varias fotos) + adjuntar imágenes ---
+
+  const openAgendaCamera = async () => {
+    if (!agendaCameraPermission?.granted) {
+      const res = await requestAgendaCameraPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+        return;
+      }
+    }
+    setIsAgendaCameraVisible(true);
+  };
+
+  // Una foto por apertura de cámara (igual que ChecklistSupervisionScreen.tsx): se cierra de
+  // inmediato tras capturar; para otra foto, el usuario vuelve a abrir la cámara.
+  const captureAgendaPhoto = async () => {
+    if (!agendaCameraRef.current) return;
+    try {
+      const photo = await agendaCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+      setIsAgendaCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const localFileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'agenda-minuta-foto',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'agenda_minuta',
+      });
+      const localId = `local_img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setAgendaImagenes((prev) => [
+        ...prev,
+        {
+          id: localId,
+          localFileName,
+          extension: 'jpg',
+          mimeType: 'image/jpeg',
+          original_name: `foto_${Date.now()}.jpg`,
+        },
+      ]);
+    } catch (e: any) {
+      setIsAgendaCameraVisible(false);
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
+
+  const handleAttachAgendaImages = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'image/*',
+        multiple: true,
+        copyToCacheDirectory: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      for (const asset of result.assets) {
+        const extension =
+          String(asset.name || '').split('.').pop()?.toLowerCase() ||
+          String(asset.mimeType || '').split('/').pop()?.toLowerCase() ||
+          'jpg';
+        const localFileName = await saveFile({
+          uri: asset.uri,
+          originalName: asset.name || `imagen.${extension}`,
+          extension,
+          type: 'image',
+          prefix: 'agenda_minuta',
+        });
+        const localId = `local_img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        setAgendaImagenes((prev) => [
+          ...prev,
+          {
+            id: localId,
+            localFileName,
+            extension,
+            mimeType: asset.mimeType,
+            original_name: asset.name || `imagen.${extension}`,
+          },
+        ]);
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo adjuntar imagen(es)');
+    }
+  };
+
+  const removeAgendaImagen = (id: string) => {
+    const target = agendaImagenes.find((i) => i.id === id);
+    if (target?.localFileName) {
+      void deleteFile(target.localFileName).catch(() => {});
+    }
+    setAgendaImagenes((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const getAgendaImagenDisplayUri = (img: LocalAgendaImage): string => {
+    if (img.localFileName) {
+      return getLocalFileDisplayUri(img.localFileName) || '';
+    }
+    if (img.serverImageId && img.serverImageName && editingRecord && hasAgendaMinutaServerId(editingRecord)) {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (apiUrl) {
+        return appendTokenToUrl(
+          `${apiUrl}/api/agenda-minuta/${editingRecord.id}/get-image/${encodeURIComponent(img.serverImageName)}?t=${Date.now()}`
+        );
+      }
+    }
+    return '';
+  };
+
+  /** Convierte imágenes locales pendientes (no subidas aún) a base64 para el payload. */
+  /**
+   * Referencias livianas (sin base64) a las imágenes locales pendientes de subir. Nunca se lee su
+   * contenido aquí ni se guarda base64 en AsyncStorage: la hidratación a base64 ocurre dentro de
+   * `createAgendaMinuta`/`updateAgendaMinuta` (`hydrateAgendaMinutaRequestData`), justo antes de la
+   * petición real — igual en el envío inmediato en línea que cuando la acción en cola sincroniza
+   * después desde App.tsx. Mismo criterio que `checklistSupervisionEvaluationFiles.ts`.
+   */
+  const collectPendingAgendaImagenesRefs = (): AgendaMinutaImageRef[] => {
+    const refs: AgendaMinutaImageRef[] = [];
+    for (const img of agendaImagenes) {
+      if (img.serverImageId) continue;
+      if (!img.localFileName) continue;
+      refs.push({
+        localFileName: img.localFileName,
+        extension: img.extension,
+        original_name: img.original_name,
+      });
+    }
+    return refs;
+  };
+
+  /** Imagen vía get-image (lazy: solo se arma la URL cuando el collapsable está expandido). */
+  const getAgendaListImageUri = (recordId: number, img: { id: number; name: string }): string => {
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) return '';
+    return appendTokenToUrl(`${apiUrl}/api/agenda-minuta/${recordId}/get-image/${encodeURIComponent(img.name)}?t=${Date.now()}`);
+  };
+
+  const handleDeleteAgendaImage = async (record: AgendaMinutaRecord, img: { id: number; name: string; original_name: string }) => {
+    const recordId = Number(record.id);
+    if (!Number.isFinite(recordId) || recordId <= 0) {
+      Alert.alert('Aviso', 'Solo se pueden eliminar imágenes de registros ya sincronizados.');
+      return;
+    }
+    const imageKey = `${recordId}-${img.id}`;
+    setDeletingImageKey(imageKey);
+    try {
+      const isConnected = await getConnectionStatus();
+      if (isConnected) {
+        const res = await deleteAgendaMinutaImage({ agendaId: recordId, imageId: img.id, refreshAccessToken, logout });
+        if (!res.status) {
+          Alert.alert('Error', res.message || 'No se pudo eliminar la imagen');
+          return;
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+        const actions = actionsStr ? JSON.parse(actionsStr) : [];
+        actions.push({
+          id: String(record.id_local || recordId),
+          action: 'delete_image',
+          type: 'agenda_minuta',
+          payload: { imageId: img.id },
+          synced: false,
+          remote_id: recordId,
+        });
+        await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+      }
+
+      const filterOutImage = (imagenes: any) =>
+        Array.isArray(imagenes) ? imagenes.filter((i: any) => Number(i?.id) !== Number(img.id)) : [];
+
+      const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+      if (cacheStr) {
+        const cache = JSON.parse(cacheStr);
+        const updatedCache = cache.map((item: any) => {
+          const sameType = item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda';
+          const sameRecord =
+            Number(item.id) === recordId || String(item.id_local ?? '') === String(record.id_local ?? '');
+          return sameType && sameRecord ? { ...item, imagenes: filterOutImage(item.imagenes) } : item;
+        });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+      }
+
+      setRecords((prev) =>
+        prev.map((r) => {
+          const sameRecord = Number(r.id) === recordId || String(r.id_local ?? '') === String(record.id_local ?? '');
+          return sameRecord ? { ...r, imagenes: filterOutImage((r as any).imagenes) } : r;
+        }),
+      );
+
+      if (!isConnected) {
+        Alert.alert('Modo Offline', 'Eliminación de imagen encolada. Se sincronizará con conexión.');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'No se pudo eliminar la imagen');
+    } finally {
+      setDeletingImageKey(null);
+    }
+  };
+
+  const handleRequestDeleteAgendaImage = (record: AgendaMinutaRecord, img: { id: number; name: string; original_name: string }) => {
+    Alert.alert('Eliminar imagen', '¿Desea eliminar permanentemente esta imagen?', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Eliminar', style: 'destructive', onPress: () => void handleDeleteAgendaImage(record, img) },
+    ]);
   };
 
   const handleGenerateFirmaResponsable = async () => {
@@ -1291,7 +1570,15 @@ export default function PhysicalMinuteAgendaScreen() {
 
         if (data.status && Array.isArray(data.data)) {
           const merged = mergeEvaluationsCacheAgendaMinutaForCorpo(fullCache, data.data, searchCorpoIdNum);
-          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
+          // Se persiste sin las firmas de participantes (ver `stripFirmaFromParticipantesJson`).
+          // Los registros pendientes de sincronizar (`synced === false`) conservan su firma completa
+          // porque son locales y acotados; solo se recorta lo ya confirmado por el servidor.
+          const mergedForCache = merged.map((item: any) =>
+            isAgendaMinutaCacheType(item?.type) && item?.synced !== false
+              ? { ...item, participantes: stripFirmaFromParticipantesJson(item.participantes) }
+              : item
+          );
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(mergedForCache));
           const forList = filterAgendaFromEvaluationsCacheByCorpo(merged, searchCorpoIdNum);
           setRecords(forList as AgendaMinutaRecord[]);
         } else {
@@ -1485,7 +1772,35 @@ export default function PhysicalMinuteAgendaScreen() {
     setSubmitResponse(null);
 
     try {
-      const payload = buildRequestPayload();
+      const payload: any = buildRequestPayload();
+      // `payload.imagenes` NUNCA lleva base64 aquí: son referencias livianas a expo-file-system
+      // (`localFileName`). La hidratación a base64 ocurre dentro de create/updateAgendaMinuta justo
+      // antes de la petición real, tanto en el envío inmediato como en la cola de sincronización de
+      // App.tsx — así jamás se guarda base64 en AsyncStorage (mismo criterio que
+      // checklistSupervisionEvaluationFiles.ts).
+      const nuevasImagenesRefs = collectPendingAgendaImagenesRefs();
+      console.log(
+        `[PhysicalMinuteAgendaScreen] agendaImagenes=${agendaImagenes.length} nuevasImagenesRefs=${nuevasImagenesRefs.length}`,
+        nuevasImagenesRefs
+      );
+      if (nuevasImagenesRefs.length > 0) payload.imagenes = nuevasImagenesRefs;
+      // Una vez que la subida se confirma (en línea de inmediato) estos archivos locales ya
+      // quedaron respaldados en servidor y deben borrarse. Para la cola offline, App.tsx hace lo
+      // mismo leyendo `action.payload.imagenes[].localFileName` tras sincronizar.
+      const deleteSyncedLocalImages = async () => {
+        for (const fn of collectAgendaMinutaImageLocalFileNames(payload)) {
+          try {
+            await deleteFile(fn);
+          } catch {
+            /* idempotente */
+          }
+        }
+      };
+      // `evaluations_cache` (caché de listado) nunca debe llevar `imagenes`: antes de sincronizar
+      // tendría solo referencias locales (forma distinta a la metadata de servidor `{id,name}` que
+      // usa la sección de imágenes del listado); después de sincronizar, el listado obtiene las
+      // imágenes vía "get-image" como el resto de módulos.
+      const { imagenes: _imagenesParaSync, ...payloadForCache } = payload;
       const isConnected = await getConnectionStatus();
 
       if (editingRecord && hasAgendaMinutaServerId(editingRecord)) {
@@ -1511,17 +1826,19 @@ export default function PhysicalMinuteAgendaScreen() {
               ) {
                 return {
                   ...it,
-                  ...payload,
+                  ...payloadForCache,
                   id: Number(editingRecord.id),
                   id_local: editLocalKey || '',
                   synced: true,
                   type: 'agenda_minuta',
                   isActive: true,
+                  imagenes: res.data?.imagenes ?? it.imagenes ?? [],
                 };
               }
               return it;
             });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            await deleteSyncedLocalImages();
             Alert.alert('Éxito', res.message || 'Agenda minuta actualizada correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
@@ -1575,10 +1892,11 @@ export default function PhysicalMinuteAgendaScreen() {
           ) {
             return {
               ...it,
-              ...payload,
+              ...payloadForCache,
               id_local: queueKey,
               synced: false,
               type: 'agenda_minuta',
+              imagenes: payload.imagenes ?? it.imagenes ?? [],
             };
           }
           return it;
@@ -1606,16 +1924,18 @@ export default function PhysicalMinuteAgendaScreen() {
               ) {
                 return {
                   ...it,
-                  ...payload,
+                  ...payloadForCache,
                   id: Number.isFinite(createdId) && createdId > 0 ? createdId : it.id,
                   synced: true,
                   type: 'agenda_minuta',
                   isActive: true,
+                  imagenes: res.data?.imagenes ?? it.imagenes ?? [],
                 };
               }
               return it;
             });
             await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCacheDraft));
+            await deleteSyncedLocalImages();
             Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
             setTimeout(() => {
               cancelCreateOrEdit();
@@ -1640,10 +1960,11 @@ export default function PhysicalMinuteAgendaScreen() {
           if (it.id_local === draftLocalId && (it.type === 'agenda_minuta' || it.type === 'physical_minute_agenda')) {
             return {
               ...it,
-              ...payload,
+              ...payloadForCache,
               id_local: draftLocalId,
               synced: false,
               type: 'agenda_minuta',
+              imagenes: payload.imagenes ?? it.imagenes ?? [],
             };
           }
           return it;
@@ -1687,9 +2008,11 @@ export default function PhysicalMinuteAgendaScreen() {
             cliente_nombre: payload.cliente_nombre ?? null,
             corpo_nombre: payload.corpo_nombre ?? null,
             puesto_nombre: payload.puesto_nombre ?? null,
+            imagenes: res.data?.imagenes ?? [],
           };
           cacheOnline.push({ ...newCacheRecordOnline, type: 'agenda_minuta', isActive: true });
           await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cacheOnline));
+          await deleteSyncedLocalImages();
           Alert.alert('Éxito', res.message || 'Agenda minuta guardada correctamente');
           setTimeout(() => {
             cancelCreateOrEdit();
@@ -1735,6 +2058,7 @@ export default function PhysicalMinuteAgendaScreen() {
         cliente_nombre: payload.cliente_nombre ?? null,
         corpo_nombre: payload.corpo_nombre ?? null,
         puesto_nombre: payload.puesto_nombre ?? null,
+        imagenes: payload.imagenes ?? [],
       };
       cache.push({ ...newCacheRecord, type: 'agenda_minuta', isActive: true });
       await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
@@ -2067,6 +2391,75 @@ export default function PhysicalMinuteAgendaScreen() {
                   </ThemedView>
                 )}
 
+                <TouchableOpacity
+                  style={styles.collapseButton}
+                  onPress={() => setExpandedImagesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))}
+                  activeOpacity={0.8}
+                >
+                  <ThemedText style={styles.collapseButtonText}>
+                    Imágenes ({Array.isArray((r as any).imagenes) ? (r as any).imagenes.length : 0})
+                  </ThemedText>
+                  <Ionicons name={!!expandedImagesById[itemKey] ? 'chevron-up' : 'chevron-down'} size={18} color="#007AFF" />
+                </TouchableOpacity>
+                {!!expandedImagesById[itemKey] && (
+                  <ThemedView style={styles.collapsableContent}>
+                    {!Array.isArray((r as any).imagenes) || (r as any).imagenes.length === 0 ? (
+                      <ThemedText style={styles.detailLine}>Sin imágenes.</ThemedText>
+                    ) : (
+                      <ThemedView style={{ gap: 10 }}>
+                        {(r.imagenes as NonNullable<AgendaMinutaRecord['imagenes']>).map((img, idx) => {
+                          const recordId = Number(r.id);
+                          // Antes de sincronizar: referencia local (`localFileName`), se lee de
+                          // expo-file-system. Ya sincronizada: metadata de servidor (`id`/`name`),
+                          // vía "get-image" como el resto de módulos.
+                          if ('localFileName' in img && img.localFileName) {
+                            const imgKey = `local-${recordId || r.id_local}-${idx}`;
+                            const uri = getLocalFileDisplayUri(img.localFileName);
+                            if (!uri) return null;
+                            return (
+                              <ThemedView key={imgKey} style={{ position: 'relative' }}>
+                                <Image
+                                  source={{ uri }}
+                                  style={styles.questionImagePreviewList}
+                                  resizeMode="contain"
+                                />
+                                <ThemedView style={styles.agendaImagePendingBadge}>
+                                  <ThemedText style={styles.agendaImagePendingBadgeText}>
+                                    Pendiente de subir
+                                  </ThemedText>
+                                </ThemedView>
+                              </ThemedView>
+                            );
+                          }
+                          const serverImg = img as { id: number; name: string; original_name: string };
+                          const imgKey = `${recordId}-${serverImg.id}`;
+                          const uri = getAgendaListImageUri(recordId, serverImg);
+                          return (
+                            <ThemedView key={imgKey} style={{ position: 'relative' }}>
+                              <Image
+                                source={{ uri }}
+                                style={styles.questionImagePreviewList}
+                                resizeMode="contain"
+                              />
+                              <TouchableOpacity
+                                onPress={() => handleRequestDeleteAgendaImage(r, serverImg)}
+                                disabled={deletingImageKey === imgKey}
+                                style={styles.agendaImageDeleteButton}
+                              >
+                                {deletingImageKey === imgKey ? (
+                                  <ActivityIndicator size="small" color="#FF3B30" />
+                                ) : (
+                                  <Ionicons name="trash" size={22} color="#FF3B30" />
+                                )}
+                              </TouchableOpacity>
+                            </ThemedView>
+                          );
+                        })}
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+                )}
+
                 <ThemedView style={styles.actionButtons}>
                   <TouchableOpacity style={[styles.listItemButton, styles.editButton]} onPress={() => startEditing(r)} activeOpacity={0.85}>
                     <Ionicons name="pencil" size={18} color="#FFFFFF" />
@@ -2370,6 +2763,64 @@ export default function PhysicalMinuteAgendaScreen() {
               <ThemedText style={styles.addButtonText}>Agregar tema</ThemedText>
             </TouchableOpacity>
 
+            {/* Imágenes: solo al crear (no se cargan ni gestionan desde el formulario de edición). */}
+            {!editingRecord && (
+              <>
+                <ThemedText style={styles.formSectionTitle}>Imágenes (opcional)</ThemedText>
+                <ThemedView style={{ flexDirection: 'row', gap: 10 }}>
+                  <TouchableOpacity
+                    style={[styles.firmaBlueButton, { backgroundColor: '#34C759' }]}
+                    onPress={openAgendaCamera}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="camera" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.firmaBlueButtonText}>Tomar</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.firmaBlueButton} onPress={handleAttachAgendaImages} activeOpacity={0.85}>
+                    <Ionicons name="image" size={18} color="#FFFFFF" />
+                    <ThemedText style={styles.firmaBlueButtonText}>Adjuntar</ThemedText>
+                  </TouchableOpacity>
+                </ThemedView>
+                {agendaImagenes.length > 0 && (
+                  <ThemedView style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 }}>
+                    {agendaImagenes.map((img) => {
+                      const uri = getAgendaImagenDisplayUri(img);
+                      return (
+                        <ThemedView key={img.id} style={{ width: 100 }}>
+                          {uri ? (
+                            <Image
+                              source={{ uri }}
+                              style={{ width: 100, height: 100, borderRadius: 8, backgroundColor: '#eee' }}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <ThemedView
+                              style={{
+                                width: 100,
+                                height: 100,
+                                borderRadius: 8,
+                                backgroundColor: '#eee',
+                                justifyContent: 'center',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Ionicons name="image-outline" size={28} color="#999" />
+                            </ThemedView>
+                          )}
+                          <TouchableOpacity
+                            onPress={() => removeAgendaImagen(img.id)}
+                            style={{ position: 'absolute', top: -6, right: -6 }}
+                          >
+                            <Ionicons name="close-circle" size={22} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      );
+                    })}
+                  </ThemedView>
+                )}
+              </>
+            )}
+
             <ThemedText style={styles.formSectionTitle}>Firma responsable *</ThemedText>
             <ThemedText style={styles.smallHint}>Debe generar una firma (GPS + sesión) o escanear un QR.</ThemedText>
             <ThemedView style={styles.firmaButtonsRow}>
@@ -2649,6 +3100,39 @@ export default function PhysicalMinuteAgendaScreen() {
         </View>
       </Modal>
 
+      <Modal
+        visible={isAgendaCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsAgendaCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          {agendaCameraPermission?.granted ? (
+            <CameraView ref={agendaCameraRef} style={{ flex: 1 }} facing="back">
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsAgendaCameraVisible(false)}
+              >
+                <Ionicons name="close" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureAgendaPhoto}>
+                <ThemedView style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <ThemedView style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>Se requiere permiso de cámara</ThemedText>
+              <TouchableOpacity
+                style={styles.cameraPermissionBtn}
+                onPress={requestAgendaCameraPermission}
+                activeOpacity={0.85}
+              >
+                <ThemedText style={styles.cameraPermissionBtnText}>Solicitar permiso</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          )}
+        </ThemedView>
+      </Modal>
+
       {QRScannerComponent}
       <AppFooter />
     </ThemedView>
@@ -2878,6 +3362,32 @@ const styles = StyleSheet.create({
   collapseButtonText: { fontSize: 13, fontWeight: '700', color: '#007AFF' },
   collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
   detailLine: { marginBottom: 6, color: '#000' },
+  // Mismo tamaño que ChecklistSupervisionScreen.tsx (questionImagePreviewList): ancho completo
+  // y alto grande, en vez de miniaturas pequeñas.
+  questionImagePreviewList: {
+    width: '100%',
+    height: 220,
+    borderRadius: 8,
+    backgroundColor: '#eee',
+  },
+  agendaImageDeleteButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderRadius: 16,
+    padding: 4,
+  },
+  agendaImagePendingBadge: {
+    position: 'absolute',
+    bottom: 8,
+    left: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  agendaImagePendingBadgeText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
 
   actionButtons: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginTop: 10 },
   listItemButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, borderRadius: 10 },
@@ -2943,6 +3453,37 @@ const styles = StyleSheet.create({
   signatureAcceptButton: { backgroundColor: '#007AFF' },
   signatureModalButtonText: { fontSize: 14, fontWeight: '800', color: '#000' },
   signatureAcceptButtonText: { color: '#FFFFFF' },
+
+  // camera modal (imágenes de agenda minuta)
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 20,
+    padding: 6,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFFFFF',
+  },
+  cameraPermissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+  cameraPermissionText: { fontSize: 16, color: '#FFFFFF', marginBottom: 20, textAlign: 'center' },
+  cameraPermissionBtn: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+  cameraPermissionBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
 });
 
 

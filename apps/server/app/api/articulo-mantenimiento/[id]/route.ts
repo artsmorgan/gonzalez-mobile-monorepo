@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -16,7 +17,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
-    if (!id) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!id) {
+      await reportError(req, "api/articulo-mantenimiento/[id]", "PUT", 500, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 500 });
+    }
 
     const body = await req.json();
     const {
@@ -71,7 +75,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     if (hora_accion) {
       const parsed = new Date(hora_accion);
       if (isNaN(parsed.getTime())) {
-        return NextResponse.json({ status: false, message: "hora_accion inválida" }, { status: 200 });
+        await reportError(req, "api/articulo-mantenimiento/[id]", "PUT", 400, "hora_accion inválida");
+        return NextResponse.json({ status: false, message: "hora_accion inválida" }, { status: 400 });
       }
       actionTime = parsed;
     }
@@ -358,7 +363,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         filesParsed = typeof files === "string" ? JSON.parse(files) : files;
       } catch (err) {
         console.error("Error parsing files JSON:", err);
-        return NextResponse.json({ status: false, message: "Formato de archivos inválido" }, { status: 200 });
+        await reportError(req, "api/articulo-mantenimiento/[id]", "PUT", 400, "Formato de archivos inválido");
+        return NextResponse.json({ status: false, message: "Formato de archivos inválido" }, { status: 400 });
       }
 
       const validFiles = filesParsed.filter((f) => f?.file_base64 && f?.extension && f?.type);
@@ -447,6 +453,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/articulo-mantenimiento/[id]:", errorMessage);
+    await reportError(req, "api/articulo-mantenimiento/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

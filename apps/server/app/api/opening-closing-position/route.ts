@@ -6,6 +6,7 @@ import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -66,6 +67,7 @@ export async function POST(req: NextRequest) {
         } = await req.json();
 
         if (!marca_id) {
+            await reportError(req, "api/opening-closing-position", "POST", 400, "Marca no especificada");
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
@@ -73,6 +75,7 @@ export async function POST(req: NextRequest) {
             where: { id: parseInt(String(marca_id), 10) },
         });
         if (!marcaDia) {
+            await reportError(req, "api/opening-closing-position", "POST", 404, "Marca no encontrada");
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
         const marcaDiaObj = marcaDia as any;
@@ -95,6 +98,7 @@ export async function POST(req: NextRequest) {
         ];
         for (const [k, v] of required) {
             if (v === undefined || v === null || String(v).trim().length === 0) {
+                await reportError(req, "api/opening-closing-position", "POST", 400, `El campo ${k} es requerido`);
                 return NextResponse.json({ status: false, message: `El campo ${k} es requerido` }, { status: 400 });
             }
         }
@@ -321,6 +325,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/opening-closing-position", "POST", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 }

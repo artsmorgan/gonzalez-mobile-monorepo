@@ -7,6 +7,7 @@ import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 import axios from "axios";
 import { parseMarcaIdsArray, ymdFromFecha } from "../../../../../utils/mutuosAcuerdosMarcas";
+import { reportError } from "../../../../../utils/reportError";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -44,11 +45,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
     if (!planillasToken) {
-      return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Token de Planillas no encontrado");
+      return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 400 });
     }
 
     const body = await req.json();
@@ -56,6 +61,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const firmaManual = String(body?.firma_ejecutivo_cuenta_manual || "").trim();
     const horaAccion = parseDateInputToDate(body?.hora_accion);
     if (!firmaDigital || firmaDigital.length < 10 || !firmaManual || firmaManual.length < 10) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Se requiere la firma digital y la firma manual del ejecutivo");
       return NextResponse.json({ status: false, message: "Se requiere la firma digital y la firma manual del ejecutivo" }, { status: 400 });
     }
 
@@ -63,14 +69,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       req,
       data: { action: "GET", table: "e_mutuos_acuerdos", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase() || "pendiente";
     if (estadoActual !== "pendiente") {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Solo se puede aprobar un mutuo acuerdo pendiente");
       return NextResponse.json({ status: false, message: "Solo se puede aprobar un mutuo acuerdo pendiente" }, { status: 400 });
     }
 
     if (existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Este mutuo acuerdo ya fue firmado por el ejecutivo");
       return NextResponse.json(
         { status: false, message: "Este mutuo acuerdo ya fue firmado por el ejecutivo" },
         { status: 400 }
@@ -78,17 +89,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     }
 
     if (!existing.ausente_acepta || !existing.reemplaza_acepta) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Ambos empleados deben aceptar antes de firmar");
       return NextResponse.json({ status: false, message: "Ambos empleados deben aceptar antes de firmar" }, { status: 400 });
     }
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
-    if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    if (!currentEmployeeId) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "Empleado inválido");
+      return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    }
 
     const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
     const canSign = myEjecutivoCuentaId !== null && Number(myEjecutivoCuentaId) === Number(existing.ejecutivo_cuenta);
     if (!canSign) {
-      return NextResponse.json({ status: false, message: "No autorizado para firmar este mutuo acuerdo" }, { status: 403 });
+      await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, "No autorizado para firmar este mutuo acuerdo");
+      return NextResponse.json({ status: false, message: "No autorizado para firmar este mutuo acuerdo" }, { status: 400 });
     }
 
     const updated = await callDynamicPrisma({
@@ -140,7 +156,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         : null;
 
       if ((!fechaAusente && !marcaAusente) || (!fechaReemplaza && !marcaReemplaza)) {
-        return NextResponse.json({ status: false, message: "Marca ausente o reemplaza no encontrada" }, { status: 200 });
+        await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 404, "Marca ausente o reemplaza no encontrada");
+        return NextResponse.json({ status: false, message: "Marca ausente o reemplaza no encontrada" }, { status: 404 });
       }
 
       const fechaAusenteFinal =
@@ -148,7 +165,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       const fechaReemplazaFinal =
         fechaReemplaza || (marcaReemplaza?.fecha ? new Date(marcaReemplaza.fecha).toISOString().split("T")[0] : null);
       if (!fechaAusenteFinal || !fechaReemplazaFinal) {
-        return NextResponse.json({ status: false, message: "Fechas del mutuo acuerdo no disponibles" }, { status: 200 });
+        await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 500, "Fechas del mutuo acuerdo no disponibles");
+        return NextResponse.json({ status: false, message: "Fechas del mutuo acuerdo no disponibles" }, { status: 500 });
       }
 
       const coordinador = await callDynamicPrisma({
@@ -162,7 +180,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
 
       if (!coordinador) {
-        return NextResponse.json({ status: false, message: "Coordinador no encontrado" }, { status: 200 });
+        await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 404, "Coordinador no encontrado");
+        return NextResponse.json({ status: false, message: "Coordinador no encontrado" }, { status: 404 });
       }
 
       const body = {
@@ -185,7 +204,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       });
 
       if (!planillasResponse.data.success) {
-          return NextResponse.json({ status: false, message: "Error al crear el cambio de guardia en Planillas" }, { status: 200 });
+          await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 500, "Error al crear el cambio de guardia en Planillas");
+          return NextResponse.json({ status: false, message: "Error al crear el cambio de guardia en Planillas" }, { status: 500 });
       }
 
       const cambioGuardiaCreated = await prisma.c_cambio_guardia.findUnique({ where: { id: planillasResponse.data.data.id } });
@@ -309,6 +329,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos/[id]/firma-ejecutivo", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

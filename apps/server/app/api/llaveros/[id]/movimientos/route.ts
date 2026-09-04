@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../utils/reportError";
 
 function parseDateOnly(value: any): Date | null {
     if (!value) return null;
@@ -73,14 +74,23 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const resolvedParams = await context.params;
         const llaveroId = parseInt(resolvedParams.id);
-        if (!llaveroId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+        if (!llaveroId) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "GET", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
 
         const marcaIdStr = req.nextUrl.searchParams.get("m");
-        if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        if (!marcaIdStr) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
         const marcaId = parseInt(marcaIdStr);
 
         const own = await validateLlaveroOwnership(req, llaveroId, marcaId);
-        if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+        if (!own.ok) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "GET", 404, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 404 });
+        }
 
         const rows = await callDynamicPrisma({
             req,
@@ -97,6 +107,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/llaveros/[id]/movimientos:", errorMessage);
+        await reportError(req, "api/llaveros/[id]/movimientos", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -108,13 +119,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
         const resolvedParams = await context.params;
         const llaveroId = parseInt(resolvedParams.id);
-        if (!llaveroId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+        if (!llaveroId) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
 
         const llavero = await callDynamicPrisma({
             req,
             data: { action: "GET", table: "e_llavero", operation: "findUnique", where: { id: llaveroId } }
         });
-        if (!llavero) return NextResponse.json({ status: false, message: "Llavero no encontrado" }, { status: 200 });
+        if (!llavero) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 404, "Llavero no encontrado");
+            return NextResponse.json({ status: false, message: "Llavero no encontrado" }, { status: 404 });
+        }
 
         const body = await req.json();
         const {
@@ -130,14 +147,23 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             firma_responsable,
         } = body ?? {};
 
-        if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        if (!marca_id) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
 
         const own = await validateLlaveroOwnership(req, llaveroId, parseInt(String(marca_id)));
-        if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+        if (!own.ok) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 404, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 404 });
+        }
 
         const fechaDate = parseDateOnly(fecha);
         const horaNormRes = normalizeHoraMovimientoInput(hora);
-        if (!fechaDate || !horaNormRes.ok) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 500 });
+        if (!fechaDate || !horaNormRes.ok) {
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 400, "Fecha u hora inválida");
+            return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 400 });
+        }
         const horaNormalized = horaNormRes.horaNormalized;
 
         const requiredStrings = [
@@ -148,7 +174,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             firma_responsable,
         ];
         if (requiredStrings.some((v) => typeof v !== "string" || v.trim().length === 0)) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/llaveros/[id]/movimientos", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         const created = await callDynamicPrisma({
@@ -311,6 +338,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in POST /api/llaveros/[id]/movimientos:", errorMessage);
+        await reportError(req, "api/llaveros/[id]/movimientos", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

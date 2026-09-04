@@ -7,6 +7,7 @@ import { sendNotificationByEmployee, sendNotificationByRole } from "../../../../
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -43,9 +44,10 @@ export async function POST(
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 400, "Manual no especificado");
             return NextResponse.json(
                 { status: false, message: "Manual no especificado" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -59,24 +61,27 @@ export async function POST(
             },
         });
         if (!manual) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Manual no encontrado");
             return NextResponse.json(
                 { status: false, message: "Manual no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
         const manualObj = manual as any;
         if (manualObj.isActive === false) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "El manual no está disponible");
             return NextResponse.json(
                 { status: false, message: "El manual no está disponible" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
         const { firma_empleado, marca_id, quiz_answear, files } = await req.json();
         if (!firma_empleado || !marca_id) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 400, "Firma del empleado requerida");
             return NextResponse.json(
                 { status: false, message: "Firma del empleado requerida" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -93,9 +98,10 @@ export async function POST(
                 }
             } catch (err) {
                 console.error("Error parsing files JSON (sign):", err);
+                await reportError(req, "api/job-manuals/[id]/sign", "POST", 400, "Formato de archivos inválido");
                 return NextResponse.json(
                     { status: false, message: "Formato de archivos inválido" },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
         }
@@ -104,18 +110,20 @@ export async function POST(
             where: { id: marca_id },
         });
         if (!marca) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Marca no encontrada");
             return NextResponse.json(
                 { status: false, message: "Marca no encontrada" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
         const marcaObj = marca as any;
         const empleadoId = marcaObj.empleadoFijo_id;
         if (!empleadoId) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Empleado no encontrado");
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -124,9 +132,10 @@ export async function POST(
         });
 
         if (!empleado) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Empleado no encontrado");
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -135,9 +144,10 @@ export async function POST(
             where: { id: manualObj.puesto_id },
         });
         if (!puesto) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Puesto no encontrado");
             return NextResponse.json(
                 { status: false, message: "Puesto no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -146,9 +156,10 @@ export async function POST(
             where: { id: marcaObj.corpo_id },
         });
         if (!corpo) {
+            await reportError(req, "api/job-manuals/[id]/sign", "POST", 404, "Sucursal no encontrada");
             return NextResponse.json(
                 { status: false, message: "Sucursal no encontrada" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -301,6 +312,7 @@ export async function POST(
             "Error in POST /api/job-manuals/[id]/sign:",
             errorMessage
         );
+        await reportError(req, "api/job-manuals/[id]/sign", "POST", 500, errorMessage);
         return NextResponse.json(
             { status: false, message: errorMessage },
             { status: 500 }

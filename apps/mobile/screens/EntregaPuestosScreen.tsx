@@ -84,6 +84,7 @@ interface EntregaPuestosInfo {
     id: number;
     nombre: string;
     codigo?: string | null;
+    cedula?: string | null;
     /** Base64 (o data-URL) de la foto de Planillas del oficial que entrega. */
     foto?: string | null;
   };
@@ -92,6 +93,7 @@ interface EntregaPuestosInfo {
     id: number;
     nombre: string;
     codigo?: string | null;
+    cedula?: string | null;
     /** Base64 (o data-URL) de la foto de Planillas del oficial que recibe. */
     foto?: string | null;
   };
@@ -1238,6 +1240,7 @@ export default function EntregaPuestosScreen() {
       { label: 'Sucursal', value: currentMarca.corpo.nombre },
       { label: 'Puesto', value: currentMarca.puesto.nombre },
       { label: 'Oficial', value: info.previous_employee.nombre },
+      { label: 'Cédula', value: info.previous_employee.cedula || 'No definida' },
       { label: 'Fecha', value: fechaEntradaEntrega },
       { label: 'Hora entrada', value: horaEntradaEntrega.split('T')[1] },
       { label: 'Hora salida', value: horaSalidaEntrega.split('T')[1] },
@@ -1250,6 +1253,7 @@ export default function EntregaPuestosScreen() {
     { label: 'Sucursal', value: currentMarca.corpo.nombre },
     { label: 'Puesto', value: currentMarca.puesto.nombre },
     { label: 'Oficial', value: employee?.name || 'Desconocido' },
+    { label: 'Cédula', value: employee?.cedula || 'No definida' },
     { label: 'Fecha', value: fechaEntradaRecibe },
     { label: 'Hora entrada', value: horaEntradaRecibe.split('T')[1] },
     { label: 'Hora salida', value: horaSalidaRecibe.split('T')[1] },

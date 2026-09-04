@@ -6,6 +6,7 @@ import {
   parseInformacionRevision,
   removeImageFromRevisionJson,
 } from "../../../../../../utils/bitacoraRevisionImages";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,7 @@ export async function DELETE(
     const revisionKey = String(req.nextUrl.searchParams.get("revisionKey") || "").trim();
 
     if (!bitacoraId || !imageName || !revisionKey) {
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]/image/[image]", "DELETE", 400, "ID, imagen o revisionKey inválidos");
       return NextResponse.json(
         { status: false, message: "ID, imagen o revisionKey inválidos" },
         { status: 400 }
@@ -45,6 +47,7 @@ export async function DELETE(
       },
     });
     if (!existing) {
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]/image/[image]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -58,6 +61,7 @@ export async function DELETE(
     const prevEntry = prevArr.find((e: any) => String(e?.key) === revisionKey);
     const prevImgs = Array.isArray(prevEntry?.images) ? prevEntry.images : [];
     if (!prevImgs.some((x: unknown) => String(x) === imageName)) {
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]/image/[image]", "DELETE", 404, "Imagen no encontrada en revisión");
       return NextResponse.json({ status: false, message: "Imagen no encontrada en revisión" }, { status: 404 });
     }
 
@@ -92,6 +96,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE bitacora revision image:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido/[id]/image/[image]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

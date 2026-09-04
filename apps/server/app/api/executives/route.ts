@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -16,6 +17,7 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/executives", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

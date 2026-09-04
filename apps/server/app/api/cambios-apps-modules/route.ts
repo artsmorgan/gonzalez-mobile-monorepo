@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { enrichCambiosAppsModulesRows } from "../../../utils/enrichCambiosAppsModules";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -16,14 +17,17 @@ export async function GET(req: NextRequest) {
         const registroIdStr = req.nextUrl.searchParams.get("registro_id") ?? req.nextUrl.searchParams.get("id");
 
         if (!tabla || tabla.trim().length === 0) {
-            return NextResponse.json({ status: false, message: "Tabla no especificada" }, { status: 200 });
+            await reportError(req, "api/cambios-apps-modules", "GET", 400, "Tabla no especificada");
+            return NextResponse.json({ status: false, message: "Tabla no especificada" }, { status: 400 });
         }
         if (!registroIdStr) {
-            return NextResponse.json({ status: false, message: "Registro no especificado" }, { status: 200 });
+            await reportError(req, "api/cambios-apps-modules", "GET", 400, "Registro no especificado");
+            return NextResponse.json({ status: false, message: "Registro no especificado" }, { status: 400 });
         }
         const registro_id = parseInt(registroIdStr);
         if (!Number.isFinite(registro_id)) {
-            return NextResponse.json({ status: false, message: "Registro inválido" }, { status: 200 });
+            await reportError(req, "api/cambios-apps-modules", "GET", 400, "Registro inválido");
+            return NextResponse.json({ status: false, message: "Registro inválido" }, { status: 400 });
         }
 
         type CambioRow = {
@@ -95,6 +99,7 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/cambios-apps-modules:", errorMessage);
+        await reportError(req, "api/cambios-apps-modules", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

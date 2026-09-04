@@ -7,6 +7,7 @@ import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import fs from "fs";
 import path from "path";
 import { sendNotificationByRole } from "../../../../utils/sendNotification";
+import { reportError } from "../../../../utils/reportError";
 
 type IncidentFileInput = {
     type: string;
@@ -39,7 +40,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const incidentId = parseInt(resolvedParams.id);
         if (!incidentId) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "PUT", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const incident = await callDynamicPrisma({
@@ -47,7 +49,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "c_incidente", operation: "findUnique", where: { id: incidentId } }
         });
         if (!incident) {
-            return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "PUT", 404, "Incidente no encontrado");
+            return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 404 });
         }
 
         const body = await req.json();
@@ -69,11 +72,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         } = body ?? {};
 
         if (!marca_id) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "PUT", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "PUT", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const updateData: any = {};
@@ -179,6 +184,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in PUT /api/incidents/[id]:", errorMessage);
+        await reportError(req, "api/incidents/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -193,7 +199,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const resolvedParams = await context.params;
         const incidentId = parseInt(resolvedParams.id);
         if (!incidentId) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "DELETE", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const incident = await callDynamicPrisma({
@@ -207,7 +214,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             }
         });
         if (!incident) {
-            return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]", "DELETE", 404, "Incidente no encontrado");
+            return NextResponse.json({ status: false, message: "Incidente no encontrado" }, { status: 404 });
         }
 
         // Borra registro (archivos en DB por cascade, y borramos directorio físico)
@@ -237,6 +245,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in DELETE /api/incidents/[id]:", errorMessage);
+        await reportError(req, "api/incidents/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

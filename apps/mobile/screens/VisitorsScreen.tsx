@@ -29,6 +29,7 @@ import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache'
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SignatureScreen from 'react-native-signature-canvas';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
 
 type VisitorsScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Visitors'>;
 
@@ -85,6 +86,9 @@ interface Visitor {
   corpo_id?: number;
   puesto_id?: number;
   puesto_nombre?: string | null;
+  /** Puesto por donde la persona sale (puede diferir del puesto de ingreso). */
+  puesto_salida_id?: number | null;
+  puesto_salida?: PuestoSalidaOption | null;
   empresa_id?: number;
   division_id?: number;
   contrato_id?: number;
@@ -381,6 +385,7 @@ export default function VisitorsScreen() {
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
   const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+  const [formPuestoSalida, setFormPuestoSalida] = useState<PuestoSalidaOption | null>(null);
 
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
   const filterSucursalIdRef = useRef<number | null>(null);
@@ -1073,20 +1078,39 @@ export default function VisitorsScreen() {
     return `${d}-${m}-${y}`;
   };
 
+  // Mismo criterio que ChecklistSupervisionScreen.tsx para horas: se usa siempre la hora
+  // LOCAL del dispositivo, sin librerías de zona horaria. IMPORTANTE: nunca se construye el
+  // `Date` a partir de un string sin sufijo "Z" (`new Date("2024-01-01T17:30:00")`), porque en
+  // Hermes ese formato puede interpretarse como UTC en vez de hora local (a diferencia de
+  // Node/V8), lo que producía el desfase. Por eso se usa el constructor multi-argumento
+  // `new Date(y, m, d, hh, mm)`, que siempre construye en hora local sin ambigüedad.
   const buildIsoFromDateAndTime = (dateInput: string, hh: string, mm: string) => {
     const ymd = normalizeDateToYMD(dateInput);
     if (!ymd) return '';
-    const h = String(hh || '').padStart(2, '0');
-    const m = String(mm || '').padStart(2, '0');
-    if (!/^\d{2}$/.test(h) || !/^\d{2}$/.test(m)) return '';
-    return `${ymd}T${h}:${m}:00.000Z`;
+    const h = parseInt(String(hh || ''), 10);
+    const m = parseInt(String(mm || ''), 10);
+    if (Number.isNaN(h) || Number.isNaN(m)) return '';
+    const [y, mo, d] = ymd.split('-').map((v) => parseInt(v, 10));
+    if ([y, mo, d].some((n) => Number.isNaN(n))) return '';
+    const localDate = new Date(y, mo - 1, d, h, m, 0, 0);
+    if (Number.isNaN(localDate.getTime())) return '';
+    return localDate.toISOString();
   };
 
+  // Mismo criterio que PhysicalMinuteAgendaScreen.tsx/ChecklistSupervisionScreen.tsx: el valor
+  // de `getHoraAccion` se usa "plano", con getters/pickers LOCALES, sin ninguna conversión de
+  // zona horaria adicional.
+  const horaAccionToLocalDate = (horaAccion: number): Date => new Date(horaAccion);
+
+  // Lectura: el ISO guardado siempre trae sufijo "Z" (viene de `.toISOString()`), por lo que
+  // `new Date(iso)` se interpreta sin ambigüedad en cualquier motor. Se lee con getters locales
+  // (sin conversión de zona) para obtener de vuelta la misma hora que se guardó.
   const dateOnlyFromIso = (value?: string | null) => {
     if (!value) return '';
     try {
-      const onlyDate = String(value).split('T')[0];
-      return normalizeDateToYMD(onlyDate);
+      const d = new Date(String(value));
+      if (Number.isNaN(d.getTime())) return '';
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     } catch {
       return '';
     }
@@ -1094,9 +1118,11 @@ export default function VisitorsScreen() {
 
   const convertDate = (dateString: string) => {
     try {
+      const d = new Date(dateString);
+      if (Number.isNaN(d.getTime())) return dateString;
       const ymd = dateOnlyFromIso(dateString);
-      const timePart = String(dateString).split('T')[1]?.split('.')[0] || '';
-      return `${toDMY(ymd)}${timePart ? ` ${timePart}` : ''}`.trim();
+      const timePart = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+      return `${toDMY(ymd)} ${timePart}`.trim();
     } catch {
       return dateString;
     }
@@ -1104,9 +1130,12 @@ export default function VisitorsScreen() {
 
   const parseHoraFromString = (horaString: string) => {
     try {
-      const timePart = horaString.split('T')[1];
-      const [hour, minute] = timePart.split(':');
-      return { hour, minute };
+      const d = new Date(horaString);
+      if (Number.isNaN(d.getTime())) return { hour: '', minute: '' };
+      return {
+        hour: String(d.getHours()).padStart(2, '0'),
+        minute: String(d.getMinutes()).padStart(2, '0'),
+      };
     } catch (error) {
       return { hour: '', minute: '' };
     }
@@ -1127,7 +1156,7 @@ export default function VisitorsScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const base = new Date(horaAccion);
+    const base = horaAccionToLocalDate(horaAccion);
     const raw = String(timeValue || '').trim();
     if (/^\d{2}:\d{2}$/.test(raw)) {
       const [hh, mm] = raw.split(':').map((v) => parseInt(v, 10));
@@ -1148,8 +1177,8 @@ export default function VisitorsScreen() {
       return;
     }
     const ymd = normalizeDateToYMD(String(dateValue || ''));
-    const d = ymd ? new Date(`${ymd}T00:00:00`) : new Date(horaAccion);
-    return Number.isNaN(d.getTime()) ? new Date(horaAccion) : d;
+    const d = ymd ? new Date(`${ymd}T00:00:00`) : horaAccionToLocalDate(horaAccion);
+    return Number.isNaN(d.getTime()) ? horaAccionToLocalDate(horaAccion) : d;
   };
 
   const openVisitorDatePicker = async (field: 'entrada_fecha' | 'salida_fecha', current?: string) => {
@@ -1174,21 +1203,40 @@ export default function VisitorsScreen() {
     setShowVisitorTimePicker(true);
   };
 
-  const startCreating = () => {
+  const startCreating = async () => {
     setIsCreating(true);
     void fetchMainStructure();
     void applyCurrentMarcaToCreateFormHierarchy();
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
+    setFormPuestoSalida(null);
+
+    // Hora de entrada automática (getHoraAccion): igual que PhysicalMinuteAgendaScreen.tsx, se
+    // usa "plano" con getters locales, sin ninguna conversión de zona horaria adicional.
+    let autoFecha = '';
+    let autoH = '';
+    let autoM = '';
+    try {
+      const horaAccion = await getHoraAccion();
+      if (horaAccion) {
+        const d = horaAccionToLocalDate(horaAccion);
+        autoFecha = `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+        autoH = String(d.getHours()).padStart(2, '0');
+        autoM = String(d.getMinutes()).padStart(2, '0');
+      }
+    } catch {
+      /* si falla, el usuario completa manualmente */
+    }
+
     setNewVisitor({
       id: null,
       id_local: '',
       nombre: '',
       cedula: '',
-      hora_entrada_fecha: '',
-      hora_entrada_h: '',
-      hora_entrada_m: '',
+      hora_entrada_fecha: autoFecha,
+      hora_entrada_h: autoH,
+      hora_entrada_m: autoM,
       hora_salida_fecha: '',
       hora_salida_h: '',
       hora_salida_m: '',
@@ -1206,9 +1254,9 @@ export default function VisitorsScreen() {
     // Initialize refs
     nombreRef.current = '';
     cedulaRef.current = '';
-    horaEntradaFechaRef.current = '';
-    horaEntradaHRef.current = '';
-    horaEntradaMRef.current = '';
+    horaEntradaFechaRef.current = autoFecha;
+    horaEntradaHRef.current = autoH;
+    horaEntradaMRef.current = autoM;
     horaSalidaFechaRef.current = '';
     horaSalidaHRef.current = '';
     horaSalidaMRef.current = '';
@@ -1227,6 +1275,7 @@ export default function VisitorsScreen() {
     setFormContratoId(null);
     setFormSucursalId(null);
     setFormPuestoId(null);
+    setFormPuestoSalida(null);
     setShowVisitorDatePicker(false);
     setShowVisitorTimePicker(false);
     setVisitorPickerField(null);
@@ -1256,6 +1305,15 @@ export default function VisitorsScreen() {
 
   const startEditing = async (visitor: Visitor) => {
     try {
+      setFormPuestoSalida(
+        visitor.puesto_salida
+          ? {
+              id: visitor.puesto_salida.id,
+              nombre: visitor.puesto_salida.nombre,
+              codigo: visitor.puesto_salida.codigo,
+            }
+          : null,
+      );
       const tree = await fetchMainStructure();
       const currentMarcaStr = await AsyncStorage.getItem('current_marca');
       const marca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
@@ -1595,6 +1653,7 @@ export default function VisitorsScreen() {
                 pers_autoriza_salida: newVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                 foto_cedula: newVisitor.foto_cedula_nueva || newVisitor.foto_cedula,
                 firma_visitante: newVisitor.firma_visitante,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
                 activos: newVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
                   nombre: activo.nombre ?? '',
@@ -1688,7 +1747,7 @@ export default function VisitorsScreen() {
                     numero_id: activo.numero_id,
                     numero_activo: activo.numero_activo,
                   })),
-                  updated_at: new Date(horaAccion).toISOString(),
+                  updated_at: horaAccion ? horaAccionToLocalDate(horaAccion).toISOString() : new Date().toISOString(),
                   id_local: localId,
                   corpo_id: corpoOffline,
                   puesto_id: puestoOffline,
@@ -1696,6 +1755,8 @@ export default function VisitorsScreen() {
                     puestoOffline > 0
                       ? findPuestoNombreInStructure(structure, puestoOffline)
                       : null,
+                  puesto_salida_id: formPuestoSalida?.id ?? null,
+                  puesto_salida: formPuestoSalida,
                   ...(hierarchyFields
                     ? {
                         empresa_id: hierarchyFields.empresa_id,
@@ -1864,6 +1925,7 @@ export default function VisitorsScreen() {
                 pers_autoriza_salida: editingVisitor.es_funcionario && persAutorizaSalidaRef.current ? persAutorizaSalidaRef.current : null,
                 foto_cedula: editingVisitor.foto_cedula_nueva || null,
                 firma_visitante: editingVisitor.firma_visitante,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
                 activos: editingVisitor.activos.map(activo => ({
                   tipo_id: activo.tipo_id,
                   nombre: activo.nombre ?? '',
@@ -1951,6 +2013,7 @@ export default function VisitorsScreen() {
                       ...(editHierarchy ?? {}),
                       ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
                       ...(puestoUpdate != null && puestoUpdate > 0 ? { puesto_id: puestoUpdate } : {}),
+                      puesto_salida_id: formPuestoSalida?.id ?? null,
                     };
 
                     // Solo actualizar foto_cedula si hay nueva imagen
@@ -1991,6 +2054,7 @@ export default function VisitorsScreen() {
                       ...(editHierarchy ?? {}),
                       ...(corpoUpdate != null && corpoUpdate > 0 ? { corpo_id: corpoUpdate } : {}),
                       ...(puestoUpdate != null && puestoUpdate > 0 ? { puesto_id: puestoUpdate } : {}),
+                      puesto_salida_id: formPuestoSalida?.id ?? null,
                     };
                     actions.push({
                       requestData: newCreateBody,
@@ -2054,6 +2118,8 @@ export default function VisitorsScreen() {
                             null,
                         }
                       : {}),
+                    puesto_salida_id: formPuestoSalida?.id ?? null,
+                    puesto_salida: formPuestoSalida,
                     ...(editHierarchy
                       ? {
                           empresa_id: editHierarchy.empresa_id,
@@ -2649,6 +2715,12 @@ export default function VisitorsScreen() {
               fieldGroupStyle={styles.formGroup}
             />
           )}
+          <PuestoSalidaPicker
+            value={formPuestoSalida}
+            onChange={setFormPuestoSalida}
+            refreshAccessToken={refreshAccessToken}
+            logout={logout}
+          />
         </ThemedView>
 
         {/* Nombre */}
@@ -2741,7 +2813,8 @@ export default function VisitorsScreen() {
               if (Platform.OS === 'android') setShowVisitorDatePicker(false);
               const dt = selected;
               if (!dt || !visitorPickerField) return;
-              const dmy = toDMY(normalizeDateToYMD(dt.toISOString()));
+              const ymdLocal = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+              const dmy = toDMY(ymdLocal);
               if (visitorPickerField === 'entrada_fecha') applyDateField('entrada_fecha', dmy);
               if (visitorPickerField === 'salida_fecha') applyDateField('salida_fecha', dmy);
               setShowVisitorDatePicker(false);
@@ -3150,6 +3223,16 @@ export default function VisitorsScreen() {
             <ThemedText style={styles.visitorValueMain}>#{visitor.puesto_id}</ThemedText>
           </ThemedView>
         ) : null}
+
+        {visitor.puesto_salida && (
+          <ThemedView style={styles.visitorDetailMain}>
+            <ThemedText style={styles.visitorLabelMain}>Puesto de salida:</ThemedText>
+            <ThemedText style={styles.visitorValueMain}>
+              {visitor.puesto_salida.nombre}
+              {visitor.puesto_salida.codigo ? ` (${visitor.puesto_salida.codigo})` : ''}
+            </ThemedText>
+          </ThemedView>
+        )}
 
         <ThemedView style={styles.visitorDetailMain}>
           <ThemedText style={styles.visitorLabelMain}>Tipo:</ThemedText>

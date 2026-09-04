@@ -4,6 +4,7 @@ import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../../../utils/sendNotification";
+import { reportError } from "../../../../../../utils/reportError";
 
 function parseDateOnly(value: any): Date | null {
     if (!value) return null;
@@ -75,14 +76,23 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const resolvedParams = await context.params;
         const planId = parseInt(resolvedParams.id);
-        if (!planId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+        if (!planId) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "GET", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
 
         const marcaIdStr = req.nextUrl.searchParams.get("m");
-        if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        if (!marcaIdStr) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
         const marcaId = parseInt(marcaIdStr);
 
         const own = await validatePlanOwnership(req, planId, marcaId);
-        if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+        if (!own.ok) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "GET", 400, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 400 });
+        }
 
         const rows = await callDynamicPrisma({
             req,
@@ -105,7 +115,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/articulo-mantenimiento/plan/[id]/movimientos:", errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+        await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "GET", 400, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 }
 
@@ -116,7 +127,10 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
         const resolvedParams = await context.params;
         const planId = parseInt(resolvedParams.id);
-        if (!planId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+        if (!planId) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+        }
 
         const body = await req.json();
         const {
@@ -134,14 +148,23 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             firma_responsable,
         } = body ?? {};
 
-        if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+        if (!marca_id) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
 
         const own = await validatePlanOwnership(req, planId, parseInt(String(marca_id)));
-        if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+        if (!own.ok) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 400, own.message);
+            return NextResponse.json({ status: false, message: own.message }, { status: 400 });
+        }
 
         const fechaDate = parseDateOnly(fecha);
         const horaDate = parseTimeOnly(hora);
-        if (!fechaDate || !horaDate) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
+        if (!fechaDate || !horaDate) {
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 400, "Fecha u hora inválida");
+            return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 400 });
+        }
 
         const requiredStrings = [
             nombre_persona_recibe,
@@ -153,7 +176,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
             firma_responsable,
         ];
         if (requiredStrings.some((v) => typeof v !== "string" || v.trim().length === 0)) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         const created = await callDynamicPrisma({
@@ -236,6 +260,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in POST /api/articulo-mantenimiento/plan/[id]/movimientos:", errorMessage);
+        await reportError(req, "api/articulo-mantenimiento/plan/[id]/movimientos", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

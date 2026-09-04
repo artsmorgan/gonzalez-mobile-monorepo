@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../../utils/prismaClient";
 import { buildMantenimientoEquipoPlantillaBuffer } from "../../../../../utils/mantenimientoEquipoPlantilla";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/mantenimiento-equipo/plantilla/get-file:", errorMessage);
+    await reportError(req, "api/mantenimiento-equipo/plantilla/get-file", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../../utils/reportError";
 
 const OPENING_CLOSING_LIST_INCLUDE = {
     c_imagenes_apertura_cierre_puesto: true,
@@ -25,6 +26,7 @@ export async function GET(
         const corpoId = parseInt(resolvedParams.corpo_id, 10);
 
         if (!corpoId) {
+            await reportError(req, "api/opening-closing-position/corpo/[corpo_id]", "GET", 400, "Corpo inválido");
             return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
         }
 
@@ -127,6 +129,7 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/opening-closing-position/corpo/[corpo_id]", "GET", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
     }
 }

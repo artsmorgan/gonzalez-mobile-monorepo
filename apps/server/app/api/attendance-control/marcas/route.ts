@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 function getTurnoLetter(turno: string): string {
   return String(turno || "").trim().charAt(0).toUpperCase();
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest) {
     const turno = String(turnoStr || "").trim();
 
     if (!fecha || !corpo_id || !turno) {
+      await reportError(req, "api/attendance-control/marcas", "GET", 400, "Faltan parámetros: fecha, corpo_id y turno son obligatorios");
       return NextResponse.json(
         { status: false, message: "Faltan parámetros: fecha, corpo_id y turno son obligatorios" },
         { status: 400 }
@@ -28,6 +30,7 @@ export async function GET(req: NextRequest) {
 
     const turnoLetter = getTurnoLetter(turno);
     if (!["D", "M", "N"].includes(turnoLetter)) {
+      await reportError(req, "api/attendance-control/marcas", "GET", 400, "Turno inválido. Use Diurno (D), Mixto (M) o Nocturno (N).");
       return NextResponse.json(
         { status: false, message: "Turno inválido. Use Diurno (D), Mixto (M) o Nocturno (N)." },
         { status: 400 }
@@ -112,6 +115,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("[attendance-control/marcas]", errorMessage);
+    await reportError(req, "api/attendance-control/marcas", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

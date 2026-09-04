@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../../../utils/reportError";
 
 /**
  * Elimina el vínculo actividad–puesto (e_actividades_puesto).
@@ -21,10 +22,12 @@ export async function DELETE(
     const actividadId = Number(resolvedParams.id);
     const puestoId = Number(resolvedParams.puestoId);
     if (!Number.isFinite(actividadId) || actividadId <= 0) {
-      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos/[puestoId]", "DELETE", 500, "Actividad inválida");
+      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 500 });
     }
     if (!Number.isFinite(puestoId) || puestoId <= 0) {
-      return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos/[puestoId]", "DELETE", 500, "Puesto inválido");
+      return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 500 });
     }
 
     const actividad = await callDynamicPrisma({
@@ -38,7 +41,8 @@ export async function DELETE(
       },
     });
     if (!actividad) {
-      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos/[puestoId]", "DELETE", 404, "Actividad no encontrada");
+      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
     const links = await callDynamicPrisma({
@@ -53,6 +57,7 @@ export async function DELETE(
     });
     const linkRows = Array.isArray(links) ? links : [];
     if (linkRows.length === 0) {
+      await reportError(req, "api/activities/created/[id]/puestos/[puestoId]", "DELETE", 500, "El puesto no está vinculado a esta actividad");
       return NextResponse.json(
         { status: false, message: "El puesto no está vinculado a esta actividad" },
         { status: 200 },
@@ -105,6 +110,7 @@ export async function DELETE(
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/[id]/puestos/[puestoId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -7,6 +7,7 @@ import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { getPermitTurnosFromPlanillasRange } from "../../../utils/getPermitTurnosFromPlanillasRange";
 import { parseMarcaIdsArray, ymdFromFecha } from "../../../utils/mutuosAcuerdosMarcas";
+import { reportError } from "../../../utils/reportError";
 
 const parseIntStrict = (value: unknown): number | null => {
   const n = parseInt(String(value), 10);
@@ -78,6 +79,7 @@ export async function GET(req: NextRequest) {
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) {
+      await reportError(req, "api/permit-request", "GET", 400, "Empleado inválido");
       return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
     }
 
@@ -196,7 +198,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Solicitudes obtenidas correctamente", data: mapped }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+    await reportError(req, "api/permit-request", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
   }
 }
 
@@ -207,21 +210,24 @@ export async function POST(req: NextRequest) {
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) {
+      await reportError(req, "api/permit-request", "POST", 400, "Empleado inválido");
       return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
     }
 
     const planillasToken =
       decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;
     if (!planillasToken) {
+      await reportError(req, "api/permit-request", "POST", 400, "Token de Planillas no encontrado");
       return NextResponse.json(
         { status: false, message: "Token de Planillas no encontrado" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
     const empleadoForTurnos = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     if (!empleadoForTurnos) {
-      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+      await reportError(req, "api/permit-request", "POST", 404, "Empleado no encontrado");
+      return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
     }
 
     const body = await req.json();
@@ -274,12 +280,15 @@ export async function POST(req: NextRequest) {
     }));
 
     if (!tipo || (tipo !== "Con goce" && tipo !== "Sin goce")) {
+      await reportError(req, "api/permit-request", "POST", 400, "Tipo inválido. Debe ser Con goce o Sin goce");
       return NextResponse.json({ status: false, message: "Tipo inválido. Debe ser Con goce o Sin goce" }, { status: 400 });
     }
     if (!fechaInicio || !fechaFin) {
+      await reportError(req, "api/permit-request", "POST", 400, "Debes enviar fecha_inicio y fecha_fin válidas");
       return NextResponse.json({ status: false, message: "Debes enviar fecha_inicio y fecha_fin válidas" }, { status: 400 });
     }
     if (new Date(fechaInicio).getTime() > new Date(fechaFin).getTime()) {
+      await reportError(req, "api/permit-request", "POST", 400, "fecha_inicio no puede ser mayor a fecha_fin");
       return NextResponse.json({ status: false, message: "fecha_inicio no puede ser mayor a fecha_fin" }, { status: 400 });
     }
 
@@ -304,10 +313,12 @@ export async function POST(req: NextRequest) {
     if (overlappingPermit) {
       const overlapInicio = new Date(overlappingPermit.fecha_inicio).toISOString().split("T")[0];
       const overlapFin = new Date(overlappingPermit.fecha_fin).toISOString().split("T")[0];
+      const conflictMessage = `Ya tienes un permiso ${overlappingPermit.estado} del ${overlapInicio} al ${overlapFin} que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`;
+      await reportError(req, "api/permit-request", "POST", 400, conflictMessage);
       return NextResponse.json(
         {
           status: false,
-          message: `Ya tienes un permiso ${overlappingPermit.estado} del ${overlapInicio} al ${overlapFin} que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`,
+          message: conflictMessage,
         },
         { status: 400 }
       );
@@ -410,11 +421,13 @@ export async function POST(req: NextRequest) {
         const estadoMutuo = String(conflictingMutuo.estado || "pendiente").trim() || "pendiente";
         const relatedDates = mutuoDatesForEmployee(conflictingMutuo);
         const fechasTxt = relatedDates.length ? relatedDates.join(" / ") : "fechas asociadas";
+        const conflictMutuoMessage = `Ya tienes un mutuo acuerdo ${estadoMutuo} (${fechasTxt}) que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`;
 
+        await reportError(req, "api/permit-request", "POST", 400, conflictMutuoMessage);
         return NextResponse.json(
           {
             status: false,
-            message: `Ya tienes un mutuo acuerdo ${estadoMutuo} (${fechasTxt}) que entra en conflicto con las fechas seleccionadas. No se puede crear la solicitud.`,
+            message: conflictMutuoMessage,
           },
           { status: 400 }
         );
@@ -422,15 +435,19 @@ export async function POST(req: NextRequest) {
     }
 
     if (!motivo) {
+      await reportError(req, "api/permit-request", "POST", 400, "El motivo es obligatorio");
       return NextResponse.json({ status: false, message: "El motivo es obligatorio" }, { status: 400 });
     }
     if (!firmaResponsable || firmaResponsable.length < 10) {
+      await reportError(req, "api/permit-request", "POST", 400, "La firma responsable es obligatoria");
       return NextResponse.json({ status: false, message: "La firma responsable es obligatoria" }, { status: 400 });
     }
     if (!firmaEmpleadoManual || firmaEmpleadoManual.length < 20) {
+      await reportError(req, "api/permit-request", "POST", 400, "La firma manual del empleado es obligatoria");
       return NextResponse.json({ status: false, message: "La firma manual del empleado es obligatoria" }, { status: 400 });
     }
     if (!plazaId) {
+      await reportError(req, "api/permit-request", "POST", 400, "Debes seleccionar una plaza");
       return NextResponse.json({ status: false, message: "Debes seleccionar una plaza" }, { status: 400 });
     }
 
@@ -442,6 +459,7 @@ export async function POST(req: NextRequest) {
 
     const plazaPuestoId = parseIntStrict(plaza?.puesto_id);
     if (!plazaPuestoId) {
+      await reportError(req, "api/permit-request", "POST", 400, "La plaza seleccionada no tiene un puesto asociado");
       return NextResponse.json(
         { status: false, message: "La plaza seleccionada no tiene un puesto asociado" },
         { status: 400 }
@@ -452,6 +470,7 @@ export async function POST(req: NextRequest) {
 
     const sucursalId = parseIntStrict(puesto?.sucursal_id);
     if (!sucursalId) {
+      await reportError(req, "api/permit-request", "POST", 400, "El puesto asociado a la plaza no tiene una sucursal válida");
       return NextResponse.json(
         { status: false, message: "El puesto asociado a la plaza no tiene una sucursal válida" },
         { status: 400 }
@@ -462,6 +481,7 @@ export async function POST(req: NextRequest) {
 
     const contratoIdFromSucursal = parseIntStrict(sucursal?.contrato_id);
     if (!contratoIdFromSucursal) {
+      await reportError(req, "api/permit-request", "POST", 400, "La sucursal asociada no tiene un contrato válido");
       return NextResponse.json(
         { status: false, message: "La sucursal asociada no tiene un contrato válido" },
         { status: 400 }
@@ -470,7 +490,8 @@ export async function POST(req: NextRequest) {
 
     const contrato = await prisma.e_estructura_contrato.findFirst({ where: { id: contratoIdFromSucursal } });
     if (!contrato) {
-      return NextResponse.json({ status: false, message: "No se encontró el contrato de la sucursal" }, { status: 400 });
+      await reportError(req, "api/permit-request", "POST", 404, "No se encontró el contrato de la sucursal");
+      return NextResponse.json({ status: false, message: "No se encontró el contrato de la sucursal" }, { status: 404 });
     }
 
     let nombre_cliente = "";
@@ -485,6 +506,7 @@ export async function POST(req: NextRequest) {
 
     const ejecutivoCuenta = parseIntStrict(sucursal?.ejecutivoCuenta_id);
     if (!ejecutivoCuenta) {
+      await reportError(req, "api/permit-request", "POST", 400, "La sucursal seleccionada no tiene un ejecutivo de cuenta asignado");
       return NextResponse.json(
         { status: false, message: "La sucursal seleccionada no tiene un ejecutivo de cuenta asignado" },
         { status: 400 }
@@ -499,6 +521,7 @@ export async function POST(req: NextRequest) {
       plazaId
     );
     if (!turnos.length) {
+      await reportError(req, "api/permit-request", "POST", 400, "No hay turnos en el rango de fechas. El usuario está libre esos días.");
       return NextResponse.json(
         { status: false, message: "No hay turnos en el rango de fechas. El usuario está libre esos días." },
         { status: 400 }
@@ -536,11 +559,13 @@ export async function POST(req: NextRequest) {
           const restKeys = hierarchyKeys.filter((x) => x !== "division_id");
           const restOk = restKeys.every((rk) => Number(bodyHierarchy[rk]) === Number(resolvedHierarchy[rk]));
           if (!restOk) {
+            const hierarchyMismatchMessage =
+              "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.";
+            await reportError(req, "api/permit-request", "POST", 400, hierarchyMismatchMessage);
             return NextResponse.json(
               {
                 status: false,
-                message:
-                  "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.",
+                message: hierarchyMismatchMessage,
               },
               { status: 400 }
             );
@@ -548,11 +573,13 @@ export async function POST(req: NextRequest) {
           continue;
         }
         if (Number(bodyHierarchy[k]) !== Number(resolvedHierarchy[k])) {
+          const hierarchyMismatchMessage =
+            "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.";
+          await reportError(req, "api/permit-request", "POST", 400, hierarchyMismatchMessage);
           return NextResponse.json(
             {
               status: false,
-              message:
-                "La jerarquía enviada no coincide con la plaza seleccionada. Revisa tu marca actual y la plaza del permiso.",
+              message: hierarchyMismatchMessage,
             },
             { status: 400 }
           );
@@ -567,8 +594,10 @@ export async function POST(req: NextRequest) {
 
     for (const k of hierarchyKeys) {
       if (hierarchyForCreate[k] == null) {
+        const resolveMessage = `No se pudo resolver ${k} para guardar la solicitud`;
+        await reportError(req, "api/permit-request", "POST", 400, resolveMessage);
         return NextResponse.json(
-          { status: false, message: `No se pudo resolver ${k} para guardar la solicitud` },
+          { status: false, message: resolveMessage },
           { status: 400 }
         );
       }
@@ -721,7 +750,8 @@ export async function POST(req: NextRequest) {
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/permit-request", "POST", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

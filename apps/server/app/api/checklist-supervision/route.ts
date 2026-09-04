@@ -14,6 +14,7 @@ import {
   stripMantenimientoFilesFromArticulosPuesto,
 } from "../../../utils/sanitizeArticulosPuestoForPersistence";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 const CHECKLIST_SUPERVISION_INCLUDE = {
   e_estructura_cliente: { select: { id: true, nombre: true } },
@@ -77,6 +78,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/checklist-supervision:", errorMessage);
+    await reportError(req, "api/checklist-supervision", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -135,7 +137,8 @@ export async function POST(req: NextRequest) {
         (!evaluacion ? "evaluacion, " : "") +
         (!firma_responsable ? "firma_responsable, " : "") +
         (!created_at ? "created_at" : "");
-      return NextResponse.json({ status: false, message: errorMessage }, { status: 200 });
+      await reportError(req, "api/checklist-supervision", "POST", 400, errorMessage);
+      return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 
     const createdAt = new Date(created_at);
@@ -153,7 +156,8 @@ export async function POST(req: NextRequest) {
       hora_fin,
     });
     if (!empleadoHoras.ok) {
-      return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 200 });
+      await reportError(req, "api/checklist-supervision", "POST", 400, empleadoHoras.message);
+      return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 400 });
     }
     const horaInicioParsed = empleadoHoras.horaInicio;
     const horaFinParsed = empleadoHoras.horaFin;
@@ -184,7 +188,8 @@ export async function POST(req: NextRequest) {
     });
 
     if (!sucursal) {
-      return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision", "POST", 404, "Sucursal no encontrada");
+      return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 404 });
     }
 
 
@@ -259,9 +264,10 @@ export async function POST(req: NextRequest) {
       } catch (rollbackError) {
         console.error("Error en rollback de checklist tras fallo de imágenes:", rollbackError);
       }
+      await reportError(req, "api/checklist-supervision", "POST", 500, "Error al procesar imágenes de la evaluación");
       return NextResponse.json(
         { status: false, message: "Error al procesar imágenes de la evaluación" },
-        { status: 200 }
+        { status: 500 }
       );
     }
 
@@ -367,6 +373,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/checklist-supervision:", errorMessage);
+    await reportError(req, "api/checklist-supervision", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

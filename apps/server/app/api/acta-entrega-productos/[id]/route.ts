@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { uploadDynamicFiles } from '../../../../utils/callDynamicFilesApi';
 import { mapActaEntregaImagesForClient } from '../mapActaEntregaImagesForClient';
+import { reportError } from '../../../../utils/reportError';
 
 export const runtime = 'nodejs';
 
@@ -36,7 +37,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const resolvedParams = await context.params;
     const actaId = parseInt(resolvedParams.id, 10);
-    if (!actaId) return NextResponse.json({ status: false, message: 'ID no especificado' }, { status: 400 });
+    if (!actaId) {
+      await reportError(req, "api/acta-entrega-productos/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: 'ID no especificado' }, { status: 400 });
+    }
 
     const {
       tipo_entrega,
@@ -70,7 +74,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         where: { id: actaId },
       },
     });
-    if (!existing) return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/acta-entrega-productos/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
+    }
     const existingObj = existing as any;
 
     const updateData: any = {};
@@ -215,6 +222,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error(errorMessage);
+    await reportError(req, "api/acta-entrega-productos/[id]", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
@@ -226,7 +234,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
 
     const resolvedParams = await context.params;
     const actaId = parseInt(resolvedParams.id, 10);
-    if (!actaId) return NextResponse.json({ status: false, message: 'ID no especificado' }, { status: 400 });
+    if (!actaId) {
+      await reportError(req, "api/acta-entrega-productos/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: 'ID no especificado' }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
@@ -237,7 +248,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         where: { id: actaId },
       },
     });
-    if (!existing) return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/acta-entrega-productos/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
+    }
 
     const existingObj = existing as any;
     // Registrar cambio de eliminación antes de eliminar
@@ -308,6 +322,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error(errorMessage);
+    await reportError(req, "api/acta-entrega-productos/[id]", "DELETE", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

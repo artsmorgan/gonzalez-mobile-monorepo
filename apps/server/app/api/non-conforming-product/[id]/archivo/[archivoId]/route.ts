@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -31,6 +32,7 @@ export async function DELETE(
     const pncId = parseInt(String(resolvedParams.id), 10);
     const archivoId = parseInt(String(resolvedParams.archivoId), 10);
     if (!pncId || !archivoId) {
+      await reportError(req, "api/non-conforming-product/[id]/archivo/[archivoId]", "DELETE", 400, "ID o adjunto no válido");
       return NextResponse.json({ status: false, message: "ID o adjunto no válido" }, { status: 400 });
     }
 
@@ -45,6 +47,7 @@ export async function DELETE(
       },
     });
     if (!row) {
+      await reportError(req, "api/non-conforming-product/[id]/archivo/[archivoId]", "DELETE", 404, "Adjunto no encontrado");
       return NextResponse.json({ status: false, message: "Adjunto no encontrado" }, { status: 404 });
     }
     const fileRow = row as { name: string; pnc_id: number };
@@ -74,6 +77,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE PNC archivo:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/non-conforming-product/[id]/archivo/[archivoId]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

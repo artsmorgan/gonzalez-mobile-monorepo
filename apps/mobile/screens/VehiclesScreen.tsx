@@ -13,6 +13,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
 import Ionicons from '@expo/vector-icons/build/Ionicons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
@@ -61,6 +62,9 @@ interface Vehicle {
   /** Sucursal (`e_registro_vehiculos.corpo_id`) para caché / filtrado offline */
   corpo_id?: number;
   puesto_id?: number;
+  /** Puesto por donde el vehículo sale (puede diferir del puesto de ingreso). */
+  puesto_salida_id?: number | null;
+  puesto_salida?: PuestoSalidaOption | null;
   empresa_id?: number;
   cliente_id?: number;
   division_id?: number;
@@ -272,6 +276,7 @@ export default function VehiclesScreen() {
   const [formContratoId, setFormContratoId] = useState<number | null>(null);
   const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
   const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+  const [formPuestoSalida, setFormPuestoSalida] = useState<PuestoSalidaOption | null>(null);
 
   // Editing state
   const [editingVehicle, setEditingVehicle] = useState<EditingVehicle | null>(null);
@@ -346,13 +351,18 @@ export default function VehiclesScreen() {
     );
   };
 
+  // Mismo criterio que PhysicalMinuteAgendaScreen.tsx/ChecklistSupervisionScreen.tsx: el valor
+  // de `getHoraAccion` se usa "plano", con getters/pickers LOCALES, sin ninguna conversión de
+  // zona horaria adicional.
+  const horaAccionToLocalDate = (horaAccion: number): Date => new Date(horaAccion);
+
   const buildDateFromParts = async (hours: string, minutes: string) => {
     const horaAccion = await getHoraAccion();
     if (!horaAccion) {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const baseDate = new Date(horaAccion);
+    const baseDate = horaAccionToLocalDate(horaAccion);
     const hRaw = String(hours || '').trim();
     const mRaw = String(minutes || '').trim();
     if (hRaw !== '' && mRaw !== '') {
@@ -365,10 +375,24 @@ export default function VehiclesScreen() {
     return baseDate;
   };
 
-  const formatDateDisplay = (date: Date) => date.toISOString().split('T')[0];
+  // Fecha local (no UTC): evita que un `toISOString()` cerca de medianoche cambie el día.
+  const formatDateDisplay = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 
+  // Mismo criterio que ChecklistSupervisionScreen.tsx para horas: se usa siempre la hora
+  // LOCAL del dispositivo, sin librerías de zona horaria. IMPORTANTE: nunca se construye el
+  // `Date` a partir de un string sin sufijo "Z" (`new Date("2024-01-01T17:30:00")`), porque en
+  // Hermes ese formato puede interpretarse como UTC en vez de hora local, lo que produce un
+  // desfase. Por eso se usa el constructor multi-argumento `new Date(y, m, d, hh, mm)`, que
+  // siempre construye en hora local sin ambigüedad.
   const buildIsoFromDateAndTime = (date: string, hours: string, minutes: string) => {
-    return `${date}T${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:00.000Z`;
+    const [y, mo, d] = date.split('-').map((v) => parseInt(v, 10));
+    const h = parseInt(hours, 10);
+    const m = parseInt(minutes, 10);
+    if ([y, mo, d, h, m].some((n) => Number.isNaN(n))) return '';
+    const localDate = new Date(y, mo - 1, d, h, m, 0, 0);
+    if (Number.isNaN(localDate.getTime())) return '';
+    return localDate.toISOString();
   };
 
   const openFechaEntradaPicker = async () => {
@@ -377,7 +401,7 @@ export default function VehiclesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : new Date(horaAccion);
+    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : horaAccionToLocalDate(horaAccion);
     setFechaEntradaPickerValue(baseDate);
     setShowFechaEntradaPicker(true);
   };
@@ -399,7 +423,7 @@ export default function VehiclesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : new Date(horaAccion);
+    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : horaAccionToLocalDate(horaAccion);
     setFechaSalidaPickerValue(baseDate);
     setShowFechaSalidaPicker(true);
   };
@@ -473,7 +497,7 @@ export default function VehiclesScreen() {
     setShowHoraSalidaPicker(false);
     fechaSalidaRef.current = '';
     setFechaSalidaDisplay('');
-    setFechaSalidaPickerValue(new Date(horaAccion));
+    setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
     setShowFechaSalidaPicker(false);
   };
 
@@ -673,6 +697,15 @@ export default function VehiclesScreen() {
       setFormContratoId(contratoId);
       setFormSucursalId(numOrNull(vehicle.corpo_id));
       setFormPuestoId(numOrNull(vehicle.puesto_id));
+      setFormPuestoSalida(
+        vehicle.puesto_salida
+          ? {
+              id: vehicle.puesto_salida.id,
+              nombre: vehicle.puesto_salida.nombre,
+              codigo: vehicle.puesto_salida.codigo,
+            }
+          : null,
+      );
       return true;
     }
     return false;
@@ -685,6 +718,7 @@ export default function VehiclesScreen() {
     setFormContratoId(null);
     setFormSucursalId(null);
     setFormPuestoId(null);
+    setFormPuestoSalida(null);
   }, []);
 
   const applyCurrentMarcaToCreateFormHierarchy = useCallback(async () => {
@@ -1128,6 +1162,7 @@ export default function VehiclesScreen() {
                 hora_entrada: entradaIso,
                 hora_salida: salidaIso,
                 razon_visita: razonVisitaRef.current,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
               };
 
               const corpoForSave = await resolveCorpoIdForSave();
@@ -1218,8 +1253,8 @@ export default function VehiclesScreen() {
                   fechaSalidaRef.current = '';
                   setFechaEntradaDisplay('');
                   setFechaSalidaDisplay('');
-                  setFechaEntradaPickerValue(new Date(horaAccion));
-                  setFechaSalidaPickerValue(new Date(horaAccion));
+                  setFechaEntradaPickerValue(horaAccionToLocalDate(horaAccion));
+                  setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
                   setShowFechaEntradaPicker(false);
                   setShowFechaSalidaPicker(false);
                   setHoraEntradaPickerValue(baseDate);
@@ -1274,13 +1309,15 @@ export default function VehiclesScreen() {
                     id: parseInt(employee?.id || '0'),
                     nombre: employee?.name || 'Desconocido',
                   },
-                  created_at: new Date(horaAccion).toISOString(),
+                  created_at: horaAccion ? horaAccionToLocalDate(horaAccion).toISOString() : new Date().toISOString(),
                   id_local: localId,
                   base64_image: '',
                   local_attachment_file: vehicleImageLocalFileName || null,
                   file_name: null,
                   corpo_id: corpoForSave,
                   puesto_id: puestoForSave,
+                  puesto_salida_id: formPuestoSalida?.id ?? null,
+                  puesto_salida: formPuestoSalida,
                   empresa_id: hierarchyIds.empresa_id ?? undefined,
                   cliente_id: hierarchyIds.cliente_id ?? undefined,
                   division_id: hierarchyIds.division_id ?? undefined,
@@ -1323,8 +1360,8 @@ export default function VehiclesScreen() {
                 fechaSalidaRef.current = '';
                 setFechaEntradaDisplay('');
                 setFechaSalidaDisplay('');
-                setFechaEntradaPickerValue(new Date(horaAccion));
-                setFechaSalidaPickerValue(new Date(horaAccion));
+                setFechaEntradaPickerValue(horaAccionToLocalDate(horaAccion));
+                setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
                 setShowFechaEntradaPicker(false);
                 setShowFechaSalidaPicker(false);
                 setHoraEntradaPickerValue(baseDate);
@@ -1424,6 +1461,7 @@ export default function VehiclesScreen() {
                 hora_entrada: entradaIso,
                 hora_salida: salidaIso,
                 razon_visita: razonVisitaRef.current,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
               };
 
               const corpoUp = await resolveCorpoIdForSave();
@@ -1573,6 +1611,8 @@ export default function VehiclesScreen() {
                     base64_image: nextBase64,
                     local_attachment_file: nextLocalAtt,
                     file_name: nextFileName,
+                    puesto_salida_id: formPuestoSalida?.id ?? null,
+                    puesto_salida: formPuestoSalida,
                     ...(requestBody.corpo_id != null && requestBody.puesto_id != null
                       ? {
                           corpo_id: requestBody.corpo_id,
@@ -1803,6 +1843,12 @@ export default function VehiclesScreen() {
             renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
             pickerStyle={styles.picker}
             fieldGroupStyle={styles.formGroup}
+          />
+          <PuestoSalidaPicker
+            value={formPuestoSalida}
+            onChange={setFormPuestoSalida}
+            refreshAccessToken={refreshAccessToken}
+            logout={logout}
           />
         </ThemedView>
 
@@ -2077,10 +2123,12 @@ export default function VehiclesScreen() {
   };
 
   const convertDate = (dateString: string) => {
-    console.log("dateString", dateString);
     try {
-      const dateSplit = dateString.split('T');
-      return dateSplit[0] + ' ' + dateSplit[1].split('.')[0];
+      const d = new Date(dateString);
+      if (Number.isNaN(d.getTime())) return dateString;
+      const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const hms = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+      return `${ymd} ${hms}`;
     } catch (error) {
       return dateString;
     }
@@ -2102,24 +2150,26 @@ export default function VehiclesScreen() {
   };
 
   const startEditing = async (vehicle: Vehicle) => {
-    const entradaDate = new Date(vehicle.hora_entrada);
-    if (Number.isNaN(entradaDate.getTime())) {
+    const entradaDateRaw = new Date(vehicle.hora_entrada);
+    if (Number.isNaN(entradaDateRaw.getTime())) {
       Alert.alert('Error', 'La fecha/hora de entrada del registro no es válida.');
       return;
     }
-    const hours = entradaDate.getUTCHours().toString().padStart(2, '0');
-    const minutes = entradaDate.getUTCMinutes().toString().padStart(2, '0');
-    const fechaEntrada = entradaDate.toISOString().split('T')[0];
+    // Extraer hora/fecha local del dispositivo (sin librerías de zona horaria), igual que
+    // `buildIsoFromDateAndTime` la construyó.
+    const hours = entradaDateRaw.getHours().toString().padStart(2, '0');
+    const minutes = entradaDateRaw.getMinutes().toString().padStart(2, '0');
+    const fechaEntrada = formatDateDisplay(entradaDateRaw);
 
     let exitHours = '';
     let exitMinutes = '';
     let fechaSalida = '';
     if (vehicle.hora_salida) {
-      const salidaDate = new Date(vehicle.hora_salida);
-      if (!Number.isNaN(salidaDate.getTime())) {
-      exitHours = salidaDate.getUTCHours().toString().padStart(2, '0');
-      exitMinutes = salidaDate.getUTCMinutes().toString().padStart(2, '0');
-      fechaSalida = salidaDate.toISOString().split('T')[0];
+      const salidaDateRaw = new Date(vehicle.hora_salida);
+      if (!Number.isNaN(salidaDateRaw.getTime())) {
+      exitHours = salidaDateRaw.getHours().toString().padStart(2, '0');
+      exitMinutes = salidaDateRaw.getMinutes().toString().padStart(2, '0');
+      fechaSalida = formatDateDisplay(salidaDateRaw);
       }
     }
 
@@ -2221,7 +2271,7 @@ export default function VehiclesScreen() {
     setFechaEntradaDisplay(fechaEntrada);
     setFechaSalidaDisplay(fechaSalida);
     setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
-    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : new Date(horaAccion));
+    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : horaAccionToLocalDate(horaAccion));
     setShowFechaEntradaPicker(false);
     setShowFechaSalidaPicker(false);
 
@@ -2273,17 +2323,25 @@ export default function VehiclesScreen() {
       Alert.alert('Error', 'No se pudo obtener la hora');
       return;
     }
-    syncTimeFields('', '', '', '');
-    fechaEntradaRef.current = '';
+    // Hora de entrada automática (getHoraAccion): igual que PhysicalMinuteAgendaScreen.tsx, se
+    // usa "plano" con getters locales, y puede editarse desde el picker.
+    const nowLocal = horaAccionToLocalDate(horaAccion);
+    const autoEntradaH = nowLocal.getHours().toString().padStart(2, '0');
+    const autoEntradaM = nowLocal.getMinutes().toString().padStart(2, '0');
+    const autoFechaEntrada = formatDateDisplay(nowLocal);
+    syncTimeFields(autoEntradaH, autoEntradaM, '', '');
+    fechaEntradaRef.current = autoFechaEntrada;
     fechaSalidaRef.current = '';
-    setFechaEntradaDisplay('');
+    setFechaEntradaDisplay(autoFechaEntrada);
     setFechaSalidaDisplay('');
-    setFechaEntradaPickerValue(new Date(horaAccion));
-    setFechaSalidaPickerValue(new Date(horaAccion));
+    const pickerSeedDate = nowLocal;
+    setFechaEntradaPickerValue(pickerSeedDate);
+    setFechaSalidaPickerValue(pickerSeedDate);
     setShowFechaEntradaPicker(false);
     setShowFechaSalidaPicker(false);
-    setHoraEntradaPickerValue(baseDate);
-    setHoraSalidaPickerValue(baseDate);
+    console.log(pickerSeedDate);
+    setHoraEntradaPickerValue(pickerSeedDate);
+    setHoraSalidaPickerValue(pickerSeedDate);
     setShowHoraEntradaPicker(false);
     setShowHoraSalidaPicker(false);
     setIsCreating(true);
@@ -2296,10 +2354,10 @@ export default function VehiclesScreen() {
       cedula_propietario: '',
       departamento_visita: '',
       persona_visita: '',
-      fecha_entrada: '',
+      fecha_entrada: autoFechaEntrada,
       fecha_salida: '',
-      hora_entrada_h: '',
-      hora_entrada_m: '',
+      hora_entrada_h: autoEntradaH,
+      hora_entrada_m: autoEntradaM,
       hora_salida_h: '',
       hora_salida_m: '',
       razon_visita: '',
@@ -2313,11 +2371,12 @@ export default function VehiclesScreen() {
     cedulaPropietarioRef.current = '';
     departamentoVisitaRef.current = '';
     personaVisitaRef.current = '';
-    horaEntradaHRef.current = '';
-    horaEntradaMRef.current = '';
+    horaEntradaHRef.current = autoEntradaH;
+    horaEntradaMRef.current = autoEntradaM;
     horaSalidaHRef.current = '';
     horaSalidaMRef.current = '';
     razonVisitaRef.current = '';
+    setFormPuestoSalida(null);
     void clearPendingVehicleCaptureFiles();
     await applyCurrentMarcaToCreateFormHierarchy();
   };
@@ -2811,6 +2870,12 @@ const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
       <ThemedText style={styles.vehicleInfo}>Entrada: {convertDate(vehicle.hora_entrada)}</ThemedText>
       {vehicle.hora_salida && (
         <ThemedText style={styles.vehicleInfo}>Salida: {convertDate(vehicle.hora_salida)}</ThemedText>
+      )}
+      {vehicle.puesto_salida && (
+        <ThemedText style={styles.vehicleInfo}>
+          Puesto de salida: {vehicle.puesto_salida.nombre}
+          {vehicle.puesto_salida.codigo ? ` (${vehicle.puesto_salida.codigo})` : ''}
+        </ThemedText>
       )}
       <ThemedText style={styles.vehicleInfo}>Razón: {vehicle.razon_visita}</ThemedText>
       <ThemedText style={styles.vehicleInfo}>Responsable: {vehicle.responsable.nombre}</ThemedText>

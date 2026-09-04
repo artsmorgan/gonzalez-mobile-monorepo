@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from '../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
 import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
 import { prisma } from '../../../../../../utils/prismaClient';
+import { reportError } from '../../../../../../utils/reportError';
 
 export const runtime = 'nodejs';
 
@@ -31,6 +32,7 @@ export async function GET(
     const fileNameParam = resolvedParams.file;
 
     if (!idNum || !fileNameParam) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 400, 'ID o archivo faltante');
       return NextResponse.json(
         { status: false, message: 'ID o archivo faltante' },
         { status: 400 }
@@ -44,6 +46,7 @@ export async function GET(
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
     if (!currentEmployeeId) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 400, 'Empleado inválido');
       return NextResponse.json({ status: false, message: 'Empleado inválido' }, { status: 400 });
     }
 
@@ -59,12 +62,14 @@ export async function GET(
       token: accessToken || undefined,
     });
     if (!record) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 404, 'Solicitud no encontrada');
       return NextResponse.json(
         { status: false, message: 'Solicitud no encontrada' },
         { status: 404 }
       );
     }
     if ((record as any).isActive === false) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 404, 'Solicitud no disponible');
       return NextResponse.json({ status: false, message: 'Solicitud no disponible' }, { status: 404 });
     }
     const decodedFileName = decodeURIComponent(String(fileNameParam).trim());
@@ -79,6 +84,7 @@ export async function GET(
       token: accessToken || undefined,
     });
     if (!fileRecord) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 404, 'Archivo no encontrado');
       return NextResponse.json(
         { status: false, message: 'Archivo no encontrado' },
         { status: 404 }
@@ -94,9 +100,10 @@ export async function GET(
       Number(record.ejecutivo_cuenta) === currentEmployeeId ||
       (myEjecutivoCuentaId != null && Number(record.ejecutivo_cuenta) === Number(myEjecutivoCuentaId));
     if (!isExecutive) {
+      await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 400, 'Solo el ejecutivo asignado puede descargar este archivo');
       return NextResponse.json(
         { status: false, message: 'Solo el ejecutivo asignado puede descargar este archivo' },
-        { status: 403 }
+        { status: 400 }
       );
     }
 
@@ -119,6 +126,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error('Error in GET /api/permit-request/[id]/get-file/[file]:', errorMessage);
+    await reportError(req, 'api/permit-request/[id]/get-file/[file]', 'GET', 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }

@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -51,6 +52,7 @@ export async function GET(
         const { id } = await context.params;
         const vehiculoId = parseInt(String(id), 10);
         if (!vehiculoId) {
+            await reportError(req, "api/corporate-vehicles/[id]/maintenances", "GET", 400, "ID no especificado");
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
@@ -70,7 +72,8 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/corporate-vehicles/[id]/maintenances:", errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/corporate-vehicles/[id]/maintenances", "GET", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -85,6 +88,7 @@ export async function POST(
         const { id } = await context.params;
         const vehiculoId = parseInt(String(id), 10);
         if (!vehiculoId) {
+            await reportError(req, "api/corporate-vehicles/[id]/maintenances", "POST", 400, "ID no especificado");
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
@@ -211,7 +215,8 @@ export async function POST(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in POST /api/corporate-vehicles/[id]/maintenances:", errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/corporate-vehicles/[id]/maintenances", "POST", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

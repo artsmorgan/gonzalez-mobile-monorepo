@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 import { deleteUploadsFileByRelativePath } from "../../../utils/deleteUploadsFileByRelativePath";
 
 type AttendanceControlImageInput = {
@@ -159,13 +160,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const { id } = await context.params;
     const idNum = parseInt(String(id), 10);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/attendance-control/[id]", "PUT", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_control_asistencia", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/attendance-control/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const body = await req.json();
     const imagenesRaw = body?.imagenes;
@@ -192,9 +199,11 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const firmasEmpleados = safeParseJson<Array<{ empleado_id?: number; marca_id?: number; firma?: string }>>(body?.firmas_empleados, []);
 
     if (!empresa_id || !cliente_id || !division_id || !contrato_id || !corpo_id || !fechaDate || !turno || !firma_responsable) {
+      await reportError(req, "api/attendance-control/[id]", "PUT", 400, "Faltan campos obligatorios para actualizar el control de asistencia");
       return NextResponse.json({ status: false, message: "Faltan campos obligatorios para actualizar el control de asistencia" }, { status: 400 });
     }
     if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+      await reportError(req, "api/attendance-control/[id]", "PUT", 400, "puesto_id es obligatorio");
       return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
     }
 
@@ -408,6 +417,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control/[id]", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
@@ -419,13 +429,19 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
 
     const { id } = await context.params;
     const idNum = parseInt(String(id), 10);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/attendance-control/[id]", "DELETE", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_control_asistencia", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/attendance-control/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const created_by = Number(payload?.id || 0);
     const created_at = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
@@ -453,6 +469,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     return NextResponse.json({ status: true, message: "Control de asistencia eliminado correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control/[id]", "DELETE", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }
