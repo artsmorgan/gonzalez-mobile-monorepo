@@ -534,8 +534,15 @@ export async function buildActaEntregaExcelBufferByType(
         right: { style: "thin" },
     };
 
+    /** Cuadrícula jerárquica: cada fila es el acta (nivel 0) o uno de sus ítems de `detalle` (nivel 1). */
+    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Acta",
         "Empresa",
         "Cliente",
         "Division ID",
@@ -549,10 +556,18 @@ export async function buildActaEntregaExcelBufferByType(
         "Cedula entrega",
         "Nombre recibe",
         "Cedula recibe",
-        "Detalle",
-        "Firma entrega",
-        "Firma recibe",
+        "Ver detalle",
+        "Ver firma entrega",
+        "Ver firma recibe",
+        "Descripción (detalle)",
+        "Unidad medida (detalle)",
+        "Cantidad (detalle)",
+        "Devolución (detalle)",
+        "Faltantes (detalle)",
     ];
+    const COL_VER_DETALLE = 19;
+    const COL_VER_FIRMA_ENTREGA = 20;
+    const COL_VER_FIRMA_RECIBE = 21;
 
     const h = main.addRow(mainHeaders);
     h.font = { bold: true };
@@ -565,6 +580,10 @@ export async function buildActaEntregaExcelBufferByType(
     main.views = [{ state: "frozen", ySplit: 1 }];
     /** Anchos amplios y sin agrupación de columnas: el filtrado va en la fila de encabezado (autoFilter). */
     main.columns = [
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
         { width: 12 },
         { width: 38 },
         { width: 36 },
@@ -579,9 +598,14 @@ export async function buildActaEntregaExcelBufferByType(
         { width: 22 },
         { width: 32 },
         { width: 22 },
-        { width: 26 },
-        { width: 24 },
-        { width: 24 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 32 },
+        { width: 18 },
+        { width: 14 },
+        { width: 14 },
+        { width: 14 },
     ];
 
     const detailsStartById = new Map<number, number>();
@@ -658,42 +682,88 @@ export async function buildActaEntregaExcelBufferByType(
         { width: 20 },
     ];
 
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((c) => {
+            c.border = borderThin;
+            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        row.height = 22;
+        if (nivel === 0) {
+            row.getCell(4).font = { bold: true };
+        }
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
-        const row = main.addRow([
-            r.id,
+        const fechaTxt = r.fecha instanceof Date ? r.fecha.toISOString() : String(r.fecha ?? "");
+        const general = [
+            String(r.id),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_id,
             r.contrato_nombre,
             r.corpo_nombre,
             r.puesto_nombre,
-            r.fecha instanceof Date ? r.fecha.toISOString() : String(r.fecha ?? ""),
+            fechaTxt,
             r.tipo_entrega,
             r.mensual,
             r.nombre_entrega,
             r.cedula_entrega,
             r.nombre_recibe,
             r.cedula_recibe,
+        ];
+
+        const rootRow = main.addRow([
+            String(r.id),
+            "",
+            0,
+            "Acta",
+            ...general,
             "Ver detalle",
             "Ver firma entrega",
             "Ver firma recibe",
+            "",
+            "",
+            "",
+            "",
+            "",
         ]);
-        row.getCell(15).value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(16).value = { text: "Ver firma entrega", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(17).value = { text: "Ver firma recibe", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(15).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(16).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(17).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((c) => {
-            c.border = borderThin;
-            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        rootRow.getCell(COL_VER_DETALLE).value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_FIRMA_ENTREGA).value = { text: "Ver firma entrega", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_FIRMA_RECIBE).value = { text: "Ver firma recibe", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_DETALLE).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_FIRMA_ENTREGA).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_FIRMA_RECIBE).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        const detalleRows = parseDetalleArray(r.detalle);
+        detalleRows.forEach((item, idx) => {
+            const itemRow = main.addRow([
+                `${r.id}.d${idx + 1}`,
+                String(r.id),
+                1,
+                "Detalle producto",
+                ...general,
+                "",
+                "",
+                "",
+                String(item.descripcion ?? ""),
+                String(item.unidad_medida ?? ""),
+                String(item.cantidad ?? ""),
+                String(item.devolucion ?? ""),
+                String(item.faltantes ?? ""),
+            ]);
+            styleDataRow(itemRow, 1);
+            totalDataRows += 1;
         });
-        row.height = 22;
     }
     main.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
     };
 
     const ab = await workbook.xlsx.writeBuffer();

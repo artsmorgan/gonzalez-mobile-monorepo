@@ -561,8 +561,15 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         wsP.addRow([]);
     }
 
+    /** Cuadrícula jerárquica: Actividad (nivel 0) → Puesto vinculado (nivel 1) → Plaza vinculada (nivel 2) → Artículo (nivel 3). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Actividad",
         "Nombre actividad",
         "Fecha inicio",
         "Fecha fin",
@@ -570,7 +577,23 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         "Es revisión equipo",
         "Descripción",
         "Puestos vinculados",
+        "Puesto (vínculo)",
+        "Código puesto (vínculo)",
+        "Plaza (vínculo)",
+        "Marcada (vínculo)",
+        "Creado (vínculo)",
+        "Nombre artículo",
+        "Tipo artículo",
+        "Marca artículo",
+        "Modelo artículo",
+        "Serie artículo",
+        "Cant. req. artículo",
+        "Cant. real artículo",
+        "Estado artículo",
+        "Observaciones artículo",
     ];
+    const COL_PUESTOS_VINCULADOS = 12;
+
     const mh = wsMain.addRow(headers);
     mh.font = { bold: true };
     mh.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -580,40 +603,137 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
-        { width: 12, outlineLevel: 1 },
-        { width: 40, outlineLevel: 1 },
-        { width: 16, outlineLevel: 1 },
-        { width: 16, outlineLevel: 1 },
-        { width: 36, outlineLevel: 1 },
-        { width: 20, outlineLevel: 1 },
-        { width: 65, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
+        { width: 12 },
+        { width: 40 },
+        { width: 16 },
+        { width: 16 },
+        { width: 36 },
+        { width: 20 },
+        { width: 65 },
+        { width: 20 },
+        { width: 36 },
+        { width: 20 },
+        { width: 30 },
+        { width: 14 },
+        { width: 20 },
+        { width: 32 },
+        { width: 18 },
+        { width: 18 },
+        { width: 22 },
+        { width: 14 },
+        { width: 14 },
+        { width: 14 },
+        { width: 22 },
+        { width: 48 },
     ];
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((c) => {
+            c.border = borderThin;
+            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
     for (const act of activities) {
         const pRow = actToPuestosRow.get(act.id) ?? 1;
         const frecTit = frecuenciaTitleOnly(act.frecuencia);
-        const row = wsMain.addRow([
-            act.id,
+        const general = [
+            String(act.id),
             act.nombre_actividad,
             act.fecha_inicio instanceof Date ? act.fecha_inicio.toISOString().slice(0, 10) : String(act.fecha_inicio ?? ""),
             act.fecha_fin ? (act.fecha_fin instanceof Date ? act.fecha_fin.toISOString().slice(0, 10) : String(act.fecha_fin)) : "",
             frecTit,
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
+        ];
+
+        const rootRow = wsMain.addRow([
+            String(act.id),
             "",
+            0,
+            "Actividad",
+            ...general,
+            "Puestos vinculados",
+            ...blank(2),
+            ...blank(3),
+            ...blank(9),
         ]);
-        row.getCell(8).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
-        row.getCell(8).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((c, col) => {
-            c.border = borderThin;
-            c.alignment = { vertical: "middle", horizontal: col === 7 ? "left" : "left", wrapText: true };
-        });
+        rootRow.getCell(COL_PUESTOS_VINCULADOS).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
+        rootRow.getCell(COL_PUESTOS_VINCULADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        for (const ap of act.e_actividades_puesto || []) {
+            const apRow = wsMain.addRow([
+                String(ap.id),
+                String(act.id),
+                1,
+                "Puesto vinculado",
+                ...general,
+                "",
+                String(ap.e_estructura_puesto?.nombre ?? ap.puesto_id ?? ""),
+                String(ap.e_estructura_puesto?.codigo ?? ""),
+                ...blank(3),
+                ...blank(9),
+            ]);
+            styleDataRow(apRow, 1);
+            totalDataRows += 1;
+
+            for (const pl of ap.e_actividades_puesto_plaza || []) {
+                if (!actividadPuestoPlazaIncluyeReporteConsolidado(pl)) continue; // Consolidado
+                const plRow = wsMain.addRow([
+                    String(pl.id),
+                    String(ap.id),
+                    2,
+                    "Plaza vinculada",
+                    ...general,
+                    ...blank(3),
+                    String(pl.e_estructura_plazas?.nombre ?? pl.plaza_id ?? ""),
+                    pl.marcada ? "Sí" : "No",
+                    pl.created_at instanceof Date ? pl.created_at.toISOString().slice(0, 19) : String(pl.created_at ?? ""),
+                    ...blank(9),
+                ]);
+                styleDataRow(plRow, 2);
+                totalDataRows += 1;
+
+                parseArticles(pl.articles).forEach((art, idx) => {
+                    const artRow = wsMain.addRow([
+                        `${pl.id}.art${idx + 1}`,
+                        String(pl.id),
+                        3,
+                        "Artículo",
+                        ...general,
+                        ...blank(6),
+                        String(art?.nombre ?? ""),
+                        String(art?.tipo ?? ""),
+                        String(art?.marca ?? ""),
+                        String(art?.modelo ?? ""),
+                        String(art?.serie ?? ""),
+                        art?.cantidad_requerida != null ? String(art.cantidad_requerida) : "",
+                        art?.cantidad_real != null ? String(art.cantidad_real) : "",
+                        String(art?.estado ?? ""),
+                        String(art?.observaciones ?? ""),
+                    ]);
+                    styleDataRow(artRow, 3);
+                    totalDataRows += 1;
+                });
+            }
+        }
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, activities.length + 1), column: headers.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: headers.length },
     };
 
     wsP.columns = [{ width: 14 }, { width: 42 }, { width: 36 }, { width: 20 }, { width: 14 }, { width: 32 }];

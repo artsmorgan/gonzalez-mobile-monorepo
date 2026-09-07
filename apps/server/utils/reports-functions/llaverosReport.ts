@@ -398,8 +398,15 @@ export async function buildLlaverosExcelConsolidado(rows: any[]): Promise<Buffer
         wsDet.addRow([]);
     }
 
+    /** Cuadrícula jerárquica: Llavero (nivel 0) → Movimiento (nivel 1, `e_movimiento_llavero`) y Llave vinculada (nivel 1, `e_llave_en_llavero` → `e_llave`), hermanos. */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Llavero",
         "N° llavero",
         "Nombre llavero",
         "Empresa",
@@ -410,9 +417,26 @@ export async function buildLlaverosExcelConsolidado(rows: any[]): Promise<Buffer
         "Puesto",
         "Observaciones",
         "Creado",
-        "Movimientos",
-        "Llaves vinculadas",
+        "Ver movimientos",
+        "Ver llaves",
+        "Entrega (movimiento)",
+        "Recibe (movimiento)",
+        "Departamento (movimiento)",
+        "Teléfono (movimiento)",
+        "Fecha (movimiento)",
+        "Hora (movimiento)",
+        "Tiene firma entrega (movimiento)",
+        "Tiene firma recibe (movimiento)",
+        "Firma responsable (movimiento)",
+        "N° llave (vinculada)",
+        "Lugar abre (llave vinculada)",
+        "Cantidad copias (llave vinculada)",
+        "Observaciones (llave vinculada)",
     ];
+    const COL_VER_MOV = headers.indexOf("Ver movimientos") + 1;
+    const COL_VER_LLAVES = headers.indexOf("Ver llaves") + 1;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+
     const hr = wsMain.addRow(headers);
     hr.font = { bold: true };
     hr.eachCell((cell) => {
@@ -425,44 +449,99 @@ export async function buildLlaverosExcelConsolidado(rows: any[]): Promise<Buffer
         to: { row: 1, column: headers.length },
     };
 
-    const linkMovCol = 12;
-    const linkDetCol = 13;
-
-    for (const r of rows) {
-        const row = wsMain.addRow([
-            String(r.id),
-            excelCellString(r.numero_llavero),
-            excelCellString(r.nombre_llavero),
-            excelCellString(r.empresa_nombre),
-            excelCellString(r.cliente_nombre),
-            excelCellString(r.division_nombre),
-            excelCellString(r.contrato_nombre),
-            excelCellString(r.corpo_nombre),
-            excelCellString(r.puesto_nombre),
-            excelCellString(r.observaciones),
-            fmtDate(r.created_at),
-            "Ver movimientos",
-            Number(r.llaves_vinculadas_count) > 0 ? "Ver llaves" : "",
-        ]);
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell) => {
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
+
+    for (const r of rows) {
+        const general: Record<number, unknown> = {
+            [headers.indexOf("ID Llavero") + 1]: String(r.id),
+            [headers.indexOf("N° llavero") + 1]: excelCellString(r.numero_llavero),
+            [headers.indexOf("Nombre llavero") + 1]: excelCellString(r.nombre_llavero),
+            [headers.indexOf("Empresa") + 1]: excelCellString(r.empresa_nombre),
+            [headers.indexOf("Cliente") + 1]: excelCellString(r.cliente_nombre),
+            [headers.indexOf("División") + 1]: excelCellString(r.division_nombre),
+            [headers.indexOf("Contrato") + 1]: excelCellString(r.contrato_nombre),
+            [headers.indexOf("Sucursal") + 1]: excelCellString(r.corpo_nombre),
+            [headers.indexOf("Puesto") + 1]: excelCellString(r.puesto_nombre),
+            [headers.indexOf("Observaciones") + 1]: excelCellString(r.observaciones),
+            [headers.indexOf("Creado") + 1]: fmtDate(r.created_at),
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Llavero";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        rootValues[COL_VER_MOV - 1] = "Ver movimientos";
+        if (Number(r.llaves_vinculadas_count) > 0) rootValues[COL_VER_LLAVES - 1] = "Ver llaves";
+        const rootRow = wsMain.addRow(rootValues);
         const movRow = movAnchorByKey.get(Number(r.id));
         if (movRow) {
-            const c = wsMain.getCell(row.number, linkMovCol);
+            const c = rootRow.getCell(COL_VER_MOV);
             c.value = { text: "Ver movimientos", hyperlink: `#'Movimientos'!A${movRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const detRow = detAnchorByKey.get(Number(r.id));
         if (detRow && Number(r.llaves_vinculadas_count) > 0) {
-            const c = wsMain.getCell(row.number, linkDetCol);
+            const c = rootRow.getCell(COL_VER_LLAVES);
             c.value = { text: "Ver llaves", hyperlink: `#'Detalles'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
+        styleDataRow(rootRow, 0);
+
+        const movs = Array.isArray(r.e_movimiento_llavero) ? r.e_movimiento_llavero : [];
+        movs.forEach((m: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.mov${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Movimiento";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Entrega (movimiento)")] = excelCellString(m.nombre_persona_entrega);
+            values[headers.indexOf("Recibe (movimiento)")] = excelCellString(m.nombre_persona_recibe);
+            values[headers.indexOf("Departamento (movimiento)")] = excelCellString(m.departamento);
+            values[headers.indexOf("Teléfono (movimiento)")] = excelCellString(m.telefono);
+            values[headers.indexOf("Fecha (movimiento)")] = fmtDate(m.fecha);
+            values[headers.indexOf("Hora (movimiento)")] = fmtTime(m.hora);
+            values[headers.indexOf("Tiene firma entrega (movimiento)")] = m.firma_entrega ? "Sí" : "No";
+            values[headers.indexOf("Tiene firma recibe (movimiento)")] = m.firma_recibe ? "Sí" : "No";
+            values[headers.indexOf("Firma responsable (movimiento)")] = excelCellString(m.firma_responsable ?? "");
+            const movRowMain = wsMain.addRow(values);
+            styleDataRow(movRowMain, 1);
+        });
+
+        const links = Array.isArray(r.e_llave_en_llavero) ? r.e_llave_en_llavero : [];
+        const llavesRows = links.map((x: any) => x?.e_llave).filter(Boolean);
+        llavesRows.forEach((ll: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.llave${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Llave vinculada";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("N° llave (vinculada)")] = excelCellString(ll.numero_llave);
+            values[headers.indexOf("Lugar abre (llave vinculada)")] = excelCellString(ll.lugar_abre);
+            values[headers.indexOf("Cantidad copias (llave vinculada)")] = String(ll.cantidad_copias ?? "");
+            values[headers.indexOf("Observaciones (llave vinculada)")] = excelCellString(ll.observaciones);
+            const llaveRow = wsMain.addRow(values);
+            styleDataRow(llaveRow, 1);
+        });
     }
 
-    wsMain.columns = [8, 12, 22, 26, 22, 18, 22, 22, 22, 28, 14, 18, 16].map((w) => ({ width: w }));
+    wsMain.columns = [
+        12, 14, 8, 20, 10,
+        12, 22, 26, 22, 18, 22, 22, 22, 28, 14,
+        16, 14,
+        22, 22, 20, 16, 14, 12, 18, 18, 30,
+        18, 22, 20, 28,
+    ].map((w) => ({ width: w }));
     wsMov.columns = [12, 22, 22, 20, 16, 14, 12, 18, 18, 18, 10].map((w) => ({ width: w }));
     wsDet.columns = [10, 14, 28, 12, 40].map((w) => ({ width: w }));
     return Buffer.from(await wb.xlsx.writeBuffer());

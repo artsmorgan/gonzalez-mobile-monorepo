@@ -214,7 +214,34 @@ export async function buildVulnerabilidadExcelConsolidado(rows: any[]): Promise<
         right: { style: "thin" },
     };
 
-    const headers = ["ID", "Empresa", "Cliente", "División", "Contrato", "Sucursal", "Puesto", "Fecha", "Solicitante", "Boleta", "Métricas", "Observaciones"];
+    /** Cuadrícula jerárquica: Registro (nivel 0) → Sección de la boleta (nivel 1) → Ítem de la sección (nivel 2); Métrica es hermana de Sección (nivel 1). */
+    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
+    const headers = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Registro",
+        "Empresa",
+        "Cliente",
+        "División",
+        "Contrato",
+        "Sucursal",
+        "Puesto",
+        "Fecha",
+        "Solicitante",
+        "Ver boleta",
+        "Ver métricas",
+        "Observaciones",
+        "Sección / Nivel vulnerabilidad",
+        "Ítem (etiqueta)",
+        "Ítem (respuesta)",
+        "Métrica",
+    ];
+    const COL_VER_BOLETA = 14;
+    const COL_VER_METRICAS = 15;
+
     const h = main.addRow(headers);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -224,18 +251,26 @@ export async function buildVulnerabilidadExcelConsolidado(rows: any[]): Promise<
     });
     main.views = [{ state: "frozen", ySplit: 1 }];
     main.columns = [
-        { width: 8, outlineLevel: 1 },
-        { width: 30, outlineLevel: 1 },
-        { width: 26, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 30, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
-        { width: 30, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 24, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 34, outlineLevel: 1 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 22 },
+        { width: 12 },
+        { width: 30 },
+        { width: 26 },
+        { width: 22 },
+        { width: 30 },
+        { width: 28 },
+        { width: 30 },
+        { width: 18 },
+        { width: 24 },
+        { width: 18 },
+        { width: 18 },
+        { width: 34 },
+        { width: 28 },
+        { width: 34 },
+        { width: 22 },
+        { width: 34 },
     ];
 
     const detailStartById = new Map<number, number>();
@@ -293,10 +328,23 @@ export async function buildVulnerabilidadExcelConsolidado(rows: any[]): Promise<
     }
     details.columns = [{ width: 48 }, { width: 18 }, { width: 18 }, { width: 18 }];
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((c) => {
+            c.border = borderThin;
+            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const dr = detailStartById.get(Number(r.id)) ?? 1;
-        const row = main.addRow([
-            r.id,
+        const general = [
+            String(r.id),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -305,20 +353,93 @@ export async function buildVulnerabilidadExcelConsolidado(rows: any[]): Promise<
             r.puesto_nombre,
             r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha ?? ""),
             r.nombre_solicitante ?? "",
+        ];
+
+        const rootRow = main.addRow([
+            String(r.id),
+            "",
+            0,
+            "Registro",
+            ...general,
             "Ver boleta",
             "Ver métricas",
             r.observaciones ?? "",
+            ...blank(4),
         ]);
-        row.getCell(10).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
-        row.getCell(11).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
-        row.getCell(10).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(11).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((c) => {
-            c.border = borderThin;
-            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        rootRow.getCell(COL_VER_BOLETA).value = { text: "Ver boleta", hyperlink: `#'Detalles'!A${dr}` };
+        rootRow.getCell(COL_VER_METRICAS).value = { text: "Ver métricas", hyperlink: `#'Detalles'!A${dr}` };
+        rootRow.getCell(COL_VER_BOLETA).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_METRICAS).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        for (const sec of parseBoletaSections(r.boleta)) {
+            const secTitle = String(sec.title ?? "");
+            const secRow = main.addRow([
+                `${r.id}.s${sec.key ?? secTitle}`.slice(0, 60) || `${r.id}.s${totalDataRows}`,
+                String(r.id),
+                1,
+                "Sección",
+                ...general,
+                ...blank(3),
+                secTitle,
+                "",
+                "",
+                "",
+            ]);
+            styleDataRow(secRow, 1);
+            totalDataRows += 1;
+
+            if (sec.key === "porcentaje_vulnerabilidad") {
+                const itemRow = main.addRow([
+                    `${r.id}.s${sec.key}.i1`,
+                    `${r.id}.s${sec.key}`.slice(0, 60),
+                    2,
+                    "Ítem",
+                    ...general,
+                    ...blank(3),
+                    "",
+                    "Nivel de vulnerabilidad",
+                    String(sec.vulnerabilityLevel ?? ""),
+                    "",
+                ]);
+                styleDataRow(itemRow, 2);
+                totalDataRows += 1;
+                continue;
+            }
+            (sec.items ?? []).forEach((item, idx) => {
+                const itemRow = main.addRow([
+                    `${r.id}.s${sec.key ?? secTitle}.i${idx + 1}`.slice(0, 60),
+                    `${r.id}.s${sec.key ?? secTitle}`.slice(0, 60),
+                    2,
+                    "Ítem",
+                    ...general,
+                    ...blank(3),
+                    "",
+                    String(item?.label ?? ""),
+                    String(item?.answer ?? ""),
+                    "",
+                ]);
+                styleDataRow(itemRow, 2);
+                totalDataRows += 1;
+            });
+        }
+
+        parseArrayJSON(r.metricas_vulnerablidad).forEach((m, idx) => {
+            const row = main.addRow([
+                `${r.id}.m${idx + 1}`,
+                String(r.id),
+                1,
+                "Métrica",
+                ...general,
+                ...blank(6),
+                String(m ?? ""),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
         });
     }
-    main.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    main.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
     return Buffer.from(await workbook.xlsx.writeBuffer());
 }
 

@@ -352,7 +352,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                     message,
                     ...extra,
                 },
-                { status: 400 }
+                { status: 200 }
             );
         };
 

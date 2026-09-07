@@ -843,8 +843,15 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         wsDet.addRow([]);
     }
 
+    /** Cuadrícula jerárquica: Encuesta (nivel 0) → Sección (nivel 1, solo formato "form") → Pregunta (nivel 2 en "form", nivel 1 directo en formato legado). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Encuesta",
         "Creado en",
         "Fecha encuesta",
         "Empresa",
@@ -855,10 +862,17 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         "Puesto",
         "Responsable",
         "Nombre evaluado",
-        "Evaluaciones",
-        "Firma evaluado",
+        "Ver evaluaciones",
+        "Ver firma",
         "Observaciones",
+        "¿Conoce procedimiento de quejas?",
+        "Sección",
+        "Pregunta",
+        "Respuesta",
     ];
+    const COL_VER_EVAL = 16;
+    const COL_VER_FIRMA = 17;
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -868,27 +882,48 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
-        { width: 8, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 12, outlineLevel: 1 },
-        { width: 24, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 20, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 20, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 36, outlineLevel: 1 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
+        { width: 10 },
+        { width: 18 },
+        { width: 12 },
+        { width: 24 },
+        { width: 22 },
+        { width: 20 },
+        { width: 22 },
+        { width: 22 },
+        { width: 20 },
+        { width: 22 },
+        { width: 22 },
+        { width: 16 },
+        { width: 16 },
+        { width: 36 },
+        { width: 20 },
+        { width: 26 },
+        { width: 40 },
+        { width: 26 },
     ];
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell) => {
+            cell.border = border;
+            cell.alignment = { vertical: "middle", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const evRow = anchorEvalById.get(Number(r.id)) ?? 1;
         const fiRow = anchorFirmaById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id,
+        const general = [
+            String(r.id),
             r.created_at_txt,
             r.fecha_txt,
             r.empresa_nombre,
@@ -899,20 +934,122 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
             r.puesto_nombre,
             r.responsable_nombre,
             r.nombre_evaluado ?? "",
+        ];
+
+        const decoded = parseEncuestaEvaluacionesJson(r.evaluaciones);
+        const conoceTxt = decoded.kind === "form" ? (decoded.know_process ? "Sí" : "No") : "";
+
+        const rootRow = wsMain.addRow([
+            String(r.id),
             "",
-            "",
+            0,
+            "Encuesta",
+            ...general,
+            "Ver evaluaciones",
+            "Ver firma",
             String(r.observaciones ?? "").slice(0, 5000),
+            conoceTxt,
+            ...blank(3),
         ]);
-        row.getCell(12).value = { text: "Ver evaluaciones", hyperlink: `#'Detalles'!A${evRow}` };
-        row.getCell(12).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(13).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
-        row.getCell(13).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
-            cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
-        });
+        rootRow.getCell(COL_VER_EVAL).value = { text: "Ver evaluaciones", hyperlink: `#'Detalles'!A${evRow}` };
+        rootRow.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
+        rootRow.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        if (decoded.kind === "legacy") {
+            decoded.items.forEach((item, idx) => {
+                const q = String((item as any)?.question ?? "").trim();
+                const v = (item as any)?.result ?? (item as any)?.value ?? "";
+                const row = wsMain.addRow([
+                    `${r.id}.q${idx + 1}`,
+                    String(r.id),
+                    1,
+                    "Pregunta",
+                    ...general,
+                    ...blank(4),
+                    "",
+                    q,
+                    String(v ?? ""),
+                ]);
+                styleDataRow(row, 1);
+                totalDataRows += 1;
+            });
+        } else if (decoded.kind === "form") {
+            decoded.form.forEach((sec, secIdx) => {
+                const secObj = sec as Record<string, unknown>;
+                const secTitle = String(secObj.section_title ?? "").trim() || `Sección ${secIdx + 1}`;
+                const secId = `${r.id}.s${secIdx + 1}`;
+                const globalSec = isGlobalSectionTitle(secTitle);
+                const secRow = wsMain.addRow([
+                    secId,
+                    String(r.id),
+                    1,
+                    "Sección",
+                    ...general,
+                    ...blank(4),
+                    secTitle,
+                    "",
+                    "",
+                ]);
+                styleDataRow(secRow, 1);
+                totalDataRows += 1;
+
+                const questions = Array.isArray(secObj.questions) ? secObj.questions : [];
+                questions.forEach((q, qIdx) => {
+                    const qRow = q as Record<string, unknown>;
+                    const qt = String(qRow.question ?? "").trim();
+                    const apply = coerceQuestionApply(qRow.apply);
+                    const val = apply && Number.isFinite(Number(qRow.value)) ? Number(qRow.value) : 0;
+                    const label = apply ? likertLabel5(val, globalSec) : "No aplica";
+                    const row = wsMain.addRow([
+                        `${secId}.q${qIdx + 1}`,
+                        secId,
+                        2,
+                        "Pregunta",
+                        ...general,
+                        ...blank(5),
+                        qt,
+                        label,
+                    ]);
+                    styleDataRow(row, 2);
+                    totalDataRows += 1;
+                });
+
+                const secObs = String(secObj.observations ?? "").trim();
+                if (secObs) {
+                    const row = wsMain.addRow([
+                        `${secId}.obs`,
+                        secId,
+                        2,
+                        "Observaciones sección",
+                        ...general,
+                        ...blank(5),
+                        "Observaciones",
+                        secObs,
+                    ]);
+                    styleDataRow(row, 2);
+                    totalDataRows += 1;
+                }
+            });
+        } else if (decoded.kind === "raw" && decoded.text.trim()) {
+            const row = wsMain.addRow([
+                `${r.id}.raw`,
+                String(r.id),
+                1,
+                "Contenido no estructurado",
+                ...general,
+                ...blank(4),
+                "",
+                "",
+                decoded.text.slice(0, 5000),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
+        }
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
     wsDet.columns = [
         { width: 28 },
         { width: 12 },

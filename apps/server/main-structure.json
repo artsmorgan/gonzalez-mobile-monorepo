@@ -1,5 +1,5 @@
 {
-  "created_at": 1788536246156,
+  "created_at": 1788806669261,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -8145,11 +8145,19 @@
             "iva": null,
             "costo_total": null,
             "fecha_fin": null,
-            "reincidencia_treinta_dias": null,
+            "reincidencia_treinta_dias": false,
             "tipo_mant_art_reincid": null,
             "created_at": "2026-09-03T11:12:38.000Z",
-            "updated_at": "2026-09-03T11:12:38.000Z",
-            "c_archivos_adjuntos_articulo_mantenimiento": []
+            "updated_at": "2026-09-04T19:17:10.000Z",
+            "c_archivos_adjuntos_articulo_mantenimiento": [
+              {
+                "id": 3,
+                "name": "3a4d90a2-8eaa-4b2a-bd47-5fc4cc7c6f89.jpg",
+                "original_name": "foto_1788549419453.jpg",
+                "type": "image",
+                "extension": "jpg"
+              }
+            ]
           }
         ],
         "ultimo_mantenimiento": {
@@ -8186,11 +8194,19 @@
           "iva": null,
           "costo_total": null,
           "fecha_fin": null,
-          "reincidencia_treinta_dias": null,
+          "reincidencia_treinta_dias": false,
           "tipo_mant_art_reincid": null,
           "created_at": "2026-09-03T11:12:38.000Z",
-          "updated_at": "2026-09-03T11:12:38.000Z",
-          "c_archivos_adjuntos_articulo_mantenimiento": []
+          "updated_at": "2026-09-04T19:17:10.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": [
+            {
+              "id": 3,
+              "name": "3a4d90a2-8eaa-4b2a-bd47-5fc4cc7c6f89.jpg",
+              "original_name": "foto_1788549419453.jpg",
+              "type": "image",
+              "extension": "jpg"
+            }
+          ]
         },
         "ultimo_registro_mantenimiento": {
           "id": 13,
@@ -8226,11 +8242,19 @@
           "iva": null,
           "costo_total": null,
           "fecha_fin": null,
-          "reincidencia_treinta_dias": null,
+          "reincidencia_treinta_dias": false,
           "tipo_mant_art_reincid": null,
           "created_at": "2026-09-03T11:12:38.000Z",
-          "updated_at": "2026-09-03T11:12:38.000Z",
-          "c_archivos_adjuntos_articulo_mantenimiento": []
+          "updated_at": "2026-09-04T19:17:10.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": [
+            {
+              "id": 3,
+              "name": "3a4d90a2-8eaa-4b2a-bd47-5fc4cc7c6f89.jpg",
+              "original_name": "foto_1788549419453.jpg",
+              "type": "image",
+              "extension": "jpg"
+            }
+          ]
         },
         "movimientos": []
       },
@@ -41185,7 +41209,7 @@
         "nombre": "ORLANDO",
         "primer_apellido": "VILLANUEVA",
         "segundo_apellido": "RIOS",
-        "Email": "orlandovillanuevar@gmail.com",
+        "Email": "abrahamjosue293@gmail.com",
         "telefono": "85190351",
         "tipoCedula": "Nacional",
         "fecha_contratacion": "2025-11-01T00:00:00.000Z",

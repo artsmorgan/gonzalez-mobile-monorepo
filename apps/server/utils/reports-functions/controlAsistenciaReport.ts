@@ -274,7 +274,39 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
         wsDetails.addRow([]);
     }
 
-    const headers = ["ID", "Empresa", "Cliente", "División", "Contrato", "Sucursal", "Puesto", "Fecha", "Turno", "Presentes", "Total turno", "Supervisor", "Comentarios", "Colaboradores"];
+    /** Cuadrícula jerárquica: Control (nivel 0) → Colaborador (nivel 1, de `colaboradores`, enriquecido con firmas de `c_control_asistencia_empleado_firmas`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
+    const headers = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Control",
+        "Empresa",
+        "Cliente",
+        "División",
+        "Contrato",
+        "Sucursal",
+        "Puesto",
+        "Fecha",
+        "Turno",
+        "Presentes",
+        "Total turno",
+        "Supervisor",
+        "Comentarios",
+        "Ver detalles",
+        "Nombre original (colaborador)",
+        "Cédula (colaborador)",
+        "Nombre reemplazo (colaborador)",
+        "Cédula reemplazo (colaborador)",
+        "Presente (colaborador)",
+        "Puesto (colaborador)",
+        "Hora inicio (colaborador)",
+        "Hora fin (colaborador)",
+        "Tiene firma (colaborador)",
+    ];
+    const COL_VER_DETALLES = 18;
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -284,25 +316,84 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
-        { width: 9, outlineLevel: 1 }, { width: 28, outlineLevel: 1 }, { width: 24, outlineLevel: 1 }, { width: 20, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 }, { width: 28, outlineLevel: 1 }, { width: 24, outlineLevel: 1 }, { width: 13, outlineLevel: 1 },
-        { width: 12, outlineLevel: 1 }, { width: 12, outlineLevel: 1 }, { width: 14, outlineLevel: 1 }, { width: 24, outlineLevel: 1 },
-        { width: 36, outlineLevel: 1 }, { width: 16, outlineLevel: 1 },
+        { width: 12 }, { width: 14 }, { width: 8 }, { width: 20 }, { width: 10 },
+        { width: 28 }, { width: 24 }, { width: 20 },
+        { width: 28 }, { width: 28 }, { width: 24 }, { width: 13 },
+        { width: 12 }, { width: 12 }, { width: 14 }, { width: 24 },
+        { width: 36 }, { width: 16 },
+        { width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 12 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 16 },
     ];
-    for (const r of rows) {
-        const anchor = detailsAnchorByControl.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id, r.empresa_nombre, r.cliente_nombre, r.division_nombre, r.contrato_nombre, r.corpo_nombre, r.puesto_nombre, r.fecha_txt, r.turno_label,
-            r.total_presentes, r.total_empleados_turno, r.nombre_supervisor ?? "", r.comentarios ?? "", "",
-        ]);
-        row.getCell(14).value = { text: "Ver detalles", hyperlink: `#'Detalles'!A${anchor}` };
-        row.getCell(14).font = { color: { argb: "FF0563C1" }, underline: true };
+
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell) => {
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
+    for (const r of rows) {
+        const anchor = detailsAnchorByControl.get(Number(r.id)) ?? 1;
+        const general = [
+            String(r.id),
+            r.empresa_nombre,
+            r.cliente_nombre,
+            r.division_nombre,
+            r.contrato_nombre,
+            r.corpo_nombre,
+            r.puesto_nombre,
+            r.fecha_txt,
+            r.turno_label,
+            r.total_presentes,
+            r.total_empleados_turno,
+            r.nombre_supervisor ?? "",
+            r.comentarios ?? "",
+        ];
+
+        const rootRow = wsMain.addRow([
+            String(r.id),
+            "",
+            0,
+            "Control",
+            ...general,
+            "Ver detalles",
+            ...blank(9),
+        ]);
+        rootRow.getCell(COL_VER_DETALLES).value = { text: "Ver detalles", hyperlink: `#'Detalles'!A${anchor}` };
+        rootRow.getCell(COL_VER_DETALLES).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        const cols = Array.isArray(r.colaboradores_preview) ? r.colaboradores_preview : parseColaboradores(r.colaboradores);
+        cols.forEach((c: any, idx: number) => {
+            const hasFirma = !!(c?.firma_manual_colaborador_data_uri || c?.firma_manual_original_data_uri || c?.firma_manual_reemplazo_data_uri);
+            const row = wsMain.addRow([
+                `${r.id}.col${idx + 1}`,
+                String(r.id),
+                1,
+                "Colaborador",
+                ...general,
+                "",
+                String(c?.nombre_original || c?.nombre || ""),
+                String(c?.cedula || ""),
+                String(c?.nombre_reemplazo || ""),
+                String(c?.cedula_reemplazo || ""),
+                c?.ausente ? "No" : "Sí",
+                String(c?.puesto || ""),
+                String(c?.hora_inicio || ""),
+                String(c?.hora_fin || ""),
+                hasFirma ? "Sí" : "No",
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
+        });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
     wsDetails.columns = [{ width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 }];
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -365,8 +365,15 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
         wsMov.addRow([]);
     }
 
+    /** Cuadrícula jerárquica: Llave (nivel 0) → Movimiento (nivel 1, de `e_movimiento_llave`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Llave",
         "N° llave",
         "Empresa",
         "Cliente",
@@ -378,8 +385,20 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
         "Cantidad copias",
         "Observaciones",
         "Creado",
-        "Movimientos",
+        "Ver movimientos",
+        "Entrega (movimiento)",
+        "Recibe (movimiento)",
+        "Departamento (movimiento)",
+        "Teléfono (movimiento)",
+        "Fecha (movimiento)",
+        "Hora (movimiento)",
+        "Tiene firma entrega (movimiento)",
+        "Tiene firma recibe (movimiento)",
+        "Firma responsable (movimiento)",
     ];
+    const COL_VER_MOV = headers.indexOf("Ver movimientos") + 1;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+
     const hr = wsMain.addRow(headers);
     hr.font = { bold: true };
     hr.eachCell((cell) => {
@@ -392,35 +411,70 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
         to: { row: 1, column: headers.length },
     };
 
-    for (const r of rows) {
-        const row = wsMain.addRow([
-            String(r.id),
-            excelCellString(r.numero_llave),
-            excelCellString(r.empresa_nombre),
-            excelCellString(r.cliente_nombre),
-            excelCellString(r.division_nombre),
-            excelCellString(r.contrato_nombre),
-            excelCellString(r.corpo_nombre),
-            excelCellString(r.puesto_nombre),
-            excelCellString(r.lugar_abre),
-            String(r.cantidad_copias ?? ""),
-            excelCellString(r.observaciones),
-            fmtDate(r.created_at),
-            "Ver movimientos",
-        ]);
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell) => {
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
+
+    for (const r of rows) {
         const detRow = movAnchorByKey.get(Number(r.id));
+        const general: Record<number, unknown> = {
+            5: String(r.id),
+            6: excelCellString(r.numero_llave),
+            7: excelCellString(r.empresa_nombre),
+            8: excelCellString(r.cliente_nombre),
+            9: excelCellString(r.division_nombre),
+            10: excelCellString(r.contrato_nombre),
+            11: excelCellString(r.corpo_nombre),
+            12: excelCellString(r.puesto_nombre),
+            13: excelCellString(r.lugar_abre),
+            14: String(r.cantidad_copias ?? ""),
+            15: excelCellString(r.observaciones),
+            16: fmtDate(r.created_at),
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Llave";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        rootValues[COL_VER_MOV - 1] = "Ver movimientos";
+        const rootRow = wsMain.addRow(rootValues);
         if (detRow) {
-            const c = wsMain.getCell(row.number, 13);
+            const c = rootRow.getCell(COL_VER_MOV);
             c.value = { text: "Ver movimientos", hyperlink: `#'Movimientos'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
+        styleDataRow(rootRow, 0);
+
+        const movs = Array.isArray(r.e_movimiento_llave) ? r.e_movimiento_llave : [];
+        movs.forEach((m: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.mov${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Movimiento";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Entrega (movimiento)")] = excelCellString(m.nombre_persona_entrega);
+            values[headers.indexOf("Recibe (movimiento)")] = excelCellString(m.nombre_persona_recibe);
+            values[headers.indexOf("Departamento (movimiento)")] = excelCellString(m.departamento);
+            values[headers.indexOf("Teléfono (movimiento)")] = excelCellString(m.telefono);
+            values[headers.indexOf("Fecha (movimiento)")] = fmtDate(m.fecha);
+            values[headers.indexOf("Hora (movimiento)")] = fmtTime(m.hora);
+            values[headers.indexOf("Tiene firma entrega (movimiento)")] = m.firma_entrega ? "Sí" : "No";
+            values[headers.indexOf("Tiene firma recibe (movimiento)")] = m.firma_recibe ? "Sí" : "No";
+            values[headers.indexOf("Firma responsable (movimiento)")] = excelCellString(m.firma_responsable ?? "");
+            const movRow = wsMain.addRow(values);
+            styleDataRow(movRow, 1);
+        });
     }
 
-    wsMain.columns = [8, 12, 26, 22, 18, 22, 22, 22, 20, 14, 28, 14, 18].map((w) => ({ width: w }));
+    wsMain.columns = [12, 14, 8, 20, 10, 12, 26, 22, 18, 22, 22, 22, 20, 14, 28, 14, 18, 22, 22, 20, 16, 14, 12, 18, 18, 30].map((w) => ({ width: w }));
     wsMov.columns = [12, 22, 22, 20, 16, 14, 12, 18, 18, 18, 10].map((w) => ({ width: w }));
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

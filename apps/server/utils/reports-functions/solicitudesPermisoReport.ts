@@ -514,8 +514,15 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
         anchorsById.set(Number(r.id), appendDetalleBlock(wsDet, r));
     }
 
+    /** Cuadrícula jerárquica: Solicitud (nivel 0) → Turno (nivel 1, de `turnos`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Solicitud",
         "Empresa",
         "Cliente",
         "División",
@@ -533,10 +540,22 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
         "Creado",
         "Motivo",
         "Observaciones",
-        "Turnos",
+        "Ver turnos",
         "Firma empleado",
         "Firma ejecutivo",
+        "Puesto (turno)",
+        "Hora inicio (turno)",
+        "Hora fin (turno)",
+        "Tipo turno",
+        "Horas duración (turno)",
+        "Reemplazo (turno)",
     ];
+    const colTurnos = headers.indexOf("Ver turnos") + 1;
+    const colFirmaEmpleado = headers.indexOf("Firma empleado") + 1;
+    const colFirmaEjecutivo = headers.indexOf("Firma ejecutivo") + 1;
+    const linkCols = new Set([colTurnos, colFirmaEmpleado, colFirmaEjecutivo]);
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -545,61 +564,85 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
         c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    wsMain.columns = headers.map(() => ({ width: 18, outlineLevel: 1 }));
+    wsMain.columns = headers.map(() => ({ width: 18 }));
 
-    const colTurnos = headers.indexOf("Turnos") + 1;
-    const colFirmaEmpleado = headers.indexOf("Firma empleado") + 1;
-    const colFirmaEjecutivo = headers.indexOf("Firma ejecutivo") + 1;
-    const linkCols = new Set([colTurnos, colFirmaEmpleado, colFirmaEjecutivo]);
-
-    for (const r of rows) {
-        const anchors = anchorsById.get(Number(r.id));
-        const row = wsMain.addRow([
-            r.id,
-            r.empresa_nombre,
-            r.cliente_nombre,
-            r.division_nombre,
-            r.contrato_nombre,
-            r.corpo_nombre,
-            r.puesto_nombre,
-            r.empleado_nombre,
-            r.empleado_codigo,
-            r.ejecutivo_cuenta_nombre,
-            r.tipo,
-            r.estado,
-            r.fecha_inicio_txt,
-            r.fecha_fin_txt,
-            r.dias_permiso,
-            r.created_at_txt,
-            String(r.motivo_txt ?? r.motivo ?? "").slice(0, 500),
-            String(r.observaciones_txt ?? r.observaciones ?? "").slice(0, 500),
-            "",
-            "",
-            "",
-        ]);
-        if (anchors) {
-            row.getCell(colTurnos).value = { text: "Ver turnos", hyperlink: `#'Detalles'!A${anchors.turnosRow}` };
-            row.getCell(colTurnos).font = { color: { argb: "FF0563C1" }, underline: true };
-            row.getCell(colFirmaEmpleado).value = {
-                text: "Ver firma",
-                hyperlink: `#'Detalles'!A${anchors.firmaEmpleadoRow}`,
-            };
-            row.getCell(colFirmaEmpleado).font = { color: { argb: "FF0563C1" }, underline: true };
-            row.getCell(colFirmaEjecutivo).value = {
-                text: "Ver firma",
-                hyperlink: `#'Detalles'!A${anchors.firmaEjecutivoRow}`,
-            };
-            row.getCell(colFirmaEjecutivo).font = { color: { argb: "FF0563C1" }, underline: true };
-        }
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, col) => {
             cell.border = borderThin;
             if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
+        });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
+
+    for (const r of rows) {
+        const anchors = anchorsById.get(Number(r.id));
+        const general: Record<number, unknown> = {
+            [headers.indexOf("ID Solicitud") + 1]: r.id,
+            [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
+            [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
+            [headers.indexOf("División") + 1]: r.division_nombre,
+            [headers.indexOf("Contrato") + 1]: r.contrato_nombre,
+            [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
+            [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
+            [headers.indexOf("Colaborador") + 1]: r.empleado_nombre,
+            [headers.indexOf("Cód. colaborador") + 1]: r.empleado_codigo,
+            [headers.indexOf("Ejecutivo de cuenta") + 1]: r.ejecutivo_cuenta_nombre,
+            [headers.indexOf("Tipo salario") + 1]: r.tipo,
+            [headers.indexOf("Estado") + 1]: r.estado,
+            [headers.indexOf("Fecha inicio") + 1]: r.fecha_inicio_txt,
+            [headers.indexOf("Fecha fin") + 1]: r.fecha_fin_txt,
+            [headers.indexOf("Días") + 1]: r.dias_permiso,
+            [headers.indexOf("Creado") + 1]: r.created_at_txt,
+            [headers.indexOf("Motivo") + 1]: String(r.motivo_txt ?? r.motivo ?? "").slice(0, 500),
+            [headers.indexOf("Observaciones") + 1]: String(r.observaciones_txt ?? r.observaciones ?? "").slice(0, 500),
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Solicitud";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        const rootRow = wsMain.addRow(rootValues);
+        if (anchors) {
+            rootRow.getCell(colTurnos).value = { text: "Ver turnos", hyperlink: `#'Detalles'!A${anchors.turnosRow}` };
+            rootRow.getCell(colTurnos).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(colFirmaEmpleado).value = {
+                text: "Ver firma",
+                hyperlink: `#'Detalles'!A${anchors.firmaEmpleadoRow}`,
+            };
+            rootRow.getCell(colFirmaEmpleado).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(colFirmaEjecutivo).value = {
+                text: "Ver firma",
+                hyperlink: `#'Detalles'!A${anchors.firmaEjecutivoRow}`,
+            };
+            rootRow.getCell(colFirmaEjecutivo).font = { color: { argb: "FF0563C1" }, underline: true };
+        }
+        styleDataRow(rootRow, 0);
+
+        const turnos: any[] = r.turnos_list?.length ? r.turnos_list : safeParseTurnos(r.turnos);
+        turnos.forEach((t: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.turno${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Turno";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Puesto (turno)")] = String(t.puesto ?? "");
+            values[headers.indexOf("Hora inicio (turno)")] = String(t.hora_inicio ?? "");
+            values[headers.indexOf("Hora fin (turno)")] = String(t.hora_fin ?? "");
+            values[headers.indexOf("Tipo turno")] = String(t.tipo_turno ?? "");
+            values[headers.indexOf("Horas duración (turno)")] = String(t.horas_duracion ?? "");
+            values[headers.indexOf("Reemplazo (turno)")] = String(t.reemplazo_nombre ?? t.reemplazo_id ?? "");
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
     };
     wsDet.columns = [{ width: 22 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 28 }];
     return Buffer.from(await wb.xlsx.writeBuffer());
