@@ -5,6 +5,7 @@ import Constants from 'expo-constants';
 import * as Network from 'expo-network';
 import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Picker } from '@react-native-picker/picker';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -286,6 +287,41 @@ export default function JobManualsScreen() {
   const [imageFiles, setImageFiles] = useState<ManualFileLocal[]>([]);
   const [audioFiles, setAudioFiles] = useState<ManualFileLocal[]>([]);
   const [videoFiles, setVideoFiles] = useState<ManualFileLocal[]>([]);
+
+  const [isManualCameraVisible, setIsManualCameraVisible] = useState(false);
+  const [manualCameraPermission, requestManualCameraPermission] = useCameraPermissions();
+  const manualCameraRef = useRef<CameraView | null>(null);
+  const pendingManualCameraHandlerRef = useRef<((asset: { uri: string; name?: string; mimeType?: string }) => void) | null>(null);
+
+  const openManualCamera = async (onCaptured: (asset: { uri: string; name?: string; mimeType?: string }) => void) => {
+    if (!manualCameraPermission?.granted) {
+      const res = await requestManualCameraPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+        return;
+      }
+    }
+    pendingManualCameraHandlerRef.current = onCaptured;
+    setIsManualCameraVisible(true);
+  };
+
+  const captureManualPhoto = async () => {
+    if (!manualCameraRef.current) return;
+    try {
+      const photo = await manualCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+      setIsManualCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const handler = pendingManualCameraHandlerRef.current;
+      pendingManualCameraHandlerRef.current = null;
+      handler?.({ uri: photo.uri, name: `foto_${Date.now()}.jpg`, mimeType: 'image/jpeg' });
+    } catch (e: any) {
+      setIsManualCameraVisible(false);
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
 
   const [firmaResponsable, setFirmaResponsable] = useState<FirmaData | null>(null);
   const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
@@ -1629,6 +1665,60 @@ export default function JobManualsScreen() {
     puestoNameById,
   ]);
 
+  /**
+   * Procesa un asset ya elegido (por DocumentPicker o por la cámara) y lo agrega a la lista
+   * correspondiente. Compartido por `handleAddFile` (adjuntar) y la cámara para no duplicar el
+   * guardado/registro del archivo.
+   */
+  const addPickedManualFileAsset = async (
+    type: ManualFileLocal['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
+    try {
+      let extension = '';
+      if (asset.name && asset.name.includes('.')) {
+        extension = asset.name.split('.').pop() || '';
+      } else if (asset.mimeType && asset.mimeType.includes('/')) {
+        extension = asset.mimeType.split('/').pop() || '';
+      }
+      const extUse = (extension || 'dat').replace(/^\./, '') || 'dat';
+      const storedType: StoredFileType = type === 'document' ? 'text' : type;
+
+      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const fileName = await saveFile({
+        uri: asset.uri,
+        originalName: asset.name || 'archivo',
+        extension: extUse,
+        type: storedType,
+        prefix: 'job_manuals_m',
+      });
+
+      const newFile: ManualFileLocal = {
+        id: localId,
+        type,
+        name: asset.name || `archivo.${extUse || 'dat'}`,
+        extension: extUse,
+        base64: '',
+        localFileName: fileName,
+        uri: asset.uri,
+        mimeType: asset.mimeType,
+      };
+
+      if (type === 'image') {
+        setImageFiles(prev => [...prev, newFile]);
+      } else if (type === 'audio') {
+        setAudioFiles(prev => [...prev, newFile]);
+      } else if (type === 'video') {
+        setVideoFiles(prev => [...prev, newFile]);
+      } else {
+        setTextFiles(prev => [...prev, newFile]);
+      }
+    } catch (error) {
+      console.error('Error adding file for job manual:', error);
+      Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
+    }
+  };
+
   const handleAddFile = async (type: ManualFileLocal['type']) => {
     try {
       let pickerTypes: string | string[] | undefined;
@@ -1675,25 +1765,37 @@ export default function JobManualsScreen() {
       }
 
       const asset = result.assets[0];
+      await addPickedManualFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
+    } catch (error) {
+      console.error('Error picking file for job manual:', error);
+      Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
+    }
+  };
 
+  /**
+   * Procesa un asset ya elegido (por DocumentPicker o por la cámara) para la sección de
+   * visualización. Compartido por `handleAddViewFile` y la cámara para no duplicar el
+   * guardado/registro del archivo.
+   */
+  const addPickedViewFileAsset = async (
+    type: ManualFileLocal['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
+    try {
       let extension = '';
-      if (asset.name && asset.name.includes('.')) {
-        extension = asset.name.split('.').pop() || '';
-      } else if (asset.mimeType && asset.mimeType.includes('/')) {
-        extension = asset.mimeType.split('/').pop() || '';
-      }
+      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
+      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
       const extUse = (extension || 'dat').replace(/^\./, '') || 'dat';
       const storedType: StoredFileType = type === 'document' ? 'text' : type;
 
-      const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const localId = `local_vis_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
       const fileName = await saveFile({
         uri: asset.uri,
         originalName: asset.name || 'archivo',
         extension: extUse,
         type: storedType,
-        prefix: 'job_manuals_m',
+        prefix: 'job_manuals_v',
       });
-
       const newFile: ManualFileLocal = {
         id: localId,
         type,
@@ -1705,18 +1807,13 @@ export default function JobManualsScreen() {
         mimeType: asset.mimeType,
       };
 
-      if (type === 'image') {
-        setImageFiles(prev => [...prev, newFile]);
-      } else if (type === 'audio') {
-        setAudioFiles(prev => [...prev, newFile]);
-      } else if (type === 'video') {
-        setVideoFiles(prev => [...prev, newFile]);
-      } else {
-        setTextFiles(prev => [...prev, newFile]);
-      }
-    } catch (error) {
-      console.error('Error picking file for job manual:', error);
-      Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
+      if (type === 'image') setViewImageFiles(prev => [...prev, newFile]);
+      else if (type === 'audio') setViewAudioFiles(prev => [...prev, newFile]);
+      else if (type === 'video') setViewVideoFiles(prev => [...prev, newFile]);
+      else setViewTextFiles(prev => [...prev, newFile]);
+    } catch (e) {
+      console.error('Error adding file for visualization:', e);
+      Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
     }
   };
 
@@ -1764,35 +1861,7 @@ export default function JobManualsScreen() {
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
       const asset = result.assets[0];
-      let extension = '';
-      if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
-      else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
-      const extUse = (extension || 'dat').replace(/^\./, '') || 'dat';
-      const storedType: StoredFileType = type === 'document' ? 'text' : type;
-
-      const localId = `local_vis_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const fileName = await saveFile({
-        uri: asset.uri,
-        originalName: asset.name || 'archivo',
-        extension: extUse,
-        type: storedType,
-        prefix: 'job_manuals_v',
-      });
-      const newFile: ManualFileLocal = {
-        id: localId,
-        type,
-        name: asset.name || `archivo.${extUse || 'dat'}`,
-        extension: extUse,
-        base64: '',
-        localFileName: fileName,
-        uri: asset.uri,
-        mimeType: asset.mimeType,
-      };
-
-      if (type === 'image') setViewImageFiles(prev => [...prev, newFile]);
-      else if (type === 'audio') setViewAudioFiles(prev => [...prev, newFile]);
-      else if (type === 'video') setViewVideoFiles(prev => [...prev, newFile]);
-      else setViewTextFiles(prev => [...prev, newFile]);
+      await addPickedViewFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
     } catch (e) {
       console.error('Error picking file for visualization:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
@@ -2929,13 +2998,22 @@ export default function JobManualsScreen() {
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Imágenes</ThemedText>
-                <TouchableOpacity
-                  style={styles.addFileButton}
-                  onPress={() => handleAddFile('image')}
-                >
-                  <Ionicons name="image-outline" size={18} color="#007AFF" />
-                  <ThemedText style={styles.addFileButtonText}>Añadir imagen</ThemedText>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  <TouchableOpacity
+                    style={styles.addFileButton}
+                    onPress={() => handleAddFile('image')}
+                  >
+                    <Ionicons name="image-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.addFileButtonText}>Añadir imagen</ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.addFileButton}
+                    onPress={() => openManualCamera((asset) => void addPickedManualFileAsset('image', asset))}
+                  >
+                    <Ionicons name="camera-outline" size={18} color="#007AFF" />
+                    <ThemedText style={styles.addFileButtonText}>Tomar foto</ThemedText>
+                  </TouchableOpacity>
+                </View>
                 {imageFiles.length > 0 && (
                   <ThemedView style={styles.filesList}>
                     {imageFiles.map(file => (
@@ -4363,6 +4441,12 @@ export default function JobManualsScreen() {
                           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('image')}>
                             <Ionicons name="image-outline" size={20} color="#007AFF" />
                           </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.fileIconButton}
+                            onPress={() => openManualCamera((asset) => void addPickedViewFileAsset('image', asset))}
+                          >
+                            <Ionicons name="camera-outline" size={20} color="#007AFF" />
+                          </TouchableOpacity>
                           <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('audio')}>
                             <Ionicons name="mic-outline" size={20} color="#007AFF" />
                           </TouchableOpacity>
@@ -4719,6 +4803,41 @@ export default function JobManualsScreen() {
               )}
             </ScrollView>
           </ThemedView>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={isManualCameraVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setIsManualCameraVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          {manualCameraPermission?.granted ? (
+            <CameraView ref={manualCameraRef} style={{ flex: 1 }} facing="back">
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsManualCameraVisible(false)}
+              >
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureManualPhoto}>
+                <View style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <View style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>
+                Se necesita permiso para usar la cámara
+              </ThemedText>
+              <TouchableOpacity
+                style={styles.cameraPermissionBtn}
+                onPress={requestManualCameraPermission}
+              >
+                <ThemedText style={styles.cameraPermissionBtnText}>Conceder permiso</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </Modal>
     </ThemedView>
@@ -5678,6 +5797,54 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
     backgroundColor: '#007AFF',
+  },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: 8,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
+  cameraPermissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#000',
+  },
+  cameraPermissionText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  cameraPermissionBtn: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  cameraPermissionBtnText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });
 

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../utils/reportError";
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,7 +54,8 @@ export async function POST(req: NextRequest) {
     const planId = articulo_plan_id != null ? Number(articulo_plan_id) : null;
     const asignadoId = articulo_asignado_id != null ? Number(articulo_asignado_id) : null;
     if (!planId && !asignadoId) {
-      return NextResponse.json({ status: false, message: "Debe indicar articulo_plan_id o articulo_asignado_id" }, { status: 200 });
+      await reportError(req, "api/articulo-mantenimiento", "POST", 400, "Debe indicar articulo_plan_id o articulo_asignado_id");
+      return NextResponse.json({ status: false, message: "Debe indicar articulo_plan_id o articulo_asignado_id" }, { status: 400 });
     }
 
     const whereLatest: any = planId ? { articulo_plan_id: planId } : { articulo_asignado_id: asignadoId };
@@ -63,7 +65,8 @@ export async function POST(req: NextRequest) {
     if (hora_accion) {
       const parsed = new Date(hora_accion);
       if (isNaN(parsed.getTime())) {
-        return NextResponse.json({ status: false, message: "hora_accion inválida" }, { status: 200 });
+        await reportError(req, "api/articulo-mantenimiento", "POST", 400, "hora_accion inválida");
+        return NextResponse.json({ status: false, message: "hora_accion inválida" }, { status: 400 });
       }
       actionTime = parsed;
     }
@@ -288,6 +291,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/articulo-mantenimiento:", errorMessage);
+    await reportError(req, "api/articulo-mantenimiento", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -723,8 +723,15 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         right: { style: "thin" },
     };
 
+    /** Cuadrícula jerárquica: la agenda (nivel 0) más sus subregistros hermanos (participantes / acuerdos / temas, nivel 1). */
+    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Agenda",
         "Empresa",
         "Cliente",
         "División",
@@ -736,10 +743,21 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         "Título",
         "Autor",
         "Estado",
-        "Participantes",
-        "Acuerdos",
-        "Temas",
+        "Ver participantes",
+        "Ver acuerdos",
+        "Ver temas",
+        "Nombre (participante)",
+        "Puesto (participante)",
+        "Tiene firma (participante)",
+        "Texto (acuerdo)",
+        "Responsable (acuerdo)",
+        "Fecha límite (acuerdo)",
+        "Tema",
     ];
+    const COL_VER_PARTICIPANTES = 17;
+    const COL_VER_ACUERDOS = 18;
+    const COL_VER_TEMAS = 19;
+
     const h = main.addRow(mainHeaders);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -750,6 +768,10 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
     main.getRow(1).height = 28;
     main.views = [{ state: "frozen", ySplit: 1 }];
     main.columns = [
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
         { width: 12 },
         { width: 38 },
         { width: 34 },
@@ -762,9 +784,16 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         { width: 36 },
         { width: 36 },
         { width: 14 },
+        { width: 20 },
+        { width: 18 },
+        { width: 18 },
+        { width: 28 },
+        { width: 26 },
+        { width: 16 },
+        { width: 36 },
         { width: 22 },
-        { width: 22 },
-        { width: 22 },
+        { width: 16 },
+        { width: 36 },
     ];
 
     const detailsStartById = new Map<number, number>();
@@ -850,10 +879,24 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
 
     details.columns = [{ width: 44 }, { width: 28 }, { width: 32 }];
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((c) => {
+            c.border = borderThin;
+            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        row.height = 22;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
-        const row = main.addRow([
-            r.id,
+        const general = [
+            String(r.id),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -865,26 +908,80 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
             r.titulo,
             r.autor,
             r.estado ? "Completado" : "Pendiente",
+        ];
+
+        const rootRow = main.addRow([
+            String(r.id),
+            "",
+            0,
+            "Agenda minuta",
+            ...general,
             "Ver participantes",
             "Ver acuerdos",
             "Ver temas",
+            ...blank(7),
         ]);
-        row.getCell(13).value = { text: "Ver participantes", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(14).value = { text: "Ver acuerdos", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(15).value = { text: "Ver temas", hyperlink: `#'Detalles'!A${detailRow}` };
-        row.getCell(13).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(14).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(15).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((c) => {
-            c.border = borderThin;
-            c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        rootRow.getCell(COL_VER_PARTICIPANTES).value = { text: "Ver participantes", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_ACUERDOS).value = { text: "Ver acuerdos", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_TEMAS).value = { text: "Ver temas", hyperlink: `#'Detalles'!A${detailRow}` };
+        rootRow.getCell(COL_VER_PARTICIPANTES).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_ACUERDOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_TEMAS).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        parseParticipantes(r.participantes).forEach((p, idx) => {
+            const row = main.addRow([
+                `${r.id}.p${idx + 1}`,
+                String(r.id),
+                1,
+                "Participante",
+                ...general,
+                ...blank(3),
+                String(p.nombre ?? ""),
+                String(p.puesto ?? ""),
+                p.firma ? "Sí" : "No",
+                ...blank(4),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
         });
-        row.height = 22;
+
+        parseAcuerdosItems(r.acuerdos).forEach((a, idx) => {
+            const row = main.addRow([
+                `${r.id}.a${idx + 1}`,
+                String(r.id),
+                1,
+                "Acuerdo",
+                ...general,
+                ...blank(6),
+                String(a.texto ?? ""),
+                String(a.responsable ?? ""),
+                String(a.fecha_limite ?? ""),
+                "",
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
+        });
+
+        parseTemas(r.temas_a_tratar).forEach((t, idx) => {
+            const row = main.addRow([
+                `${r.id}.t${idx + 1}`,
+                String(r.id),
+                1,
+                "Tema",
+                ...general,
+                ...blank(9),
+                String(t ?? ""),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
+        });
     }
 
     main.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
     };
 
     const ab = await workbook.xlsx.writeBuffer();

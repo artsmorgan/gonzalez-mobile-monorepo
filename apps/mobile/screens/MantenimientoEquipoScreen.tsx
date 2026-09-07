@@ -4,6 +4,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Network from 'expo-network';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import getCurrentUserDigitalSignature from '../hooks/getCurrentUserDigitalSignature';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Picker } from '@react-native-picker/picker';
@@ -58,6 +59,7 @@ import {
 } from '@/hooks/mantenimientoEquipoBulkArticulos';
 import { parseMantenimientoEquipoPlantillaLocal } from '@/hooks/mantenimientoEquipoPlantillaLocal';
 import { prioritizePlanByArticuloNomencladorId } from '@/hooks/prioritizePlanByArticuloNomencladorId';
+import { searchActaStructure, type StructureLite } from '@/hooks/reportesFunctions';
 
 type TipoMantenimientoArticulo = { id: number; nombre: string };
 
@@ -776,6 +778,25 @@ export default function MantenimientoEquipoScreen() {
     const pendingPlanillasBulkSubmitRef = useRef(false);
     const executeSubmitBulkArticulosRef = useRef<() => Promise<void>>(async () => {});
 
+    // Alta unitaria de artículos (mismas condiciones y validación de token que la carga masiva)
+    const [isUnitArticuloModalVisible, setIsUnitArticuloModalVisible] = useState(false);
+    const [unitArticuloCatalog, setUnitArticuloCatalog] = useState<{ id: number; nombre: string }[]>([]);
+    const [isUnitCatalogLoading, setIsUnitCatalogLoading] = useState(false);
+    const [unitSelectedArticulo, setUnitSelectedArticulo] = useState<{ id: number; nombre: string } | null>(null);
+    const [unitCantidad, setUnitCantidad] = useState('');
+    const [unitSerie, setUnitSerie] = useState('');
+    const [unitMarca, setUnitMarca] = useState('');
+    const [unitModelo, setUnitModelo] = useState('');
+    const [unitFechaEntrega, setUnitFechaEntrega] = useState(new Date());
+    const [showUnitFechaEntregaPicker, setShowUnitFechaEntregaPicker] = useState(false);
+    const [unitPuestoSearch, setUnitPuestoSearch] = useState('');
+    const [unitPuestoResults, setUnitPuestoResults] = useState<StructureLite[]>([]);
+    const [unitPuestos, setUnitPuestos] = useState<{ codigo: string; nombre: string }[]>([]);
+    const [isUnitValidatingPuesto, setIsUnitValidatingPuesto] = useState(false);
+    const [isUnitSubmitting, setIsUnitSubmitting] = useState(false);
+    const pendingPlanillasUnitSubmitRef = useRef(false);
+    const executeSubmitUnitArticuloRef = useRef<() => Promise<void>>(async () => {});
+
     const canBulkArticulosPuesto = marcaDivisionNombre === 'Administrativos';
 
     // Estructura principal (main_structure) para filtros jerárquicos (Empresa → ... → Puesto)
@@ -896,6 +917,45 @@ export default function MantenimientoEquipoScreen() {
     const [armaSignatureKey, setArmaSignatureKey] = useState(0);
     const [isReadingArmaSignature, setIsReadingArmaSignature] = useState(false);
 
+    // Cámara reutilizable para cualquier foto del módulo (mismo criterio de un disparo por
+    // apertura que ChecklistSupervisionScreen.tsx/PhysicalMinuteAgendaScreen.tsx): se guarda el
+    // callback a invocar con la foto capturada, así un único modal sirve tanto para "Agregar
+    // imagen" del activo como para las fotos Antes/Después de armas, sin duplicar la cámara.
+    const [isActivoCameraVisible, setIsActivoCameraVisible] = useState(false);
+    const [activoCameraPermission, requestActivoCameraPermission] = useCameraPermissions();
+    const activoCameraRef = useRef<CameraView | null>(null);
+    const pendingActivoCameraHandlerRef = useRef<((asset: { uri: string; name?: string; mimeType?: string }) => void) | null>(null);
+
+    const openActivoCamera = async (onCaptured: (asset: { uri: string; name?: string; mimeType?: string }) => void) => {
+        if (!activoCameraPermission?.granted) {
+            const res = await requestActivoCameraPermission();
+            if (!res.granted) {
+                Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+                return;
+            }
+        }
+        pendingActivoCameraHandlerRef.current = onCaptured;
+        setIsActivoCameraVisible(true);
+    };
+
+    const captureActivoPhoto = async () => {
+        if (!activoCameraRef.current) return;
+        try {
+            const photo = await activoCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+            setIsActivoCameraVisible(false);
+            if (!photo?.uri) {
+                Alert.alert('Error', 'No se pudo capturar la foto');
+                return;
+            }
+            const handler = pendingActivoCameraHandlerRef.current;
+            pendingActivoCameraHandlerRef.current = null;
+            handler?.({ uri: photo.uri, name: `foto_${Date.now()}.jpg`, mimeType: 'image/jpeg' });
+        } catch (e: any) {
+            setIsActivoCameraVisible(false);
+            Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+        }
+    };
+
     // Submódulo: Movimiento de activos (CRUD dentro de modal)
     const { scanQR, QRScannerComponent } = useQRScanner();
     const [isMovModalVisible, setIsMovModalVisible] = useState(false);
@@ -1000,6 +1060,44 @@ export default function MantenimientoEquipoScreen() {
         return { mime: blob.type || 'image/jpeg', base64 };
     }, []);
 
+    /** Compartido por `pickArmaImageAsFile` (adjuntar) y la cámara, para no duplicar el guardado. */
+    const buildArmaFileFromAsset = useCallback(
+        async (baseName: string, asset: { uri: string; name?: string; mimeType?: string }) => {
+            let extension = '';
+            if (asset.name && asset.name.includes('.')) {
+                extension = asset.name.split('.').pop() || '';
+            } else if (asset.mimeType && asset.mimeType.includes('/')) {
+                extension = asset.mimeType.split('/').pop() || '';
+            }
+            if (!extension) extension = 'jpg';
+            const extNorm = extension.replace(/^\./, '') || 'jpg';
+
+            const localId = `arma_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+            const fileName = `${baseName}.${extNorm}`;
+
+            const localFileName = await saveFile({
+                uri: asset.uri,
+                originalName: baseName,
+                extension: extNorm,
+                type: 'image',
+                prefix: 'mantenimiento_equipo',
+            });
+
+            const newFile: ActivoFileLocal = {
+                id: localId,
+                type: 'image',
+                name: fileName,
+                extension: extNorm,
+                localFileName,
+                uri: asset.uri,
+                mimeType: asset.mimeType,
+            };
+
+            return newFile;
+        },
+        []
+    );
+
     const pickArmaImageAsFile = useCallback(async (baseName: string) => {
         const result = await DocumentPicker.getDocumentAsync({
             type: 'image/*',
@@ -1010,40 +1108,8 @@ export default function MantenimientoEquipoScreen() {
         if (result.canceled || !result.assets || result.assets.length === 0) return null;
 
         const asset = result.assets[0];
-        const response = await fetch(asset.uri);
-        const blob = await response.blob();
-
-        let extension = '';
-        if (asset.name && asset.name.includes('.')) {
-            extension = asset.name.split('.').pop() || '';
-        } else if (blob.type && blob.type.includes('/')) {
-            extension = blob.type.split('/').pop() || '';
-        }
-        if (!extension) extension = 'jpg';
-
-        const localId = `arma_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const fileName = `${baseName}.${extension}`;
-
-        const localFileName = await saveFile({
-            uri: asset.uri,
-            originalName: baseName,
-            extension: extension.replace(/^\./, '') || 'jpg',
-            type: 'image',
-            prefix: 'mantenimiento_equipo',
-        });
-
-        const newFile: ActivoFileLocal = {
-            id: localId,
-            type: 'image',
-            name: fileName,
-            extension: extension.replace(/^\./, '') || 'jpg',
-            localFileName,
-            uri: asset.uri,
-            mimeType: blob.type || asset.mimeType,
-        };
-
-        return newFile;
-    }, []);
+        return buildArmaFileFromAsset(baseName, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
+    }, [buildArmaFileFromAsset]);
 
     const openArmaSignatureModal = useCallback(() => {
         setArmaSignatureKey(k => k + 1);
@@ -1588,11 +1654,16 @@ export default function MantenimientoEquipoScreen() {
             pendingPlanillasBulkSubmitRef.current = false;
             void executeSubmitBulkArticulosRef.current();
         }
+        if (pendingPlanillasUnitSubmitRef.current) {
+            pendingPlanillasUnitSubmitRef.current = false;
+            void executeSubmitUnitArticuloRef.current();
+        }
     }, []);
 
     const handlePlanillasRevalidationDismiss = useCallback(() => {
         planillasRevalidationModalShownRef.current = false;
         pendingPlanillasBulkSubmitRef.current = false;
+        pendingPlanillasUnitSubmitRef.current = false;
         setShowPlanillasRevalidationModal(false);
     }, []);
 
@@ -1684,6 +1755,228 @@ export default function MantenimientoEquipoScreen() {
             ],
         );
     }, [bulkPlantillaArticulos, getConnectionStatus, executeSubmitBulkArticulos]);
+
+    // --- Alta unitaria de artículos (mismo endpoint que la carga masiva) ---
+
+    const resetUnitArticuloForm = useCallback(() => {
+        setUnitSelectedArticulo(null);
+        setUnitCantidad('');
+        setUnitSerie('');
+        setUnitMarca('');
+        setUnitModelo('');
+        setUnitFechaEntrega(new Date());
+        setUnitPuestoSearch('');
+        setUnitPuestoResults([]);
+        setUnitPuestos([]);
+    }, []);
+
+    const closeUnitArticuloModal = useCallback(() => {
+        setIsUnitArticuloModalVisible(false);
+        resetUnitArticuloForm();
+    }, [resetUnitArticuloForm]);
+
+    const loadUnitArticuloCatalog = useCallback(async () => {
+        if (unitArticuloCatalog.length > 0) return;
+        try {
+            setIsUnitCatalogLoading(true);
+            const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+            if (!apiUrl) throw new Error('Server URL not configured');
+            const response = await authedFetch({
+                url: `${apiUrl}/api/mantenimiento-equipo/articulos-catalogo`,
+                init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+                refreshAccessToken,
+                logout,
+            });
+            if (!response) return;
+            const result = await response.json().catch(() => null);
+            if (response.ok && result?.status && Array.isArray(result.data)) {
+                setUnitArticuloCatalog(
+                    result.data.map((a: any) => ({ id: Number(a.id), nombre: String(a.nombre ?? '') })),
+                );
+            } else {
+                Alert.alert('Error', result?.message || 'No se pudo cargar el catálogo de artículos.');
+            }
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : 'No se pudo cargar el catálogo de artículos.';
+            Alert.alert('Error', msg);
+        } finally {
+            setIsUnitCatalogLoading(false);
+        }
+    }, [unitArticuloCatalog.length, refreshAccessToken, logout]);
+
+    const openUnitArticuloModal = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'Esta función requiere conexión a internet.');
+            return;
+        }
+        resetUnitArticuloForm();
+        setIsUnitArticuloModalVisible(true);
+        void loadUnitArticuloCatalog();
+    }, [getConnectionStatus, resetUnitArticuloForm, loadUnitArticuloCatalog]);
+
+    // Mismo buscador de puesto (por nombre o código) que ReportesPuestoModal.tsx: búsqueda en
+    // servidor vía `searchActaStructure`, en vez de validar un código escrito a mano.
+    const runUnitPuestoSearch = useCallback(async () => {
+        const q = unitPuestoSearch.trim();
+        if (!q) {
+            Alert.alert('Puesto', 'Escriba un nombre o código de puesto.');
+            return;
+        }
+        if (!(await getConnectionStatus())) {
+            Alert.alert('Sin conexión', 'La búsqueda de puestos requiere conexión a internet.');
+            return;
+        }
+        try {
+            setIsUnitValidatingPuesto(true);
+            const res = await searchActaStructure({ entity: 'puesto', q, refreshAccessToken, logout });
+            const data = res.status ? res.data ?? [] : [];
+            setUnitPuestoResults(data);
+            if (!data.length) Alert.alert('Puesto', 'Sin resultados.');
+        } finally {
+            setIsUnitValidatingPuesto(false);
+        }
+    }, [unitPuestoSearch, getConnectionStatus, refreshAccessToken, logout]);
+
+    const selectUnitPuesto = useCallback((it: StructureLite) => {
+        const codigo = it.codigo || String(it.id);
+        setUnitPuestos((prev) =>
+            prev.some((p) => p.codigo.toLowerCase() === codigo.toLowerCase())
+                ? prev
+                : [...prev, { codigo, nombre: it.nombre }],
+        );
+        setUnitPuestoSearch('');
+        setUnitPuestoResults([]);
+    }, []);
+
+    const removeUnitPuesto = useCallback((index: number) => {
+        setUnitPuestos((prev) => prev.filter((_, i) => i !== index));
+    }, []);
+
+    const formatUnitFechaEntregaForApi = (date: Date): string => {
+        const dd = String(date.getDate()).padStart(2, '0');
+        const mm = String(date.getMonth() + 1).padStart(2, '0');
+        const yyyy = date.getFullYear();
+        return `${dd}-${mm}-${yyyy} 00:00:00`;
+    };
+
+    const executeSubmitUnitArticulo = useCallback(async () => {
+        if (!unitSelectedArticulo) {
+            Alert.alert('Validación', 'Seleccione un artículo.');
+            return;
+        }
+        const cantidadNum = Number(unitCantidad);
+        if (!unitCantidad.trim() || !Number.isFinite(cantidadNum) || cantidadNum < 0) {
+            Alert.alert('Validación', 'Ingrese una cantidad válida.');
+            return;
+        }
+        if (!unitSerie.trim()) {
+            Alert.alert('Validación', 'La serie es obligatoria.');
+            return;
+        }
+        if (!unitMarca.trim()) {
+            Alert.alert('Validación', 'La marca es obligatoria.');
+            return;
+        }
+        if (unitPuestos.length === 0) {
+            Alert.alert('Validación', 'Agregue al menos un código de puesto.');
+            return;
+        }
+
+        let referenceMs: number;
+        try {
+            referenceMs = (await getHoraAccion()) || Date.now();
+        } catch {
+            referenceMs = Date.now();
+        }
+
+        const hasValidPlanillasToken = await requestPlanillasRevalidationIfNeeded(referenceMs);
+        if (!hasValidPlanillasToken) {
+            pendingPlanillasUnitSubmitRef.current = true;
+            return;
+        }
+
+        const planillasTokenCheck = await isStoredPlanillasTokenValid(referenceMs);
+        const planillasToken = planillasTokenCheck.token;
+
+        const articulos: BulkPlantillaArticulo[] = unitPuestos.map((p) => ({
+            codigo_puesto: p.codigo,
+            puesto_nombre: p.nombre,
+            numero_articulo: unitSelectedArticulo.id,
+            cantidad: cantidadNum,
+            serie: unitSerie.trim(),
+            marca: unitMarca.trim(),
+            modelo: unitModelo.trim() || null,
+            fecha_entrega: formatUnitFechaEntregaForApi(unitFechaEntrega),
+            articulo_nombre: unitSelectedArticulo.nombre,
+        }));
+
+        try {
+            setIsUnitSubmitting(true);
+            const result = await submitMantenimientoEquipoBulkArticulos({
+                articulos,
+                planillasToken,
+                refreshAccessToken,
+                logout,
+            });
+            if (!result.status) {
+                const errText =
+                    result.errors?.length
+                        ? result.errors.slice(0, 8).join('\n')
+                        : result.message || 'No se pudo completar la operación.';
+                Alert.alert('Error', errText);
+                return;
+            }
+            let msg = result.message || 'Operación completada.';
+            if (result.skipped?.length) {
+                msg += `\n\nOmitidos (${result.skipped.length}):\n${result.skipped.slice(0, 5).join('\n')}`;
+            }
+            Alert.alert('Listo', msg);
+            closeUnitArticuloModal();
+            await fetchReportes({ force: true });
+        } catch (e: unknown) {
+            const errMsg = e instanceof Error ? e.message : 'Error al actualizar.';
+            Alert.alert('Error', errMsg);
+        } finally {
+            setIsUnitSubmitting(false);
+        }
+    }, [
+        unitSelectedArticulo,
+        unitCantidad,
+        unitSerie,
+        unitMarca,
+        unitModelo,
+        unitFechaEntrega,
+        unitPuestos,
+        closeUnitArticuloModal,
+        requestPlanillasRevalidationIfNeeded,
+        refreshAccessToken,
+        logout,
+    ]);
+
+    executeSubmitUnitArticuloRef.current = executeSubmitUnitArticulo;
+
+    const handleSubmitUnitArticulo = useCallback(async () => {
+        if (!(await getConnectionStatus())) {
+            Alert.alert(
+                'Sin conexión',
+                'El alta de artículos requiere conexión a internet y no se puede encolar offline.'
+            );
+            return;
+        }
+        Alert.alert(
+            'Confirmar',
+            `¿Vincular el artículo a ${unitPuestos.length} puesto(s)?`,
+            [
+                { text: 'Cancelar', style: 'cancel' },
+                {
+                    text: 'Guardar',
+                    onPress: () => {
+                        void executeSubmitUnitArticulo();
+                    },
+                },
+            ],
+        );
+    }, [unitPuestos, getConnectionStatus, executeSubmitUnitArticulo]);
 
     const resetFiltersToCurrentMarca = useCallback(() => {
         if (roleName === 'OPERATIVO') {
@@ -2636,6 +2929,59 @@ export default function MantenimientoEquipoScreen() {
         return `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     };
 
+    /**
+     * Procesa un asset ya elegido (por DocumentPicker o por la cámara) y lo agrega a la lista
+     * correspondiente. Compartido por `handleAddFile` (adjuntar) y `captureActivoPhoto` (cámara)
+     * para no duplicar el guardado/registro del archivo.
+     */
+    const addPickedAssetAsFile = async (
+        type: ActivoFileLocal['type'],
+        asset: { uri: string; name?: string; mimeType?: string }
+    ) => {
+        try {
+            let extension = '';
+            if (asset.name && asset.name.includes('.')) {
+                extension = asset.name.split('.').pop() || '';
+            } else if (asset.mimeType && asset.mimeType.includes('/')) {
+                extension = asset.mimeType.split('/').pop() || '';
+            }
+            const extNorm = (extension || 'dat').replace(/^\./, '');
+
+            const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+            const localFileName = await saveFile({
+                uri: asset.uri,
+                originalName: asset.name || 'file',
+                extension: extNorm,
+                type: activoFileLocalToStorageType(type),
+                prefix: 'mantenimiento_equipo',
+            });
+
+            const newFile: ActivoFileLocal = {
+                id: localId,
+                type,
+                name: asset.name || `archivo.${extNorm}`,
+                extension: extNorm,
+                localFileName,
+                uri: asset.uri,
+                mimeType: asset.mimeType,
+            };
+
+            if (type === 'image') {
+                setImageFiles(prev => [...prev, newFile]);
+            } else if (type === 'audio') {
+                setAudioFiles(prev => [...prev, newFile]);
+            } else if (type === 'video') {
+                setVideoFiles(prev => [...prev, newFile]);
+            } else {
+                setTextFiles(prev => [...prev, newFile]);
+            }
+        } catch (error) {
+            console.error('Error adding file:', error);
+            Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
+        }
+    };
+
     const handleAddFile = async (type: ActivoFileLocal['type']) => {
         try {
             let pickerTypes: string | string[] | undefined;
@@ -2682,46 +3028,7 @@ export default function MantenimientoEquipoScreen() {
             }
 
             const asset = result.assets[0];
-            const response = await fetch(asset.uri);
-            const blob = await response.blob();
-
-            let extension = '';
-            if (asset.name && asset.name.includes('.')) {
-                extension = asset.name.split('.').pop() || '';
-            } else if (asset.mimeType && asset.mimeType.includes('/')) {
-                extension = asset.mimeType.split('/').pop() || '';
-            }
-            const extNorm = (extension || 'dat').replace(/^\./, '');
-
-            const localId = `local_file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-
-            const localFileName = await saveFile({
-                uri: asset.uri,
-                originalName: asset.name || 'file',
-                extension: extNorm,
-                type: activoFileLocalToStorageType(type),
-                prefix: 'mantenimiento_equipo',
-            });
-
-            const newFile: ActivoFileLocal = {
-                id: localId,
-                type,
-                name: asset.name || `archivo.${extNorm}`,
-                extension: extNorm,
-                localFileName,
-                uri: asset.uri,
-                mimeType: asset.mimeType,
-            };
-
-            if (type === 'image') {
-                setImageFiles(prev => [...prev, newFile]);
-            } else if (type === 'audio') {
-                setAudioFiles(prev => [...prev, newFile]);
-            } else if (type === 'video') {
-                setVideoFiles(prev => [...prev, newFile]);
-            } else {
-                setTextFiles(prev => [...prev, newFile]);
-            }
+            await addPickedAssetAsFile(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
         } catch (error) {
             console.error('Error picking file:', error);
             Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
@@ -4359,8 +4666,28 @@ export default function MantenimientoEquipoScreen() {
                                     }
                                 }}
                             >
-                                <Ionicons name="camera" size={18} color="#fff" />
+                                <Ionicons name="image-outline" size={18} color="#fff" />
                                 <ThemedText style={styles.armasMediaButtonText}>{armaFotoAntesLocal ? 'Cambiar' : 'Subir'}</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.armasMediaButton}
+                                onPress={() =>
+                                    openActivoCamera(async (asset) => {
+                                        if (armaFotoAntesLocal?.localFileName) {
+                                            try {
+                                                await deleteFile(armaFotoAntesLocal.localFileName);
+                                            } catch {
+                                                /* idempotente */
+                                            }
+                                        }
+                                        const imgFile = await buildArmaFileFromAsset('arma_foto_antes', asset);
+                                        setArmaFotoAntesLocal(imgFile);
+                                        setArmaFotoAntesName(imgFile.name);
+                                    })
+                                }
+                            >
+                                <Ionicons name="camera-outline" size={18} color="#fff" />
+                                <ThemedText style={styles.armasMediaButtonText}>Tomar foto</ThemedText>
                             </TouchableOpacity>
                             {armaFotoAntesLocal ? (
                                 <>
@@ -4469,8 +4796,28 @@ export default function MantenimientoEquipoScreen() {
                                     }
                                 }}
                             >
-                                <Ionicons name="camera" size={18} color="#fff" />
+                                <Ionicons name="image-outline" size={18} color="#fff" />
                                 <ThemedText style={styles.armasMediaButtonText}>{armaFotoDespuesLocal ? 'Cambiar' : 'Subir'}</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.armasMediaButton}
+                                onPress={() =>
+                                    openActivoCamera(async (asset) => {
+                                        if (armaFotoDespuesLocal?.localFileName) {
+                                            try {
+                                                await deleteFile(armaFotoDespuesLocal.localFileName);
+                                            } catch {
+                                                /* idempotente */
+                                            }
+                                        }
+                                        const imgFile = await buildArmaFileFromAsset('arma_foto_despues', asset);
+                                        setArmaFotoDespuesLocal(imgFile);
+                                        setArmaFotoDespuesName(imgFile.name);
+                                    })
+                                }
+                            >
+                                <Ionicons name="camera-outline" size={18} color="#fff" />
+                                <ThemedText style={styles.armasMediaButtonText}>Tomar foto</ThemedText>
                             </TouchableOpacity>
                             {armaFotoDespuesLocal ? (
                                 <>
@@ -4834,13 +5181,22 @@ export default function MantenimientoEquipoScreen() {
 
                 <ThemedView style={styles.formGroup}>
                     <ThemedText style={styles.formLabel}>Imágenes</ThemedText>
-                    <TouchableOpacity
-                        style={styles.addFileButton}
-                        onPress={() => handleAddFile('image')}
-                    >
-                        <Ionicons name="image-outline" size={18} color="#007AFF" />
-                        <ThemedText style={styles.addFileButtonText}>Agregar imagen</ThemedText>
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                        <TouchableOpacity
+                            style={styles.addFileButton}
+                            onPress={() => handleAddFile('image')}
+                        >
+                            <Ionicons name="image-outline" size={18} color="#007AFF" />
+                            <ThemedText style={styles.addFileButtonText}>Agregar imagen</ThemedText>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.addFileButton}
+                            onPress={() => openActivoCamera((asset) => void addPickedAssetAsFile('image', asset))}
+                        >
+                            <Ionicons name="camera-outline" size={18} color="#007AFF" />
+                            <ThemedText style={styles.addFileButtonText}>Tomar foto</ThemedText>
+                        </TouchableOpacity>
+                    </View>
                     {activoFiles.filter(f => f.type === 'image').length > 0 && (
                         <ThemedView style={styles.filesList}>
                             {activoFiles.filter(f => f.type === 'image').map((file) => (
@@ -5124,6 +5480,19 @@ export default function MantenimientoEquipoScreen() {
                             <Ionicons name="cloud-upload-outline" size={18} color="#FFFFFF" />
                             <ThemedText style={styles.bulkArticulosOpenButtonText}>
                                 Carga masiva de artículos
+                            </ThemedText>
+                        </TouchableOpacity>
+                    )}
+
+                    {canBulkArticulosPuesto && !isUpdating && !showActivos && (
+                        <TouchableOpacity
+                            style={[styles.bulkArticulosOpenButton, { backgroundColor: '#34C759', marginTop: 8 }]}
+                            onPress={openUnitArticuloModal}
+                            activeOpacity={0.85}
+                        >
+                            <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.bulkArticulosOpenButtonText}>
+                                Agregar equipo a puesto(s)
                             </ThemedText>
                         </TouchableOpacity>
                     )}
@@ -5764,6 +6133,40 @@ export default function MantenimientoEquipoScreen() {
                 </View>
             </Modal>
 
+            {/* Cámara reutilizable (una foto por apertura, igual que ChecklistSupervisionScreen.tsx) */}
+            <Modal
+                visible={isActivoCameraVisible}
+                animationType="slide"
+                onRequestClose={() => setIsActivoCameraVisible(false)}
+            >
+                <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+                    {activoCameraPermission?.granted ? (
+                        <CameraView ref={activoCameraRef} style={{ flex: 1 }} facing="back">
+                            <TouchableOpacity
+                                style={styles.cameraCloseButton}
+                                onPress={() => setIsActivoCameraVisible(false)}
+                            >
+                                <Ionicons name="close" size={30} color="#FFFFFF" />
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureActivoPhoto}>
+                                <ThemedView style={styles.cameraCaptureButtonInner} />
+                            </TouchableOpacity>
+                        </CameraView>
+                    ) : (
+                        <ThemedView style={styles.cameraPermissionContainer}>
+                            <ThemedText style={styles.cameraPermissionText}>Se requiere permiso de cámara</ThemedText>
+                            <TouchableOpacity
+                                style={styles.cameraPermissionBtn}
+                                onPress={requestActivoCameraPermission}
+                                activeOpacity={0.85}
+                            >
+                                <ThemedText style={styles.cameraPermissionBtnText}>Solicitar permiso</ThemedText>
+                            </TouchableOpacity>
+                        </ThemedView>
+                    )}
+                </ThemedView>
+            </Modal>
+
             <Modal
                 visible={isBulkArticulosModalVisible}
                 transparent
@@ -5891,6 +6294,196 @@ export default function MantenimientoEquipoScreen() {
                 </View>
             </Modal>
 
+            <Modal
+                visible={isUnitArticuloModalVisible}
+                transparent
+                animationType="fade"
+                presentationStyle="overFullScreen"
+                onRequestClose={closeUnitArticuloModal}
+            >
+                <View style={styles.overlay}>
+                    <ThemedView style={styles.floatModalCard}>
+                        <ThemedView style={styles.floatModalHeader}>
+                            <ThemedText style={styles.modalTitle}>Agregar equipo a puesto(s)</ThemedText>
+                            <TouchableOpacity onPress={closeUnitArticuloModal}>
+                                <Ionicons name="close" size={24} color="#333" />
+                            </TouchableOpacity>
+                        </ThemedView>
+                        <ThemedText style={styles.signatureModalHint}>
+                            Complete los datos del equipo e indique el código o nombre de 1 o más puestos a los que
+                            se asignará. Se enviará al mismo proceso que la carga masiva de artículos.
+                        </ThemedText>
+                        <ScrollView
+                            style={{ maxHeight: Dimensions.get('window').height * 0.55 }}
+                            contentContainerStyle={{ padding: 12 }}
+                            keyboardShouldPersistTaps="handled"
+                        >
+                            <ThemedText style={styles.label}>Puesto(s):</ThemedText>
+                            <View style={styles.row}>
+                                <TextInput
+                                    style={[styles.input, { flex: 1 }]}
+                                    value={unitPuestoSearch}
+                                    onChangeText={setUnitPuestoSearch}
+                                    placeholder="Buscar por nombre o código"
+                                />
+                                <TouchableOpacity
+                                    style={styles.searchIconBtn}
+                                    onPress={() => void runUnitPuestoSearch()}
+                                    activeOpacity={0.85}
+                                    disabled={isUnitValidatingPuesto}
+                                >
+                                    {isUnitValidatingPuesto ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <Ionicons name="search" size={22} color="#fff" />
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                            {unitPuestoResults.length > 0 && (
+                                <ThemedView style={styles.resultList}>
+                                    {unitPuestoResults.map((it) => (
+                                        <TouchableOpacity
+                                            key={`unit-puesto-result-${it.id}`}
+                                            style={styles.resultItem}
+                                            onPress={() => selectUnitPuesto(it)}
+                                        >
+                                            <ThemedText>
+                                                {[it.codigo, it.nombre].filter(Boolean).join(' — ')}
+                                            </ThemedText>
+                                        </TouchableOpacity>
+                                    ))}
+                                </ThemedView>
+                            )}
+                            <ThemedView style={styles.assignedList}>
+                                {unitPuestos.length === 0 ? (
+                                    <ThemedText style={styles.helperText}>Ningún puesto seleccionado.</ThemedText>
+                                ) : (
+                                    unitPuestos.map((p, index) => (
+                                        <ThemedView key={`${p.codigo}-${index}`} style={styles.assignedUserItem}>
+                                            <ThemedText style={styles.assignedUserTitle}>
+                                                {p.codigo}
+                                                {p.nombre && p.nombre !== p.codigo ? ` — ${p.nombre}` : ''}
+                                            </ThemedText>
+                                            <TouchableOpacity
+                                                style={styles.removeUserButton}
+                                                onPress={() => removeUnitPuesto(index)}
+                                                accessibilityLabel="Quitar puesto"
+                                            >
+                                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                            </TouchableOpacity>
+                                        </ThemedView>
+                                    ))
+                                )}
+                            </ThemedView>
+
+                            <ThemedText style={styles.label}>Artículo:</ThemedText>
+                            <View style={styles.pickerContainer}>
+                                <Picker
+                                    selectedValue={unitSelectedArticulo ? String(unitSelectedArticulo.id) : ''}
+                                    onValueChange={(value: string) => {
+                                        if (value === '') {
+                                            setUnitSelectedArticulo(null);
+                                            return;
+                                        }
+                                        const found = unitArticuloCatalog.find((a) => a.id === Number(value));
+                                        setUnitSelectedArticulo(found ?? null);
+                                    }}
+                                    style={styles.picker}
+                                >
+                                    <Picker.Item
+                                        label={isUnitCatalogLoading ? 'Cargando catálogo...' : 'Seleccionar...'}
+                                        value=""
+                                        color="#000000"
+                                    />
+                                    {unitArticuloCatalog.map((a) => (
+                                        <Picker.Item key={a.id} label={`#${a.id} — ${a.nombre}`} value={String(a.id)} color="#000000" />
+                                    ))}
+                                </Picker>
+                            </View>
+
+                            <ThemedText style={styles.label}>Cantidad:</ThemedText>
+                            <TextInput
+                                style={styles.input}
+                                value={unitCantidad}
+                                onChangeText={setUnitCantidad}
+                                keyboardType="numeric"
+                                placeholder="Cantidad"
+                            />
+
+                            <ThemedText style={styles.label}>Serie:</ThemedText>
+                            <TextInput
+                                style={styles.input}
+                                value={unitSerie}
+                                onChangeText={setUnitSerie}
+                                placeholder="Serie"
+                            />
+
+                            <ThemedText style={styles.label}>Marca:</ThemedText>
+                            <TextInput
+                                style={styles.input}
+                                value={unitMarca}
+                                onChangeText={setUnitMarca}
+                                placeholder="Marca"
+                            />
+
+                            <ThemedText style={styles.label}>Modelo (opcional):</ThemedText>
+                            <TextInput
+                                style={styles.input}
+                                value={unitModelo}
+                                onChangeText={setUnitModelo}
+                                placeholder="Modelo"
+                            />
+
+                            <ThemedText style={styles.label}>Fecha de entrega:</ThemedText>
+                            <TouchableOpacity
+                                style={styles.dateButton}
+                                onPress={() => setShowUnitFechaEntregaPicker(true)}
+                            >
+                                <ThemedText style={styles.dateButtonText}>
+                                    {unitFechaEntrega.toLocaleDateString()}
+                                </ThemedText>
+                                <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                            </TouchableOpacity>
+                            {showUnitFechaEntregaPicker && (
+                                <DateTimePicker
+                                    value={unitFechaEntrega}
+                                    mode="date"
+                                    display="default"
+                                    onChange={(_event, selectedDate) => {
+                                        setShowUnitFechaEntregaPicker(false);
+                                        if (selectedDate) setUnitFechaEntrega(selectedDate);
+                                    }}
+                                />
+                            )}
+                        </ScrollView>
+
+                        <ThemedView style={styles.modalActions}>
+                            <TouchableOpacity
+                                style={[styles.modalButton, styles.modalCancelButton]}
+                                onPress={closeUnitArticuloModal}
+                            >
+                                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.modalButton,
+                                    styles.modalConfirmButton,
+                                    isUnitSubmitting && { opacity: 0.7 },
+                                ]}
+                                onPress={handleSubmitUnitArticulo}
+                                disabled={isUnitSubmitting}
+                            >
+                                {isUnitSubmitting ? (
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                ) : (
+                                    <ThemedText style={styles.modalConfirmButtonText}>Guardar</ThemedText>
+                                )}
+                            </TouchableOpacity>
+                        </ThemedView>
+                    </ThemedView>
+                </View>
+            </Modal>
+
             <AppFooter />
             <PlanillasPasswordRevalidationModal
                 visible={showPlanillasRevalidationModal}
@@ -5954,6 +6547,34 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
     },
     picker: { color: '#000' },
+
+    row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    searchIconBtn: {
+        backgroundColor: '#007AFF',
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    resultList: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', marginTop: 4 },
+    resultItem: { padding: 10, borderBottomWidth: 1, borderBottomColor: '#E8E8E8', backgroundColor: '#FFFFFF' },
+    assignedList: { marginTop: 8 },
+    helperText: { fontSize: 13, color: '#666', lineHeight: 18 },
+    assignedUserItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 10,
+        paddingHorizontal: 10,
+        marginTop: 6,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        backgroundColor: '#FFFFFF',
+    },
+    assignedUserTitle: { fontSize: 14, color: '#000', flex: 1, paddingRight: 8 },
+    removeUserButton: { padding: 4 },
 
     checkboxContainer: {
         flexDirection: 'row',
@@ -6940,5 +7561,35 @@ const styles = StyleSheet.create({
         fontSize: 13,
         fontWeight: '700',
     },
+    // Cámara (mismo estándar que ChecklistSupervisionScreen.tsx/PhysicalMinuteAgendaScreen.tsx)
+    cameraCloseButton: {
+        position: 'absolute',
+        top: 50,
+        left: 20,
+        backgroundColor: 'rgba(255,255,255,0.3)',
+        borderRadius: 20,
+        padding: 6,
+    },
+    cameraCaptureButton: {
+        position: 'absolute',
+        bottom: 40,
+        alignSelf: 'center',
+        width: 70,
+        height: 70,
+        borderRadius: 35,
+        backgroundColor: 'rgba(255,255,255,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    cameraCaptureButtonInner: {
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: '#FFFFFF',
+    },
+    cameraPermissionContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20 },
+    cameraPermissionText: { fontSize: 16, color: '#FFFFFF', marginBottom: 20, textAlign: 'center' },
+    cameraPermissionBtn: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
+    cameraPermissionBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '700' },
 });
 

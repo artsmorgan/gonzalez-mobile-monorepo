@@ -4,6 +4,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { getUserMarca } from "../../../utils/getUserMarca";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
 
@@ -28,7 +29,8 @@ export async function GET(req: NextRequest) {
     const puestoParam = req.nextUrl.searchParams.get("p") ?? req.nextUrl.searchParams.get("puesto_id");
     const puestoId = puestoParam ? parseInt(puestoParam) : NaN;
     if (!Number.isFinite(puestoId)) {
-      return NextResponse.json({ status: false, message: "Puesto inválido / no especificado" }, { status: 200 });
+      await reportError(req, "api/mantenimiento-equipo", "GET", 400, "Puesto inválido / no especificado");
+      return NextResponse.json({ status: false, message: "Puesto inválido / no especificado" }, { status: 400 });
     }
 
     console.log('puestoId: ', puestoId);
@@ -38,7 +40,10 @@ export async function GET(req: NextRequest) {
       const marcaId = parseInt(marcaIdStr);
       if (Number.isFinite(marcaId)) {
         const marcaRes = await getMarcaDiaOrFail(req, marcaId);
-        if (!marcaRes.ok) return NextResponse.json({ status: false, message: marcaRes.message }, { status: 200 });
+        if (!marcaRes.ok) {
+          await reportError(req, "api/mantenimiento-equipo", "GET", 404, marcaRes.message);
+          return NextResponse.json({ status: false, message: marcaRes.message }, { status: 404 });
+        }
       }
     }
 
@@ -193,6 +198,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/mantenimiento-equipo:", errorMessage);
+    await reportError(req, "api/mantenimiento-equipo", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

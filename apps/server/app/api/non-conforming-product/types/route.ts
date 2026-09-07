@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -33,8 +34,10 @@ export async function GET(req: NextRequest) {
     );
   } catch (error: any) {
     console.error("Error in GET /api/non-conforming-product/types:", error);
+    const errorMessage = error?.message || "Error interno del servidor";
+    await reportError(req, "api/non-conforming-product/types", "GET", 500, errorMessage);
     return NextResponse.json(
-      { status: false, message: error?.message || "Error interno del servidor" },
+      { status: false, message: errorMessage },
       { status: 500 }
     );
   }

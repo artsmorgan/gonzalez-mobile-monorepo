@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { reportError } from "../../../utils/reportError";
 
 /** Jerarquía: empresa_id, cliente_id, division_id, contrato_id, corpo_id, puesto_id (sucursal_id = corpo). */
 function parseId(v: unknown): number | null {
@@ -22,12 +23,14 @@ export async function GET(req: NextRequest) {
 
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     if (!corpoIdStr || String(corpoIdStr).trim() === "") {
-      return NextResponse.json({ status: false, message: "Sucursal (corpo) no especificada" }, { status: 200 });
+      await reportError(req, "api/llaves", "GET", 400, "Sucursal (corpo) no especificada");
+      return NextResponse.json({ status: false, message: "Sucursal (corpo) no especificada" }, { status: 400 });
     }
 
     const targetCorpoId = parseInt(String(corpoIdStr), 10);
     if (!Number.isFinite(targetCorpoId) || targetCorpoId <= 0) {
-      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
+      await reportError(req, "api/llaves", "GET", 400, "corpo_id inválido");
+      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
     }
 
     const rows = await callDynamicPrisma({
@@ -90,6 +93,7 @@ export async function GET(req: NextRequest) {
     console.log(error);
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/llaves:", errorMessage);
+    await reportError(req, "api/llaves", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -118,15 +122,18 @@ export async function POST(req: NextRequest) {
     } = body ?? {};
 
     if (!marca_id || !numero_llave || !lugar_abre || cantidad_copias === undefined || cantidad_copias === null || !firma_responsable) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/llaves", "POST", 400, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
     }
 
     const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
     if (!marcaDia) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+      await reportError(req, "api/llaves", "POST", 404, "Marca no encontrada");
+      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
     }
     if (!marcaDia.puesto_id) {
-      return NextResponse.json({ status: false, message: "Puesto no encontrado en marca" }, { status: 200 });
+      await reportError(req, "api/llaves", "POST", 404, "Puesto no encontrado en marca");
+      return NextResponse.json({ status: false, message: "Puesto no encontrado en marca" }, { status: 404 });
     }
 
     const useCliente =
@@ -146,9 +153,10 @@ export async function POST(req: NextRequest) {
     const useDivision = parseId(bodyDivisionId);
     const useContrato = parseId(bodyContratoId);
     if (useEmpresa == null || useDivision == null || useContrato == null) {
+      await reportError(req, "api/llaves", "POST", 400, "Incluya empresa_id, division_id y contrato_id (jerarquía desde el formulario o current_marca vía app)");
       return NextResponse.json(
         { status: false, message: "Incluya empresa_id, division_id y contrato_id (jerarquía desde el formulario o current_marca vía app)" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -254,6 +262,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/llaves:", errorMessage);
+    await reportError(req, "api/llaves", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

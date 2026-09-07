@@ -4,12 +4,14 @@ import { sendNotificationByPlaza, fetchActivePlazaIdsForPuestos } from "../../..
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
         return NextResponse.json({ status: true, message: "Método GET" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/activities", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -34,12 +36,14 @@ export async function POST(req: NextRequest) {
             console.log("puestos_plazas", puestos_plazas);
             console.log("firma_responsable", firma_responsable);
             console.log("--------------------------------");
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/activities", "POST", 500, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 500 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const actividad = await callDynamicPrisma({
@@ -159,6 +163,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log("errorMessage", errorMessage);
+        await reportError(req, "api/activities", "POST", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

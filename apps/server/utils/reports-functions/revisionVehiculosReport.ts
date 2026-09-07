@@ -724,77 +724,160 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
         wsDet.addRow([]);
     }
 
+    /** Cuadrícula jerárquica: Registro (nivel 0) → Ítem info. general / Ítem info. revisión / Movimiento, hermanos (nivel 1). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Registro",
         "Empresa",
         "Cliente",
         "División",
         "Contrato",
         "Sucursal",
         "Puesto",
-        "ID",
         "Tipo",
         "Vehículo",
         "Observaciones",
         "Fecha de creación",
-        "Información general",
-        "Información de revisión",
-        "Movimientos",
+        "Ver información general",
+        "Ver información de revisión",
+        "Ver movimientos",
+        "Campo (ítem)",
+        "Valor (ítem)",
+        "Observación (ítem)",
+        "Movimiento",
+        "Fecha (movimiento)",
+        "Hora (movimiento)",
+        "Realizado por (movimiento)",
+        "Autorizado por (movimiento)",
     ];
+    const colGen = mainHeaders.indexOf("Ver información general") + 1;
+    const colRev = mainHeaders.indexOf("Ver información de revisión") + 1;
+    const colMov = mainHeaders.indexOf("Ver movimientos") + 1;
+    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    const linkCols = new Set([colGen, colRev, colMov]);
     wsMain.addRow(mainHeaders);
     applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
 
-    const colGen = mainHeaders.indexOf("Información general") + 1;
-    const colRev = mainHeaders.indexOf("Información de revisión") + 1;
-    const colMov = mainHeaders.indexOf("Movimientos") + 1;
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell, col) => {
+            if (linkCols.has(col)) return;
+            cell.border = borderThin;
+            cell.alignment = { wrapText: true, vertical: "top" };
+        });
+        for (const c of linkCols) row.getCell(c).border = borderThin;
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
 
     for (const r of rows) {
         const linkGen = r.info_general_count > 0 ? `Ver información general (${r.info_general_count})` : "";
         const linkRev = r.info_revision_count > 0 ? `Ver revisión (${r.info_revision_count})` : "";
         const linkMov = r.movimientos_count > 0 ? `Ver movimientos (${r.movimientos_count})` : "";
-        const row = wsMain.addRow([
-            r.empresa_txt,
-            r.cliente_txt,
-            r.division_txt,
-            r.contrato_txt,
-            r.corpo_txt,
-            r.puesto_txt,
-            r.id,
-            r.tipo,
-            r.vehiculo_txt,
-            excelCellString(r.observaciones).slice(0, 500),
-            r.created_at_txt,
-            linkGen || "—",
-            linkRev || "—",
-            linkMov || "—",
-        ]);
-        applyDataRow(row, mainHeaders.length);
+        const general: Record<number, unknown> = {
+            [mainHeaders.indexOf("ID Registro") + 1]: r.id,
+            [mainHeaders.indexOf("Empresa") + 1]: r.empresa_txt,
+            [mainHeaders.indexOf("Cliente") + 1]: r.cliente_txt,
+            [mainHeaders.indexOf("División") + 1]: r.division_txt,
+            [mainHeaders.indexOf("Contrato") + 1]: r.contrato_txt,
+            [mainHeaders.indexOf("Sucursal") + 1]: r.corpo_txt,
+            [mainHeaders.indexOf("Puesto") + 1]: r.puesto_txt,
+            [mainHeaders.indexOf("Tipo") + 1]: r.tipo,
+            [mainHeaders.indexOf("Vehículo") + 1]: r.vehiculo_txt,
+            [mainHeaders.indexOf("Observaciones") + 1]: excelCellString(r.observaciones).slice(0, 500),
+            [mainHeaders.indexOf("Fecha de creación") + 1]: r.created_at_txt,
+        };
+
+        const rootValues = new Array(mainHeaders.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Registro";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        rootValues[colGen - 1] = linkGen || "—";
+        rootValues[colRev - 1] = linkRev || "—";
+        rootValues[colMov - 1] = linkMov || "—";
+        const rootRow = wsMain.addRow(rootValues);
 
         const aGen = anchorGen.get(r.id);
         if (aGen && linkGen) {
-            const cell = row.getCell(colGen);
+            const cell = rootRow.getCell(colGen);
             cell.value = { text: linkGen, hyperlink: `#'Detalles'!A${aGen}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const aRev = anchorRev.get(r.id);
         if (aRev && linkRev) {
-            const cell = row.getCell(colRev);
+            const cell = rootRow.getCell(colRev);
             cell.value = { text: linkRev, hyperlink: `#'Detalles'!A${aRev}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const aMov = anchorMov.get(r.id);
         if (aMov && linkMov) {
-            const cell = row.getCell(colMov);
+            const cell = rootRow.getCell(colMov);
             cell.value = { text: linkMov, hyperlink: `#'Detalles'!A${aMov}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
+        styleDataRow(rootRow, 0);
+
+        const itemRow = (tipo: string, idPrefix: string, item: any, idx: number) => {
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${r.id}.${idPrefix}${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = tipo;
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            if (item?.kind === "heading") {
+                values[mainHeaders.indexOf("Campo (ítem)")] = excelCellString(item.label ?? item.title ?? "");
+            } else {
+                values[mainHeaders.indexOf("Campo (ítem)")] = excelCellString(item?.label ?? item?.key ?? "");
+                if (item?.kind === "signature") {
+                    values[mainHeaders.indexOf("Valor (ítem)")] = item?.value ? "Tiene firma" : "Sin firma";
+                } else {
+                    values[mainHeaders.indexOf("Valor (ítem)")] = excelCellString(item?.value ?? "");
+                }
+                values[mainHeaders.indexOf("Observación (ítem)")] = excelCellString(item?.observation ?? "");
+            }
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        };
+
+        safeParseArray(r.informacion_general).forEach((item: any, idx: number) => itemRow("Ítem info. general", "ig", item, idx));
+        parseInformacionRevision(r.informacion_revision).forEach((item: any, idx: number) => itemRow("Ítem info. revisión", "ir", item, idx));
+
+        safeParseArray(r.movimientos_vehiculos).forEach((mov: any, idx: number) => {
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${r.id}.mov${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Movimiento";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Movimiento")] = excelCellString(mov?.movimiento ?? "");
+            values[mainHeaders.indexOf("Fecha (movimiento)")] = excelCellString(mov?.fecha ?? "");
+            values[mainHeaders.indexOf("Hora (movimiento)")] = excelCellString(mov?.hora ?? "");
+            values[mainHeaders.indexOf("Realizado por (movimiento)")] = excelCellString(mov?.realizado_por ?? "");
+            values[mainHeaders.indexOf("Autorizado por (movimiento)")] = excelCellString(mov?.autorizado_por ?? "");
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, wsMain.rowCount), column: mainHeaders.length },
     };
 
-    wsMain.columns = [28, 24, 22, 28, 24, 28, 8, 14, 32, 36, 20, 22, 24, 18].map((w) => ({ width: w }));
+    wsMain.columns = [
+        12, 14, 8, 20, 10,
+        28, 24, 22, 28, 24, 28,
+        14, 32, 36, 20,
+        20, 24, 18,
+        26, 30, 30,
+        22, 18, 14, 22, 22,
+    ].map((w) => ({ width: w }));
     wsDet.columns = [32, 48].map((w) => ({ width: w }));
 
     return Buffer.from(await wb.xlsx.writeBuffer());

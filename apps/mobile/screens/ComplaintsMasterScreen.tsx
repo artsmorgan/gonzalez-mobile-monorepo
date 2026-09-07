@@ -66,6 +66,7 @@ import {
 import { deleteFile, saveFile, getLocalFileDisplayUri, type StoredFileType } from '@/hooks/fileStorage';
 import { downloadAuthedUrlToDevice } from '@/hooks/downloadReportFileToDevice';
 import * as DocumentPicker from 'expo-document-picker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 const COMPLAINTS_MASTER_FILE_STORAGE_PREFIX = 'complaints_master';
 const COMPLAINTS_MASTER_DEBUG_LOG = '[ComplaintsMaster]';
@@ -467,6 +468,42 @@ export default function ComplaintsMasterScreen() {
   const [audioFiles, setAudioFiles] = useState<LocalFile[]>([]);
   const [videoFiles, setVideoFiles] = useState<LocalFile[]>([]);
   const [documentFiles, setDocumentFiles] = useState<LocalFile[]>([]);
+
+  const [isComplaintCameraVisible, setIsComplaintCameraVisible] = useState(false);
+  const [complaintCameraPermission, requestComplaintCameraPermission] = useCameraPermissions();
+  const complaintCameraRef = useRef<CameraView | null>(null);
+  const pendingComplaintCameraHandlerRef = useRef<((asset: { uri: string; name?: string; mimeType?: string }) => void) | null>(null);
+
+  const openComplaintCamera = async (onCaptured: (asset: { uri: string; name?: string; mimeType?: string }) => void) => {
+    if (!complaintCameraPermission?.granted) {
+      const res = await requestComplaintCameraPermission();
+      if (!res.granted) {
+        Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+        return;
+      }
+    }
+    pendingComplaintCameraHandlerRef.current = onCaptured;
+    setIsComplaintCameraVisible(true);
+  };
+
+  const captureComplaintPhoto = async () => {
+    if (!complaintCameraRef.current) return;
+    try {
+      const photo = await complaintCameraRef.current.takePictureAsync({ quality: 0.7, skipProcessing: false });
+      setIsComplaintCameraVisible(false);
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto');
+        return;
+      }
+      const handler = pendingComplaintCameraHandlerRef.current;
+      pendingComplaintCameraHandlerRef.current = null;
+      handler?.({ uri: photo.uri, name: `foto_${Date.now()}.jpg`, mimeType: 'image/jpeg' });
+    } catch (e: any) {
+      setIsComplaintCameraVisible(false);
+      Alert.alert('Error', e?.message || 'No se pudo capturar la foto');
+    }
+  };
+
   /** Al editar: adjuntos ya existentes, precargados para el PUT; no se listan en la UI. */
   const [preservedImageFiles, setPreservedImageFiles] = useState<LocalFile[]>([]);
   const [preservedAudioFiles, setPreservedAudioFiles] = useState<LocalFile[]>([]);
@@ -1140,17 +1177,16 @@ export default function ComplaintsMasterScreen() {
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
   };
 
-  const handleAddFile = async (type: LocalFile['type']) => {
+  /**
+   * Procesa un asset ya elegido (por DocumentPicker o por la cámara) y lo agrega a la lista
+   * correspondiente. Compartido por `handleAddFile` (adjuntar) y la cámara para no duplicar el
+   * guardado/registro del archivo.
+   */
+  const addPickedComplaintFileAsset = async (
+    type: LocalFile['type'],
+    asset: { uri: string; name?: string; mimeType?: string }
+  ) => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: complaintsMasterDocumentPickerTypes(type),
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled || !result.assets || result.assets.length === 0) return;
-
-      const asset = result.assets[0];
       let extension = '';
       if (asset.name && asset.name.includes('.')) extension = asset.name.split('.').pop() || '';
       else if (asset.mimeType && asset.mimeType.includes('/')) extension = asset.mimeType.split('/').pop() || '';
@@ -1200,6 +1236,24 @@ export default function ComplaintsMasterScreen() {
       else if (type === 'audio') setAudioFiles(prev => [...prev, file]);
       else if (type === 'video') setVideoFiles(prev => [...prev, file]);
       else setDocumentFiles(prev => [...prev, file]);
+    } catch (e) {
+      console.error('Error adding file for complaint:', e);
+      Alert.alert('Error', 'No se pudo agregar el archivo. Intenta nuevamente.');
+    }
+  };
+
+  const handleAddFile = async (type: LocalFile['type']) => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: complaintsMasterDocumentPickerTypes(type),
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      await addPickedComplaintFileAsset(type, { uri: asset.uri, name: asset.name, mimeType: asset.mimeType });
     } catch (e) {
       console.error('Error picking file for complaint:', e);
       Alert.alert('Error', 'No se pudo seleccionar el archivo. Intenta nuevamente.');
@@ -2889,6 +2943,12 @@ export default function ComplaintsMasterScreen() {
             <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('image')}>
               <Ionicons name="image-outline" size={20} color="#007AFF" />
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.fileIconButton}
+              onPress={() => openComplaintCamera((asset) => void addPickedComplaintFileAsset('image', asset))}
+            >
+              <Ionicons name="camera-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
             <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddFile('audio')}>
               <Ionicons name="mic-outline" size={20} color="#007AFF" />
             </TouchableOpacity>
@@ -3383,6 +3443,41 @@ export default function ComplaintsMasterScreen() {
         currentRoute="ComplaintsMaster"
       />
       {QRScannerComponent}
+
+      <Modal
+        visible={isComplaintCameraVisible}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setIsComplaintCameraVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: '#000' }}>
+          {complaintCameraPermission?.granted ? (
+            <CameraView ref={complaintCameraRef} style={{ flex: 1 }} facing="back">
+              <TouchableOpacity
+                style={styles.cameraCloseButton}
+                onPress={() => setIsComplaintCameraVisible(false)}
+              >
+                <Ionicons name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.cameraCaptureButton} onPress={captureComplaintPhoto}>
+                <View style={styles.cameraCaptureButtonInner} />
+              </TouchableOpacity>
+            </CameraView>
+          ) : (
+            <View style={styles.cameraPermissionContainer}>
+              <ThemedText style={styles.cameraPermissionText}>
+                Se necesita permiso para usar la cámara
+              </ThemedText>
+              <TouchableOpacity
+                style={styles.cameraPermissionBtn}
+                onPress={requestComplaintCameraPermission}
+              >
+                <ThemedText style={styles.cameraPermissionBtnText}>Conceder permiso</ThemedText>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
     </ThemedView>
   );
 }
@@ -4022,6 +4117,54 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 50,
+    left: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 20,
+    padding: 8,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraCaptureButtonInner: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#fff',
+  },
+  cameraPermissionContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#000',
+  },
+  cameraPermissionText: {
+    color: '#fff',
+    fontSize: 16,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  cameraPermissionBtn: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  cameraPermissionBtnText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });
 

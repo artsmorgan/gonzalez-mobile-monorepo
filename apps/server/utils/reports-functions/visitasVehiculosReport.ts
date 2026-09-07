@@ -201,7 +201,8 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
     const empIds = [...new Set(raw.map((r) => Number(r.empresa_id)).filter((n) => n > 0))];
     const divIds = [...new Set(raw.map((r) => Number(r.division_id)).filter((n) => n > 0))];
     const conIds = [...new Set(raw.map((r) => Number(r.contrato_id)).filter((n) => n > 0))];
-    const [emps, divs, cons] = await Promise.all([
+    const puestoSalidaIds = [...new Set(raw.map((r) => Number(r.puesto_salida_id)).filter((n) => n > 0))];
+    const [emps, divs, cons, puestosSalida] = await Promise.all([
         empIds.length
             ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empIds } }, select: { id: true, nombre: true, codigo: true } })
             : [],
@@ -209,14 +210,19 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
         conIds.length
             ? prisma.e_estructura_contrato.findMany({ where: { id: { in: conIds } }, select: { id: true, nombre: true, nro_contrato: true } })
             : [],
+        puestoSalidaIds.length
+            ? prisma.e_estructura_puesto.findMany({ where: { id: { in: puestoSalidaIds } }, select: { id: true, nombre: true, codigo: true } })
+            : [],
     ]);
     const empMap = new Map(emps.map((e) => [e.id, e]));
     const divMap = new Map(divs.map((e) => [e.id, e]));
     const conMap = new Map(cons.map((e) => [e.id, e]));
+    const puestoSalidaMap = new Map(puestosSalida.map((p) => [p.id, p]));
     return raw.map((r) => {
         const empresa = empMap.get(r.empresa_id);
         const division = divMap.get(r.division_id);
         const contrato = conMap.get(r.contrato_id);
+        const puestoSalida = r.puesto_salida_id ? puestoSalidaMap.get(Number(r.puesto_salida_id)) : null;
         return {
             ...r,
             empresa_nombre: empresa ? `${empresa.codigo ? `${empresa.codigo} - ` : ""}${empresa.nombre}` : String(r.empresa_id),
@@ -227,6 +233,9 @@ async function enrichRows(prisma: ReportDataAccess, raw: any[]): Promise<any[]> 
                   r.c_empleado.codigo
                 : "",
             persona_lugar_visita: [r.persona_visita, r.departamento_visita].filter((x) => x != null && String(x).trim() !== "").join(" / "),
+            puesto_salida_nombre: puestoSalida
+                ? `${puestoSalida.codigo ? `${puestoSalida.codigo} - ` : ""}${puestoSalida.nombre}`
+                : "",
         };
     });
 }
@@ -250,7 +259,14 @@ export async function queryVisitasVehiculosRows(
     if (filters.divisionIds?.length) where.division_id = { in: filters.divisionIds };
     if (filters.contratoIds?.length) where.contrato_id = { in: filters.contratoIds };
     if (filters.corpoIds?.length) where.corpo_id = { in: filters.corpoIds };
-    if (filters.puestoIds?.length) where.puesto_id = { in: filters.puestoIds };
+    if (filters.puestoIds?.length) {
+        // Un vehículo puede ingresar por un puesto y salir por otro: el filtro de puesto
+        // debe considerar tanto `puesto_id` (ingreso) como `puesto_salida_id` (salida).
+        where.OR = [
+            { puesto_id: { in: filters.puestoIds } },
+            { puesto_salida_id: { in: filters.puestoIds } },
+        ];
+    }
     if (filters.responsableIds?.length) where.responsable_id = { in: filters.responsableIds };
     if (filters.cedulaVisitante && filters.cedulaVisitante.trim() !== "") {
         where.cedula = { contains: filters.cedulaVisitante.trim() };
@@ -372,6 +388,7 @@ export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promis
         "Ver cédula",
         "Hora entrada",
         "Hora salida",
+        "Puesto de salida",
         "Motivo visita",
         "Persona / lugar visita",
         "Responsable",
@@ -391,7 +408,7 @@ export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promis
         from: { row: 1, column: 1 },
         to: { row: 1, column: mainHeaders.length },
     };
-    wsMain.columns = [8, 22, 22, 18, 22, 22, 20, 14, 12, 24, 14, 14, 16, 16, 28, 28, 26, 18].map((w) => ({ width: w }));
+    wsMain.columns = [8, 22, 22, 18, 22, 22, 20, 14, 12, 24, 14, 14, 16, 16, 22, 28, 28, 26, 18].map((w) => ({ width: w }));
 
     for (const r of rows) {
         const rid = Number(r.id);
@@ -411,6 +428,7 @@ export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promis
             "",
             formatDt(r.hora_entrada instanceof Date ? r.hora_entrada : new Date(r.hora_entrada)),
             r.hora_salida ? formatDt(r.hora_salida instanceof Date ? r.hora_salida : new Date(r.hora_salida)) : "",
+            excelCellString(r.puesto_salida_nombre),
             excelCellString(r.razon_visita),
             excelCellString(r.persona_lugar_visita),
             excelCellString(r.responsable_label),

@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 function parseDateTime(value: any): Date | null {
   if (!value) return null;
@@ -21,7 +22,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -34,7 +36,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const body = await req.json();
@@ -58,21 +61,31 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const fechaDate = fecha ? parseDateTime(fecha) : null;
     if (fecha && !fechaDate) {
-      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 400, "Fecha inválida");
+      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
     // Validar IDs si vienen
     if (cliente_id) {
       const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
-      if (!cliente) return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 200 });
+      if (!cliente) {
+        await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 400, "Cliente inválido");
+        return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 400 });
+      }
     }
     if (corpo_id) {
       const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
-      if (!corpo) return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 200 });
+      if (!corpo) {
+        await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 400, "Corpo inválido");
+        return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 400 });
+      }
     }
     if (puesto_id) {
       const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
-      if (!puesto) return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
+      if (!puesto) {
+        await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 400, "Puesto inválido");
+        return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
+      }
     }
 
     const existingObj = existing as any;
@@ -191,6 +204,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/apreciacion-vulnerabilidad/[id]:", errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -203,7 +217,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -216,7 +231,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       },
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     // Registrar cambio de eliminación antes de eliminar
@@ -270,6 +286,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/apreciacion-vulnerabilidad/[id]:", errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -324,8 +324,15 @@ export async function buildTiempoAlmuerzoExcelConsolidado(rows: any[]): Promise<
         anchorPausasById.set(Number(r.id), appendPausasDetailBlock(wsPausas, r));
     }
 
+    /** Cuadrícula jerárquica: Registro (nivel 0) → Pausa (nivel 1, de `pausas`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Registro",
         "Empresa",
         "Cliente",
         "División",
@@ -338,8 +345,14 @@ export async function buildTiempoAlmuerzoExcelConsolidado(rows: any[]): Promise<
         "Fin",
         "Minutos almuerzo",
         "Es manual",
-        "Pausas",
+        "Ver pausas",
+        "Inicio (pausa)",
+        "Fin (pausa)",
+        "Motivo (pausa)",
     ];
+    const colPausasLink = headers.indexOf("Ver pausas") + 1;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -349,55 +362,87 @@ export async function buildTiempoAlmuerzoExcelConsolidado(rows: any[]): Promise<
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
-        { width: 8, outlineLevel: 1 },
-        { width: 26, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 20, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
-        { width: 16, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 14, outlineLevel: 1 },
-        { width: 10, outlineLevel: 1 },
-        { width: 14, outlineLevel: 1 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
+        { width: 10 },
+        { width: 26 },
+        { width: 22 },
+        { width: 20 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 28 },
+        { width: 16 },
+        { width: 18 },
+        { width: 18 },
+        { width: 14 },
+        { width: 10 },
+        { width: 14 },
+        { width: 20 },
+        { width: 20 },
+        { width: 34 },
     ];
 
-    const colPausas = headers.length;
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell) => {
+            cell.border = borderThin;
+            cell.alignment = { vertical: "top", wrapText: true };
+        });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
 
     for (const r of rows) {
         const paRow = anchorPausasById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id,
-            r.empresa_nombre,
-            r.cliente_nombre,
-            r.division_nombre,
-            r.contrato_nombre,
-            r.corpo_nombre,
-            r.puesto_nombre,
-            String(r.empleado_nombre ?? ""),
-            String(r.cedula_empleado ?? ""),
-            r.inicio_txt,
-            r.fin_txt,
-            Number(r.minutos_almuerzo ?? 0),
-            r.es_manual ? "Sí" : "No",
-            "",
-        ]);
-        row.getCell(colPausas).value = { text: "Ver pausas", hyperlink: `#'Pausas'!A${paRow}` };
-        row.getCell(colPausas).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell, col) => {
-            cell.border = borderThin;
-            if (col !== colPausas) {
-                cell.alignment = { vertical: "top", wrapText: true };
-            }
+        const general: Record<number, unknown> = {
+            [headers.indexOf("ID Registro") + 1]: r.id,
+            [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
+            [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
+            [headers.indexOf("División") + 1]: r.division_nombre,
+            [headers.indexOf("Contrato") + 1]: r.contrato_nombre,
+            [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
+            [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
+            [headers.indexOf("Empleado") + 1]: String(r.empleado_nombre ?? ""),
+            [headers.indexOf("Cédula") + 1]: String(r.cedula_empleado ?? ""),
+            [headers.indexOf("Inicio") + 1]: r.inicio_txt,
+            [headers.indexOf("Fin") + 1]: r.fin_txt,
+            [headers.indexOf("Minutos almuerzo") + 1]: Number(r.minutos_almuerzo ?? 0),
+            [headers.indexOf("Es manual") + 1]: r.es_manual ? "Sí" : "No",
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Registro";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        rootValues[colPausasLink - 1] = "Ver pausas";
+        const rootRow = wsMain.addRow(rootValues);
+        rootRow.getCell(colPausasLink).value = { text: "Ver pausas", hyperlink: `#'Pausas'!A${paRow}` };
+        rootRow.getCell(colPausasLink).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+
+        const pausas: PausaParsed[] = r.pausas_list?.length ? r.pausas_list : parsePausasJson(r.pausas);
+        pausas.forEach((p, idx) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.pausa${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Pausa";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Inicio (pausa)")] = p.startTime;
+            values[headers.indexOf("Fin (pausa)")] = p.endTime;
+            values[headers.indexOf("Motivo (pausa)")] = p.reason;
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
     };
 
     wsPausas.columns = [{ width: 22 }, { width: 22 }, { width: 42 }];

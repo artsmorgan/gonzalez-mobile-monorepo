@@ -423,8 +423,15 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         anchorFirmaById.set(Number(r.id), firmaRow);
     }
 
+    /** Cuadrícula jerárquica: Evaluación (nivel 0) → Sección (nivel 1, de `evaluacion`) → Pregunta (nivel 2, de `sec.questions`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Evaluación",
         "Creado en",
         "Empresa",
         "Cliente",
@@ -435,10 +442,18 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         "Tipo",
         "Empleado evaluado",
         "Evaluador",
-        "Evaluación",
-        "Firma empleado (manual)",
+        "Ver evaluación",
+        "Ver firma",
         "Comentarios",
+        "Sección",
+        "Pregunta",
+        "Respuesta",
+        "Imágenes (nombres)",
     ];
+    const COL_VER_EVAL = 16;
+    const COL_VER_FIRMA = 17;
+    const COL_SECCION = 19;
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -448,27 +463,61 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
-        { width: 8, outlineLevel: 1 },
-        { width: 18, outlineLevel: 1 },
-        { width: 24, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 20, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 22, outlineLevel: 1 },
-        { width: 14, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
-        { width: 16, outlineLevel: 1 },
-        { width: 16, outlineLevel: 1 },
-        { width: 36, outlineLevel: 1 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
+        { width: 12 },
+        { width: 18 },
+        { width: 24 },
+        { width: 22 },
+        { width: 20 },
+        { width: 22 },
+        { width: 22 },
+        { width: 22 },
+        { width: 14 },
+        { width: 28 },
+        { width: 28 },
+        { width: 16 },
+        { width: 16 },
+        { width: 36 },
+        { width: 24 },
+        { width: 40 },
+        { width: 30 },
+        { width: 30 },
     ];
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell) => {
+            cell.border = border;
+            cell.alignment = { vertical: "middle", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    const imagesJoined = (q: any): string => {
+        const names: string[] = [];
+        if (Array.isArray(q?.images)) {
+            for (const im of q.images) {
+                const s = String(im ?? "").trim();
+                if (s && !s.startsWith("data:image/")) names.push(s);
+            }
+        } else if (q?.image && typeof q.image === "string" && !q.image.startsWith("data:image/")) {
+            names.push(q.image.trim());
+        }
+        return names.join(", ");
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const evRow = anchorEvalById.get(Number(r.id)) ?? 1;
         const fiRow = anchorFirmaById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id,
+        const general = [
+            String(r.id),
             r.created_at_txt,
             r.empresa_nombre,
             r.cliente_nombre,
@@ -479,20 +528,65 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
             r.tipo,
             r.empleado_evaluado_txt,
             r.evaluador_txt,
+        ];
+
+        const rootRow = wsMain.addRow([
+            String(r.id),
             "",
-            "",
+            0,
+            "Evaluación",
+            ...general,
+            "Ver evaluación",
+            "Ver firma",
             String(r.comentarios ?? "").slice(0, 5000),
+            ...blank(4),
         ]);
-        row.getCell(12).value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${evRow}` };
-        row.getCell(12).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(13).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
-        row.getCell(13).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
-            cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
+        rootRow.getCell(COL_VER_EVAL).value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${evRow}` };
+        rootRow.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Detalles'!A${fiRow}` };
+        rootRow.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        const sections = parseStaffEvaluacionSections(r.evaluacion);
+        sections.forEach((sec, secIdx) => {
+            const secTitle = String(sec.title ?? "").trim() || `Sección ${secIdx + 1}`;
+            const secId = `${r.id}.s${secIdx + 1}`;
+            const secRow = wsMain.addRow([
+                secId,
+                String(r.id),
+                1,
+                "Sección",
+                ...general,
+                ...blank(3),
+                secTitle,
+                "",
+                "",
+                "",
+            ]);
+            styleDataRow(secRow, 1);
+            totalDataRows += 1;
+
+            const questions = Array.isArray(sec.questions) ? sec.questions : [];
+            questions.forEach((q, qIdx) => {
+                const row = wsMain.addRow([
+                    `${secId}.q${qIdx + 1}`,
+                    secId,
+                    2,
+                    "Pregunta",
+                    ...general,
+                    ...blank(3),
+                    "",
+                    String(q?.title ?? ""),
+                    String(q?.answear ?? ""),
+                    imagesJoined(q),
+                ]);
+                styleDataRow(row, 2);
+                totalDataRows += 1;
+            });
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
     for (let c = 1; c <= maxCol; c++) wsDet.getColumn(c).width = c <= 2 ? 40 : 12;
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

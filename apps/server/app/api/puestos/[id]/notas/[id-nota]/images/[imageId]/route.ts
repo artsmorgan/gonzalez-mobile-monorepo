@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../../../utils/reportError";
 
 export async function DELETE(
   req: NextRequest,
@@ -17,7 +18,8 @@ export async function DELETE(
     const noteId = parseInt(String(p["id-nota"]), 10);
     const imageId = parseInt(String(p.imageId), 10);
     if (!Number.isFinite(puestoId) || !Number.isFinite(noteId) || !Number.isFinite(imageId)) {
-      return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 200 });
+      await reportError(req, "api/puestos/[id]/notas/[id-nota]/images/[imageId]", "DELETE", 400, "Parámetros inválidos");
+      return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 400 });
     }
 
     const note = await callDynamicPrisma({
@@ -30,7 +32,8 @@ export async function DELETE(
       },
     });
     if (!note || Number(note.puesto_id) !== puestoId) {
-      return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
+      await reportError(req, "api/puestos/[id]/notas/[id-nota]/images/[imageId]", "DELETE", 404, "Nota no encontrada");
+      return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 404 });
     }
 
     const image = await callDynamicPrisma({
@@ -43,7 +46,8 @@ export async function DELETE(
       },
     });
     if (!image || Number(image.nota_id) !== noteId) {
-      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
+      await reportError(req, "api/puestos/[id]/notas/[id-nota]/images/[imageId]", "DELETE", 404, "Archivo no encontrado");
+      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
     }
 
     await callDynamicPrisma({
@@ -75,6 +79,7 @@ export async function DELETE(
     return NextResponse.json({ status: true, message: "Archivo eliminado con éxito" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/puestos/[id]/notas/[id-nota]/images/[imageId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

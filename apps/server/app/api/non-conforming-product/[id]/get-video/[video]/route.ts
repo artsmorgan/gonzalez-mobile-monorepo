@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,10 @@ export async function GET(
   try {
     const { id, video } = await context.params;
     const pncId = parseInt(String(id), 10);
-    if (!pncId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!pncId) {
+      await reportError(req, "api/non-conforming-product/[id]/get-video/[video]", "GET", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
 
     const fetched = await fetchDynamicFile({
       req,
@@ -29,6 +33,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/non-conforming-product/[id]/get-video/[video]:", errorMessage);
+    await reportError(req, "api/non-conforming-product/[id]/get-video/[video]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

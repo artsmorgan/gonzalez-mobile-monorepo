@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(
     req: NextRequest,
@@ -47,6 +48,7 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/attendance-control/corpo/[corpo_id]", "GET", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
     }
 }

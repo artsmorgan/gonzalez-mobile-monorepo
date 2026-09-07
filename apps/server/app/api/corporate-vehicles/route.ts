@@ -11,6 +11,7 @@ import {
   buildCorporateVehicleOptionalFields,
   normalizeMarca,
 } from "../../../utils/corporateVehiclePayload";
+import { reportError } from "../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: true, data: [] }, { status: 200 });
       }
     } else {
+      await reportError(req, "api/corporate-vehicles", "GET", 400, "Debe especificar filtros jerárquicos");
       return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
     }
 
@@ -119,7 +121,8 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/corporate-vehicles:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -173,6 +176,7 @@ export async function POST(req: NextRequest) {
     const contratoIdNum = Number(contrato_id ?? 0);
     const puestoIdNum = Number(puesto_id ?? 0);
     if (!empresaId || !clienteId || !sucursalId) {
+      await reportError(req, "api/corporate-vehicles", "POST", 400, "Empresa, Cliente y Sucursal son requeridos");
       return NextResponse.json(
         { status: false, message: "Empresa, Cliente y Sucursal son requeridos" },
         { status: 400 }
@@ -180,6 +184,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+      await reportError(req, "api/corporate-vehicles", "POST", 400, "La firma del responsable es requerida");
       return NextResponse.json(
         { status: false, message: "La firma del responsable es requerida" },
         { status: 400 }
@@ -188,6 +193,7 @@ export async function POST(req: NextRequest) {
 
     const marcaNorm = normalizeMarca(marca);
     if (!marcaNorm) {
+      await reportError(req, "api/corporate-vehicles", "POST", 400, "Marca es requerida");
       return NextResponse.json({ status: false, message: "Marca es requerida" }, { status: 400 });
     }
 
@@ -370,7 +376,8 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/corporate-vehicles:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles", "POST", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

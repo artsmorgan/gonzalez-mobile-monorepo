@@ -6,6 +6,7 @@ import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 import {
   dateAtUtcMidnight,
   parseIntStrict,
@@ -256,7 +257,10 @@ export async function GET(req: NextRequest) {
     if (!valid) return NextResponse.json({ status: false, expired, message, data: [] }, { status: expired ? 401 : 403 });
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
-    if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
+    if (!currentEmployeeId) {
+      await reportError(req, "api/mutuos-acuerdos", "GET", 400, "Empleado inválido");
+      return NextResponse.json({ status: false, message: "Empleado inválido", data: [] }, { status: 400 });
+    }
 
     const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
@@ -417,6 +421,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Mutuos acuerdos obtenidos correctamente", data: mapped }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }
@@ -445,22 +450,24 @@ export async function POST(req: NextRequest) {
     const mime_type = String(body?.mimeType || "").trim();
 
     if (!fechaAusenteYmd || !fechaReemplazaYmd || !motivo || !firma_responsable) {
+      const msg = "Datos incompletos: se requieren fecha_ausente, fecha_reemplaza, motivo y firma_responsable";
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
       return NextResponse.json(
         {
           status: false,
-          message:
-            "Datos incompletos: se requieren fecha_ausente, fecha_reemplaza, motivo y firma_responsable",
+          message: msg,
         },
         { status: 400 },
       );
     }
 
     if (marcasAusenteIds.length === 0 || marcasReemplazaIds.length === 0) {
+      const msg = "Ambas fechas deben tener al menos 1 marca/turno (marcas_ausente y marcas_reemplaza no pueden estar vacíos)";
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
       return NextResponse.json(
         {
           status: false,
-          message:
-            "Ambas fechas deben tener al menos 1 marca/turno (marcas_ausente y marcas_reemplaza no pueden estar vacíos)",
+          message: msg,
         },
         { status: 400 },
       );
@@ -468,6 +475,7 @@ export async function POST(req: NextRequest) {
 
     const overlapIds = marcasAusenteIds.filter((id) => marcasReemplazaIds.includes(id));
     if (overlapIds.length > 0) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Las marcas del primer y segundo turno no pueden solaparse");
       return NextResponse.json(
         { status: false, message: "Las marcas del primer y segundo turno no pueden solaparse" },
         { status: 400 },
@@ -480,6 +488,7 @@ export async function POST(req: NextRequest) {
     ]);
 
     if (marcasAusenteRows.length !== marcasAusenteIds.length || marcasReemplazaRows.length !== marcasReemplazaIds.length) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 404, "No se encontraron todas las marcas indicadas");
       return NextResponse.json({ status: false, message: "No se encontraron todas las marcas indicadas" }, { status: 404 });
     }
 
@@ -491,18 +500,22 @@ export async function POST(req: NextRequest) {
     const marcaAusente = marcasAusente[0];
     const marcaReemplaza = marcasReemplaza[0];
     if (!marcaAusente || !marcaReemplaza) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 404, "No se encontraron las marcas seleccionadas");
       return NextResponse.json({ status: false, message: "No se encontraron las marcas seleccionadas" }, { status: 404 });
     }
 
     for (const m of marcasAusente) {
       const day = ymdFromFecha(m.fecha);
       if (day !== fechaAusenteYmd) {
+        const msg = `La marca #${m.id} no corresponde a fecha_ausente (${fechaAusenteYmd})`;
+        await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
         return NextResponse.json(
-          { status: false, message: `La marca #${m.id} no corresponde a fecha_ausente (${fechaAusenteYmd})` },
+          { status: false, message: msg },
           { status: 400 },
         );
       }
       if (Number(m.empleadoFijo_id) !== Number(marcaAusente.empleadoFijo_id)) {
+        await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Todas las marcas del primer turno deben pertenecer al mismo empleado");
         return NextResponse.json(
           { status: false, message: "Todas las marcas del primer turno deben pertenecer al mismo empleado" },
           { status: 400 },
@@ -512,12 +525,15 @@ export async function POST(req: NextRequest) {
     for (const m of marcasReemplaza) {
       const day = ymdFromFecha(m.fecha);
       if (day !== fechaReemplazaYmd) {
+        const msg = `La marca #${m.id} no corresponde a fecha_reemplaza (${fechaReemplazaYmd})`;
+        await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
         return NextResponse.json(
-          { status: false, message: `La marca #${m.id} no corresponde a fecha_reemplaza (${fechaReemplazaYmd})` },
+          { status: false, message: msg },
           { status: 400 },
         );
       }
       if (Number(m.empleadoFijo_id) !== Number(marcaReemplaza.empleadoFijo_id)) {
+        await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Todas las marcas del segundo turno deben pertenecer al mismo empleado");
         return NextResponse.json(
           { status: false, message: "Todas las marcas del segundo turno deben pertenecer al mismo empleado" },
           { status: 400 },
@@ -526,6 +542,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (Number(marcaAusente.empleadoFijo_id) === Number(marcaReemplaza.empleadoFijo_id)) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "El primer y segundo turno deben corresponder a empleados distintos");
       return NextResponse.json(
         { status: false, message: "El primer y segundo turno deben corresponder a empleados distintos" },
         { status: 400 },
@@ -539,6 +556,7 @@ export async function POST(req: NextRequest) {
 
     let resolvedContratoId = bodyContrato != null && bodyContrato > 0 ? bodyContrato : parseIntStrict(marcaAusente.contrato_id);
     if (!resolvedContratoId || resolvedContratoId <= 0) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "No se pudo determinar el contrato (marca o formulario)");
       return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (marca o formulario)" }, { status: 400 });
     }
 
@@ -550,6 +568,7 @@ export async function POST(req: NextRequest) {
     const resolvedDivisionId =
       bodyDivision != null && bodyDivision > 0 ? bodyDivision : divisionFromContrato;
     if (!resolvedDivisionId || resolvedDivisionId <= 0) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "No se pudo determinar la división");
       return NextResponse.json({ status: false, message: "No se pudo determinar la división" }, { status: 400 });
     }
 
@@ -558,17 +577,21 @@ export async function POST(req: NextRequest) {
     const resolvedPuestoId =
       bodyPuesto != null && bodyPuesto > 0 ? bodyPuesto : parseIntStrict(marcaAusente.puesto_id);
     if (!resolvedEmpresaId || resolvedEmpresaId <= 0) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "empresa_id requerido");
       return NextResponse.json({ status: false, message: "empresa_id requerido" }, { status: 400 });
     }
     if (!resolvedPuestoId || resolvedPuestoId <= 0) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "puesto_id requerido");
       return NextResponse.json({ status: false, message: "puesto_id requerido" }, { status: 400 });
     }
 
     if (!marcaAusente.empleadoFijo_id || !marcaReemplaza.empleadoFijo_id || !marcaAusente.plaza_id || !marcaReemplaza.plaza_id) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Las marcas seleccionadas no tienen empleado/plaza válidos");
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen empleado/plaza válidos" }, { status: 400 });
     }
 
     if (!marcaAusente.cliente_id || !marcaAusente.corpo_id || !marcaReemplaza.cliente_id || !marcaReemplaza.corpo_id) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "Las marcas seleccionadas no tienen cliente/sucursal válidos");
       return NextResponse.json({ status: false, message: "Las marcas seleccionadas no tienen cliente/sucursal válidos" }, { status: 400 });
     }
 
@@ -578,6 +601,7 @@ export async function POST(req: NextRequest) {
     });
     const ejecutivo_cuenta = parseIntStrict((sucursal as any)?.ejecutivoCuenta_id ?? (sucursal as any)?.ejecutivo_cuenta_id);
     if (!ejecutivo_cuenta) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, "La sucursal de las marcas no tiene un ejecutivo de cuenta asignado");
       return NextResponse.json(
         { status: false, message: "La sucursal de las marcas no tiene un ejecutivo de cuenta asignado" },
         { status: 400 }
@@ -586,6 +610,7 @@ export async function POST(req: NextRequest) {
 
     const shiftValidation = await validateMutuoAcuerdoShiftExchange(marcasAusente, marcasReemplaza);
     if (!shiftValidation.ok) {
+      await reportError(req, "api/mutuos-acuerdos", "POST", 400, shiftValidation.message);
       return NextResponse.json({ status: false, message: shiftValidation.message }, { status: 400 });
     }
 
@@ -626,10 +651,12 @@ export async function POST(req: NextRequest) {
           conflictDays.some((day) => day >= pInicio && day <= pFin);
 
         if (coversDay) {
+          const msg = `El empleado ${emp.label} tiene un permiso ${overlappingPermit.estado} del ${pInicio} al ${pFin} que entra en conflicto con las fechas del mutuo acuerdo.`;
+          await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
           return NextResponse.json(
             {
               status: false,
-              message: `El empleado ${emp.label} tiene un permiso ${overlappingPermit.estado} del ${pInicio} al ${pFin} que entra en conflicto con las fechas del mutuo acuerdo.`,
+              message: msg,
             },
             { status: 400 }
           );
@@ -669,10 +696,12 @@ export async function POST(req: NextRequest) {
       });
 
       if (conflictingOther) {
+        const msg = `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(conflictingOther.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`;
+        await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
         return NextResponse.json(
           {
             status: false,
-            message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(conflictingOther.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
+            message: msg,
           },
           { status: 400 }
         );
@@ -717,10 +746,12 @@ export async function POST(req: NextRequest) {
           });
         });
         if (legacyConflict) {
+          const msg = `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(legacyConflict.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`;
+          await reportError(req, "api/mutuos-acuerdos", "POST", 400, msg);
           return NextResponse.json(
             {
               status: false,
-              message: `El empleado ${emp.label} ya tiene un mutuo acuerdo ${String(legacyConflict.estado || "pendiente")} cuyas fechas entran en conflicto con este intercambio.`,
+              message: msg,
             },
             { status: 400 }
           );
@@ -920,6 +951,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Mutuo acuerdo creado correctamente", data: finalRecord }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos", "POST", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

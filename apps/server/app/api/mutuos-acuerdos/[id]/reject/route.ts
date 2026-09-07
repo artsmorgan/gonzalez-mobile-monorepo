@@ -5,6 +5,7 @@ import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../../utils/sendNotification";
 import { parseMarcaIdsArray, ymdFromFecha } from "../../../../../utils/mutuosAcuerdosMarcas";
+import { reportError } from "../../../../../utils/reportError";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -27,30 +28,42 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "e_mutuos_acuerdos", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase() || "pendiente";
     if (estadoActual !== "pendiente") {
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, "Solo se puede rechazar un mutuo acuerdo pendiente");
       return NextResponse.json({ status: false, message: "Solo se puede rechazar un mutuo acuerdo pendiente" }, { status: 400 });
     }
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
-    if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    if (!currentEmployeeId) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, "Empleado inválido");
+      return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    }
 
     const empleado = await prisma.c_empleado.findUnique({ where: { id: currentEmployeeId } });
     const myEjecutivoCuentaId = empleado?.supervisor_id ?? null;
     const canReject = myEjecutivoCuentaId !== null && Number(myEjecutivoCuentaId) === Number(existing.ejecutivo_cuenta);
     if (!canReject) {
-      return NextResponse.json({ status: false, message: "No autorizado para rechazar este mutuo acuerdo" }, { status: 403 });
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, "No autorizado para rechazar este mutuo acuerdo");
+      return NextResponse.json({ status: false, message: "No autorizado para rechazar este mutuo acuerdo" }, { status: 400 });
     }
 
     if (!existing.ausente_acepta || !existing.reemplaza_acepta) {
+      await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, "Ambos empleados deben aceptar antes de rechazar");
       return NextResponse.json({ status: false, message: "Ambos empleados deben aceptar antes de rechazar" }, { status: 400 });
     }
 
@@ -189,6 +202,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos/[id]/reject", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

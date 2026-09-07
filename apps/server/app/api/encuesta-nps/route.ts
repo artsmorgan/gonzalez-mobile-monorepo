@@ -7,6 +7,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 const ENCUESTA_NPS_ESTRUCTURA_INCLUDE = {
   e_estructura_empresa: { select: { id: true, nombre: true } },
@@ -230,6 +231,7 @@ export async function GET(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/encuesta-nps", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -278,12 +280,14 @@ export async function POST(req: NextRequest) {
         console.log("--------------------------------");
 
         if (!marca_id || !empresa_evaluada || !puesto_id || !fecha || !evaluaciones || !persona_evaluada || !cedula_persona_evaluada || !nombre_responsable || !cedula_responsable || !firma_responsable || !observaciones) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         // Validar que los IDs de la jerarquía estén presentes
         if (!empresa_id || !cliente_id || !division_id || !corpo_id || !puesto_id) {
-            return NextResponse.json({ status: false, message: "IDs de jerarquía incompletos" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 400, "IDs de jerarquía incompletos");
+            return NextResponse.json({ status: false, message: "IDs de jerarquía incompletos" }, { status: 400 });
         }
 
         const contratoIdNum =
@@ -292,47 +296,56 @@ export async function POST(req: NextRequest) {
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const marcaObj = marca as any;
         if (!marcaObj.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaObj.empleadoFijo_id } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: parseInt(String(empresa_id)) } });
         if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Empresa no encontrada");
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
         }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
         if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Cliente no encontrado");
+            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
         }
 
         const puesto_db = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
         if (!puesto_db) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
         const division = await prisma.n_division.findUnique({ where: { id: parseInt(String(division_id)) } });
         if (!division) {
-            return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Division no encontrada");
+            return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 404 });
         }
 
         const responsable = await prisma.c_empleado.findUnique({ where: { id: marcaObj.empleadoFijo_id } });
         if (!responsable) {
-            return NextResponse.json({ status: false, message: "Responsable no encontrada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps", "POST", 404, "Responsable no encontrada");
+            return NextResponse.json({ status: false, message: "Responsable no encontrada" }, { status: 404 });
         }
 
         const empresaObj = empresa as any;
@@ -462,6 +475,7 @@ export async function POST(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/encuesta-nps", "POST", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

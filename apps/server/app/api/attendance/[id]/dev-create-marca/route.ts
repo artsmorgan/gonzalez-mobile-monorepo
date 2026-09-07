@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -86,6 +87,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/attendance/[id]/dev-create-marca", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

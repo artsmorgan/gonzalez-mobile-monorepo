@@ -3,6 +3,8 @@ import { callDynamicPrisma } from "./callDynamicPrisma";
 import axios from "axios";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "./prismaClient";
+import dotenv from "dotenv";
+dotenv.config();
 
 export async function getPlanillasToken(req: NextRequest, empleado_id: number) {
     // findFirst
@@ -15,8 +17,13 @@ export async function getPlanillasToken(req: NextRequest, empleado_id: number) {
             where: { empleado_id: empleado_id }
         }
     });
+    // `toZonedTime` ya desplaza el instante para que sus getters UTC devuelvan la hora de reloj
+    // de Costa Rica; restar 6 horas otra vez aquí duplicaba el desplazamiento (mismo bug que
+    // había en `/api/server-time` y en `createTokenPlanillas.ts`).
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
     if (!mobile_token || new Date(mobile_token.expires_at) < now) {
         mobile_token = await createTokenPlanillas(req, empleado_id, mobile_token?.id ?? 0);
     }
@@ -40,8 +47,10 @@ async function createTokenPlanillas(req: NextRequest, empleado_id: number, mobil
         throw new Error("Error al iniciar sesión en Planillas");
     }
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
-    let expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
+    const expires_at = new Date(now.getTime() + response.data.data.expires_in * 1000);
 
     // Crear o actualizar el token en la base de datos
     let new_mobile_token: any;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 function buildFileUrl(baseUrl: string, recordId: number, file: { name: string; type: string }): string {
   const fileName = file.name;
@@ -32,6 +33,7 @@ export async function GET(
 
         const corpoId = parseInt(String(corpo_id), 10);
         if (!corpoId) {
+            await reportError(req, "api/non-conforming-product/corpo/[corpo_id]", "GET", 400, "Sucursal (corpo) no especificada");
             return NextResponse.json({ status: false, message: "Sucursal (corpo) no especificada" }, { status: 400 });
         }
 
@@ -71,7 +73,8 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/non-conforming-product/corpo/[corpo_id]", "GET", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

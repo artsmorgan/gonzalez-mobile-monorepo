@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../utils/reportError";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -21,11 +22,13 @@ export async function GET(req: NextRequest) {
 
     const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
     if (!corpoIdStr) {
-      return NextResponse.json({ status: false, message: "Sucursal (corpo_id) no especificada" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "GET", 400, "Sucursal (corpo_id) no especificada");
+      return NextResponse.json({ status: false, message: "Sucursal (corpo_id) no especificada" }, { status: 400 });
     }
     const corpoId = parseInt(corpoIdStr, 10);
     if (!Number.isFinite(corpoId) || corpoId <= 0) {
-      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "GET", 400, "corpo_id inválido");
+      return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
     }
 
     const rows = await callDynamicPrisma({
@@ -68,6 +71,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/documentos-entregados:", errorMessage);
+    await reportError(req, "api/documentos-entregados", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -104,7 +108,8 @@ export async function POST(req: NextRequest) {
       !descripcion ||
       !firma_responsable
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "POST", 400, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
     }
 
     const clienteIdNum = parseInt(String(cliente_id), 10);
@@ -114,15 +119,18 @@ export async function POST(req: NextRequest) {
     const contratoIdNum = contrato_id != null && String(contrato_id).trim() !== "" ? parseInt(String(contrato_id), 10) : 0;
     const puestoIdNum = puesto_id != null && String(puesto_id).trim() !== "" ? parseInt(String(puesto_id), 10) : 0;
     if (!Number.isFinite(clienteIdNum) || clienteIdNum <= 0 || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) {
-      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "POST", 400, "cliente_id o corpo_id inválidos");
+      return NextResponse.json({ status: false, message: "cliente_id o corpo_id inválidos" }, { status: 400 });
     }
     if (!Number.isFinite(puestoIdNum) || puestoIdNum <= 0) {
-      return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "POST", 400, "puesto_id es obligatorio");
+      return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
     }
 
     const fechaDate = parseDateOnly(fecha);
     if (!fechaDate) {
-      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 200 });
+      await reportError(req, "api/documentos-entregados", "POST", 400, "Fecha inválida");
+      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
     const created = await callDynamicPrisma({
@@ -226,6 +234,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/documentos-entregados:", errorMessage);
+    await reportError(req, "api/documentos-entregados", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

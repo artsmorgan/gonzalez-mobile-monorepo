@@ -8,6 +8,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroVehiculoLocationAnchors } from "../../../../utils/registroCorpoPuesto";
 import { deleteDynamicFile } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -19,7 +20,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/vehicles/[id]", "PUT", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const {
@@ -39,6 +41,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             hora_entrada,
             hora_salida,
             razon_visita,
+            puesto_salida_id,
             file,
             clear_attachment,
         } = await req.json();
@@ -48,12 +51,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_registro_vehiculos", operation: "findUnique", where: { id } }
         });
         if (!vehicle) {
-            return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 200 });
+            await reportError(req, "api/vehicles/[id]", "PUT", 404, "Vehículo no encontrado");
+            return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 404 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/vehicles/[id]", "PUT", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         let updatedFileName = vehicle.file_name;
@@ -84,9 +89,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if (vehicle && file) {
             const result = await createVehicleImage(req, vehicle.id, file);
             if (!result) {
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "No se pudo subir la imagen. Verifique el formato o el tamaño.");
                 return NextResponse.json(
                     { status: false, message: "No se pudo subir la imagen. Verifique el formato o el tamaño." },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
             const updatedVehicle = await callDynamicPrisma({
@@ -95,6 +101,25 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             });
             if (updatedVehicle) {
                 updatedFileName = updatedVehicle.file_name;
+            }
+        }
+
+        let puestoSalidaIdFinal: number | null | undefined = undefined;
+        if (puesto_salida_id !== undefined) {
+            if (puesto_salida_id == null || puesto_salida_id === "") {
+                puestoSalidaIdFinal = null;
+            } else {
+                const parsedPuestoSalida = parseInt(String(puesto_salida_id), 10);
+                if (!Number.isFinite(parsedPuestoSalida) || parsedPuestoSalida <= 0) {
+                    await reportError(req, "api/vehicles/[id]", "PUT", 400, "Puesto de salida inválido");
+                    return NextResponse.json({ status: false, message: "Puesto de salida inválido" }, { status: 400 });
+                }
+                const puestoSalidaBd = await prisma.e_estructura_puesto.findUnique({ where: { id: parsedPuestoSalida } });
+                if (!puestoSalidaBd) {
+                    await reportError(req, "api/vehicles/[id]", "PUT", 404, "El puesto de salida no existe");
+                    return NextResponse.json({ status: false, message: "El puesto de salida no existe" }, { status: 404 });
+                }
+                puestoSalidaIdFinal = parsedPuestoSalida;
             }
         }
 
@@ -112,6 +137,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
             file_name: updatedFileName // Preservar el file_name actualizado si existe
         };
+        if (puestoSalidaIdFinal !== undefined) {
+            updateData.puesto_salida_id = puestoSalidaIdFinal;
+        }
 
         const hasBodyCorpo = bodyCorpoId != null && bodyCorpoId !== "";
         const hasBodyPuesto = bodyPuestoId != null && bodyPuestoId !== "";
@@ -123,19 +151,23 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     : Number(vehicle.corpo_id);
             const corpoOkPut = await assertCorpoAllowedForMarca(req, marcaDia, targetCorpoId);
             if (!corpoOkPut.ok) {
-                return NextResponse.json({ status: false, message: corpoOkPut.message }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, corpoOkPut.message);
+                return NextResponse.json({ status: false, message: corpoOkPut.message }, { status: 400 });
             }
             const puestoForResolve = hasBodyPuesto ? bodyPuestoId : vehicle.puesto_id;
             const resolvedPut = await resolveClienteYPuestoParaAlta(req, marcaDia, targetCorpoId, puestoForResolve);
             if (!resolvedPut.ok) {
-                return NextResponse.json({ status: false, message: resolvedPut.message }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, resolvedPut.message);
+                return NextResponse.json({ status: false, message: resolvedPut.message }, { status: 400 });
             }
             const anchorsPut = await getRegistroVehiculoLocationAnchors(req, targetCorpoId);
             if (!anchorsPut.ok) {
-                return NextResponse.json({ status: false, message: anchorsPut.message }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, anchorsPut.message);
+                return NextResponse.json({ status: false, message: anchorsPut.message }, { status: 400 });
             }
             if (Number(resolvedPut.cliente_id) !== Number(anchorsPut.cliente_id)) {
-                return NextResponse.json({ status: false, message: "Cliente inconsistente con la sucursal" }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "Cliente inconsistente con la sucursal");
+                return NextResponse.json({ status: false, message: "Cliente inconsistente con la sucursal" }, { status: 400 });
             }
             const chkPut = (bodyVal: unknown, expected: number) => {
                 if (bodyVal == null || bodyVal === "") return true;
@@ -143,16 +175,20 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 return Number.isFinite(n) && n === expected;
             };
             if (!chkPut(bodyEmpresaId, anchorsPut.empresa_id)) {
-                return NextResponse.json({ status: false, message: "La empresa no corresponde a la sucursal" }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "La empresa no corresponde a la sucursal");
+                return NextResponse.json({ status: false, message: "La empresa no corresponde a la sucursal" }, { status: 400 });
             }
             if (!chkPut(bodyClienteId, anchorsPut.cliente_id)) {
-                return NextResponse.json({ status: false, message: "El cliente no corresponde a la sucursal" }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "El cliente no corresponde a la sucursal");
+                return NextResponse.json({ status: false, message: "El cliente no corresponde a la sucursal" }, { status: 400 });
             }
             if (!chkPut(bodyDivisionId, anchorsPut.division_id)) {
-                return NextResponse.json({ status: false, message: "La división no corresponde a la sucursal" }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "La división no corresponde a la sucursal");
+                return NextResponse.json({ status: false, message: "La división no corresponde a la sucursal" }, { status: 400 });
             }
             if (!chkPut(bodyContratoId, anchorsPut.contrato_id)) {
-                return NextResponse.json({ status: false, message: "El contrato no corresponde a la sucursal" }, { status: 200 });
+                await reportError(req, "api/vehicles/[id]", "PUT", 400, "El contrato no corresponde a la sucursal");
+                return NextResponse.json({ status: false, message: "El contrato no corresponde a la sucursal" }, { status: 400 });
             }
             updateData.cliente_id = resolvedPut.cliente_id;
             updateData.corpo_id = targetCorpoId;
@@ -222,6 +258,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/vehicles/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -236,7 +273,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/vehicles/[id]", "DELETE", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const vehicle = await callDynamicPrisma({
@@ -244,7 +282,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             data: { action: "GET", table: "e_registro_vehiculos", operation: "findUnique", where: { id } }
         });
         if (!vehicle) {
-            return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 200 });
+            await reportError(req, "api/vehicles/[id]", "DELETE", 404, "Vehículo no encontrado");
+            return NextResponse.json({ status: false, message: "Vehículo no encontrado" }, { status: 404 });
         }
 
         const id_vehicle = vehicle.id;
@@ -293,6 +332,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/vehicles/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

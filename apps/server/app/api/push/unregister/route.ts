@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { deactivateFcmDeviceByToken } from "../../../../utils/pushNotifications";
+import { reportError } from "../../../../utils/reportError";
 
 /**
  * POST /api/push/unregister
@@ -22,7 +23,8 @@ export async function POST(req: NextRequest) {
     const empleadoId = Number(payload?.id ?? 0);
 
     if (!token) {
-      return NextResponse.json({ status: false, message: "token requerido" }, { status: 200 });
+      await reportError(req, "api/push/unregister", "POST", 400, "token requerido");
+      return NextResponse.json({ status: false, message: "token requerido" }, { status: 400 });
     }
 
     const result = await deactivateFcmDeviceByToken(
@@ -39,6 +41,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("[push/unregister]", errorMessage);
+    await reportError(req, "api/push/unregister", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

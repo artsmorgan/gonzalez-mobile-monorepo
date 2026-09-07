@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../utils/reportError";
 
 
 export async function POST(req: NextRequest) {
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
 
         if (!empleadoIdToUse || !inicio || !fin || !firma_empleado) {
             console.log('Faltan datos requeridos', { empleadoIdToUse, inicio, fin, firma_empleado });
+            await reportError(req, "api/lunch-time", "POST", 400, "Faltan datos requeridos");
             return NextResponse.json({ status: false, message: "Faltan datos requeridos" }, { status: 400 });
         }
 
@@ -62,6 +64,7 @@ export async function POST(req: NextRequest) {
         const corpoId = parseInt(String(bodyCorpoId), 10);
         const puestoId = parseInt(String(bodyPuestoId), 10);
         if (!Number.isFinite(marcaId) || marcaId <= 0) {
+            await reportError(req, "api/lunch-time", "POST", 400, "Falta el identificador de la marca (marca_id). Verifique la marca actual.");
             return NextResponse.json(
                 { status: false, message: "Falta el identificador de la marca (marca_id). Verifique la marca actual." },
                 { status: 400 }
@@ -75,6 +78,7 @@ export async function POST(req: NextRequest) {
             !Number.isFinite(corpoId) || corpoId <= 0 ||
             !Number.isFinite(puestoId) || puestoId <= 0
         ) {
+            await reportError(req, "api/lunch-time", "POST", 400, "Faltan datos de jerarquía (empresa, cliente, división, contrato, sucursal o puesto). Verifique la marca actual.");
             return NextResponse.json(
                 { status: false, message: "Faltan datos de jerarquía (empresa, cliente, división, contrato, sucursal o puesto). Verifique la marca actual." },
                 { status: 400 }
@@ -84,12 +88,14 @@ export async function POST(req: NextRequest) {
         const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoIdToUse } });
 
         if (!empleado) {
+            await reportError(req, "api/lunch-time", "POST", 404, "Empleado no encontrado");
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const inicioDate = new Date(inicio);
         const finDate = new Date(fin);
         if (isNaN(inicioDate.getTime()) || isNaN(finDate.getTime())) {
+            await reportError(req, "api/lunch-time", "POST", 400, "Fechas de inicio/fin inválidas");
             return NextResponse.json({ status: false, message: "Fechas de inicio/fin inválidas" }, { status: 400 });
         }
 
@@ -148,6 +154,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/lunch-time", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -640,8 +640,15 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         anchorSup.set(Number(r.id), a.rs);
     }
 
+    /** Cuadrícula jerárquica: Registro (nivel 0) → Tema / Aspecto / Participante, hermanos (nivel 1). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Registro",
         "Creado en",
         "Empresa",
         "Cliente",
@@ -657,11 +664,26 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         "División (texto)",
         "Empleado",
         "Responsable (creado por)",
-        "Temas desarrollados",
-        "Aspectos específicos",
-        "Participantes",
-        "Firma supervisor",
+        "Ver temas",
+        "Ver aspectos",
+        "Ver participantes",
+        "Ver firma supervisor",
+        "Tema",
+        "Respuesta (tema)",
+        "Comentarios (tema)",
+        "Aspecto",
+        "Respuesta (aspecto)",
+        "Comentarios (aspecto)",
+        "Nombre completo (participante)",
+        "Cédula (participante)",
     ];
+    const c1 = headers.indexOf("Ver temas") + 1;
+    const c2 = headers.indexOf("Ver aspectos") + 1;
+    const c3 = headers.indexOf("Ver participantes") + 1;
+    const c4 = headers.indexOf("Ver firma supervisor") + 1;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+    const linkCols = new Set([c1, c2, c3, c4]);
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -671,54 +693,100 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = headers.map((lab) => {
-        if (lab.includes("Renglón") || lab.includes("Supervisor")) return { width: 28, outlineLevel: 1 };
-        if (lab.includes("Temas") || lab.includes("Aspectos") || lab.includes("Participantes") || lab.includes("Firma")) return { width: 16, outlineLevel: 1 };
-        return { width: 22, outlineLevel: 1 };
+        if (lab.includes("Renglón") || lab.includes("Supervisor")) return { width: 28 };
+        if (lab.startsWith("Ver")) return { width: 16 };
+        return { width: 22 };
     });
 
-    const c1 = headers.length - 3;
-    const c2 = headers.length - 2;
-    const c3 = headers.length - 1;
-    const c4 = headers.length;
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell, col) => {
+            cell.border = borderThin as ExcelJS.Borders;
+            if (!linkCols.has(col)) cell.alignment = { vertical: "middle", wrapText: true };
+        });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
 
     for (const r of rows) {
         const rt = anchorTemas.get(Number(r.id)) ?? 1;
         const ra = anchorAsp.get(Number(r.id)) ?? 1;
         const rp = anchorPart.get(Number(r.id)) ?? 1;
         const rs = anchorSup.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id,
-            r.created_at_txt,
-            r.empresa_nombre,
-            r.cliente_nombre,
-            r.division_nombre,
-            r.contrato_nombre,
-            r.corpo_nombre,
-            r.puesto_nombre,
-            r.plaza_nombre,
-            r.fecha_txt,
-            excelCellString(r.renglon_edificio),
-            excelCellString(r.supervisor_cliente),
-            excelCellString(r.supervisor_corporacion),
-            excelCellString(r.division),
-            r.empleado_txt,
-            r.created_by_nombre,
-            "",
-            "",
-            "",
-            "",
-        ]);
-        row.getCell(c1).value = { text: "Ver", hyperlink: `#'Detalles'!A${rt}` };
-        row.getCell(c1).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(c2).value = { text: "Ver", hyperlink: `#'Detalles'!A${ra}` };
-        row.getCell(c2).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(c3).value = { text: "Ver", hyperlink: `#'Detalles'!A${rp}` };
-        row.getCell(c3).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(c4).value = { text: "Ver", hyperlink: `#'Detalles'!A${rs}` };
-        row.getCell(c4).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
-            cell.border = borderThin as ExcelJS.Borders;
-            cell.alignment = { vertical: "middle", wrapText: true };
+        const general: Record<number, unknown> = {
+            [headers.indexOf("ID Registro") + 1]: r.id,
+            [headers.indexOf("Creado en") + 1]: r.created_at_txt,
+            [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
+            [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
+            [headers.indexOf("División") + 1]: r.division_nombre,
+            [headers.indexOf("Contrato") + 1]: r.contrato_nombre,
+            [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
+            [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
+            [headers.indexOf("Plaza") + 1]: r.plaza_nombre,
+            [headers.indexOf("Fecha (visita)") + 1]: r.fecha_txt,
+            [headers.indexOf("Renglón / edificio") + 1]: excelCellString(r.renglon_edificio),
+            [headers.indexOf("Supervisor cliente") + 1]: excelCellString(r.supervisor_cliente),
+            [headers.indexOf("Supervisor corporación") + 1]: excelCellString(r.supervisor_corporacion),
+            [headers.indexOf("División (texto)") + 1]: excelCellString(r.division),
+            [headers.indexOf("Empleado") + 1]: r.empleado_txt,
+            [headers.indexOf("Responsable (creado por)") + 1]: r.created_by_nombre,
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Registro";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        const rootRow = wsMain.addRow(rootValues);
+        rootRow.getCell(c1).value = { text: "Ver", hyperlink: `#'Detalles'!A${rt}` };
+        rootRow.getCell(c1).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(c2).value = { text: "Ver", hyperlink: `#'Detalles'!A${ra}` };
+        rootRow.getCell(c2).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(c3).value = { text: "Ver", hyperlink: `#'Detalles'!A${rp}` };
+        rootRow.getCell(c3).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(c4).value = { text: "Ver", hyperlink: `#'Detalles'!A${rs}` };
+        rootRow.getCell(c4).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+
+        safeParseJsonArray(r.temas_desarrollados).forEach((t: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.tema${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Tema";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Tema")] = excelCellString(t?.tema);
+            values[headers.indexOf("Respuesta (tema)")] = excelCellString(t?.respuesta);
+            values[headers.indexOf("Comentarios (tema)")] = excelCellString(t?.comentarios);
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
+
+        safeParseJsonArray(r.aspectos_especificos).forEach((a: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.asp${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Aspecto";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Aspecto")] = excelCellString(a?.aspecto);
+            values[headers.indexOf("Respuesta (aspecto)")] = excelCellString(a?.respuesta);
+            values[headers.indexOf("Comentarios (aspecto)")] = excelCellString(a?.comentarios);
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
+
+        safeParseJsonArray(r.participantes).forEach((p: any, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.part${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Participante";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Nombre completo (participante)")] = excelCellString(p?.nombre_completo);
+            values[headers.indexOf("Cédula (participante)")] = excelCellString(p?.cedula);
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
         });
     }
     for (let c = 1; c <= maxCol; c++) wsDet.getColumn(c).width = c === 2 ? 48 : 14;

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 type TipoMantenimientoArticuloDTO = { id: number; nombre: string };
 
@@ -16,7 +17,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const puestoId = parseInt(resolvedParams.id);
         if (!Number.isFinite(puestoId)) {
-            return NextResponse.json({ status: false, message: "Puesto inválido / no especificado" }, { status: 200 });
+            await reportError(req, "api/articulo-mantenimiento/puesto/[id]", "GET", 400, "Puesto inválido / no especificado");
+            return NextResponse.json({ status: false, message: "Puesto inválido / no especificado" }, { status: 400 });
         }
 
         // Obtener artículos del puesto replicando la lógica usada por mantenimiento-equipo/main-structure:
@@ -227,6 +229,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/articulo-mantenimiento/puesto/[id]:", errorMessage);
+        await reportError(req, "api/articulo-mantenimiento/puesto/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,7 @@ export async function DELETE(
     const vehiculoId = parseInt(String(id), 10);
     const imageRowId = parseInt(String(imageId), 10);
     if (!vehiculoId || !imageRowId) {
+      await reportError(req, "api/corporate-vehicles/[id]/image/[imageId]", "DELETE", 400, "ID no válido");
       return NextResponse.json({ status: false, message: "ID no válido" }, { status: 400 });
     }
 
@@ -38,11 +40,13 @@ export async function DELETE(
       },
     });
     if (!row || Number((row as any)?.vehiculo_id) !== vehiculoId) {
+      await reportError(req, "api/corporate-vehicles/[id]/image/[imageId]", "DELETE", 404, "Imagen no encontrada");
       return NextResponse.json({ status: false, message: "Imagen no encontrada" }, { status: 404 });
     }
     const name = String((row as any)?.name || "").trim();
     if (!name) {
-      return NextResponse.json({ status: false, message: "Nombre de archivo inválido" }, { status: 400 });
+      await reportError(req, "api/corporate-vehicles/[id]/image/[imageId]", "DELETE", 500, "Nombre de archivo inválido");
+      return NextResponse.json({ status: false, message: "Nombre de archivo inválido" }, { status: 500 });
     }
 
     const relative = `corporate-vehicles/${vehiculoId}/${name}`.replace(/\\/g, "/");
@@ -69,6 +73,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE /api/corporate-vehicles/[id]/image/[imageId]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/[id]/image/[imageId]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -2773,7 +2773,8 @@ const getActivities = async (marcaId: number) => {
                 {/* Late Warning */}
                 {(resolveMarcaIsLate(attendanceData.marca as Record<string, unknown>) ||
                   attendanceData.is_late) &&
-                  attendanceData.marca.hora_inicio != null && (
+                  attendanceData.marca.hora_inicio != null &&
+                  attendanceData.marca.hora_entrada_digitada == null && (
                   <ThemedView style={styles.lateWarning}>
                     <ThemedText style={styles.lateWarningText}>
                       {getActionIcon('warning')} Tardía de {getLateTime(attendanceData, horaAccion)}

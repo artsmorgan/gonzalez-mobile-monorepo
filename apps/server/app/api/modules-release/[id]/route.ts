@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+import { reportError } from "../../../../utils/reportError";
 
 const parseIntStrict = (value: unknown): number | null => {
   const n = parseInt(String(value), 10);
@@ -17,10 +18,12 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
     const empleadoId = payload?.id != null ? Number(payload.id) : 0;
     if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 403, "Usuario no autorizado");
       return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
     const superAdmin = await isSuperAdminEmpleado(req, empleadoId);
     if (!superAdmin) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 403, "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos");
       return NextResponse.json(
         { status: false, message: "Se requiere rol SUPER_ADMIN para modificar visibilidad de módulos" },
         { status: 403 }
@@ -30,11 +33,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
     if (!idNum || idNum <= 0) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
     const body = await req.json().catch(() => ({}));
     if (typeof body?.is_visible !== "boolean") {
+      await reportError(req, "api/modules-release/[id]", "PUT", 400, "Debes enviar is_visible como booleano");
       return NextResponse.json(
         { status: false, message: "Debes enviar is_visible como booleano" },
         { status: 400 }
@@ -52,6 +57,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     });
 
     if (!existing) {
+      await reportError(req, "api/modules-release/[id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -81,6 +87,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/modules-release/[id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

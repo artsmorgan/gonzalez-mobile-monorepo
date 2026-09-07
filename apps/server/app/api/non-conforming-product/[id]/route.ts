@@ -5,6 +5,7 @@ import { toZonedTime } from "date-fns-tz";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -67,6 +68,7 @@ export async function PUT(
         const { id } = resolvedParams;
         const pncId = parseInt(String(id), 10);
         if (!pncId) {
+            await reportError(req, "api/non-conforming-product/[id]", "PUT", 400, "ID no especificado");
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
@@ -104,6 +106,7 @@ export async function PUT(
         });
 
         if (!existingRecord) {
+            await reportError(req, "api/non-conforming-product/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
         const existingRecordObj = existingRecord as any;
@@ -285,7 +288,8 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/non-conforming-product/[id]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -302,6 +306,7 @@ export async function DELETE(
         const { id } = resolvedParams;
         const pncId = parseInt(String(id), 10);
         if (!pncId) {
+            await reportError(req, "api/non-conforming-product/[id]", "DELETE", 400, "ID no especificado");
             return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
@@ -316,6 +321,7 @@ export async function DELETE(
         });
 
         if (!existingRecord) {
+            await reportError(req, "api/non-conforming-product/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
@@ -381,7 +387,8 @@ export async function DELETE(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/non-conforming-product/[id]", "DELETE", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

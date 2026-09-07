@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(
   req: NextRequest,
@@ -20,6 +21,7 @@ export async function GET(
     const puestoId = parseInt(puestoIdParam, 10);
 
     if (!puestoId || Number.isNaN(puestoId)) {
+      await reportError(req, "api/entrega-puestos/puesto/[id]", "GET", 400, "Puesto inválido");
       return NextResponse.json(
         { status: false, message: "Puesto inválido" },
         { status: 400 }
@@ -117,6 +119,7 @@ export async function GET(
       "Error in GET /api/entrega-puestos/puesto/[id]:",
       errorMessage
     );
+    await reportError(req, "api/entrega-puestos/puesto/[id]", "GET", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }

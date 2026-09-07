@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { fetchActivePlazaIdsForPuestos, sendNotificationByPlaza } from "../../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../../utils/reportError";
 
 /**
  * Añade vínculos actividad–puesto sin eliminar los existentes.
@@ -19,16 +20,19 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const resolvedParams = await context.params;
     const actividadId = Number(resolvedParams.id);
     if (!Number.isFinite(actividadId) || actividadId <= 0) {
-      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 500, "Actividad inválida");
+      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 500 });
     }
 
     const { marca_id, puestos_ids } = await req.json();
     const marcaId = Number(marca_id);
     if (!Number.isFinite(marcaId) || marcaId <= 0) {
-      return NextResponse.json({ status: false, message: "Marca inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 500, "Marca inválida");
+      return NextResponse.json({ status: false, message: "Marca inválida" }, { status: 500 });
     }
     if (!Array.isArray(puestos_ids) || puestos_ids.length === 0) {
-      return NextResponse.json({ status: false, message: "Debes enviar al menos un puesto" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 500, "Debes enviar al menos un puesto");
+      return NextResponse.json({ status: false, message: "Debes enviar al menos un puesto" }, { status: 500 });
     }
 
     const requestedUnique = Array.from(
@@ -40,7 +44,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     );
 
     if (requestedUnique.length === 0) {
-      return NextResponse.json({ status: false, message: "No hay identificadores de puesto válidos" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 500, "No hay identificadores de puesto válidos");
+      return NextResponse.json({ status: false, message: "No hay identificadores de puesto válidos" }, { status: 500 });
     }
 
     const marcaRow = await prisma.c_marca_dia.findUnique({
@@ -48,7 +53,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       select: { id: true },
     });
     if (!marcaRow) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 404, "Marca no encontrada");
+      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
     }
 
     const actividad = await callDynamicPrisma({
@@ -61,7 +67,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       },
     });
     if (!actividad) {
-      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 404, "Actividad no encontrada");
+      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
     const existingRows = await callDynamicPrisma({
@@ -92,10 +99,12 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const missing = requestedUnique.filter((id) => !confirmedIds.has(id));
     if (missing.length > 0) {
+      const missingMessage = `Uno o más puestos no existen: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""}`;
+      await reportError(req, "api/activities/created/[id]/puestos", "POST", 404, missingMessage);
       return NextResponse.json(
         {
           status: false,
-          message: `Uno o más puestos no existen: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "…" : ""}`,
+          message: missingMessage,
         },
         { status: 200 }
       );
@@ -185,6 +194,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/[id]/puestos", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

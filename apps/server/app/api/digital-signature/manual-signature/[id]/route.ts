@@ -4,6 +4,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../utils/reportError";
 const dotenv = require("dotenv");
 dotenv.config();
 
@@ -39,6 +40,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
 
         if (!empleado) {
+            await reportError(req, "api/digital-signature/manual-signature/[id]", "GET", 404, "Empleado no encontrado");
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
@@ -46,6 +48,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: true, manualSignature }, { status: 200 });
     } catch (error) {
         console.error(error);
+        await reportError(req, "api/digital-signature/manual-signature/[id]", "GET", 500, "Error interno en la firma");
         return NextResponse.json({ status: false, message: "Error interno en la firma" }, { status: 500 });
     }
 }
@@ -70,6 +73,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
 
         if (!empleado) {
+            await reportError(req, "api/digital-signature/manual-signature/[id]", "PUT", 404, "Empleado no encontrado");
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
@@ -109,6 +113,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json({ status: true, firmaRecord }, { status: 200 });
     } catch (error) {
         console.error(error);
+        await reportError(req, "api/digital-signature/manual-signature/[id]", "PUT", 500, "Error interno en la firma");
         return NextResponse.json({ status: false, message: "Error interno en la firma" }, { status: 500 });
     }
 }

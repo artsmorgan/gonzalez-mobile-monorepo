@@ -9,6 +9,7 @@ import {
   buildCorporateVehicleOptionalFields,
   normalizeMarca,
 } from "../../../../utils/corporateVehiclePayload";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -43,6 +44,7 @@ export async function PUT(
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);
     if (!vehiculoId) {
+      await reportError(req, "api/corporate-vehicles/[id]", "PUT", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -82,6 +84,7 @@ export async function PUT(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/[id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     const existingObj = existing as any;
@@ -130,6 +133,7 @@ export async function PUT(
     if (marca !== undefined) {
       const marcaNorm = normalizeMarca(marca);
       if (!marcaNorm) {
+        await reportError(req, "api/corporate-vehicles/[id]", "PUT", 400, "Marca es requerida");
         return NextResponse.json({ status: false, message: "Marca es requerida" }, { status: 400 });
       }
       updateData.marca = marcaNorm;
@@ -308,7 +312,8 @@ export async function PUT(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/corporate-vehicles/[id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/[id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -323,6 +328,7 @@ export async function DELETE(
     const { id } = await context.params;
     const vehiculoId = parseInt(String(id), 10);
     if (!vehiculoId) {
+      await reportError(req, "api/corporate-vehicles/[id]", "DELETE", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -336,6 +342,7 @@ export async function DELETE(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/[id]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -393,7 +400,8 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/corporate-vehicles/[id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/[id]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

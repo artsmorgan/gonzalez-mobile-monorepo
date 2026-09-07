@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -14,16 +15,19 @@ export async function GET(req: NextRequest) {
         const e = searchParams.get("e");
 
         if (!m || !e) {
-            return NextResponse.json({ status: false, message: "Marca o empleado no especificados" }, { status: 200 });
+            await reportError(req, "api/notification", "GET", 404, "Marca o empleado no especificados");
+            return NextResponse.json({ status: false, message: "Marca o empleado no especificados" }, { status: 404 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(m) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/notification", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         if (!marca.plaza_id || !marca.empleadoFijo_id) {
-            return NextResponse.json({ status: false, message: "Plaza o empleado no encontrados" }, { status: 200 });
+            await reportError(req, "api/notification", "GET", 404, "Plaza o empleado no encontrados");
+            return NextResponse.json({ status: false, message: "Plaza o empleado no encontrados" }, { status: 404 });
         }
 
         const plaza_notifications = await callDynamicPrisma({
@@ -100,6 +104,7 @@ export async function GET(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/notification", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -108,7 +113,8 @@ export async function POST(req: NextRequest) {
     try {
         const { notifications } = await req.json();
         if (notifications === undefined || notifications.length === 0) {
-            return NextResponse.json({ status: false, message: "Notificaciones no especificadas" }, { status: 200 });
+            await reportError(req, "api/notification", "POST", 400, "Notificaciones no especificadas");
+            return NextResponse.json({ status: false, message: "Notificaciones no especificadas" }, { status: 400 });
         }
 
         const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
@@ -152,6 +158,7 @@ export async function POST(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/notification", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

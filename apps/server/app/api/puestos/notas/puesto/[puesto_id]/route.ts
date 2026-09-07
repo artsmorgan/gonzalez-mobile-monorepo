@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../utils/prismaClient";
+import { reportError } from "../../../../../../utils/reportError";
 import {
     mergeNotesWhereWithDateRange,
     validateNotesDateRange,
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
     const resolved = await context.params;
     const puestoId = parseInt(String(resolved.puesto_id), 10);
     if (!puestoId || Number.isNaN(puestoId)) {
+      await reportError(req, "api/puestos/notas/puesto/[puesto_id]", "GET", 400, "Puesto inválido");
       return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
     }
 
@@ -24,11 +26,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
     const fechaFin = req.nextUrl.searchParams.get("fecha_fin");
     const rangeValidation = validateNotesDateRange(fechaInicio, fechaFin);
     if (!rangeValidation.valid) {
+      await reportError(req, "api/puestos/notas/puesto/[puesto_id]", "GET", 400, rangeValidation.message);
       return NextResponse.json({ status: false, message: rangeValidation.message }, { status: 400 });
     }
 
     const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
     if (!puesto) {
+      await reportError(req, "api/puestos/notas/puesto/[puesto_id]", "GET", 404, "Puesto no encontrado");
       return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
     }
 
@@ -72,6 +76,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ puesto_
     return NextResponse.json({ status: true, notas: output }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/puestos/notas/puesto/[puesto_id]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../../../utils/prismaClient";
+import { reportError } from "../../../../../../../utils/reportError";
 
 function parseDateOnly(value: any): Date | null {
   if (!value) return null;
@@ -69,7 +70,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const asignadoId = parseInt(resolvedParams.id);
     const movId = parseInt(resolvedParams.movId);
-    if (!asignadoId || !movId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!asignadoId || !movId) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
 
     const body = await req.json();
     const {
@@ -87,14 +91,23 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       firma_responsable,
     } = body ?? {};
 
-    if (!marca_id) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    if (!marca_id) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "PUT", 400, "Marca no especificada");
+      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+    }
 
     const own = await validateOwnership(req, asignadoId, movId, parseInt(String(marca_id)));
-    if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+    if (!own.ok) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "PUT", 400, own.message);
+      return NextResponse.json({ status: false, message: own.message }, { status: 400 });
+    }
 
     const fechaDate = fecha ? parseDateOnly(fecha) : null;
     const horaDate = hora ? parseTimeOnly(hora) : null;
-    if ((fecha && !fechaDate) || (hora && !horaDate)) return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 200 });
+    if ((fecha && !fechaDate) || (hora && !horaDate)) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "PUT", 400, "Fecha u hora inválida");
+      return NextResponse.json({ status: false, message: "Fecha u hora inválida" }, { status: 400 });
+    }
 
     const updateData: any = {
       nombre_persona_recibe: typeof nombre_persona_recibe === "string" ? nombre_persona_recibe : own.mov!.nombre_persona_recibe,
@@ -161,6 +174,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]:", errorMessage);
+    await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -173,13 +187,22 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const asignadoId = parseInt(resolvedParams.id);
     const movId = parseInt(resolvedParams.movId);
-    if (!asignadoId || !movId) return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+    if (!asignadoId || !movId) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
+    }
 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
-    if (!marcaIdStr) return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+    if (!marcaIdStr) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "DELETE", 400, "Marca no especificada");
+      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+    }
 
     const own = await validateOwnership(req, asignadoId, movId, parseInt(marcaIdStr));
-    if (!own.ok) return NextResponse.json({ status: false, message: own.message }, { status: 200 });
+    if (!own.ok) {
+      await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "DELETE", 400, own.message);
+      return NextResponse.json({ status: false, message: own.message }, { status: 400 });
+    }
 
     const before = own.mov;
     await callDynamicPrisma({
@@ -225,6 +248,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]:", errorMessage);
+    await reportError(req, "api/articulo-mantenimiento/asignado/[id]/movimientos/[movId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

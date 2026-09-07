@@ -120,6 +120,8 @@ export default function NotificationsScreen() {
   const [singleMarkLoadingKey, setSingleMarkLoadingKey] = useState<string | null>(null);
   /** Carga al marcar todas como leídas. */
   const [markAllLoading, setMarkAllLoading] = useState(false);
+  /** Separación de listas (mismo patrón de tabs que en LlavesScreen). */
+  const [activeTab, setActiveTab] = useState<'no_vistas' | 'vistas'>('no_vistas');
 
   const anyMarkOperationInProgress = singleMarkLoadingKey !== null || markAllLoading;
 
@@ -352,7 +354,7 @@ export default function NotificationsScreen() {
           </ThemedView>
 
           {/* Mark All as Read Button */}
-          {notifications.some((n) => !n.watched) && (
+          {activeTab === 'no_vistas' && notifications.some((n) => !n.watched) && (
             <TouchableOpacity
               style={[
                 styles.markAllButton,
@@ -373,17 +375,41 @@ export default function NotificationsScreen() {
             </TouchableOpacity>
           )}
 
+          {/* Tabs: vistas / no vistas */}
+          <ThemedView style={styles.tabsContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'no_vistas' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('no_vistas')}
+            >
+              <Ionicons name="eye-off" size={20} color={activeTab === 'no_vistas' ? '#FFFFFF' : '#007AFF'} />
+              <ThemedText style={[styles.tabButtonText, activeTab === 'no_vistas' && styles.tabButtonTextActive]}>
+                No vistas ({notifications.filter((n) => !n.watched).length})
+              </ThemedText>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'vistas' && styles.tabButtonActive]}
+              onPress={() => setActiveTab('vistas')}
+            >
+              <Ionicons name="eye" size={20} color={activeTab === 'vistas' ? '#FFFFFF' : '#007AFF'} />
+              <ThemedText style={[styles.tabButtonText, activeTab === 'vistas' && styles.tabButtonTextActive]}>
+                Vistas ({notifications.filter((n) => n.watched).length})
+              </ThemedText>
+            </TouchableOpacity>
+          </ThemedView>
+
           {/* Notifications List */}
           <ThemedView style={styles.notificationsContainer}>
-            {notifications.length === 0 ? (
+            {notifications.filter((n) => (activeTab === 'vistas' ? n.watched : !n.watched)).length === 0 ? (
               <ThemedView style={styles.emptyContainer}>
                 <Ionicons name="notifications-off-outline" size={80} color="#ccc" />
                 <ThemedText style={styles.emptyText}>
-                  No hay notificaciones
+                  {activeTab === 'vistas' ? 'No hay notificaciones vistas' : 'No hay notificaciones sin ver'}
                 </ThemedText>
               </ThemedView>
             ) : (
-              notifications.map((notification, index) => (
+              notifications
+                .filter((n) => (activeTab === 'vistas' ? n.watched : !n.watched))
+                .map((notification, index) => (
                 <ThemedView
                   key={notificationRowKey(notification, index)}
                   style={[
@@ -462,6 +488,34 @@ const styles = StyleSheet.create({
   contentContainer: {
     width: '100%',
     maxWidth: 600,
+  },
+  tabsContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 8,
+    padding: 4,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    gap: 8,
+  },
+  tabButtonActive: {
+    backgroundColor: '#007AFF',
+  },
+  tabButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  tabButtonTextActive: {
+    color: '#FFFFFF',
   },
   titleContainer: {
     alignItems: 'center',

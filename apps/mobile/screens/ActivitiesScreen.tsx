@@ -1228,7 +1228,7 @@ export default function ActivitiesScreen() {
     const handler = () => {
       fetchActivities();
     };
-
+    findCurrentMarca();
     eventBus.on('connectionRestored', handler);
     return () => {
       eventBus.off('connectionRestored', handler);

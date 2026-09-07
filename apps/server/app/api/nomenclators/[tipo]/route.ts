@@ -29,14 +29,17 @@ import {
     parseSuperAdminCreatePayload,
 } from "../../../../utils/nomenclatorsSuperAdmins";
 import { isSuperAdminEmpleado } from "../../../../utils/isSuperAdminEmpleado";
+import { reportError } from "../../../../utils/reportError";
 
-async function requireCallerSuperAdmin(req: NextRequest, payload: any): Promise<NextResponse | null> {
+async function requireCallerSuperAdmin(req: NextRequest, payload: any, method: string): Promise<NextResponse | null> {
     const empleadoId = payload?.id != null ? Number(payload.id) : 0;
     if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+        await reportError(req, "api/nomenclators/[tipo]", method, 403, "Usuario no autorizado");
         return NextResponse.json({ status: false, message: "Usuario no autorizado" }, { status: 403 });
     }
     const ok = await isSuperAdminEmpleado(req, empleadoId);
     if (!ok) {
+        await reportError(req, "api/nomenclators/[tipo]", method, 403, "Se requiere rol SUPER_ADMIN para administrar este nomenclador");
         return NextResponse.json(
             { status: false, message: "Se requiere rol SUPER_ADMIN para administrar este nomenclador" },
             { status: 403 }
@@ -61,6 +64,7 @@ export async function GET(
         const { tipo } = await context.params;
         const table = resolveNomenclatorTable(tipo);
         if (!table) {
+            await reportError(req, "api/nomenclators/[tipo]", "GET", 400, "Tipo de nomenclador no válido");
             return NextResponse.json(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
@@ -68,7 +72,7 @@ export async function GET(
         }
 
         if (resolveNomenclatorKind(tipo) === "super-admin") {
-            const denied = await requireCallerSuperAdmin(req, payload);
+            const denied = await requireCallerSuperAdmin(req, payload, "GET");
             if (denied) return denied;
             const data = await fetchSuperAdminsList(req);
             return NextResponse.json({ status: true, data }, { status: 200 });
@@ -120,6 +124,7 @@ export async function GET(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(`Error in GET /api/nomenclators/[tipo]:`, errorMessage);
+        await reportError(req, "api/nomenclators/[tipo]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -140,6 +145,7 @@ export async function POST(
         const { tipo } = await context.params;
         const table = resolveNomenclatorTable(tipo);
         if (!table) {
+            await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "Tipo de nomenclador no válido");
             return NextResponse.json(
                 { status: false, message: "Tipo de nomenclador no válido" },
                 { status: 400 }
@@ -149,11 +155,12 @@ export async function POST(
         const body = await req.json();
 
         if (resolveNomenclatorKind(tipo) === "super-admin") {
-            const denied = await requireCallerSuperAdmin(req, payload);
+            const denied = await requireCallerSuperAdmin(req, payload, "POST");
             if (denied) return denied;
 
             const createPayload = parseSuperAdminCreatePayload(body);
             if (!createPayload) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "Debe seleccionar un empleado válido");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un empleado válido" },
                     { status: 400 }
@@ -162,6 +169,7 @@ export async function POST(
 
             const result = await createSuperAdmin(req, createPayload.empleado_id);
             if (!result.ok) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", result.status, result.message);
                 return NextResponse.json(
                     { status: false, message: result.message },
                     { status: result.status }
@@ -175,6 +183,7 @@ export async function POST(
         }
 
         if (resolveNomenclatorKind(tipo) === "mobile-variable") {
+            await reportError(req, "api/nomenclators/[tipo]", "POST", 405, "No se pueden crear variables del sistema desde esta pantalla");
             return NextResponse.json(
                 { status: false, message: "No se pueden crear variables del sistema desde esta pantalla" },
                 { status: 405 }
@@ -184,6 +193,7 @@ export async function POST(
         if (resolveNomenclatorKind(tipo) === "ejecutivo-coordinador") {
             const payload = parseEjecutivoCoordinadorPayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "Debe seleccionar un ejecutivo de cuenta y un coordinador válidos");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un ejecutivo de cuenta y un coordinador válidos" },
                     { status: 400 }
@@ -196,6 +206,7 @@ export async function POST(
                 payload.coordinador_id
             );
             if (!validation.valid) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 409, validation.message);
                 return NextResponse.json(
                     { status: false, message: validation.message },
                     { status: 409 }
@@ -217,6 +228,7 @@ export async function POST(
 
             const mapped = await mapEjecutivoCoordinadorRow(req, created);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 500, "No se pudo crear el registro");
                 return NextResponse.json(
                     { status: false, message: "No se pudo crear el registro" },
                     { status: 500 }
@@ -234,6 +246,7 @@ export async function POST(
                 decodeURIComponent(req.headers.get("Planillas-Token") ?? req.headers.get("planillas-token") ?? "") ||
                 null;
             if (!planillasToken) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 401, "Token de Planillas requerido");
                 return NextResponse.json(
                     { status: false, message: "Token de Planillas requerido" },
                     { status: 401 }
@@ -242,6 +255,7 @@ export async function POST(
 
             const payload = parseEmpleadoEjecutivoPayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "Debe seleccionar un empleado y un ejecutivo de cuenta válidos");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un empleado y un ejecutivo de cuenta válidos" },
                     { status: 400 }
@@ -264,6 +278,7 @@ export async function POST(
         if (resolveNomenclatorKind(tipo) === "tipo-mantenimiento-articulo") {
             const payload = parseTipoMantenimientoArticuloPayload(body);
             if (!payload) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "Debe seleccionar un artículo e indicar un nombre válido");
                 return NextResponse.json(
                     { status: false, message: "Debe seleccionar un artículo e indicar un nombre válido" },
                     { status: 400 }
@@ -272,6 +287,7 @@ export async function POST(
 
             const exists = await articuloCorpoPuestoExists(req, payload.articulo_id);
             if (!exists) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "El artículo seleccionado no existe");
                 return NextResponse.json(
                     { status: false, message: "El artículo seleccionado no existe" },
                     { status: 400 }
@@ -293,6 +309,7 @@ export async function POST(
 
             const mapped = await mapTipoMantenimientoArticuloRow(req, created);
             if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]", "POST", 500, "No se pudo crear el registro");
                 return NextResponse.json(
                     { status: false, message: "No se pudo crear el registro" },
                     { status: 500 }
@@ -307,6 +324,7 @@ export async function POST(
 
         const nombre = String(body?.nombre ?? "").trim();
         if (!nombre) {
+            await reportError(req, "api/nomenclators/[tipo]", "POST", 400, "El nombre es obligatorio");
             return NextResponse.json(
                 { status: false, message: "El nombre es obligatorio" },
                 { status: 400 }
@@ -325,6 +343,7 @@ export async function POST(
 
         const mapped = mapNomenclatorRow(created);
         if (!mapped) {
+            await reportError(req, "api/nomenclators/[tipo]", "POST", 500, "No se pudo crear el registro");
             return NextResponse.json(
                 { status: false, message: "No se pudo crear el registro" },
                 { status: 500 }
@@ -338,6 +357,7 @@ export async function POST(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(`Error in POST /api/nomenclators/[tipo]:`, errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/nomenclators/[tipo]", "POST", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

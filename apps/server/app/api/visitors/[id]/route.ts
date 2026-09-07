@@ -7,6 +7,7 @@ import path from "path";
 import fs from "fs";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
 import { visitorsResolveHierarchyFromPuestoId } from "../../../../utils/visitorsResolveHierarchyFromPuesto";
+import { reportError } from "../../../../utils/reportError";
 
 async function getClienteIdForSucursalPut(_req: NextRequest, sucursalId: number): Promise<number | null> {
     const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: sucursalId } });
@@ -49,7 +50,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/visitors/[id]", "PUT", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const {
@@ -68,6 +70,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             foto_cedula, // viene en base64
             firma_visitante, // viene en base64 y opcional
             activos,
+            puesto_salida_id,
         } = await req.json();
 
         const visitor = await callDynamicPrisma({
@@ -75,7 +78,27 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
         });
         if (!visitor) {
-            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 200 });
+            await reportError(req, "api/visitors/[id]", "PUT", 404, "Persona no encontrada");
+            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 404 });
+        }
+
+        let puestoSalidaIdFinal: number | null | undefined = undefined;
+        if (puesto_salida_id !== undefined) {
+            if (puesto_salida_id == null || puesto_salida_id === "") {
+                puestoSalidaIdFinal = null;
+            } else {
+                const parsedPuestoSalida = parseInt(String(puesto_salida_id), 10);
+                if (!Number.isFinite(parsedPuestoSalida) || parsedPuestoSalida <= 0) {
+                    await reportError(req, "api/visitors/[id]", "PUT", 400, "Puesto de salida inválido");
+                    return NextResponse.json({ status: false, message: "Puesto de salida inválido" }, { status: 400 });
+                }
+                const puestoSalidaBd = await prisma.e_estructura_puesto.findUnique({ where: { id: parsedPuestoSalida } });
+                if (!puestoSalidaBd) {
+                    await reportError(req, "api/visitors/[id]", "PUT", 404, "El puesto de salida no existe");
+                    return NextResponse.json({ status: false, message: "El puesto de salida no existe" }, { status: 404 });
+                }
+                puestoSalidaIdFinal = parsedPuestoSalida;
+            }
         }
 
         // Preparar datos de actualización
@@ -93,6 +116,9 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             firma_visitante,
             updated_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
         };
+        if (puestoSalidaIdFinal !== undefined) {
+            updateData.puesto_salida_id = puestoSalidaIdFinal;
+        }
 
         const bodyCorpoParsed =
             bodyCorpoId != null && bodyCorpoId !== ""
@@ -111,27 +137,31 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         if (corpoChanging) {
             const cp = await clienteAndPuestoForCorpoPut(req, bodyCorpoParsed);
             if (!cp) {
+                await reportError(req, "api/visitors/[id]", "PUT", 400, "No se pudo resolver cliente/puesto para la sucursal indicada");
                 return NextResponse.json(
                     { status: false, message: "No se pudo resolver cliente/puesto para la sucursal indicada" },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
             if (Number(cp.cliente_id) !== Number(visitor.cliente_id)) {
+                await reportError(req, "api/visitors/[id]", "PUT", 400, "La sucursal indicada no pertenece al mismo cliente del registro");
                 return NextResponse.json(
                     { status: false, message: "La sucursal indicada no pertenece al mismo cliente del registro" },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
             updateData.corpo_id = bodyCorpoParsed;
             if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0) {
                 const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: bodyPuestoParsed } });
                 if (!puestoRow) {
-                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                    await reportError(req, "api/visitors/[id]", "PUT", 404, "Puesto no encontrado");
+                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
                 }
                 if (Number(puestoRow.sucursal_id) !== bodyCorpoParsed) {
+                    await reportError(req, "api/visitors/[id]", "PUT", 400, "El puesto no pertenece a la sucursal indicada");
                     return NextResponse.json(
                         { status: false, message: "El puesto no pertenece a la sucursal indicada" },
-                        { status: 200 }
+                        { status: 400 }
                     );
                 }
                 updateData.puesto_id = bodyPuestoParsed;
@@ -141,19 +171,22 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         } else if (Number.isFinite(bodyPuestoParsed) && bodyPuestoParsed > 0 && bodyPuestoParsed !== Number(visitor.puesto_id)) {
             const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: bodyPuestoParsed } });
             if (!puestoRow) {
-                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                await reportError(req, "api/visitors/[id]", "PUT", 404, "Puesto no encontrado");
+                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
             }
             if (Number(puestoRow.sucursal_id) !== Number(visitor.corpo_id)) {
+                await reportError(req, "api/visitors/[id]", "PUT", 400, "El puesto no pertenece a la sucursal del registro");
                 return NextResponse.json(
                     { status: false, message: "El puesto no pertenece a la sucursal del registro" },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
             const clienteDelPuesto = await getClienteIdForSucursalPut(req, Number(visitor.corpo_id));
             if (clienteDelPuesto == null || Number(clienteDelPuesto) !== Number(visitor.cliente_id)) {
+                await reportError(req, "api/visitors/[id]", "PUT", 400, "No se pudo validar el cliente del puesto");
                 return NextResponse.json(
                     { status: false, message: "No se pudo validar el cliente del puesto" },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
             updateData.puesto_id = bodyPuestoParsed;
@@ -166,7 +199,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             if (Number.isFinite(finalCorpo) && finalCorpo > 0 && Number.isFinite(finalPuesto) && finalPuesto > 0) {
                 const h = await visitorsResolveHierarchyFromPuestoId(req, finalPuesto, finalCorpo);
                 if (!h.ok) {
-                    return NextResponse.json({ status: false, message: h.message }, { status: 200 });
+                    await reportError(req, "api/visitors/[id]", "PUT", 400, h.message);
+                    return NextResponse.json({ status: false, message: h.message }, { status: 400 });
                 }
                 updateData.cliente_id = h.cliente_id;
                 updateData.empresa_id = h.empresa_id;
@@ -326,6 +360,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/visitors/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -340,7 +375,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
-            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+            await reportError(req, "api/visitors/[id]", "DELETE", 400, "ID no especificado");
+            return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
         }
 
         const existing = await callDynamicPrisma({
@@ -348,7 +384,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             data: { action: "GET", table: "e_registro_personas", operation: "findUnique", where: { id } }
         });
         if (!existing) {
-            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 200 });
+            await reportError(req, "api/visitors/[id]", "DELETE", 404, "Persona no encontrada");
+            return NextResponse.json({ status: false, message: "Persona no encontrada" }, { status: 404 });
         }
 
         await callDynamicPrisma({
@@ -386,6 +423,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/visitors/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../utils/reportError";
 import fs from "fs";
 import path from "path";
 
@@ -23,6 +24,7 @@ export async function DELETE(
     const id = parseInt(resolvedParams.id, 10);
 
     if (!id) {
+      await reportError(req, "api/evaluation/[id]", "DELETE", 400, "Evaluación no especificada");
       return NextResponse.json(
         { status: false, message: "Evaluación no especificada" },
         { status: 400 }
@@ -35,6 +37,7 @@ export async function DELETE(
     });
 
     if (!evaluation) {
+      await reportError(req, "api/evaluation/[id]", "DELETE", 404, "Evaluación no encontrada");
       return NextResponse.json(
         { status: false, message: "Evaluación no encontrada" },
         { status: 404 }
@@ -66,6 +69,7 @@ export async function DELETE(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/evaluation/[id]:", errorMessage);
+    await reportError(req, "api/evaluation/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }
@@ -90,6 +94,7 @@ export async function PATCH(
     const id = parseInt(resolvedParams.id, 10);
 
     if (!id) {
+      await reportError(req, "api/evaluation/[id]", "PATCH", 400, "Evaluación no especificada");
       return NextResponse.json(
         { status: false, message: "Evaluación no especificada" },
         { status: 400 }
@@ -100,6 +105,7 @@ export async function PATCH(
     const { field, value } = body as { field?: string; value?: string };
 
     if (!field || (field !== "firma_empleado" && field !== "firma_empleado_manual")) {
+      await reportError(req, "api/evaluation/[id]", "PATCH", 400, "Campo inválido. Debe ser firma_empleado o firma_empleado_manual.");
       return NextResponse.json(
         { status: false, message: "Campo inválido. Debe ser firma_empleado o firma_empleado_manual." },
         { status: 400 }
@@ -112,6 +118,7 @@ export async function PATCH(
     });
 
     if (!evaluation) {
+      await reportError(req, "api/evaluation/[id]", "PATCH", 404, "Evaluación no encontrada");
       return NextResponse.json(
         { status: false, message: "Evaluación no encontrada" },
         { status: 404 }
@@ -140,6 +147,7 @@ export async function PATCH(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PATCH /api/evaluation/[id]:", errorMessage);
+    await reportError(req, "api/evaluation/[id]", "PATCH", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }

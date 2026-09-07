@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 
 type ManualFileInput = {
     type: string;
@@ -28,9 +29,10 @@ export async function PUT(
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
+            await reportError(req, "api/job-manuals/[id]", "PUT", 400, "Manual no especificado");
             return NextResponse.json(
                 { status: false, message: "Manual no especificado" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -44,9 +46,10 @@ export async function PUT(
             },
         });
         if (!manual) {
+            await reportError(req, "api/job-manuals/[id]", "PUT", 404, "Manual no encontrado");
             return NextResponse.json(
                 { status: false, message: "Manual no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
         const manualObj = manual as any;
@@ -119,12 +122,13 @@ export async function PUT(
                 filesParsed = JSON.parse(newFiles) as ManualFileInput[];
             } catch (err) {
                 console.error("Error parsing newFiles JSON:", err);
+                await reportError(req, "api/job-manuals/[id]", "PUT", 400, "Formato de archivos inválido");
                 return NextResponse.json(
                     {
                         status: false,
                         message: "Formato de archivos inválido"
                     },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
 
@@ -169,6 +173,7 @@ export async function PUT(
         const errorMessage =
             error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in PUT /api/job-manuals/[id]:", errorMessage);
+        await reportError(req, "api/job-manuals/[id]", "PUT", 500, errorMessage);
         return NextResponse.json(
             { status: false, message: errorMessage },
             { status: 500 }
@@ -193,9 +198,10 @@ export async function DELETE(
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
+            await reportError(req, "api/job-manuals/[id]", "DELETE", 400, "Manual no especificado");
             return NextResponse.json(
                 { status: false, message: "Manual no especificado" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -209,9 +215,10 @@ export async function DELETE(
             },
         });
         if (!manual) {
+            await reportError(req, "api/job-manuals/[id]", "DELETE", 404, "Manual no encontrado");
             return NextResponse.json(
                 { status: false, message: "Manual no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -219,6 +226,7 @@ export async function DELETE(
         // Solo el creador puede eliminar
         const requesterId = String(payload?.id ?? "");
         if (String(manualObj.created_by ?? "") !== requesterId) {
+            await reportError(req, "api/job-manuals/[id]", "DELETE", 403, "No tienes permiso para eliminar este manual");
             return NextResponse.json(
                 { status: false, message: "No tienes permiso para eliminar este manual" },
                 { status: 403 }
@@ -245,6 +253,7 @@ export async function DELETE(
         const errorMessage =
             error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in DELETE /api/job-manuals/[id]:", errorMessage);
+        await reportError(req, "api/job-manuals/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json(
             { status: false, message: errorMessage },
             { status: 500 }

@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
 import { uploadDynamicFiles } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -37,11 +38,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const incidentId = parseInt(id, 10);
     const aporteId = parseInt(contributionId, 10);
     if (!incidentId || !aporteId) {
-      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "PUT", 400, "IDs no especificados");
+      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 400 });
     }
 
     const empleadoId = parseInt(String((payload as any)?.id ?? (payload as any)?.empleado_id ?? "0"), 10);
-    if (!empleadoId) return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 200 });
+    if (!empleadoId) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "PUT", 400, "Empleado no identificado");
+      return NextResponse.json({ status: false, message: "Empleado no identificado" }, { status: 400 });
+    }
 
     const aporte = await callDynamicPrisma({
       req,
@@ -52,7 +57,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         where: { id: aporteId, incidente_id: incidentId }
       }
     });
-    if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 200 });
+    if (!aporte) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "PUT", 404, "Aporte no encontrado");
+      return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+    }
 
     const body = await req.json();
     const { aporte: aporteText, archivos, nombre_aporte, firma_aporte_tercero } = body ?? {};
@@ -125,6 +133,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/incidents/[id]/contributions/[contributionId]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -138,7 +147,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const incidentId = parseInt(id, 10);
     const aporteId = parseInt(contributionId, 10);
     if (!incidentId || !aporteId) {
-      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "DELETE", 400, "IDs no especificados");
+      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 400 });
     }
 
     const aporte = await callDynamicPrisma({
@@ -151,7 +161,10 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         include: { c_archivos_aporte_incidente: true }
       }
     });
-    if (!aporte) return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 200 });
+    if (!aporte) {
+      await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "DELETE", 404, "Aporte no encontrado");
+      return NextResponse.json({ status: false, message: "Aporte no encontrado" }, { status: 404 });
+    }
 
     await callDynamicPrisma({
       req,
@@ -171,6 +184,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/incidents/[id]/contributions/[contributionId]:", errorMessage);
+    await reportError(req, "api/incidents/[id]/contributions/[contributionId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

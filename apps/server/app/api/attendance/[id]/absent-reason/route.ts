@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../../../utils/sendNotification";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -17,16 +18,19 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const body = await req.json();
         const { reason, horaAccion } = body as { reason?: string; horaAccion?: number };
         if (reason == null || String(reason).trim() === "") {
-            return NextResponse.json({ status: false, message: "Motivo no especificado" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 400, "Motivo no especificado");
+            return NextResponse.json({ status: false, message: "Motivo no especificado" }, { status: 400 });
         }
         const horaAccionNum = horaAccion != null ? Number(horaAccion) : NaN;
         if (!Number.isFinite(horaAccionNum)) {
-            return NextResponse.json({ status: false, message: "horaAccion inválida" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 400, "horaAccion inválida");
+            return NextResponse.json({ status: false, message: "horaAccion inválida" }, { status: 400 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 404, "No se encontró la marca del dia");
+            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
         }
 
         const authEmpleadoId = Number(payload.id);
@@ -40,7 +44,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                   : authEmpleadoId;
         const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 404, "No se encontró el empleado");
+            return NextResponse.json({ status: false, message: "No se encontró el empleado" }, { status: 404 });
         }
 
         const reasonTrimmed = String(reason).trim();
@@ -95,6 +100,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/attendance/[id]/absent-reason", "PUT", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

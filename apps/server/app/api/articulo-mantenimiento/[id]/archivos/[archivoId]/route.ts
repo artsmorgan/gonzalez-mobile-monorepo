@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,7 @@ export async function DELETE(
     const archivoId = parseInt(String(resolved.archivoId), 10);
 
     if (!Number.isFinite(activoMantenimientoId) || activoMantenimientoId <= 0 || !Number.isFinite(archivoId) || archivoId <= 0) {
+      await reportError(req, "api/articulo-mantenimiento/[id]/archivos/[archivoId]", "DELETE", 400, "Parámetros inválidos");
       return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 400 });
     }
 
@@ -37,6 +39,7 @@ export async function DELETE(
     })) as { id: number; name: string; activo_mantenimiento_id: number } | null;
 
     if (!fileRow) {
+      await reportError(req, "api/articulo-mantenimiento/[id]/archivos/[archivoId]", "DELETE", 404, "Archivo no encontrado");
       return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
     }
 
@@ -64,6 +67,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE /api/articulo-mantenimiento/[id]/archivos/[archivoId]:", errorMessage);
+    await reportError(req, "api/articulo-mantenimiento/[id]/archivos/[archivoId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

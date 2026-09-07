@@ -526,8 +526,15 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         right: { style: "thin" },
     };
 
+    /** Cuadrícula jerárquica: el registro (nivel 0) más sus artículos (nivel 1, de `articulos_puesto`). */
+    main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Entrega",
         "Empresa",
         "Cliente",
         "División",
@@ -551,7 +558,17 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         "Artículos puesto",
         "Firma entrega",
         "Firma recibe",
+        "Nombre artículo",
+        "Tipo artículo",
+        "Cant. requerida artículo",
+        "Cant. real artículo",
+        "Estado artículo",
+        "Observaciones artículo",
     ];
+    const COL_LINK_ARTICULOS = 26;
+    const COL_LINK_FIRMA_ENTREGA = 27;
+    const COL_LINK_FIRMA_RECIBE = 28;
+
     const h = main.addRow(mainHeaders);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
@@ -561,6 +578,10 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
     });
     main.views = [{ state: "frozen", ySplit: 1 }];
     main.columns = [
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
         { width: 10 },
         { width: 28 },
         { width: 26 },
@@ -582,10 +603,15 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         { width: 14 },
         { width: 14 },
         { width: 14 },
-        { width: 24 },
         { width: 18 },
         { width: 18 },
         { width: 18 },
+        { width: 28 },
+        { width: 16 },
+        { width: 16 },
+        { width: 14 },
+        { width: 16 },
+        { width: 32 },
     ];
 
     const detailsStartById = new Map<number, number>();
@@ -726,10 +752,24 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         summaryRight: true,
     };
 
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((c) => {
+            c.border = borderThin;
+            c.alignment = { vertical: "middle", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const anchor = detailsStartById.get(Number(r.id)) ?? 1;
-        const row = main.addRow([
-            r.id,
+        const link = `#'Detalles'!A${anchor}`;
+        const general = [
+            String(r.id),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -750,26 +790,51 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
             displayEntregaTime(r.hora_entrada_recibe),
             displayEntregaTime(r.hora_salida_recibe),
             displayMarcaId(r.marca_recibe_id),
+        ];
+
+        const rootRow = main.addRow([
+            String(r.id),
+            "",
+            0,
+            "Registro",
+            ...general,
             "Ver artículos / firmas",
             "Ver artículos / firmas",
             "Ver artículos / firmas",
+            ...blank(6),
         ]);
-        const link = `#'Detalles'!A${anchor}`;
-        row.getCell(22).value = { text: "Ver artículos / firmas", hyperlink: link };
-        row.getCell(23).value = { text: "Ver artículos / firmas", hyperlink: link };
-        row.getCell(24).value = { text: "Ver artículos / firmas", hyperlink: link };
-        [22, 23, 24].forEach((i) => {
-            row.getCell(i).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_LINK_ARTICULOS).value = { text: "Ver artículos / firmas", hyperlink: link };
+        rootRow.getCell(COL_LINK_FIRMA_ENTREGA).value = { text: "Ver artículos / firmas", hyperlink: link };
+        rootRow.getCell(COL_LINK_FIRMA_RECIBE).value = { text: "Ver artículos / firmas", hyperlink: link };
+        [COL_LINK_ARTICULOS, COL_LINK_FIRMA_ENTREGA, COL_LINK_FIRMA_RECIBE].forEach((i) => {
+            rootRow.getCell(i).font = { color: { argb: "FF0563C1" }, underline: true };
         });
-        row.eachCell((c) => {
-            c.border = borderThin;
-            c.alignment = { vertical: "middle", wrapText: true };
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        parseArticulos(r.articulos_puesto).forEach((item, idx) => {
+            const row = main.addRow([
+                `${r.id}.art${idx + 1}`,
+                String(r.id),
+                1,
+                "Artículo",
+                ...general,
+                ...blank(3),
+                String(item.nombre ?? ""),
+                String(item.tipo ?? ""),
+                String(item.cantidad_requerida ?? ""),
+                String(item.cantidad_real ?? ""),
+                String(item.estado ?? ""),
+                String(item.observaciones ?? ""),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
         });
     }
 
     main.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

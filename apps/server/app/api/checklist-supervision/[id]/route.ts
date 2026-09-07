@@ -12,6 +12,7 @@ import {
   stripMantenimientoFilesFromArticulosPuesto,
 } from "../../../../utils/sanitizeArticulosPuestoForPersistence";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../utils/reportError";
 
 const CHECKLIST_SUPERVISION_INCLUDE = {
   e_estructura_cliente: { select: { id: true, nombre: true } },
@@ -44,7 +45,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "GET", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const { sameGroupInclude, preexistentSpecs } = splitIncludeByTableGroup(CHECKLIST_SUPERVISION_INCLUDE);
@@ -62,11 +64,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     await hydratePreexistentRelations(row, preexistentSpecs);
 
     if (!row) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "GET", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     if ((row as any).isActive === false) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "GET", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const mapped = mapChecklistSupervisionPublicRow(row, req.nextUrl.origin);
@@ -75,6 +79,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/checklist-supervision/[id]:", errorMessage);
+    await reportError(req, "api/checklist-supervision/[id]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -87,7 +92,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const body = await req.json();
@@ -118,7 +124,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       data: { action: "GET", table: "c_checklist_supervision", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     // Registrar cambios (solo campos actualizados, excluyendo firmas)
@@ -166,7 +173,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         hora_fin: hora_fin !== undefined ? hora_fin : (existing as any).hora_fin,
       });
       if (!empleadoHoras.ok) {
-        return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 200 });
+        await reportError(req, "api/checklist-supervision/[id]", "PUT", 400, empleadoHoras.message);
+        return NextResponse.json({ status: false, message: empleadoHoras.message }, { status: 400 });
       }
       updateData.empleado_id = empleadoHoras.empleadoId;
       updateData.empleado_nombre = empleadoHoras.empleadoNombre;
@@ -316,6 +324,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/checklist-supervision/[id]:", errorMessage);
+    await reportError(req, "api/checklist-supervision/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -328,7 +337,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -336,7 +346,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       data: { action: "GET", table: "c_checklist_supervision", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/checklist-supervision/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     // Registrar cambio de eliminación antes de eliminar
@@ -387,6 +398,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/checklist-supervision/[id]:", errorMessage);
+    await reportError(req, "api/checklist-supervision/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

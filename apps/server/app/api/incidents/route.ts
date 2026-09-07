@@ -8,6 +8,7 @@ import { sendNotificationByEmployee, sendNotificationByRole } from "../../../uti
 import { findContributionIncidents } from "../../../utils/findContributionIncidents";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 const INCIDENTS_LIST_INCLUDE = {
     n_ejecutivo_cuenta: true,
@@ -66,12 +67,14 @@ export async function GET(req: NextRequest) {
 
         const corpoIdStr = req.nextUrl.searchParams.get("corpo_id");
         if (!corpoIdStr) {
-            return NextResponse.json({ status: false, message: "Corporación no especificada" }, { status: 200 });
+            await reportError(req, "api/incidents", "GET", 400, "Corporación no especificada");
+            return NextResponse.json({ status: false, message: "Corporación no especificada" }, { status: 400 });
         }
 
         const corpoId = parseInt(corpoIdStr, 10);
         if (Number.isNaN(corpoId)) {
-            return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
+            await reportError(req, "api/incidents", "GET", 400, "corpo_id inválido");
+            return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
         }
 
         const tokenEmpleadoId =
@@ -154,6 +157,7 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/incidents:", errorMessage);
+        await reportError(req, "api/incidents", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -202,12 +206,14 @@ export async function POST(req: NextRequest) {
             !descripcion ||
             !nombre_responsable_atencion
         ) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/incidents", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/incidents", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const corpoIdFinal =
@@ -219,7 +225,8 @@ export async function POST(req: NextRequest) {
                 ? parseInt(String(body_puesto_id), 10)
                 : 0;
         if (!puestoIdFinal) {
-            return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 200 });
+            await reportError(req, "api/incidents", "POST", 400, "puesto_id es obligatorio");
+            return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
         }
         const empresaIdFinal =
             body_empresa_id != null && !Number.isNaN(parseInt(String(body_empresa_id), 10))
@@ -238,9 +245,10 @@ export async function POST(req: NextRequest) {
                 ? parseInt(String(body_contrato_id), 10)
                 : 0;
         if (!empresaIdFinal || !clienteIdFinal || !divisionIdFinal || !contratoIdFinal || !corpoIdFinal) {
+            await reportError(req, "api/incidents", "POST", 400, "Debe indicar jerarquía (empresa, cliente, división, contrato, sucursal, puesto)");
             return NextResponse.json(
                 { status: false, message: "Debe indicar jerarquía (empresa, cliente, división, contrato, sucursal, puesto)" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -257,7 +265,8 @@ export async function POST(req: NextRequest) {
         const sucursal = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoIdFinal } });
 
         if (!sucursal) {
-            return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 200 });
+            await reportError(req, "api/incidents", "POST", 404, "Sucursal no encontrada");
+            return NextResponse.json({ status: false, message: "Sucursal no encontrada" }, { status: 404 });
         }
 
         const incident = await callDynamicPrisma({
@@ -353,6 +362,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log("Error in POST /api/incidents:", errorMessage);
+        await reportError(req, "api/incidents", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

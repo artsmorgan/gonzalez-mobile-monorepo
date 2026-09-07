@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -13,7 +14,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const actividadId = Number(resolvedParams.id);
     if (!Number.isFinite(actividadId) || actividadId <= 0) {
-      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]", "PUT", 500, "Actividad inválida");
+      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 500 });
     }
 
     const {
@@ -34,7 +36,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       es_revision_equipo === undefined ||
       !firma_responsable
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]", "PUT", 500, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 500 });
     }
 
     const existing = await callDynamicPrisma({
@@ -47,7 +50,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]", "PUT", 404, "Actividad no encontrada");
+      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
     await callDynamicPrisma({
@@ -108,6 +112,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     return NextResponse.json({ status: true, message: "Actividad actualizada correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -122,7 +127,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const actividadId = Number(resolvedParams.id);
     if (!Number.isFinite(actividadId) || actividadId <= 0) {
-      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]", "DELETE", 500, "Actividad inválida");
+      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 500 });
     }
 
     const existing = await callDynamicPrisma({
@@ -135,7 +141,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       },
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]", "DELETE", 404, "Actividad no encontrada");
+      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
     await callDynamicPrisma({
@@ -167,6 +174,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     return NextResponse.json({ status: true, message: "Actividad eliminada correctamente" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

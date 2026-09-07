@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -11,10 +12,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
-        if (!empleado) return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
+        if (!empleado) {
+            await reportError(req, "api/empleados/[id]", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ message: "Empleado no encontrado" }, { status: 404 });
+        }
         return NextResponse.json(empleado);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/empleados/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -32,6 +37,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         return NextResponse.json(updatedEmpleado);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/empleados/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
@@ -47,6 +53,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         return NextResponse.json({ message: "Empleado eliminado" });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/empleados/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

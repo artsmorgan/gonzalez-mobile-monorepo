@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { upsertFcmDevice } from "../../../../utils/pushNotifications";
+import { reportError } from "../../../../utils/reportError";
 
 /**
  * POST /api/push/register
@@ -34,14 +35,16 @@ export async function POST(req: NextRequest) {
         : empleadoFromBody;
 
     if (!Number.isFinite(empleado_id) || empleado_id <= 0) {
+      await reportError(req, "api/push/register", "POST", 400, "empleado_id no disponible en la sesión");
       return NextResponse.json(
         { status: false, message: "empleado_id no disponible en la sesión" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
     if (!token) {
-      return NextResponse.json({ status: false, message: "token requerido" }, { status: 200 });
+      await reportError(req, "api/push/register", "POST", 400, "token requerido");
+      return NextResponse.json({ status: false, message: "token requerido" }, { status: 400 });
     }
 
     // Evitar que un cliente registre tokens a nombre de otro empleado
@@ -50,9 +53,10 @@ export async function POST(req: NextRequest) {
       empleadoFromBody > 0 &&
       empleadoFromBody !== empleado_id
     ) {
+      await reportError(req, "api/push/register", "POST", 400, "empleado_id no coincide con la sesión");
       return NextResponse.json(
         { status: false, message: "empleado_id no coincide con la sesión" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -81,6 +85,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("[push/register]", errorMessage);
+    await reportError(req, "api/push/register", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { sendNotificationByEmployee } from "../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../utils/reportError";
 
 const parseIntStrict = (value: any) => {
   const n = parseInt(String(value), 10);
@@ -83,22 +84,32 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
     const { id } = await context.params;
     const idNum = parseIntStrict(id);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const body = await req.json();
     const role = String(body?.role || "").trim().toLowerCase();
     if (role !== "ausente" && role !== "reemplaza") {
+      await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "Role inválido");
       return NextResponse.json({ status: false, message: "Role inválido" }, { status: 400 });
     }
 
     const currentEmployeeId = parseIntStrict((payload as any)?.id);
-    if (!currentEmployeeId) return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    if (!currentEmployeeId) {
+      await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "Empleado inválido");
+      return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "e_mutuos_acuerdos", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const now = toZonedTime(new Date(), "America/Costa_Rica").toISOString();
     let updateData: any = {};
@@ -109,12 +120,14 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
     if (role === "ausente") {
       if (Number(existing.empleadoAusente_id) !== currentEmployeeId) {
-        return NextResponse.json({ status: false, message: "No autorizado para aceptar como primer turno" }, { status: 403 });
+        await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "No autorizado para aceptar como primer turno");
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como primer turno" }, { status: 400 });
       }
       if (existing.ausente_acepta) {
         return NextResponse.json({ status: true, message: "El primer turno ya había aceptado", data: existing }, { status: 200 });
       }
       if (!firmaAusenteNorm || firmaAusenteNorm.length < 80) {
+        await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "La firma manual del primer turno es obligatoria");
         return NextResponse.json({ status: false, message: "La firma manual del primer turno es obligatoria" }, { status: 400 });
       }
       updateData = { ausente_acepta: true, ausente_acepta_at: now, firma_ausente_manual: firmaAusenteNorm };
@@ -125,12 +138,14 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       ];
     } else {
       if (Number(existing.empleadoReemplaza_id) !== currentEmployeeId) {
-        return NextResponse.json({ status: false, message: "No autorizado para aceptar como segundo turno" }, { status: 403 });
+        await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "No autorizado para aceptar como segundo turno");
+        return NextResponse.json({ status: false, message: "No autorizado para aceptar como segundo turno" }, { status: 400 });
       }
       if (existing.reemplaza_acepta) {
         return NextResponse.json({ status: true, message: "El segundo turno ya había aceptado", data: existing }, { status: 200 });
       }
       if (!firmaReemplazaNorm || firmaReemplazaNorm.length < 80) {
+        await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, "La firma manual del segundo turno es obligatoria");
         return NextResponse.json({ status: false, message: "La firma manual del segundo turno es obligatoria" }, { status: 400 });
       }
       updateData = { reemplaza_acepta: true, reemplaza_acepta_at: now, firma_reemplaza_manual: firmaReemplazaNorm };
@@ -172,6 +187,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     return NextResponse.json({ status: true, message: "Aceptación registrada correctamente", data: updated }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos/[id]", "PATCH", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

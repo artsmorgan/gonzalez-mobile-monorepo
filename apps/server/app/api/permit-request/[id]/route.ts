@@ -5,6 +5,7 @@ import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee } from "../../../../utils/sendNotification";
 import axios from "axios";
+import { reportError } from "../../../../utils/reportError";
 
 const parseDateInputToDate = (input: unknown): Date | null => {
     if (!input) return null;
@@ -25,12 +26,14 @@ export async function PUT(
 
         const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
         if (!planillasToken) {
-            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "Token de Planillas no encontrado");
+            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 400 });
         }
 
         const resolvedParams = await context.params;
         const idNum = parseInt(String(resolvedParams.id), 10);
         if (!idNum) {
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -44,11 +47,13 @@ export async function PUT(
             },
         });
         if (!existing) {
+            await reportError(req, "api/permit-request/[id]", "PUT", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
         const currentEmployeeId = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         if (!currentEmployeeId) {
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "Empleado inválido");
             return NextResponse.json({ status: false, message: "Empleado inválido" }, { status: 400 });
         }
 
@@ -58,15 +63,18 @@ export async function PUT(
             Number(existing.ejecutivo_cuenta) === currentEmployeeId ||
             (myEjecutivoCuentaId != null && Number(existing.ejecutivo_cuenta) === myEjecutivoCuentaId);
         if (!isExecutive) {
-            return NextResponse.json({ status: false, message: "No autorizado para aprobar esta solicitud" }, { status: 403 });
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "No autorizado para aprobar esta solicitud");
+            return NextResponse.json({ status: false, message: "No autorizado para aprobar esta solicitud" }, { status: 400 });
         }
 
         const estadoActual = String((existing as any)?.estado || "").trim().toLowerCase();
         if (estadoActual !== "pendiente") {
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "Solo se pueden aprobar solicitudes pendientes");
             return NextResponse.json({ status: false, message: "Solo se pueden aprobar solicitudes pendientes" }, { status: 400 });
         }
 
         if (existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual) {
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "La solicitud ya fue completada por el ejecutivo");
             return NextResponse.json({ status: false, message: "La solicitud ya fue completada por el ejecutivo" }, { status: 400 });
         }
 
@@ -80,6 +88,7 @@ export async function PUT(
         const firmaManual = String(body?.firma_ejecutivo_cuenta_manual || "").trim();
 
         if (!firmaDigital || firmaDigital.length < 10 || !firmaManual || firmaManual.length < 10) {
+            await reportError(req, "api/permit-request/[id]", "PUT", 400, "Debes generar firma digital y firma manual del ejecutivo");
             return NextResponse.json({ status: false, message: "Debes generar firma digital y firma manual del ejecutivo" }, { status: 400 });
         }
 
@@ -124,14 +133,16 @@ export async function PUT(
             const firstTurno = turnosUpdated[0];
             const result = await createPermisoInPlanillas(req, planillasToken, firstTurno, existing, allReplacementsEqual);
             if (!result) {
-                return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 200 });
+                await reportError(req, "api/permit-request/[id]", "PUT", 500, "Error al crear el permiso en Planillas");
+                return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 500 });
             }
         }
         else {
             for (const turno of turnosUpdated) {
                 const result = await createPermisoInPlanillas(req, planillasToken, turno, existing, allReplacementsEqual);
                 if (!result) {
-                    return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 200 });
+                    await reportError(req, "api/permit-request/[id]", "PUT", 500, "Error al crear el permiso en Planillas");
+                    return NextResponse.json({ status: false, message: "Error al crear el permiso en Planillas" }, { status: 500 });
                 }
             }
         }
@@ -241,7 +252,8 @@ export async function PUT(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/permit-request/[id]", "PUT", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
@@ -323,6 +335,7 @@ export async function DELETE(
         const { id } = resolvedParams;
         const idNum = parseInt(id, 10);
         if (!idNum) {
+            await reportError(req, "api/permit-request/[id]", "DELETE", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -336,15 +349,18 @@ export async function DELETE(
             },
         });
         if (!existing) {
+            await reportError(req, "api/permit-request/[id]", "DELETE", 404, "Registro no encontrado");
             return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
         }
 
         const currentEmployeeId = payload?.id !== undefined && payload?.id !== null ? Number(payload.id) : 0;
         if (!currentEmployeeId || Number(existing.empleado_id) !== Number(currentEmployeeId)) {
-            return NextResponse.json({ status: false, message: "Solo el creador puede eliminar la solicitud" }, { status: 403 });
+            await reportError(req, "api/permit-request/[id]", "DELETE", 400, "Solo el creador puede eliminar la solicitud");
+            return NextResponse.json({ status: false, message: "Solo el creador puede eliminar la solicitud" }, { status: 400 });
         }
 
         if (existing.firma_ejecutivo_cuenta_digital || existing.firma_ejecutivo_cuenta_manual) {
+            await reportError(req, "api/permit-request/[id]", "DELETE", 400, "No se puede eliminar una solicitud ya completada");
             return NextResponse.json({ status: false, message: "No se puede eliminar una solicitud ya completada" }, { status: 400 });
         }
 
@@ -389,7 +405,8 @@ export async function DELETE(
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/permit-request/[id]", "DELETE", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

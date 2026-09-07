@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "../../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../../utils/reportError";
 import axios from "axios";
 
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -16,21 +17,24 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
         const planillasToken = await req.headers.get("planillas-token");
         if (!planillasToken) {
+            await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 400, "Token de Planillas requerido");
             return NextResponse.json(
                 { status: false, message: "Token de Planillas requerido" },
-                { status: 401 }
+                { status: 400 }
             );
         }
 
         const resolvedParams = await context.params;
         const horarioId = parseInt(resolvedParams.id, 10);
         if (!Number.isFinite(horarioId) || horarioId <= 0) {
+            await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 400, "Identificador de horario inválido");
             return NextResponse.json({ status: false, message: "Identificador de horario inválido" }, { status: 400 });
         }
 
         const body = await req.json();
         const minutosRaw = Number(body?.minutos_almuerzo);
         if (!Number.isFinite(minutosRaw) || minutosRaw <= 0) {
+            await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 400, "minutos_almuerzo debe ser un número mayor a 0");
             return NextResponse.json(
                 { status: false, message: "minutos_almuerzo debe ser un número mayor a 0" },
                 { status: 400 }
@@ -39,6 +43,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
 
         const horario = await prisma.c_horario.findUnique({ where: { id: horarioId } });
         if (!horario) {
+            await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 404, "Horario no encontrado");
             return NextResponse.json({ status: false, message: "Horario no encontrado" }, { status: 404 });
         }
 
@@ -54,6 +59,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         });
   
         if (!planillasResponse.data.success) {
+          await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 500, "Error al actualizar los minutos de alimentación");
           return NextResponse.json(
             { status: false, message: "Error al actualizar los minutos de alimentación" },
             { status: 500 }
@@ -66,6 +72,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
         );
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/lunch-time/horario/[id]/minutos-almuerzo", "PATCH", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

@@ -4,6 +4,7 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../utils/reportError";
 
 function parseId(v: unknown): number | null {
   if (v === undefined || v === null || v === "") return null;
@@ -21,7 +22,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const body = await req.json();
@@ -40,12 +42,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       puesto_id: bodyPuestoId,
     } = body ?? {};
     if (!marca_id) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 400, "Marca no especificada");
+      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
     }
 
     const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
     if (!marcaDia) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 404, "Marca no encontrada");
+      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
     }
 
     const existing = await callDynamicPrisma({
@@ -53,11 +57,13 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       data: { action: "GET", table: "e_llavero", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     if (existing.cliente_id !== marcaDia.cliente_id) {
-      return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 400, "No autorizado para modificar este registro");
+      return NextResponse.json({ status: false, message: "No autorizado para modificar este registro" }, { status: 400 });
     }
 
     const nextCliente =
@@ -74,16 +80,18 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         : existing.puesto_id;
 
     if (nextCliente !== marcaDia.cliente_id) {
-      return NextResponse.json({ status: false, message: "Cliente destino no coincide con la marca" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "PUT", 400, "Cliente destino no coincide con la marca");
+      return NextResponse.json({ status: false, message: "Cliente destino no coincide con la marca" }, { status: 400 });
     }
 
     const nextEmpresa = parseId(bodyEmpresaId) ?? Number(existing.empresa_id);
     const nextDivision = parseId(bodyDivisionId) ?? Number(existing.division_id);
     const nextContrato = parseId(bodyContratoId) ?? Number(existing.contrato_id);
     if (!Number.isFinite(nextEmpresa) || nextEmpresa <= 0 || !Number.isFinite(nextDivision) || nextDivision <= 0 || !Number.isFinite(nextContrato) || nextContrato <= 0) {
+      await reportError(req, "api/llaveros/[id]", "PUT", 400, "Indique empresa_id, division_id y contrato_id válidos");
       return NextResponse.json(
         { status: false, message: "Indique empresa_id, division_id y contrato_id válidos" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -240,6 +248,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/llaveros/[id]:", errorMessage);
+    await reportError(req, "api/llaveros/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -254,16 +263,19 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const marcaIdStr = req.nextUrl.searchParams.get("m");
     if (!marcaIdStr) {
-      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "DELETE", 400, "Marca no especificada");
+      return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
     }
     const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
     if (!marcaDia) {
-      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "DELETE", 404, "Marca no encontrada");
+      return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
     }
 
     const existing = await callDynamicPrisma({
@@ -271,10 +283,12 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       data: { action: "GET", table: "e_llavero", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     if (existing.cliente_id !== marcaDia.cliente_id) {
-      return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 200 });
+      await reportError(req, "api/llaveros/[id]", "DELETE", 400, "No autorizado para eliminar este registro");
+      return NextResponse.json({ status: false, message: "No autorizado para eliminar este registro" }, { status: 400 });
     }
 
     await callDynamicPrisma({
@@ -325,6 +339,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/llaveros/[id]:", errorMessage);
+    await reportError(req, "api/llaveros/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

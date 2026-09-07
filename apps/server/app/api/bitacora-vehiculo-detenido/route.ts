@@ -12,6 +12,7 @@ import {
   normalizeMarca,
 } from "../../../utils/corporateVehiclePayload";
 import { hydrateBitacoraRevisionImagesFromMultipart } from "../../../utils/bitacoraRevisionImages";
+import { reportError } from "../../../utils/reportError";
 
 type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
 
@@ -96,25 +97,29 @@ export async function GET(req: NextRequest) {
     if (!empresaId || !clienteId || !sucursalId) {
       const marcaIdStr = req.nextUrl.searchParams.get("m");
       if (!marcaIdStr) {
+        await reportError(req, "api/bitacora-vehiculo-detenido", "GET", 400, "Marca no especificada");
         return NextResponse.json(
           { status: false, message: "Marca no especificada" },
-          { status: 200 }
+          { status: 400 }
         );
       }
 
       const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaIdStr) } });
       if (!marcaDia) {
-        return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+        await reportError(req, "api/bitacora-vehiculo-detenido", "GET", 404, "Marca no encontrada");
+        return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
       }
 
       if (!marcaDia.empleadoFijo_id) {
-        return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+        await reportError(req, "api/bitacora-vehiculo-detenido", "GET", 404, "Empleado no encontrado");
+        return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
       }
 
       // Obtener la última marca del empleado (simplificado: obtener la más reciente)
       const lastMarca = await prisma.c_marca_dia.findFirst({ where: { empleadoFijo_id: marcaDia.empleadoFijo_id }, orderBy: { fecha: "desc", hora_inicio: "desc" } });
       if (!lastMarca) {
-        return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 200 });
+        await reportError(req, "api/bitacora-vehiculo-detenido", "GET", 404, "No se encontró la última marca");
+        return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 404 });
       }
 
       empresaId = marcaDia.empresa_id;
@@ -159,6 +164,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/bitacora-vehiculo-detenido:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -178,7 +184,8 @@ export async function POST(req: NextRequest) {
       multipartForm = parsed.multipartForm;
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : "Cuerpo inválido";
-      return NextResponse.json({ status: false, message: msg }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 400, msg);
+      return NextResponse.json({ status: false, message: msg }, { status: 400 });
     }
     const {
       marca_id,
@@ -209,7 +216,8 @@ export async function POST(req: NextRequest) {
       !tipo ||
       !firma_responsable
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 400, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
     }
 
     let empresaId = empresa_id ? Number(empresa_id) : 0;
@@ -219,7 +227,8 @@ export async function POST(req: NextRequest) {
     if (marca_id) {
       const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(String(marca_id)) } });
       if (!marcaDia) {
-        return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+        await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 404, "Marca no encontrada");
+        return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
       }
       // Si no vienen ids explícitos, usamos los de marca
       if (!empresaId) empresaId = marcaDia.empresa_id ?? 0;
@@ -228,7 +237,8 @@ export async function POST(req: NextRequest) {
     }
 
     if (!empresaId || !clienteId || !sucursalId) {
-      return NextResponse.json({ status: false, message: "Estructura incompleta" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 400, "Estructura incompleta");
+      return NextResponse.json({ status: false, message: "Estructura incompleta" }, { status: 400 });
     }
 
     let divisionIdFinal = divId;
@@ -245,9 +255,10 @@ export async function POST(req: NextRequest) {
       const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdFinal } });
       const sidP = puestoRow ? Number(puestoRow.sucursal_id ?? 0) : 0;
       if (sidP > 0 && sidP !== Number(sucursalId)) {
+        await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 400, "El puesto no pertenece a la sucursal indicada");
         return NextResponse.json(
           { status: false, message: "El puesto no pertenece a la sucursal indicada" },
-          { status: 200 }
+          { status: 400 }
         );
       }
     }
@@ -263,9 +274,10 @@ export async function POST(req: NextRequest) {
       }
     }
     if (!divisionIdFinal || !contratoIdFinal || !puestoIdFinal) {
+      await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 400, "División, contrato y puesto son requeridos");
       return NextResponse.json(
         { status: false, message: "División, contrato y puesto son requeridos" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -504,6 +516,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/bitacora-vehiculo-detenido:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

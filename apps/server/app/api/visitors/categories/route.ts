@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { NextRequest, NextResponse } from "next/server";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -12,6 +13,7 @@ export async function GET(req: NextRequest) {
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/visitors/categories", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

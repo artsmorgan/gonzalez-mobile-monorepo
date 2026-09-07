@@ -608,14 +608,21 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         }
     }
 
+    /** Cuadrícula jerárquica: Vehículo (nivel 0) → Uso (nivel 1, `c_usos_vehiculos_corporativos`) y Mantenimiento (nivel 1, `c_mantenimiento_vehiculos_corporativos`), hermanos. */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID vehículo",
         "Empresa",
         "Cliente",
         "División",
         "Contrato",
         "Sucursal",
         "Puesto",
-        "ID vehículo",
         "Placa",
         "Tipo de vehículo",
         "Marca",
@@ -631,67 +638,139 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         "Marchamo",
         "Activo",
         "Fecha de creación",
-        "Usos",
-        "Mantenimientos",
+        "Ver usos",
+        "Ver mantenimientos",
+        "Conductor (uso)",
+        "Código conductor (uso)",
+        "Fecha (uso)",
+        "Inicio (uso)",
+        "Fin (uso)",
+        "Km inicio (uso)",
+        "Km fin (uso)",
+        "Motivo (uso)",
+        "Combustible inicio (uso)",
+        "Combustible fin (uso)",
+        "Fecha (mantenimiento)",
+        "Tipo (mantenimiento)",
+        "Mantenimiento",
+        "Diagnóstico (mantenimiento)",
+        "Km próxima revisión (mantenimiento)",
+        "Mecánico (mantenimiento)",
     ];
+    const colUsos = mainHeaders.indexOf("Ver usos") + 1;
+    const colMant = mainHeaders.indexOf("Ver mantenimientos") + 1;
+    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    const linkCols = new Set([colUsos, colMant]);
     wsMain.addRow(mainHeaders);
     applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
 
-    const colUsos = mainHeaders.indexOf("Usos") + 1;
-    const colMant = mainHeaders.indexOf("Mantenimientos") + 1;
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        applyDataRow(row, mainHeaders.length);
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
 
     for (const r of rows) {
         const usoLink = r.usos_count > 0 ? `Ver usos (${r.usos_count})` : "";
         const mantLink = r.mantenimientos_count > 0 ? `Ver mantenimientos (${r.mantenimientos_count})` : "";
-        const row = wsMain.addRow([
-            r.empresa_txt,
-            r.cliente_txt,
-            r.division_txt,
-            r.contrato_txt,
-            r.corpo_txt,
-            r.puesto_txt,
-            r.id,
-            excelCellString(r.placa),
-            r.tipo,
-            excelCellString(r.marca),
-            excelCellString(r.modelo),
-            fmtInt(r.anno),
-            fmtInt(r.kilometraje),
-            fmtInt(r.prox_cambio_aceite),
-            r.estado,
-            r.tipo_autoria,
-            excelCellString(r.descripcion),
-            r.titulo_propiedad_txt,
-            r.rtv_txt,
-            r.marchamo_txt,
-            r.activo_txt,
-            r.created_at_txt,
-            usoLink,
-            mantLink,
-        ]);
-        applyDataRow(row, mainHeaders.length);
+        const general: Record<number, unknown> = {
+            [mainHeaders.indexOf("ID vehículo") + 1]: r.id,
+            [mainHeaders.indexOf("Empresa") + 1]: r.empresa_txt,
+            [mainHeaders.indexOf("Cliente") + 1]: r.cliente_txt,
+            [mainHeaders.indexOf("División") + 1]: r.division_txt,
+            [mainHeaders.indexOf("Contrato") + 1]: r.contrato_txt,
+            [mainHeaders.indexOf("Sucursal") + 1]: r.corpo_txt,
+            [mainHeaders.indexOf("Puesto") + 1]: r.puesto_txt,
+            [mainHeaders.indexOf("Placa") + 1]: excelCellString(r.placa),
+            [mainHeaders.indexOf("Tipo de vehículo") + 1]: r.tipo,
+            [mainHeaders.indexOf("Marca") + 1]: excelCellString(r.marca),
+            [mainHeaders.indexOf("Modelo") + 1]: excelCellString(r.modelo),
+            [mainHeaders.indexOf("Año") + 1]: fmtInt(r.anno),
+            [mainHeaders.indexOf("Kilometraje") + 1]: fmtInt(r.kilometraje),
+            [mainHeaders.indexOf("Próximo cambio de aceite") + 1]: fmtInt(r.prox_cambio_aceite),
+            [mainHeaders.indexOf("Estado") + 1]: r.estado,
+            [mainHeaders.indexOf("Tipo de autoría") + 1]: r.tipo_autoria,
+            [mainHeaders.indexOf("Descripción") + 1]: excelCellString(r.descripcion),
+            [mainHeaders.indexOf("Título de propiedad") + 1]: r.titulo_propiedad_txt,
+            [mainHeaders.indexOf("RTV") + 1]: r.rtv_txt,
+            [mainHeaders.indexOf("Marchamo") + 1]: r.marchamo_txt,
+            [mainHeaders.indexOf("Activo") + 1]: r.activo_txt,
+            [mainHeaders.indexOf("Fecha de creación") + 1]: r.created_at_txt,
+        };
+
+        const rootValues = new Array(mainHeaders.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Vehículo";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        const rootRow = wsMain.addRow(rootValues);
         const usoAnchor = usoAnchorByVehiculoId.get(r.id);
         if (usoAnchor && r.usos_count > 0) {
-            const cell = row.getCell(colUsos);
+            const cell = rootRow.getCell(colUsos);
             cell.value = { text: usoLink, hyperlink: `#'Detalles'!A${usoAnchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const mantAnchor = mantAnchorByVehiculoId.get(r.id);
         if (mantAnchor && r.mantenimientos_count > 0) {
-            const cell = row.getCell(colMant);
+            const cell = rootRow.getCell(colMant);
             cell.value = { text: mantLink, hyperlink: `#'Detalles'!A${mantAnchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
+        styleDataRow(rootRow, 0);
+
+        r.usos.forEach((u, idx) => {
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${r.id}.uso${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Uso";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Conductor (uso)")] = excelCellString(u.nombre_conductor);
+            values[mainHeaders.indexOf("Código conductor (uso)")] = excelCellString(u.codigo_conductor);
+            values[mainHeaders.indexOf("Fecha (uso)")] = u.fecha_txt;
+            values[mainHeaders.indexOf("Inicio (uso)")] = u.inicio_txt;
+            values[mainHeaders.indexOf("Fin (uso)")] = u.fin_txt;
+            values[mainHeaders.indexOf("Km inicio (uso)")] = u.km_inicio;
+            values[mainHeaders.indexOf("Km fin (uso)")] = u.km_fin;
+            values[mainHeaders.indexOf("Motivo (uso)")] = excelCellString(u.motivo);
+            values[mainHeaders.indexOf("Combustible inicio (uso)")] = excelCellString(u.combustible_inicio);
+            values[mainHeaders.indexOf("Combustible fin (uso)")] = excelCellString(u.combustible_fin);
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
+
+        r.mantenimientos.forEach((m, idx) => {
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${r.id}.mant${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Mantenimiento";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Fecha (mantenimiento)")] = m.fecha_txt;
+            values[mainHeaders.indexOf("Tipo (mantenimiento)")] = excelCellString(m.tipo);
+            values[mainHeaders.indexOf("Mantenimiento")] = excelCellString(m.mantenimiento);
+            values[mainHeaders.indexOf("Diagnóstico (mantenimiento)")] = excelCellString(m.diagnostico);
+            values[mainHeaders.indexOf("Km próxima revisión (mantenimiento)")] = m.kilometraje_siguiente_revision;
+            values[mainHeaders.indexOf("Mecánico (mantenimiento)")] = excelCellString(m.nombre_mecanico);
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, wsMain.rowCount), column: mainHeaders.length },
     };
 
-    wsMain.columns = [28, 24, 22, 28, 24, 28, 10, 14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8, 20, 18, 22].map(
-        (w) => ({ width: w }),
-    );
+    wsMain.columns = [
+        12, 14, 8, 20, 12,
+        28, 24, 22, 28, 24, 28,
+        14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8, 20,
+        16, 22,
+        22, 18, 16, 14, 14, 12, 12, 22, 18, 18,
+        16, 16, 26, 26, 22, 22,
+    ].map((w) => ({ width: w }));
     wsDet.columns = [12, 12, 22, 14, 20, 20, 20, 10, 10, 28, 16, 16].map((w) => ({ width: w }));
 
     return Buffer.from(await wb.xlsx.writeBuffer());

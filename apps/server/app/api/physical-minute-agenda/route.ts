@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessToken } from "../../../utils/verifyToken";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function POST(req: NextRequest) {
     try {
@@ -94,6 +95,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/physical-minute-agenda", "POST", 400, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
     }
 }

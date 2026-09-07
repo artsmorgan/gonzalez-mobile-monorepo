@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../utils/reportError";
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string, "id-nota": string }> }) {
     try {
@@ -15,10 +16,12 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const notaId = parseInt(resolvedParams["id-nota"], 10);
 
         if (!empleadoId || Number.isNaN(empleadoId)) {
-            return NextResponse.json({ status: false, message: "Empleado no válido" }, { status: 200 });
+            await reportError(req, "api/empleados/[id]/notas/[id-nota]", "DELETE", 400, "Empleado no válido");
+            return NextResponse.json({ status: false, message: "Empleado no válido" }, { status: 400 });
         }
         if (!notaId || Number.isNaN(notaId)) {
-            return NextResponse.json({ status: false, message: "Nota no válida" }, { status: 200 });
+            await reportError(req, "api/empleados/[id]/notas/[id-nota]", "DELETE", 400, "Nota no válida");
+            return NextResponse.json({ status: false, message: "Nota no válida" }, { status: 400 });
         }
 
         const nota = await callDynamicPrisma({
@@ -31,7 +34,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             }
         });
         if (!nota) {
-            return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
+            await reportError(req, "api/empleados/[id]/notas/[id-nota]", "DELETE", 404, "Nota no encontrada");
+            return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 404 });
         }
 
         await callDynamicPrisma({
@@ -73,6 +77,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         return NextResponse.json({ status: true, message: "Nota eliminada con éxito" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/empleados/[id]/notas/[id-nota]", "DELETE", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

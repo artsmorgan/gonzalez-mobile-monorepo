@@ -185,7 +185,11 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       }
 
       if (!response.ok) {
-        return { success: false, error: responseData?.message || 'Error de autenticación' };
+        return {
+          success: false,
+          passwordExpired: responseData?.passwordExpired || false,
+          error: responseData?.message || 'Error de autenticación',
+        };
       }
 
       if (!responseData.status) {

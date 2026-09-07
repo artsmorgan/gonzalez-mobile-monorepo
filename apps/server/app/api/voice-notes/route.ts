@@ -4,6 +4,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { sendNotificationByRole, sendNotificationByPlaza } from "../../../utils/sendNotification";
+import { reportError } from "../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -16,17 +17,20 @@ export async function GET(req: NextRequest) {
         const puestoIdParam = req.nextUrl.searchParams.get("puesto_id") ?? req.nextUrl.searchParams.get("p");
 
         if (!corpoIdParam) {
-            return NextResponse.json({ status: false, message: "corpo_id no especificado" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "GET", 400, "corpo_id no especificado");
+            return NextResponse.json({ status: false, message: "corpo_id no especificado" }, { status: 400 });
         }
 
         const corpoId = parseInt(String(corpoIdParam), 10);
         if (!Number.isFinite(corpoId) || corpoId <= 0) {
-            return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "GET", 400, "corpo_id inválido");
+            return NextResponse.json({ status: false, message: "corpo_id inválido" }, { status: 400 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoId } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "GET", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
         }
 
         let voiceNotesWhere: Record<string, unknown>;
@@ -34,14 +38,17 @@ export async function GET(req: NextRequest) {
         if (puestoIdParam != null && String(puestoIdParam).trim() !== "") {
             const puestoId = parseInt(String(puestoIdParam), 10);
             if (!Number.isFinite(puestoId) || puestoId <= 0) {
-                return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "GET", 400, "puesto_id inválido");
+                return NextResponse.json({ status: false, message: "puesto_id inválido" }, { status: 400 });
             }
             const puestoRow = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
             if (!puestoRow) {
-                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "GET", 404, "Puesto no encontrado");
+                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
             }
             if (puestoRow.sucursal_id == null || Number(puestoRow.sucursal_id) !== corpoId) {
-                return NextResponse.json({ status: false, message: "El puesto no pertenece al corpo indicado" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "GET", 400, "El puesto no pertenece al corpo indicado");
+                return NextResponse.json({ status: false, message: "El puesto no pertenece al corpo indicado" }, { status: 400 });
             }
             voiceNotesWhere = {
                 AND: [
@@ -158,6 +165,7 @@ export async function GET(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/voice-notes", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -176,12 +184,14 @@ export async function POST(req: NextRequest) {
         } = body;
 
         if (!marca_id || !titulo || !descripcion || !firma_responsable || !file_base64 || !created_at) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         let empresaId = marca.empresa_id;
@@ -196,7 +206,8 @@ export async function POST(req: NextRequest) {
             const sc = parseInt(String(structure_cliente_id), 10);
             const sco = parseInt(String(structure_corpo_id), 10);
             if (!Number.isFinite(se) || se <= 0 || !Number.isFinite(sc) || sc <= 0 || !Number.isFinite(sco) || sco <= 0) {
-                return NextResponse.json({ status: false, message: "Jerarquía incompleta (empresa, cliente o corpo)" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "POST", 400, "Jerarquía incompleta (empresa, cliente o corpo)");
+                return NextResponse.json({ status: false, message: "Jerarquía incompleta (empresa, cliente o corpo)" }, { status: 400 });
             }
             empresaId = se;
             clienteId = sc;
@@ -213,14 +224,17 @@ export async function POST(req: NextRequest) {
             if (structure_puesto_id !== undefined && structure_puesto_id !== null && String(structure_puesto_id).trim() !== "") {
                 const sp = parseInt(String(structure_puesto_id), 10);
                 if (!Number.isFinite(sp) || sp <= 0) {
-                    return NextResponse.json({ status: false, message: "puesto_id inválido en la jerarquía" }, { status: 200 });
+                    await reportError(req, "api/voice-notes", "POST", 400, "puesto_id inválido en la jerarquía");
+                    return NextResponse.json({ status: false, message: "puesto_id inválido en la jerarquía" }, { status: 400 });
                 }
                 const puestoSel = await prisma.e_estructura_puesto.findUnique({ where: { id: sp } });
                 if (!puestoSel) {
-                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                    await reportError(req, "api/voice-notes", "POST", 400, "Puesto no encontrado");
+                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 400 });
                 }
                 if (puestoSel.sucursal_id == null || Number(puestoSel.sucursal_id) !== corpoId) {
-                    return NextResponse.json({ status: false, message: "El puesto no pertenece al corpo seleccionado" }, { status: 200 });
+                    await reportError(req, "api/voice-notes", "POST", 400, "El puesto no pertenece al corpo seleccionado");
+                    return NextResponse.json({ status: false, message: "El puesto no pertenece al corpo seleccionado" }, { status: 400 });
                 }
                 puestoIdFinal = sp;
             }
@@ -228,32 +242,38 @@ export async function POST(req: NextRequest) {
             puestoIdFinal = setPuesto === true && marca.puesto_id != null ? Number(marca.puesto_id) : null;
             if (setPuesto === true && puestoIdFinal) {
                 if (!Number.isFinite(puestoIdFinal as number) || (puestoIdFinal as number) <= 0) {
-                    return NextResponse.json({ status: false, message: "La marca no tiene puesto asignado" }, { status: 200 });
+                    await reportError(req, "api/voice-notes", "POST", 400, "La marca no tiene puesto asignado");
+                    return NextResponse.json({ status: false, message: "La marca no tiene puesto asignado" }, { status: 400 });
                 }
                 const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdFinal } });
                 if (!puesto) {
-                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+                    await reportError(req, "api/voice-notes", "POST", 404, "Puesto no encontrado");
+                    return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 400 });
                 }
             }
         }
 
         if (!empresaId || !clienteId || !corpoId) {
+            await reportError(req, "api/voice-notes", "POST", 500, "Empresa, cliente o corpo no identificable");
             return NextResponse.json({ status: false, message: "Empresa, cliente o corpo no identificable" }, { status: 500 });
         }
 
         const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: empresaId } });
         if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 404, "Empresa no encontrada");
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
         }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: clienteId } });
         if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 404, "Cliente no encontrada");
+            return NextResponse.json({ status: false, message: "Cliente no encontrada" }, { status: 404 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: corpoId } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 404, "Corpo no encontrada");
+            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 404 });
         }
 
         let resolvedDivisionId: number;
@@ -268,14 +288,16 @@ export async function POST(req: NextRequest) {
                 : NaN;
             const cTry = Number.isFinite(cFromSuc) && cFromSuc > 0 ? cFromSuc : cFromMarca;
             if (!Number.isFinite(cTry) || cTry <= 0) {
-                return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (sucursal o marca)" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "POST", 400, "No se pudo determinar el contrato (sucursal o marca)");
+                return NextResponse.json({ status: false, message: "No se pudo determinar el contrato (sucursal o marca)" }, { status: 400 });
             }
             const contrRow = await prisma.e_estructura_contrato.findUnique({ where: { id: cTry } });
             const divFromContr = contrRow && (contrRow as { division_id?: number | null }).division_id != null
                 ? Number((contrRow as { division_id?: number | null }).division_id)
                 : NaN;
             if (!Number.isFinite(divFromContr) || divFromContr <= 0) {
-                return NextResponse.json({ status: false, message: "No se pudo determinar la división del contrato" }, { status: 200 });
+                await reportError(req, "api/voice-notes", "POST", 400, "No se pudo determinar la división del contrato");
+                return NextResponse.json({ status: false, message: "No se pudo determinar la división del contrato" }, { status: 400 });
             }
             resolvedDivisionId = divFromContr;
             resolvedContratoId = cTry;
@@ -302,6 +324,7 @@ export async function POST(req: NextRequest) {
 
         if (newVoiceNote) {
             if (!/^[A-Za-z0-9+/=]+$/.test(file_base64)) {
+                await reportError(req, "api/voice-notes", "POST", 400, "Formato de archivo inválido");
                 return NextResponse.json({ status: false, message: "Formato de archivo inválido" }, { status: 400 });
             }
             const extension = file_base64.startsWith('UklGR') ? 'wav' : 'm4a';
@@ -337,7 +360,8 @@ export async function POST(req: NextRequest) {
         }
 
         if (!newVoiceNote || typeof (newVoiceNote as { id?: number }).id !== "number") {
-            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 200 });
+            await reportError(req, "api/voice-notes", "POST", 400, "No se pudo crear el registro");
+            return NextResponse.json({ status: false, message: "No se pudo crear el registro" }, { status: 400 });
         }
         const createdId = (newVoiceNote as { id: number }).id;
         return NextResponse.json(
@@ -348,6 +372,7 @@ export async function POST(req: NextRequest) {
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/voice-notes", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

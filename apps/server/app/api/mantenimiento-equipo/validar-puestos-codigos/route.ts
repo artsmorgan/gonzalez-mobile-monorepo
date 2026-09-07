@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -15,9 +16,10 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const codigosRaw = body?.codigos;
     if (!Array.isArray(codigosRaw) || codigosRaw.length === 0) {
+      await reportError(req, "api/mantenimiento-equipo/validar-puestos-codigos", "POST", 400, "Debe indicar al menos un código de puesto.");
       return NextResponse.json(
         { status: false, message: "Debe indicar al menos un código de puesto." },
-        { status: 200 },
+        { status: 400 },
       );
     }
 
@@ -29,9 +31,10 @@ export async function POST(req: NextRequest) {
       ),
     );
     if (codigos.length === 0) {
+      await reportError(req, "api/mantenimiento-equipo/validar-puestos-codigos", "POST", 400, "Códigos de puesto inválidos.");
       return NextResponse.json(
         { status: false, message: "Códigos de puesto inválidos." },
-        { status: 200 },
+        { status: 400 },
       );
     }
 
@@ -62,6 +65,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (errors.length > 0) {
+      await reportError(req, "api/mantenimiento-equipo/validar-puestos-codigos", "POST", 404, "Algunos códigos de puesto no existen.");
       return NextResponse.json(
         {
           status: false,
@@ -69,7 +73,7 @@ export async function POST(req: NextRequest) {
           errors,
           puestos: resolved,
         },
-        { status: 200 },
+        { status: 404 },
       );
     }
 
@@ -84,6 +88,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/mantenimiento-equipo/validar-puestos-codigos:", errorMessage);
+    await reportError(req, "api/mantenimiento-equipo/validar-puestos-codigos", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

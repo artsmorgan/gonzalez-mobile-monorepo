@@ -8,6 +8,7 @@ import {
   canRegisterCorporateVehicleFromBitacora,
 } from "../../../../utils/corporateVehiclePayload";
 import { hydrateBitacoraRevisionImagesFromMultipart } from "../../../../utils/bitacoraRevisionImages";
+import { reportError } from "../../../../utils/reportError";
 
 type MultipartBody = { get(name: string): string | { arrayBuffer(): Promise<ArrayBuffer> } | null };
 
@@ -40,7 +41,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -48,7 +50,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       data: { action: "GET", table: "c_bitacora_vehiculo_detenido", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     let body: Record<string, any>;
@@ -59,7 +62,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       multipartForm = parsed.multipartForm;
     } catch (parseErr) {
       const msg = parseErr instanceof Error ? parseErr.message : "Cuerpo inválido";
-      return NextResponse.json({ status: false, message: msg }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "PUT", 400, msg);
+      return NextResponse.json({ status: false, message: msg }, { status: 400 });
     }
     const {
       tipo,
@@ -150,7 +154,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       } catch (imgErr) {
         console.error("Error subiendo imágenes de revisión (bitácora PUT):", imgErr);
         const msg = imgErr instanceof Error ? imgErr.message : "Error al subir imágenes";
-        return NextResponse.json({ status: false, message: msg }, { status: 200 });
+        await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "PUT", 400, msg);
+        return NextResponse.json({ status: false, message: msg }, { status: 400 });
       }
     }
 
@@ -263,6 +268,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/bitacora-vehiculo-detenido/[id]:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -275,7 +281,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "DELETE", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -283,7 +290,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
       data: { action: "GET", table: "c_bitacora_vehiculo_detenido", operation: "findUnique", where: { id } }
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const usoOnRecord = existing.uso_id != null ? Number(existing.uso_id) : null;
@@ -337,6 +345,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/bitacora-vehiculo-detenido/[id]:", errorMessage);
+    await reportError(req, "api/bitacora-vehiculo-detenido/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

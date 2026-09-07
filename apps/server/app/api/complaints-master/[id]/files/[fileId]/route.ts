@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessToke
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import fs from "fs";
 import path from "path";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -21,7 +22,8 @@ export async function DELETE(
     const complaintId = parseInt(id, 10);
     const anexId = parseInt(fileId, 10);
     if (!complaintId || !anexId) {
-      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 200 });
+      await reportError(req, "api/complaints-master/[id]/files/[fileId]", "DELETE", 400, "IDs no especificados");
+      return NextResponse.json({ status: false, message: "IDs no especificados" }, { status: 400 });
     }
 
     const anex = await callDynamicPrisma({
@@ -33,7 +35,10 @@ export async function DELETE(
         where: { id: anexId, queja_id: complaintId },
       },
     });
-    if (!anex) return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
+    if (!anex) {
+      await reportError(req, "api/complaints-master/[id]/files/[fileId]", "DELETE", 404, "Archivo no encontrado");
+      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
+    }
 
     const anexObj = anex as any;
     await callDynamicPrisma({
@@ -60,6 +65,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/complaints-master/[id]/files/[fileId]:", errorMessage);
+    await reportError(req, "api/complaints-master/[id]/files/[fileId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

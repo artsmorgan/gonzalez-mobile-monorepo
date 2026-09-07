@@ -6,6 +6,7 @@ import {
   sendPushToEmpleados,
   sendPushToPlazas,
 } from "../../../../utils/pushNotifications";
+import { reportError } from "../../../../utils/reportError";
 
 /**
  * POST /api/push/send
@@ -40,9 +41,10 @@ export async function POST(req: NextRequest) {
     const title = String(body?.title ?? "").trim();
     const pushBody = String(body?.body ?? body?.description ?? "").trim();
     if (!title || !pushBody) {
+      await reportError(req, "api/push/send", "POST", 400, "title y body son requeridos");
       return NextResponse.json(
         { status: false, message: "title y body son requeridos" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -78,12 +80,13 @@ export async function POST(req: NextRequest) {
     } else if (body?.plaza_id != null) {
       result = await sendPushToPlazas(req, [Number(body.plaza_id)], params);
     } else {
+      await reportError(req, "api/push/send", "POST", 400, "Indica empleado_id, empleado_ids, plaza_id o plaza_ids");
       return NextResponse.json(
         {
           status: false,
           message: "Indica empleado_id, empleado_ids, plaza_id o plaza_ids",
         },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -94,16 +97,21 @@ export async function POST(req: NextRequest) {
       result.failed === 0;
 
     let responseMessage = "Push enviado";
+    let httpStatus = 200;
     if (!result.firebaseConfigured) {
       responseMessage =
         "Firebase Admin no configurado en este servidor (revisa FIREBASE_* en el entorno donde corre la API)";
+      httpStatus = 500;
     } else if (result.tokensTargeted === 0) {
       responseMessage = "No hay tokens FCM activos para el destinatario indicado";
+      httpStatus = 404;
     } else if (result.sent === 0 && result.failed > 0) {
       responseMessage =
         "FCM rechazó todos los tokens (¿service account de otro proyecto Firebase que google-services.json?)";
+      httpStatus = 500;
     } else if (result.failed > 0) {
       responseMessage = "Push parcial: algunos tokens fallaron";
+      httpStatus = 500;
     }
 
     console.log("[push/send]", {
@@ -111,14 +119,18 @@ export async function POST(req: NextRequest) {
       responseMessage,
       ...result,
     });
+    if (!ok) {
+      await reportError(req, "api/push/send", "POST", httpStatus, responseMessage);
+    }
     return NextResponse.json({
       status: ok,
       message: responseMessage,
       ...result,
-    });
+    }, { status: httpStatus });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("[push/send]", errorMessage);
+    await reportError(req, "api/push/send", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

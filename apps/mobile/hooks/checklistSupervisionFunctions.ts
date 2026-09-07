@@ -41,6 +41,8 @@ export type ChecklistSupervisionItem = {
   firma_responsable: string;
   created_by: number;
   created_at: string;
+  /** Nombre del supervisor que creó el registro (resuelto vía `created_by`). */
+  supervisor_nombre?: string | null;
   empleado_id?: number | null;
   empleado_nombre?: string | null;
   empleado_codigo?: string | null;

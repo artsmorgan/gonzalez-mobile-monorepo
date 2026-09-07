@@ -11,6 +11,7 @@ import {
     articuloIncomingTimestamp,
     cantidadNecesariaFromArticulo,
 } from "../../checklist-supervision/articulosMantenimiento";
+import { reportError } from "../../../../utils/reportError";
 
 function isPlanTipoArticulo(tipo: unknown): boolean {
     const s = String(tipo ?? "").trim().toLowerCase();
@@ -118,7 +119,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id: e } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/activities/[id]", "PUT", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         const actividad_marcada = await callDynamicPrisma({
@@ -126,7 +128,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_actividades_puesto_plaza", operation: "findUnique", where: { id } }
         });
         if (!actividad_marcada) {
-            return NextResponse.json({ status: false, message: "Marca de la actividad no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities/[id]", "PUT", 404, "Marca de la actividad no encontrada");
+            return NextResponse.json({ status: false, message: "Marca de la actividad no encontrada" }, { status: 404 });
         }
 
         const actividadPuesto = await callDynamicPrisma({
@@ -134,7 +137,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_actividades_puesto", operation: "findUnique", where: { id: actividad_marcada.actividad_puesto_id } }
         });
         if (!actividadPuesto) {
-            return NextResponse.json({ status: false, message: "Actividad/puesto no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities/[id]", "PUT", 404, "Actividad/puesto no encontrada");
+            return NextResponse.json({ status: false, message: "Actividad/puesto no encontrada" }, { status: 404 });
         }
 
         const actividad = await callDynamicPrisma({
@@ -142,7 +146,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             data: { action: "GET", table: "e_actividades", operation: "findUnique", where: { id: actividadPuesto.actividad_id } }
         });
         if (!actividad) {
-            return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities/[id]", "PUT", 404, "Actividad no encontrada");
+            return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
         }
 
         if (estado === "marcar") {
@@ -275,6 +280,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/activities/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

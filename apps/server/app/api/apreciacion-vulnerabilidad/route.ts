@@ -7,6 +7,7 @@ import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../utils/reportError";
 
 const VULNERABILIDAD_ESTRUCTURA_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
@@ -91,6 +92,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/apreciacion-vulnerabilidad:", errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
@@ -130,12 +132,14 @@ export async function POST(req: NextRequest) {
       !metricas_vulnerablidad ||
       !firma_responsable
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 500, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 500 });
     }
 
     const fechaDate = parseDateTime(fecha);
     if (!fechaDate) {
-      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 400, "Fecha inválida");
+      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
     }
 
     // Validar IDs existan (mínimo)
@@ -144,9 +148,18 @@ export async function POST(req: NextRequest) {
       prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } }),
       prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } }),
     ]);
-    if (!cliente) return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 200 });
-    if (!corpo) return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 200 });
-    if (!puesto) return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 200 });
+    if (!cliente) {
+      await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 400, "Cliente inválido");
+      return NextResponse.json({ status: false, message: "Cliente inválido" }, { status: 400 });
+    }
+    if (!corpo) {
+      await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 400, "Corpo inválido");
+      return NextResponse.json({ status: false, message: "Corpo inválido" }, { status: 400 });
+    }
+    if (!puesto) {
+      await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 400, "Puesto inválido");
+      return NextResponse.json({ status: false, message: "Puesto inválido" }, { status: 400 });
+    }
 
     const created = await callDynamicPrisma({
       req,
@@ -293,6 +306,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/apreciacion-vulnerabilidad:", errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

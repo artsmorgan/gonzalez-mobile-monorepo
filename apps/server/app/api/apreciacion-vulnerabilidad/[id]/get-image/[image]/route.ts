@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchDynamicFile } from '../../../../../../utils/callDynamicFilesApi';
 import { callDynamicPrisma } from '../../../../../../utils/callDynamicPrisma';
+import { reportError } from '../../../../../../utils/reportError';
 
 export const runtime = 'nodejs';
 
@@ -14,6 +15,7 @@ export async function GET(
     const image = resolvedParams.image;
 
     if (!boletaId || !image) {
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/get-image/[image]", "GET", 400, 'ID de boleta o imagen faltante');
       return NextResponse.json(
         { status: false, message: 'ID de boleta o imagen faltante' },
         { status: 400 }
@@ -33,6 +35,7 @@ export async function GET(
       },
     });
     if (!boleta) {
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/get-image/[image]", "GET", 404, 'Registro no encontrado');
       return NextResponse.json({ status: false, message: 'Registro no encontrado' }, { status: 404 });
     }
 
@@ -47,6 +50,7 @@ export async function GET(
       },
     });
     if (!imageRecord) {
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/get-image/[image]", "GET", 404, 'Imagen no encontrada');
       return NextResponse.json({ status: false, message: 'Imagen no encontrada' }, { status: 404 });
     }
 
@@ -66,6 +70,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido';
     console.error('Error in GET /api/apreciacion-vulnerabilidad/[id]/get-image/[image]:', errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad/[id]/get-image/[image]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

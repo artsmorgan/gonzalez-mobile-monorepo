@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
@@ -16,15 +17,17 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
         const puestoIdToUse = puestoIdParam ? parseInt(String(puestoIdParam), 10) : NaN;
 
         if (!Number.isFinite(puestoIdToUse) || puestoIdToUse <= 0) {
+            await reportError(req, "api/puestos/[id]/notas", "GET", 400, "puesto_id es requerido y debe ser válido");
             return NextResponse.json(
                 { status: false, message: "puesto_id es requerido y debe ser válido" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdToUse } });
         if (!puesto) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/puestos/[id]/notas", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
         const notas = await callDynamicPrisma({
@@ -142,6 +145,7 @@ export async function GET(req: NextRequest, _context: { params: Promise<{ id: st
         return NextResponse.json({ status: true, notas: notas_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/puestos/[id]/notas", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -182,10 +186,14 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
                 where: { id: categoria_id }
             }
         });
-        if (!categoriaData) return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 200 });
+        if (!categoriaData) {
+            await reportError(req, "api/puestos/[id]/notas", "POST", 400, "Categoría no encontrada");
+            return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 400 });
+        }
 
         if (!firma_responsable || String(firma_responsable).trim().length === 0) {
-            return NextResponse.json({ status: false, message: "Firma responsable requerida" }, { status: 200 });
+            await reportError(req, "api/puestos/[id]/notas", "POST", 400, "Firma responsable requerida");
+            return NextResponse.json({ status: false, message: "Firma responsable requerida" }, { status: 400 });
         }
 
         const puestos_parse: number[] = JSON.parse(puestos);
@@ -196,10 +204,16 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
         const createdNotes: any[] = [];
         for (const puesto_id of puestos_parse) {
             const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
-            if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            if (!puesto) {
+                await reportError(req, "api/puestos/[id]/notas", "POST", 404, "Puesto no encontrado");
+                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
+            }
 
             const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
-            if (!empleado) return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            if (!empleado) {
+                await reportError(req, "api/puestos/[id]/notas", "POST", 404, "Empleado no encontrado");
+                return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+            }
 
             const newNote = await callDynamicPrisma({
                 req,
@@ -307,6 +321,7 @@ export async function POST(req: NextRequest, _context: { params: Promise<{ id: s
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/puestos/[id]/notas", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
-} 
+}

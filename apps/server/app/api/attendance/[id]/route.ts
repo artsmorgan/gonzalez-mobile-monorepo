@@ -9,6 +9,7 @@ import { createLoginMarca } from "../../../../utils/createLoginMarca";
 import { getMonitoringPostMinutes } from "../../../../utils/getMonitoringPostMinutes";
 import axios from "axios";
 import { getTiempoGraciaMarcarSalida } from "../../../../utils/getTiempoGraciaMarcarSalida";
+import { reportError } from "../../../../utils/reportError";
 
 const getUsuarioInsercion = async (req: NextRequest, id: number) => {
     const empleado = await prisma.c_empleado.findUnique({ where: { id } });
@@ -124,13 +125,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         // Planillas token deben ser obtenido del header de la request
         const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
         if (!planillasToken) {
-            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]", "PUT", 400, "Token de Planillas no encontrado");
+            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 400 });
         }
 
         // Obtener siempre la última marca agregada
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 200 });
+            await reportError(req, "api/attendance/[id]", "PUT", 404, "No se encontró la marca");
+            return NextResponse.json({ status: false, message: "No se encontró la marca" }, { status: 404 });
         }
 
         let empresa 
@@ -140,12 +143,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         switch (type) {
             case "entrada":
                 if (marcaDia.hora_entrada_digitada != null) {
-                    return NextResponse.json({ status: false, message: "Ya has marcado la entrada" }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 400, "Ya has marcado la entrada");
+                    return NextResponse.json({ status: false, message: "Ya has marcado la entrada" }, { status: 400 });
                 }
 
                 empleado = await prisma.c_empleado.findUnique({ where: { id: payload.id } });
                 if (!empleado) {
-                    return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 404, "Empleado no encontrado");
+                    return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
                 }
 
                 // Cerrar turno anterior abierto (Planillas, hasta 14 días atrás por horario).
@@ -223,15 +228,17 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 });
 
                 if (!planillasResponse.data.success) {
-                    return NextResponse.json({ status: false, message: "Error al marcar la entrada en Planillas" }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 500, "Error al marcar la entrada en Planillas");
+                    return NextResponse.json({ status: false, message: "Error al marcar la entrada en Planillas" }, { status: 500 });
                 }
-                
+
                 console.log("Marcamos entrada en Planillas");
-                
+
                 const updated = await prisma.c_marca_dia.findUnique({ where: { id: marcaDia.id } });
 
                 if (!updated) {
-                    return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 500, "No se pudo actualizar la marca del dia");
+                    return NextResponse.json({ status: false, message: "No se pudo actualizar la marca del dia" }, { status: 500 });
                 }
 
                 const marca_hora_entrada = updated.hora_inicio ? new Date(updated.hora_inicio).toISOString().split('T')[1] : "00:00:00";
@@ -243,9 +250,10 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, hora_entrada_digitada, null, null, true);
                 
                 if (!marcaDia.corpo_id) {
-                    return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 404, "No se encontró la sucursal");
+                    return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 404 });
                 }
-                
+
                 const current_corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
                 const current_puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id ?? 0 } });
                 let puesto_name = "Indefinido";
@@ -269,12 +277,14 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 break;
             case "salida":
                 if (marcaDia.hora_salida_digitada != null) {
-                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 500, "Ya has marcado la salida");
+                    return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 500 });
                 }
 
                 const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken);
                 if (!response.status) {
-                    return NextResponse.json({ status: false, message: response.message }, { status: 200 });
+                    await reportError(req, "api/attendance/[id]", "PUT", 500, response.message);
+                    return NextResponse.json({ status: false, message: response.message }, { status: 500 });
                 }
                 break;
         }
@@ -283,6 +293,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.log(errorMessage);
+    await reportError(req, "api/attendance/[id]", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
 }
 }

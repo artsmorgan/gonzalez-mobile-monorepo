@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -11,6 +12,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const { id } = await context.params;
     const controlId = Number(id);
     if (!Number.isFinite(controlId) || controlId <= 0) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 400, "ID de control inválido");
       return NextResponse.json({ status: false, message: "ID de control inválido" }, { status: 400 });
     }
 
@@ -18,6 +20,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const marcaId = Number(body?.marca_id || 0);
     const firma = String(body?.firma || "").trim();
     if (!Number.isFinite(marcaId) || marcaId <= 0 || !firma) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 400, "marca_id y firma son obligatorios");
       return NextResponse.json({ status: false, message: "marca_id y firma son obligatorios" }, { status: 400 });
     }
 
@@ -32,6 +35,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!control) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 404, "Control no encontrado");
       return NextResponse.json({ status: false, message: "Control no encontrado" }, { status: 404 });
     }
 
@@ -45,13 +49,16 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!marca) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 404, "No se encontró la marca especificada");
       return NextResponse.json({ status: false, message: "No se encontró la marca especificada" }, { status: 404 });
     }
     if (!((marca as any).hora_entrada_digitada)) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 400, "No se puede firmar un colaborador ausente");
       return NextResponse.json({ status: false, message: "No se puede firmar un colaborador ausente" }, { status: 400 });
     }
     const empleadoId = Number((marca as any).empleadoReemplaza_id || (marca as any).empleadoFijo_id || 0);
     if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+      await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 400, "empleado_id inválido para la marca seleccionada");
       return NextResponse.json({ status: false, message: "empleado_id inválido para la marca seleccionada" }, { status: 400 });
     }
 
@@ -106,6 +113,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control/[id]/employee-signature", "PUT", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

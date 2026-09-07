@@ -5,6 +5,7 @@ import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByPlaza } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../utils/reportError";
 
 type ManualFileInput = {
     type: string; // 'image' | 'audio' | 'video' | 'document' | etc
@@ -20,17 +21,19 @@ export async function GET(req: NextRequest) {
 
         const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
         if (!puestoIdStr || String(puestoIdStr).trim() === "") {
+            await reportError(req, "api/job-manuals", "GET", 400, "Puesto no especificado");
             return NextResponse.json(
                 { status: false, message: "Puesto no especificado" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
         const targetPuestoId = parseInt(String(puestoIdStr), 10);
         if (!Number.isFinite(targetPuestoId) || targetPuestoId <= 0) {
+            await reportError(req, "api/job-manuals", "GET", 400, "puesto_id inválido");
             return NextResponse.json(
                 { status: false, message: "puesto_id inválido" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -39,9 +42,10 @@ export async function GET(req: NextRequest) {
         });
 
         if (!puesto) {
+            await reportError(req, "api/job-manuals", "GET", 404, "Puesto no encontrado");
             return NextResponse.json(
                 { status: false, message: "Puesto no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -245,6 +249,7 @@ export async function GET(req: NextRequest) {
         const errorMessage =
             error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in GET /api/job-manuals:", errorMessage);
+        await reportError(req, "api/job-manuals", "GET", 500, errorMessage);
         return NextResponse.json(
             { status: false, message: errorMessage },
             { status: 500 }
@@ -285,9 +290,10 @@ export async function POST(req: NextRequest) {
         const contrato_id = parseOptInt(contrato_id_raw);
 
         if (!marca_id || !title || !description || !firma_responsable) {
+            await reportError(req, "api/job-manuals", "POST", 400, "Datos incompletos");
             return NextResponse.json(
                 { status: false, message: "Datos incompletos" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -319,9 +325,10 @@ export async function POST(req: NextRequest) {
             where: { id: parseInt(marca_id) },
         });
         if (!marca) {
+            await reportError(req, "api/job-manuals", "POST", 404, "Marca no encontrada");
             return NextResponse.json(
                 { status: false, message: "Marca no encontrada" },
-                { status: 200 }
+                { status: 404 }
             );
         }
         const marcaObj = marca as any;
@@ -348,12 +355,13 @@ export async function POST(req: NextRequest) {
                 filesParsed = JSON.parse(files) as ManualFileInput[];
             } catch (err) {
                 console.error("Error parsing files JSON:", err);
+                await reportError(req, "api/job-manuals", "POST", 400, "Formato de archivos inválido");
                 return NextResponse.json(
                     {
                         status: false,
                         message: "Formato de archivos inválido"
                     },
-                    { status: 200 }
+                    { status: 400 }
                 );
             }
         }
@@ -362,9 +370,10 @@ export async function POST(req: NextRequest) {
 
         // Crear un único manual y luego asociarlo a múltiples puestos mediante e_puestos_manual_puesto
         if (puestosParsed.length === 0) {
+            await reportError(req, "api/job-manuals", "POST", 400, "Debe especificarse al menos un puesto");
             return NextResponse.json(
                 { status: false, message: "Debe especificarse al menos un puesto" },
-                { status: 200 }
+                { status: 400 }
             );
         }
 
@@ -383,9 +392,10 @@ export async function POST(req: NextRequest) {
         );
 
         if (confirmedPuestoIds.length === 0) {
+            await reportError(req, "api/job-manuals", "POST", 404, "No se encontraron puestos válidos");
             return NextResponse.json(
                 { status: false, message: "No se encontraron puestos válidos" },
-                { status: 200 }
+                { status: 404 }
             );
         }
         const primaryPuestoId = confirmedPuestoIds[0];
@@ -497,6 +507,7 @@ export async function POST(req: NextRequest) {
         const errorMessage =
             error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in POST /api/job-manuals:", errorMessage);
+        await reportError(req, "api/job-manuals", "POST", 500, errorMessage);
         return NextResponse.json(
             { status: false, message: errorMessage },
             { status: 500 }

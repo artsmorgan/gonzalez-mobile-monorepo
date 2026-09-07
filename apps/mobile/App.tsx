@@ -4235,13 +4235,28 @@ function AppContent() {
               }
             }
           } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
-            console.log('Creando agenda minuta:', action.id);
+            console.log(
+              'Creando agenda minuta:',
+              action.id,
+              'imagenes en payload (claves por item, para detectar acciones viejas en cola):',
+              JSON.stringify(
+                (Array.isArray(action.payload?.imagenes) ? action.payload.imagenes : []).map((img: any) =>
+                  img && typeof img === 'object' ? Object.keys(img) : typeof img
+                )
+              )
+            );
             const { createAgendaMinuta } = await import('@/hooks/evaluationFunctions');
             const result = await createAgendaMinuta({
               requestData: action.payload,
               refreshAccessToken,
               logout,
             });
+            console.log(
+              'Resultado creación agenda minuta:',
+              result.status,
+              'imagenes devueltas:',
+              Array.isArray(result.data?.imagenes) ? result.data.imagenes.length : 'no-array'
+            );
 
             if (result.status) {
               console.log('Agenda minuta creada correctamente');
@@ -4266,11 +4281,25 @@ function AppContent() {
                       id_local: '',
                       type: 'agenda_minuta',
                       isActive: true,
+                      imagenes: result.data?.imagenes ?? item.imagenes ?? [],
                     };
                   }
                   return item;
                 });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+
+              // `action.payload.imagenes` solo llevaba referencias locales (`localFileName`), nunca
+              // base64 (ver `hydrateAgendaMinutaRequestData`); ya subidas, esos archivos locales no
+              // hacen falta más y se borran igual que `attachmentLocalFileName` en vehicles_actions.
+              const { collectAgendaMinutaImageLocalFileNames } = await import('@/hooks/agendaMinutaImageHydration');
+              const agendaLocalFileNames = collectAgendaMinutaImageLocalFileNames(action.payload);
+              for (const fn of agendaLocalFileNames) {
+                try {
+                  await deleteFile(String(fn));
+                } catch {
+                  /* idempotente */
+                }
               }
             }
           } else if (action.type === 'action_plan') {
@@ -5288,6 +5317,62 @@ function AppContent() {
               actions = updatedActions;
             }
           }
+        } else if (action.action === 'delete_image' && (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda')) {
+          const agendaId = Number(action.remote_id || action.id);
+          const agendaImageId = Number(action.payload?.imageId);
+          if (!Number.isFinite(agendaId) || agendaId <= 0 || !Number.isFinite(agendaImageId) || agendaImageId <= 0) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda') &&
+                  a.action === 'delete_image' &&
+                  String(a.id) === String(action.id)
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+            continue;
+          }
+          console.log('Eliminando imagen de agenda minuta:', action.id, action.payload?.imageId);
+          const { deleteAgendaMinutaImage } = await import('@/hooks/evaluationFunctions');
+          const result = await deleteAgendaMinutaImage({
+            agendaId,
+            imageId: agendaImageId,
+            refreshAccessToken,
+            logout,
+          });
+          if (result.status) {
+            const updatedActions = actions.filter(
+              (a: any) =>
+                !(
+                  a.id === action.id &&
+                  a.action === 'delete_image' &&
+                  (a.type === 'agenda_minuta' || a.type === 'physical_minute_agenda') &&
+                  Number(a.payload?.imageId) === Number(action.payload?.imageId)
+                )
+            );
+            await AsyncStorage.setItem('evaluations_actions', JSON.stringify(updatedActions));
+            actions = updatedActions;
+
+            const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const targetId = String(action.remote_id || action.id);
+              const updatedCache = cache.map((item: any) => {
+                const sameType = item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda';
+                const sameRecord =
+                  String(item.id) === targetId || String(item.id_local ?? '').trim() === String(action.id ?? '').trim();
+                if (sameType && sameRecord) {
+                  const imagenes = Array.isArray(item.imagenes)
+                    ? item.imagenes.filter((img: any) => Number(img?.id) !== Number(action.payload?.imageId))
+                    : [];
+                  return { ...item, imagenes };
+                }
+                return item;
+              });
+              await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+            }
+          }
         } else if (action.action === 'update') {
           if (action.type === 'mileage_control') {
             console.log('Actualizando control de kilometraje:', action.id);
@@ -5553,7 +5638,16 @@ function AppContent() {
               console.error('Error syncing puesto ubicacion:', error);
             }
           } else if (action.type === 'agenda_minuta' || action.type === 'physical_minute_agenda') {
-            console.log('Actualizando agenda minuta:', action.id);
+            console.log(
+              'Actualizando agenda minuta:',
+              action.id,
+              'imagenes en payload (claves por item, para detectar acciones viejas en cola):',
+              JSON.stringify(
+                (Array.isArray(action.payload?.imagenes) ? action.payload.imagenes : []).map((img: any) =>
+                  img && typeof img === 'object' ? Object.keys(img) : typeof img
+                )
+              )
+            );
             const { updateAgendaMinuta } = await import('@/hooks/evaluationFunctions');
             const result = await updateAgendaMinuta({
               id: action.remote_id || action.id,
@@ -5561,6 +5655,12 @@ function AppContent() {
               refreshAccessToken,
               logout,
             });
+            console.log(
+              'Resultado actualización agenda minuta:',
+              result.status,
+              'imagenes devueltas:',
+              Array.isArray(result.data?.imagenes) ? result.data.imagenes.length : 'no-array'
+            );
 
             if (result.status) {
               console.log('Agenda minuta actualizada correctamente');
@@ -5573,6 +5673,9 @@ function AppContent() {
                 const cache = JSON.parse(cacheStr);
                 const targetId = String(action.remote_id || action.id);
                 const actionLocalKey = String(action.id_local ?? '').trim();
+                // `action.payload.imagenes` (base64) no debe persistirse en el caché de listado
+                // (llenaba el almacenamiento local / SQLITE_FULL). El listado se sirve vía get-image.
+                const { imagenes: _syncedImagenes, ...payloadForCache } = action.payload || {};
                 const updatedCache = cache.map((item: any) => {
                   const sameType = item.type === 'agenda_minuta' || item.type === 'physical_minute_agenda';
                   const sameRecord =
@@ -5580,10 +5683,12 @@ function AppContent() {
                     String(item.id_local ?? '').trim() === String(action.id ?? '').trim() ||
                     (actionLocalKey.length > 0 && String(item.id_local ?? '').trim() === actionLocalKey);
                   if (sameType && sameRecord) {
+                    const { imagenes: _resultImagenes, ...resultForCache } = result.data || {};
                     return {
                       ...item,
-                      ...(action.payload || {}),
-                      ...(result.data || {}),
+                      ...payloadForCache,
+                      ...resultForCache,
+                      imagenes: (result.data || {}).imagenes ?? item.imagenes ?? [],
                       type: 'agenda_minuta',
                       synced: true,
                       isActive: true,
@@ -5592,6 +5697,19 @@ function AppContent() {
                   return item;
                 });
                 await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+              }
+
+              // `action.payload.imagenes` solo llevaba referencias locales (`localFileName`), nunca
+              // base64 (ver `hydrateAgendaMinutaRequestData`); ya subidas, esos archivos locales no
+              // hacen falta más y se borran igual que `attachmentLocalFileName` en vehicles_actions.
+              const { collectAgendaMinutaImageLocalFileNames } = await import('@/hooks/agendaMinutaImageHydration');
+              const agendaLocalFileNames = collectAgendaMinutaImageLocalFileNames(action.payload);
+              for (const fn of agendaLocalFileNames) {
+                try {
+                  await deleteFile(String(fn));
+                } catch {
+                  /* idempotente */
+                }
               }
             }
           } else if (action.type === 'action_plan') {

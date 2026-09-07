@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,7 @@ export async function GET(
     const image = decodeURIComponent(String(resolvedParams.image || "").trim());
 
     if (!id || !image) {
+      await reportError(req, "api/entrega-puestos/[id]/get-image/[image]", "GET", 400, "ID o imagen faltante");
       return NextResponse.json(
         { status: false, message: "ID o imagen faltante" },
         { status: 400 }
@@ -46,6 +48,7 @@ export async function GET(
     });
 
     if (!registro) {
+      await reportError(req, "api/entrega-puestos/[id]/get-image/[image]", "GET", 404, "Registro no encontrado");
       return NextResponse.json(
         { status: false, message: "Registro no encontrado" },
         { status: 404 }
@@ -58,6 +61,7 @@ export async function GET(
       String((registro as { image_receives?: string | null }).image_receives || "").trim() === image;
 
     if (!matchesDelivery && !matchesReceives) {
+      await reportError(req, "api/entrega-puestos/[id]/get-image/[image]", "GET", 404, "Imagen no encontrada en el registro");
       return NextResponse.json(
         { status: false, message: "Imagen no encontrada en el registro" },
         { status: 404 }
@@ -80,6 +84,7 @@ export async function GET(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/entrega-puestos/[id]/get-image/[image]:", errorMessage);
+    await reportError(req, "api/entrega-puestos/[id]/get-image/[image]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

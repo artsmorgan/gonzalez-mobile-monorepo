@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 import axios from "axios";
 
 export const runtime = "nodejs";
@@ -75,14 +76,16 @@ export async function POST(req: NextRequest) {
     const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
 
     if (!planillasToken) {
-        return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+        await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 400, "Token de Planillas no encontrado");
+        return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 400 });
     }
 
     const body = await req.json();
     const articulosRaw = body?.articulos;
 
     if (!Array.isArray(articulosRaw) || articulosRaw.length === 0) {
-      return NextResponse.json({ status: false, message: "Debe indicar al menos un artículo." }, { status: 200 });
+      await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 400, "Debe indicar al menos un artículo.");
+      return NextResponse.json({ status: false, message: "Debe indicar al menos un artículo." }, { status: 400 });
     }
 
     const articulos: BulkArticuloInput[] = [];
@@ -138,9 +141,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (validationErrors.length > 0) {
+      await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 400, "Datos de artículos inválidos.");
       return NextResponse.json(
         { status: false, message: "Datos de artículos inválidos.", errors: validationErrors },
-        { status: 200 },
+        { status: 400 },
       );
     }
 
@@ -157,9 +161,10 @@ export async function POST(req: NextRequest) {
       }
     }
     if (validationErrors.length > 0) {
+      await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 404, "Algunos artículos no existen.");
       return NextResponse.json(
         { status: false, message: "Algunos artículos no existen.", errors: validationErrors },
-        { status: 200 },
+        { status: 404 },
       );
     }
 
@@ -179,9 +184,10 @@ export async function POST(req: NextRequest) {
       }
     }
     if (validationErrors.length > 0) {
+      await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 404, "Algunos códigos de puesto no existen.");
       return NextResponse.json(
         { status: false, message: "Algunos códigos de puesto no existen.", errors: validationErrors },
-        { status: 200 },
+        { status: 404 },
       );
     }
 
@@ -262,6 +268,7 @@ export async function POST(req: NextRequest) {
   });
 
   if (!planillasResponse.data.success) {
+      await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 500, "Error al actualizar la ubicación del puesto");
       return NextResponse.json(
           { status: false, message: "Error al actualizar la ubicación del puesto" },
           { status: 500 }
@@ -281,6 +288,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in POST /api/mantenimiento-equipo/bulk-articulos:", errorMessage);
+    await reportError(req, "api/mantenimiento-equipo/bulk-articulos", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

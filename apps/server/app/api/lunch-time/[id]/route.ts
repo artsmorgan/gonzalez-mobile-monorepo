@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "../../../../utils/prismaClient";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -15,12 +16,16 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
 
-        if (!marcaDia) return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
+        if (!marcaDia) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ message: "Marca no encontrada" }, { status: 404 });
+        }
 
         if (!marcaDia.empleadoFijo_id) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Empleado no encontrado");
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -61,15 +66,22 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
             });
         }
 
-        if (!last_marca) return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
+        if (!last_marca) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "No se encontró la última marca");
+            return NextResponse.json({ message: "No se encontró la última marca" }, { status: 404 });
+        }
 
         const horario = await prisma.c_horario.findUnique({ where: { id: marcaDia.horario_id ?? 0 } });
 
-        if (!horario) return NextResponse.json({ message: "Horario no encontrado" }, { status: 404 });
+        if (!horario) {
+            await reportError(req, "api/lunch-time/[id]", "GET", 404, "Horario no encontrado");
+            return NextResponse.json({ message: "Horario no encontrado" }, { status: 404 });
+        }
 
         return NextResponse.json({ status: true, minutos: horario.minutos_almuerzo ? horario.minutos_almuerzo : 0, tiene_almuerzo: horario.tiene_almuerzo != null ? horario.tiene_almuerzo : false }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/lunch-time/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

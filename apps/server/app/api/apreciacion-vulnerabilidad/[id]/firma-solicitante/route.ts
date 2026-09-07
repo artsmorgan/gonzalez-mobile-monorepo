@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -14,13 +15,15 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     const resolvedParams = await context.params;
     const id = parseInt(resolvedParams.id, 10);
     if (!id) {
-      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/firma-solicitante", "PUT", 400, "ID no especificado");
+      return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
     const body = await req.json().catch(() => ({}));
     const firmaSolicitante = typeof body?.firma_solicitante === "string" ? body.firma_solicitante.trim() : "";
     if (!firmaSolicitante) {
-      return NextResponse.json({ status: false, message: "Firma del solicitante requerida" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/firma-solicitante", "PUT", 400, "Firma del solicitante requerida");
+      return NextResponse.json({ status: false, message: "Firma del solicitante requerida" }, { status: 400 });
     }
 
     const existing = await callDynamicPrisma({
@@ -33,7 +36,8 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
       },
     });
     if (!existing || existing.isActive === false) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/firma-solicitante", "PUT", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const updated = await callDynamicPrisma({
@@ -76,6 +80,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/apreciacion-vulnerabilidad/[id]/firma-solicitante:", errorMessage);
+    await reportError(req, "api/apreciacion-vulnerabilidad/[id]/firma-solicitante", "PUT", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

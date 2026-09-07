@@ -4,6 +4,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../utils/reportError";
 
 type AttendanceControlImageInput = {
   file_base64: string;
@@ -170,7 +171,10 @@ export async function GET(req: NextRequest) {
     else if (divisionIdStr) where.division_id = parseInt(divisionIdStr, 10);
     else if (clienteIdStr) where.cliente_id = parseInt(clienteIdStr, 10);
     else if (empresaIdStr) where.empresa_id = parseInt(empresaIdStr, 10);
-    else return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+    else {
+      await reportError(req, "api/attendance-control", "GET", 400, "Debe especificar filtros jerárquicos");
+      return NextResponse.json({ status: false, message: "Debe especificar filtros jerárquicos" }, { status: 400 });
+    }
 
     where.isActive = true;
 
@@ -209,6 +213,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Controles de asistencia obtenidos correctamente", data: normalized }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }
@@ -236,9 +241,11 @@ export async function POST(req: NextRequest) {
     const imagenes = body?.imagenes;
 
     if (!empresa_id || !cliente_id || !division_id || !contrato_id || !corpo_id || !fechaDate || !turno || !firma_responsable) {
+      await reportError(req, "api/attendance-control", "POST", 400, "Faltan campos obligatorios para crear el control de asistencia");
       return NextResponse.json({ status: false, message: "Faltan campos obligatorios para crear el control de asistencia" }, { status: 400 });
     }
     if (!Number.isFinite(puesto_id) || puesto_id <= 0) {
+      await reportError(req, "api/attendance-control", "POST", 400, "puesto_id es obligatorio");
       return NextResponse.json({ status: false, message: "puesto_id es obligatorio" }, { status: 400 });
     }
 
@@ -409,6 +416,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control", "POST", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

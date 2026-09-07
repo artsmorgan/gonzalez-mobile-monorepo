@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../../utils/reportError";
 
 export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
   try {
@@ -13,7 +14,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     const resolvedParams = await context.params;
     const sourceId = Number(resolvedParams.id);
     if (!Number.isFinite(sourceId) || sourceId <= 0) {
-      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/duplicate", "POST", 500, "Actividad inválida");
+      return NextResponse.json({ status: false, message: "Actividad inválida" }, { status: 500 });
     }
 
     const existing = await callDynamicPrisma({
@@ -26,7 +28,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
       },
     });
     if (!existing) {
-      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/duplicate", "POST", 404, "Actividad no encontrada");
+      return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 404 });
     }
 
     const baseName = String(existing.nombre_actividad ?? "").trim();
@@ -51,7 +54,8 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const newId = Number(newActivity?.id);
     if (!Number.isFinite(newId) || newId <= 0) {
-      return NextResponse.json({ status: false, message: "No se pudo crear la actividad duplicada" }, { status: 200 });
+      await reportError(req, "api/activities/created/[id]/duplicate", "POST", 500, "No se pudo crear la actividad duplicada");
+      return NextResponse.json({ status: false, message: "No se pudo crear la actividad duplicada" }, { status: 500 });
     }
 
     const puestoLinks = await callDynamicPrisma({
@@ -129,6 +133,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     );
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/activities/created/[id]/duplicate", "POST", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../../utils/reportError";
 
 const MUTUOS_ACUERDOS_CORPO_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
@@ -18,6 +19,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
     const resolvedParams = await context.params;
     const corpoIdNum = parseInt(String(resolvedParams.corpo_id), 10);
     if (Number.isNaN(corpoIdNum) || corpoIdNum <= 0) {
+      await reportError(req, "api/mutuos-acuerdos/corpo/[corpo_id]", "GET", 400, "Corpo inválido");
       return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
     }
 
@@ -60,6 +62,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/mutuos-acuerdos/corpo/[corpo_id]", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }

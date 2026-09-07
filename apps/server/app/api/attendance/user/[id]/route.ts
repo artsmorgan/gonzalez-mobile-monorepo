@@ -8,6 +8,9 @@ import { getMonitoringPreviousMinutes } from "../../../../../utils/getMonitoring
 import { getMonitoringPostMinutes } from "../../../../../utils/getMonitoringPostMinutes";
 import { getTiempoGraciaMarcarSalida } from "../../../../../utils/getTiempoGraciaMarcarSalida";
 import { getValidateGpsSalida } from "../../../../../utils/getValidateGpsSalida";
+import { reportError } from "../../../../../utils/reportError";
+import dotenv from "dotenv";
+dotenv.config();
 import axios from "axios";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -31,18 +34,22 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
 
         if (!planillasToken) {
-            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 500, "Token de Planillas no encontrado");
+            return NextResponse.json({ status: false, message: "Token de Planillas no encontrado" }, { status: 500 });
         }
 
         // Ubicación: validación en el dispositivo; lat/long opcionales en este endpoint.
 
         const empleado = await prisma.c_empleado.findUnique({ where: { id } });
         if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        if (process.env.NODE_ENV === "development") {
+            now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+        }
         const monitoringPreviousMinutes = await getMonitoringPreviousMinutes(req);
         const monitoringPostMinutes = await getMonitoringPostMinutes(req);
         const tiempoGraciaMarcarSalida = await getTiempoGraciaMarcarSalida(req);
@@ -173,55 +180,67 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         }
 
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la marca del dia");
+            return NextResponse.json({ status: false, message: "No se encontró la marca del dia" }, { status: 404 });
         }
 
         if (!marcaDia.empresa_id) {
-            return NextResponse.json({ status: false, message: "No se encontró la empresa" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la empresa");
+            return NextResponse.json({ status: false, message: "No se encontró la empresa" }, { status: 404 });
         }
 
         if (!marcaDia.cliente_id) {
-            return NextResponse.json({ status: false, message: "No se encontró el cliente" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el cliente");
+            return NextResponse.json({ status: false, message: "No se encontró el cliente" }, { status: 404 });
         }
 
         if (!marcaDia.contrato_id) {
-            return NextResponse.json({ status: false, message: "No se encontró el contrato" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el contrato");
+            return NextResponse.json({ status: false, message: "No se encontró el contrato" }, { status: 404 });
         }
 
         if (!marcaDia.corpo_id) {
-            return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la sucursal");
+            return NextResponse.json({ status: false, message: "No se encontró la sucursal" }, { status: 404 });
         }
 
         if (!marcaDia.puesto_id) {
-            return NextResponse.json({ status: false, message: "No se encontró el puesto" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el puesto");
+            return NextResponse.json({ status: false, message: "No se encontró el puesto" }, { status: 404 });
         }
 
         if (!marcaDia.plaza_id) {
-            return NextResponse.json({ status: false, message: "No se encontró la plaza" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró la plaza");
+            return NextResponse.json({ status: false, message: "No se encontró la plaza" }, { status: 404 });
         }
 
         if (!marcaDia.horario_id) {
-            return NextResponse.json({ status: false, message: "No se encontró el horario" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "No se encontró el horario");
+            return NextResponse.json({ status: false, message: "No se encontró el horario" }, { status: 404 });
         }
 
         const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: marcaDia.empresa_id } });
         if (!empresa) {
-            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empresa no encontrada");
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
         }
 
         const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: marcaDia.cliente_id } });
         if (!cliente) {
-            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "Cliente no encontrado");
+            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
         }
 
         const contrato = await prisma.e_estructura_contrato.findUnique({ where: { id: marcaDia.contrato_id } });
         if (!contrato) {
-            return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "Contrato no encontrado");
+            return NextResponse.json({ status: false, message: "Contrato no encontrado" }, { status: 404 });
         }
 
         const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: marcaDia.corpo_id } });
         if (!corpo) {
-            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
+            await reportError(req, "api/attendance/user/[id]", "GET", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
         }
 
         let puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id ?? 0 } });
@@ -314,11 +333,11 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
         console.log("marca_return: ", marca_return);
 
-        const blockedMarcaResponse = (
+        const blockedMarcaResponse = async (
             message: string,
             extra: Record<string, unknown> = {}
-        ) =>
-            NextResponse.json(
+        ) => {
+            return NextResponse.json(
                 {
                     status: false,
                     mark_blocked: true,
@@ -335,11 +354,13 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
                 },
                 { status: 200 }
             );
+        };
 
         if (marcaDia.empleadoFijo_id == empleado.id && marcaDia.empleadoReemplaza_id != null) {
             const empleadoReemplaza = await prisma.c_empleado.findUnique({ where: { id: marcaDia.empleadoReemplaza_id } });
             if (!empleadoReemplaza) {
-                return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
+                await reportError(req, "api/attendance/user/[id]", "GET", 404, "Empleado no encontrado");
+                return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
             }
             const nombreCompleto = [empleadoReemplaza.nombre, empleadoReemplaza.primer_apellido, empleadoReemplaza.segundo_apellido]
                 .filter(Boolean)
@@ -484,6 +505,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         console.log("Error en attendance/user/[id]:", error);
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/attendance/user/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

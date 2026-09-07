@@ -604,15 +604,46 @@ export async function buildArticulosPuestoExcelConsolidado(
         }
     }
 
+    /** Cuadrícula jerárquica: Puesto (nivel 0) → Artículo (nivel 1, de tablas de plan/asignación) → Movimiento (nivel 2, de `c_movimientos_articulo_mantenimiento`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const mainHeaders = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Puesto",
         "Empresa",
         "Cliente",
         "División",
         "Contrato",
         "Sucursal",
         "Puesto",
-        "Artículos del puesto",
+        "Ver artículos",
+        "Origen (artículo)",
+        "ID registro (artículo)",
+        "Artículo",
+        "Cantidad",
+        "Marca (artículo)",
+        "Modelo (artículo)",
+        "Serie (artículo)",
+        "Fecha entrega (artículo)",
+        "Combo",
+        "Nomenclador",
+        "Ver movimientos",
+        "Persona entrega (movimiento)",
+        "Persona recibe (movimiento)",
+        "Departamento (movimiento)",
+        "Teléfono (movimiento)",
+        "Entrega (movimiento)",
+        "Recibe (movimiento)",
+        "Fecha (movimiento)",
+        "Hora (movimiento)",
+        "Tiene firma entrega (movimiento)",
+        "Tiene firma recibe (movimiento)",
     ];
+    const COL_VER_ARTICULOS = 12;
+    const COL_VER_MOVIMIENTOS = 23;
     wsMain.addRow(mainHeaders);
     applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
 
@@ -673,35 +704,118 @@ export async function buildArticulosPuestoExcelConsolidado(
         }
     }
 
-    for (const r of rows) {
-        const anchor = artAnchorByPuestoId.get(r.puesto_id);
-        const linkText = r.articulos_count > 0 ? `Ver artículos (${r.articulos_count})` : "Sin artículos";
-        const row = wsMain.addRow([
-            r.empresa_txt,
-            r.cliente_txt,
-            r.division_txt,
-            r.contrato_txt,
-            r.corpo_txt,
-            r.puesto_txt,
-            linkText,
-        ]);
-        if (anchor && r.articulos_count > 0) {
-            const cell = row.getCell(7);
-            cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
-            cell.font = { color: { argb: "FF0563C1" }, underline: true };
-        }
+    const blank = (n: number) => Array.from({ length: n }, () => "");
+    const origenCode = (origen: string): string =>
+        origen === "Asignado" ? "as" : origen === "Plan (combo)" ? "pc" : "pl";
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((c) => {
             c.border = borderThin;
             c.alignment = { wrapText: true, vertical: "top" };
         });
+        row.getCell(4).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    let totalDataRows = 0;
+    for (const r of rows) {
+        const anchor = artAnchorByPuestoId.get(r.puesto_id);
+        const linkText = r.articulos_count > 0 ? `Ver artículos (${r.articulos_count})` : "Sin artículos";
+        const general = [String(r.puesto_id), r.empresa_txt, r.cliente_txt, r.division_txt, r.contrato_txt, r.corpo_txt, r.puesto_txt];
+
+        const rootRow = wsMain.addRow([
+            String(r.puesto_id),
+            "",
+            0,
+            "Puesto",
+            ...general,
+            linkText,
+            ...blank(21),
+        ]);
+        if (anchor && r.articulos_count > 0) {
+            const cell = rootRow.getCell(COL_VER_ARTICULOS);
+            cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
+            cell.font = { color: { argb: "FF0563C1" }, underline: true };
+        }
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        for (const a of r.articulos) {
+            const artId = `p${r.puesto_id}.${origenCode(a.origen)}${a.registro_id}`;
+            const movKey = articuloMovKey(a.origen, a.registro_id);
+            const movAnchor = movAnchorByKey.get(movKey);
+            const movCount = a.movimientos_count ?? 0;
+            const movLinkText = movCount > 0 ? `Ver movimientos (${movCount})` : "";
+
+            const artRowMain = wsMain.addRow([
+                artId,
+                String(r.puesto_id),
+                1,
+                "Artículo",
+                ...general,
+                "",
+                a.origen,
+                String(a.registro_id),
+                a.articulo_nombre,
+                String(a.cantidad ?? ""),
+                a.marca,
+                a.modelo,
+                a.serie,
+                a.fecha_entrega,
+                a.combo_nombre,
+                a.nomenclador_nombre,
+                movLinkText,
+                ...blank(10),
+            ]);
+            if (movAnchor && movCount > 0) {
+                const cell = artRowMain.getCell(COL_VER_MOVIMIENTOS);
+                cell.value = { text: movLinkText, hyperlink: `#'Movimientos'!A${movAnchor}` };
+                cell.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+            styleDataRow(artRowMain, 1);
+            totalDataRows += 1;
+
+            for (const m of a.movimientos) {
+                const movRow = wsMain.addRow([
+                    String(m.id),
+                    artId,
+                    2,
+                    "Movimiento",
+                    ...general,
+                    "",
+                    ...blank(10),
+                    "",
+                    excelCellString(m.nombre_persona_entrega),
+                    excelCellString(m.nombre_persona_recibe),
+                    excelCellString(m.departamento),
+                    excelCellString(m.telefono),
+                    excelCellString(m.entrega),
+                    excelCellString(m.recibe),
+                    fmtDate(m.fecha),
+                    fmtTime(m.hora),
+                    m.firma_entrega ? "Sí" : "No",
+                    m.firma_recibe ? "Sí" : "No",
+                ]);
+                styleDataRow(movRow, 2);
+                totalDataRows += 1;
+            }
+        }
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: mainHeaders.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
     };
 
-    wsMain.columns = [{ width: 28 }, { width: 24 }, { width: 22 }, { width: 28 }, { width: 24 }, { width: 28 }, { width: 22 }];
+    wsMain.columns = [
+        { width: 14 }, { width: 16 }, { width: 8 }, { width: 20 }, { width: 10 },
+        { width: 28 }, { width: 24 }, { width: 22 }, { width: 28 }, { width: 24 }, { width: 28 },
+        { width: 18 },
+        { width: 16 }, { width: 14 }, { width: 28 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 20 }, { width: 22 }, { width: 28 }, { width: 20 },
+        { width: 18 },
+        { width: 22 }, { width: 22 }, { width: 20 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 18 },
+    ];
     wsArt.columns = [
         { width: 28 },
         { width: 14 },

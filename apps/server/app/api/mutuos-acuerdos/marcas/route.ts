@@ -8,6 +8,7 @@ import {
   parseIntStrict,
   ymdFromFecha,
 } from "../../../../utils/mutuosAcuerdosMarcas";
+import { reportError } from "../../../../utils/reportError";
 
 const turnoTexto = (tipoTurno?: string | null) => {
   const first = String(tipoTurno || "").trim().charAt(0).toUpperCase();
@@ -25,9 +26,10 @@ export async function GET(req: NextRequest) {
     const planillasToken =
       decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;
     if (!planillasToken) {
+      await reportError(req, "api/mutuos-acuerdos/marcas", "GET", 400, "Token de Planillas no encontrado");
       return NextResponse.json(
         { status: false, message: "Token de Planillas no encontrado", data: [] },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -35,12 +37,14 @@ export async function GET(req: NextRequest) {
     const empleadoId = parseIntStrict(searchParams.get("empleado_id"));
     const fecha = String(searchParams.get("fecha") || "").trim();
     if (!empleadoId || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+      await reportError(req, "api/mutuos-acuerdos/marcas", "GET", 400, "Parámetros inválidos");
       return NextResponse.json({ status: false, message: "Parámetros inválidos", data: [] }, { status: 400 });
     }
 
     const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
     if (!empleado) {
-      return NextResponse.json({ status: false, message: "Empleado no encontrado", data: [] }, { status: 200 });
+      await reportError(req, "api/mutuos-acuerdos/marcas", "GET", 404, "Empleado no encontrado");
+      return NextResponse.json({ status: false, message: "Empleado no encontrado", data: [] }, { status: 404 });
     }
 
     const dayDate = new Date(`${fecha}T00:00:00.000Z`);
@@ -177,6 +181,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ status: true, message: "Marcas obtenidas", data }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/mutuos-acuerdos/marcas", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }

@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../utils/reportError";
 
 function getTurnoLetter(turno: string): string {
   return String(turno || "").trim().charAt(0).toUpperCase();
@@ -93,18 +94,25 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
 
     const { id } = await context.params;
     const idNum = parseInt(String(id), 10);
-    if (!idNum) return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    if (!idNum) {
+      await reportError(req, "api/attendance-control/[id]/refresh-colaboradores", "POST", 400, "ID inválido");
+      return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
+    }
 
     const existing = await callDynamicPrisma({
       req,
       data: { action: "GET", table: "c_control_asistencia", operation: "findUnique", where: { id: idNum } },
     });
-    if (!existing) return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    if (!existing) {
+      await reportError(req, "api/attendance-control/[id]/refresh-colaboradores", "POST", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+    }
 
     const fecha = new Date(existing.fecha);
     const corpo_id = Number(existing.corpo_id || 0);
     const turno = String(existing.turno || "");
     if (!corpo_id || Number.isNaN(fecha.getTime()) || !turno) {
+      await reportError(req, "api/attendance-control/[id]/refresh-colaboradores", "POST", 400, "El registro no tiene datos válidos para refrescar colaboradores");
       return NextResponse.json({ status: false, message: "El registro no tiene datos válidos para refrescar colaboradores" }, { status: 400 });
     }
 
@@ -147,6 +155,7 @@ export async function POST(req: NextRequest, context: { params: Promise<{ id: st
     return NextResponse.json({ status: true, message: "Colaboradores actualizados correctamente", data: updated }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/attendance-control/[id]/refresh-colaboradores", "POST", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

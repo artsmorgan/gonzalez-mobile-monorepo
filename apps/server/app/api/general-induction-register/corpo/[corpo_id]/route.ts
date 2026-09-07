@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../../../utils/hydratePreexistentIncludes";
+import { reportError } from "../../../../../utils/reportError";
 
 const GENERAL_INDUCTION_FULL_INCLUDE = {
   c_imagenes_registro_induccion_general: true,
@@ -20,6 +21,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
     const resolvedParams = await context.params;
     const corpoIdNum = parseInt(String(resolvedParams.corpo_id), 10);
     if (Number.isNaN(corpoIdNum) || corpoIdNum <= 0) {
+      await reportError(req, "api/general-induction-register/corpo/[corpo_id]", "GET", 400, "Corpo inválido");
       return NextResponse.json({ status: false, message: "Corpo inválido", data: [] }, { status: 400 });
     }
 
@@ -62,7 +64,8 @@ export async function GET(req: NextRequest, context: { params: Promise<{ corpo_i
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+    await reportError(req, "api/general-induction-register/corpo/[corpo_id]", "GET", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
   }
 }
 

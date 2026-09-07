@@ -5,11 +5,14 @@ import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../../../utils/hydratePreexistentIncludes";
+import { saveAgendaMinutaImages, type AgendaMinutaImageInput } from "../../../utils/agendaMinutaImages";
+import { reportError } from "../../../utils/reportError";
 
 const AGENDA_MINUTA_ESTRUCTURA_INCLUDE = {
   e_estructura_cliente: { select: { nombre: true } },
   e_estructura_sucursal: { select: { nombre: true, nro_sucursal: true } },
   e_estructura_puesto: { select: { nombre: true, codigo: true } },
+  c_imagenes_agenda_minuta: { select: { id: true, name: true, original_name: true } },
 };
 
 function parseFechaInput(fecha: any): Date | undefined {
@@ -159,6 +162,7 @@ export async function GET(req: NextRequest) {
       puesto_nombre: r.e_estructura_puesto
         ? `${r.e_estructura_puesto.codigo ? `${r.e_estructura_puesto.codigo} - ` : ""}${r.e_estructura_puesto.nombre}`
         : null,
+      imagenes: Array.isArray(r.c_imagenes_agenda_minuta) ? r.c_imagenes_agenda_minuta : [],
     }));
 
     return NextResponse.json(
@@ -168,6 +172,7 @@ export async function GET(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/agenda-minuta", "GET", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
   }
 }
@@ -196,6 +201,7 @@ export async function POST(req: NextRequest) {
       observaciones,
       firma_responsable,
       estado,
+      imagenes,
     } = await req.json();
 
     const required: Array<[string, any]> = [
@@ -217,6 +223,7 @@ export async function POST(req: NextRequest) {
     ];
     for (const [k, v] of required) {
       if (v === undefined || v === null || String(v).trim().length === 0) {
+        await reportError(req, "api/agenda-minuta", "POST", 400, `El campo ${k} es requerido`);
         return NextResponse.json({ status: false, message: `El campo ${k} es requerido` }, { status: 400 });
       }
     }
@@ -229,15 +236,25 @@ export async function POST(req: NextRequest) {
     const puestoIdNum = parseInt(String(puesto_id), 10);
     const numeroNum = parseInt(String(numero), 10);
     if ([empresaIdNum, clienteIdNum, divisionIdNum, contratoIdNum, corpoIdNum, puestoIdNum, numeroNum].some((n) => Number.isNaN(n) || n <= 0)) {
+      await reportError(req, "api/agenda-minuta", "POST", 400, "IDs inválidos");
       return NextResponse.json({ status: false, message: "IDs inválidos" }, { status: 400 });
     }
 
     const fechaParsed = parseFechaInput(fecha);
-    if (!fechaParsed) return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
+    if (!fechaParsed) {
+      await reportError(req, "api/agenda-minuta", "POST", 400, "Fecha inválida");
+      return NextResponse.json({ status: false, message: "Fecha inválida" }, { status: 400 });
+    }
     const horaInicioParsed = parseTimeInput(hora_inicio);
-    if (!horaInicioParsed) return NextResponse.json({ status: false, message: "Hora inicio inválida" }, { status: 400 });
+    if (!horaInicioParsed) {
+      await reportError(req, "api/agenda-minuta", "POST", 400, "Hora inicio inválida");
+      return NextResponse.json({ status: false, message: "Hora inicio inválida" }, { status: 400 });
+    }
     const horaFinParsed = parseTimeInput(hora_fin);
-    if (!horaFinParsed) return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
+    if (!horaFinParsed) {
+      await reportError(req, "api/agenda-minuta", "POST", 400, "Hora fin inválida");
+      return NextResponse.json({ status: false, message: "Hora fin inválida" }, { status: 400 });
+    }
 
     const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
     const { preexistentSpecs } = splitIncludeByTableGroup(AGENDA_MINUTA_ESTRUCTURA_INCLUDE);
@@ -271,6 +288,25 @@ export async function POST(req: NextRequest) {
       },
     });
     await hydratePreexistentRelations(record, preexistentSpecs);
+
+    // El registro ya quedó creado arriba: si la subida de imágenes falla (tamaño, red, etc.), NO
+    // debe reportarse la petición completa como fallida — eso dejaría un registro huérfano sin
+    // imágenes mientras el cliente cree que todo falló y (para la cola offline) reintentaría
+    // creando registros duplicados. Se aísla el error y se deja constancia en `error_logs`.
+    let imagesUploadError: string | null = null;
+    try {
+      await saveAgendaMinutaImages(req, record.id, imagenes as AgendaMinutaImageInput[] | null | undefined);
+    } catch (imgErr: unknown) {
+      imagesUploadError = imgErr instanceof Error ? imgErr.message : "Error desconocido al subir imágenes";
+      console.error(`Error subiendo imágenes de agenda minuta (registro ${record.id} ya creado):`, imgErr);
+      await reportError(
+        req,
+        "api/agenda-minuta",
+        "POST",
+        500,
+        `Registro ${record.id} creado, pero fallaron sus imágenes: ${imagesUploadError}`
+      );
+    }
 
     if (record) {
       let empNombre = "Desconocido";
@@ -346,6 +382,15 @@ export async function POST(req: NextRequest) {
     });
 
     const recordAny = record as any;
+    const savedImages = await callDynamicPrisma({
+      req,
+      data: {
+        action: "GET",
+        table: "c_imagenes_agenda_minuta",
+        operation: "findMany",
+        where: { agenda_id: record.id },
+      },
+    });
     return NextResponse.json(
       {
         status: true,
@@ -360,6 +405,7 @@ export async function POST(req: NextRequest) {
           puesto_nombre: recordAny.e_estructura_puesto
             ? `${recordAny.e_estructura_puesto.codigo ? `${recordAny.e_estructura_puesto.codigo} - ` : ""}${recordAny.e_estructura_puesto.nombre}`
             : null,
+          imagenes: Array.isArray(savedImages) ? savedImages : [],
         },
       },
       { status: 200 }
@@ -367,6 +413,7 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
+    await reportError(req, "api/agenda-minuta", "POST", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

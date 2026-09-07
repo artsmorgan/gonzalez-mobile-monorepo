@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 import fs from "fs";
 import path from "path";
 
@@ -17,7 +18,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const fileId = parseInt(resolvedParams.fileId);
 
         if (!incidentId || !fileId) {
-            return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]/files/[fileId]", "DELETE", 400, "Parámetros inválidos");
+            return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 400 });
         }
 
         const file = await callDynamicPrisma({
@@ -25,7 +27,8 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             data: { action: "GET", table: "c_archivos_incidente", operation: "findUnique", where: { id: fileId } }
         });
         if (!file || file.incidente_id !== incidentId) {
-            return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
+            await reportError(req, "api/incidents/[id]/files/[fileId]", "DELETE", 404, "Archivo no encontrado");
+            return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
         }
 
         await callDynamicPrisma({
@@ -51,6 +54,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("Error in DELETE /api/incidents/[id]/files/[fileId]:", errorMessage);
+        await reportError(req, "api/incidents/[id]/files/[fileId]", "DELETE", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

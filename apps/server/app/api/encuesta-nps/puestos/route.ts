@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -9,12 +10,14 @@ export async function GET(req: NextRequest) {
 
         const marcaId = req.nextUrl.searchParams.get("m");
         if (!marcaId) {
-            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps/puestos", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/encuesta-nps/puestos", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const puestos = await prisma.e_estructura_puesto.findMany({ where: { sucursal_id: marca.corpo_id } });
@@ -27,6 +30,7 @@ export async function GET(req: NextRequest) {
     }
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/encuesta-nps/puestos", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

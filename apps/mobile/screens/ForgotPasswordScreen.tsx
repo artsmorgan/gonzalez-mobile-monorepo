@@ -58,16 +58,19 @@ export default function ForgotPasswordScreen() {
         }),
       });
 
-      const responseData = await response.json();
+      const responseData = await response.json().catch(() => null);
 
-      if (responseData.status) {
+      if (responseData?.status) {
         // Si el servidor responde exitosamente, navegar a la pantalla de verificación
-        navigation.navigate('VerifyCode', { 
+        navigation.navigate('VerifyCode', {
           cedula: cedula.trim(),
-          message: responseData.message 
+          message: responseData.message
         });
       } else {
-        Alert.alert('Error', responseData.message);
+        Alert.alert(
+          'Error',
+          responseData?.message || responseData?.error?.message || 'No se pudo enviar el código de verificación.'
+        );
       }
     } catch (error) {
       console.error('Error sending forgot password request:', error);

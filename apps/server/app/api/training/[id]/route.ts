@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { uploadDynamicFiles } from "../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../utils/reportError";
 import {
     buildTrainingUploadPartsFromDataUris,
     collectTrainingUploadDataUrisFromBody,
@@ -18,6 +19,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id, 10);
         if (!id || Number.isNaN(id)) {
+            await reportError(req, "api/training/[id]", "PUT", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -31,6 +33,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
             },
         });
         if (!existing) {
+            await reportError(req, "api/training/[id]", "PUT", 404, "Capacitación no encontrada");
             return NextResponse.json({ status: false, message: "Capacitación no encontrada" }, { status: 404 });
         }
 
@@ -185,6 +188,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("PUT training:", errorMessage);
+        await reportError(req, "api/training/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -199,6 +203,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id, 10);
         if (!id || Number.isNaN(id)) {
+            await reportError(req, "api/training/[id]", "DELETE", 400, "ID inválido");
             return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
         }
 
@@ -212,6 +217,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
             },
         });
         if (!existing) {
+            await reportError(req, "api/training/[id]", "DELETE", 404, "Capacitación no encontrada");
             return NextResponse.json({ status: false, message: "Capacitación no encontrada" }, { status: 404 });
         }
 
@@ -247,6 +253,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ id: 
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error("DELETE training:", errorMessage);
+        await reportError(req, "api/training/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

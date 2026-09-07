@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -12,7 +13,8 @@ export async function GET(req: NextRequest) {
 
         const empleadoId = payload?.id ? parseInt(String(payload.id), 10) : 0;
         if (!empleadoId) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado en token" }, { status: 401 });
+            await reportError(req, "api/traslado-plaza", "GET", 400, "Empleado no encontrado en token");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado en token" }, { status: 400 });
         }
 
         const accionesArray = await prisma.c_accion_personal.findMany({
@@ -56,6 +58,7 @@ export async function GET(req: NextRequest) {
 
         return NextResponse.json({ status: true, acciones_return }, { status: 200 });
     } catch (error) {
+        await reportError(req, "api/traslado-plaza", "GET", 500, "Error al obtener archivos de acciones");
         return NextResponse.json({ status: false, message: "Error al obtener archivos de acciones" }, { status: 500 });
     }
 }

@@ -398,8 +398,15 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
         anchorPto.set(Number(r.id), a.rowPuestos);
     }
 
+    /** Cuadrícula jerárquica: Capacitación (nivel 0) → Empleado (nivel 1, `e_capacitacion_empleado`) y Puesto (nivel 1, `e_capacitacion_puesto`), hermanos. */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Capacitación",
         "Fecha",
         "Empresa",
         "Cliente",
@@ -411,9 +418,17 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
         "Tipo",
         "Resultado",
         "Responsable",
-        "Empleados de la capacitación",
-        "Puestos de la capacitación",
+        "Ver empleados",
+        "Ver puestos",
+        "Empleado (código / nombre)",
+        "Cédula (empleado)",
+        "Puesto (código / nombre)",
     ];
+    const colEmpLink = headers.indexOf("Ver empleados") + 1;
+    const colPtoLink = headers.indexOf("Ver puestos") + 1;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+    const linkCols = new Set([colEmpLink, colPtoLink]);
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true };
     h.eachCell((c) => {
@@ -423,7 +438,11 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
     wsMain.columns = [
+        { width: 12 },
+        { width: 14 },
         { width: 8 },
+        { width: 20 },
+        { width: 12 },
         { width: 14 },
         { width: 26 },
         { width: 24 },
@@ -435,47 +454,82 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
         { width: 14 },
         { width: 14 },
         { width: 24 },
-        { width: 28, outlineLevel: 1 },
-        { width: 28, outlineLevel: 1 },
+        { width: 16 },
+        { width: 16 },
+        { width: 28 },
+        { width: 16 },
+        { width: 28 },
     ];
 
-    const colEmp = headers.length - 1;
-    const colPto = headers.length;
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell, col) => {
+            cell.border = borderThin;
+            if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
+        });
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+    };
 
     for (const r of rows) {
         const re = anchorEmp.get(Number(r.id)) ?? 1;
         const rp = anchorPto.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id,
-            r.fecha_txt,
-            r.empresa_nombre,
-            r.cliente_nombre,
-            r.division_nombre,
-            r.contrato_nombre,
-            r.corpo_nombre,
-            r.puesto_nombre,
-            excelCellString(r.titulo),
-            excelCellString(r.tipo),
-            excelCellString(r.resultado ?? ""),
-            r.responsable_nombre,
-            "",
-            "",
-        ]);
-        row.getCell(colEmp).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
-        row.getCell(colEmp).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.getCell(colPto).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
-        row.getCell(colPto).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell, col) => {
-            cell.border = borderThin;
-            if (col !== colEmp && col !== colPto) {
-                cell.alignment = { vertical: "top", wrapText: true };
-            }
+        const general: Record<number, unknown> = {
+            [headers.indexOf("ID Capacitación") + 1]: r.id,
+            [headers.indexOf("Fecha") + 1]: r.fecha_txt,
+            [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
+            [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
+            [headers.indexOf("División") + 1]: r.division_nombre,
+            [headers.indexOf("Contrato") + 1]: r.contrato_nombre,
+            [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
+            [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
+            [headers.indexOf("Título") + 1]: excelCellString(r.titulo),
+            [headers.indexOf("Tipo") + 1]: excelCellString(r.tipo),
+            [headers.indexOf("Resultado") + 1]: excelCellString(r.resultado ?? ""),
+            [headers.indexOf("Responsable") + 1]: r.responsable_nombre,
+        };
+
+        const rootValues = new Array(headers.length).fill("");
+        rootValues[0] = String(r.id);
+        rootValues[2] = 0;
+        rootValues[3] = "Capacitación";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        const rootRow = wsMain.addRow(rootValues);
+        rootRow.getCell(colEmpLink).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
+        rootRow.getCell(colEmpLink).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(colPtoLink).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
+        rootRow.getCell(colPtoLink).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+
+        (r.empleados_cap || []).forEach((e: { id: number; label: string; cedula?: string }, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.emp${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Empleado";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Empleado (código / nombre)")] = e.label;
+            values[headers.indexOf("Cédula (empleado)")] = e.cedula ?? "";
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
+        });
+
+        (r.puestos_cap || []).forEach((p: { id: number; label: string }, idx: number) => {
+            const values = new Array(headers.length).fill("");
+            values[0] = `${r.id}.pto${idx + 1}`;
+            values[1] = String(r.id);
+            values[2] = 1;
+            values[3] = "Puesto vinculado";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[headers.indexOf("Puesto (código / nombre)")] = p.label;
+            const row = wsMain.addRow(values);
+            styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
     };
 
     wsDet.columns = [{ width: 14 }, { width: 14 }, { width: 42 }, { width: 18 }];

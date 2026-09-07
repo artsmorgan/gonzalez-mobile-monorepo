@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchDynamicFile } from "../../../../../../../utils/callDynamicFilesApi";
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,7 @@ export async function GET(
     const image = resolvedParams.image;
 
     if (!id || !image) {
+      await reportError(req, "api/puestos/notas/[id]/get-image/[image]", "GET", 400, "ID o imagen faltante");
       return NextResponse.json({ status: false, message: "ID o imagen faltante" }, { status: 400 });
     }
 
@@ -33,6 +35,7 @@ export async function GET(
       },
     });
     if (!note) {
+      await reportError(req, "api/puestos/notas/[id]/get-image/[image]", "GET", 404, "Nota no encontrada");
       return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 404 });
     }
 
@@ -46,6 +49,7 @@ export async function GET(
       },
     });
     if (!fileRecord) {
+      await reportError(req, "api/puestos/notas/[id]/get-image/[image]", "GET", 404, "Archivo no encontrado");
       return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
     }
 
@@ -64,6 +68,7 @@ export async function GET(
     });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/puestos/notas/[id]/get-image/[image]", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

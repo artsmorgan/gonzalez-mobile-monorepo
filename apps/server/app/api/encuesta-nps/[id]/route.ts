@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi
 import { callDynamicPrisma } from "../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../utils/reportError";
 
 function encuestaCambiosEq(a: any, b: any): boolean {
   if (a === b) return true;
@@ -30,6 +31,7 @@ export async function DELETE(
     const id = parseInt(resolvedParams.id, 10);
 
     if (!id || !Number.isFinite(id)) {
+      await reportError(req, "api/encuesta-nps/[id]", "DELETE", 400, "ID de encuesta no especificado");
       return NextResponse.json(
         { status: false, message: "ID de encuesta no especificado" },
         { status: 400 }
@@ -47,6 +49,7 @@ export async function DELETE(
     });
 
     if (!existing) {
+      await reportError(req, "api/encuesta-nps/[id]", "DELETE", 404, "Encuesta no encontrada");
       return NextResponse.json(
         { status: false, message: "Encuesta no encontrada" },
         { status: 404 }
@@ -121,6 +124,7 @@ export async function DELETE(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/encuesta-nps/[id]:", errorMessage);
+    await reportError(req, "api/encuesta-nps/[id]", "DELETE", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }
@@ -145,6 +149,7 @@ export async function PUT(
     const id = parseInt(resolvedParams.id, 10);
 
     if (!id || !Number.isFinite(id)) {
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 400, "ID de encuesta no especificado");
       return NextResponse.json(
         { status: false, message: "ID de encuesta no especificado" },
         { status: 400 }
@@ -162,6 +167,7 @@ export async function PUT(
     });
 
     if (!encuestaExisting) {
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Encuesta no encontrada");
       return NextResponse.json(
         { status: false, message: "Encuesta no encontrada" },
         { status: 404 }
@@ -204,13 +210,15 @@ export async function PUT(
       observaciones === undefined ||
       observaciones === null
     ) {
-      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 400, "Datos incompletos");
+      return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
     }
 
     if (!empresa_id || !cliente_id || !division_id || !corpo_id || !puesto_id) {
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 400, "IDs de jerarquía incompletos");
       return NextResponse.json(
         { status: false, message: "IDs de jerarquía incompletos" },
-        { status: 200 }
+        { status: 400 }
       );
     }
 
@@ -220,27 +228,32 @@ export async function PUT(
 
     const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: parseInt(String(empresa_id)) } });
     if (!empresa) {
-      return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Empresa no encontrada");
+      return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
     }
 
     const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: parseInt(String(cliente_id)) } });
     if (!cliente) {
-      return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Cliente no encontrado");
+      return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
     }
 
     const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: parseInt(String(corpo_id)) } });
     if (!corpo) {
-      return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Corpo no encontrado");
+      return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
     }
 
     const puesto_db = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(String(puesto_id)) } });
     if (!puesto_db) {
-      return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Puesto no encontrado");
+      return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
     }
 
     const division = await prisma.n_division.findUnique({ where: { id: parseInt(String(division_id)) } });
     if (!division) {
-      return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 200 });
+      await reportError(req, "api/encuesta-nps/[id]", "PUT", 404, "Division no encontrada");
+      return NextResponse.json({ status: false, message: "Division no encontrada" }, { status: 404 });
     }
 
     const empresaObj = empresa as any;
@@ -342,6 +355,7 @@ export async function PUT(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/encuesta-nps/[id]:", errorMessage);
+    await reportError(req, "api/encuesta-nps/[id]", "PUT", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }
@@ -366,6 +380,7 @@ export async function PATCH(
     const id = parseInt(resolvedParams.id, 10);
 
     if (!id || !Number.isFinite(id)) {
+      await reportError(req, "api/encuesta-nps/[id]", "PATCH", 400, "ID de encuesta no especificado");
       return NextResponse.json(
         { status: false, message: "ID de encuesta no especificado" },
         { status: 400 }
@@ -376,6 +391,7 @@ export async function PATCH(
     const { field, value } = body as { field?: string; value?: string };
 
     if (field !== "firma_persona_evaluada") {
+      await reportError(req, "api/encuesta-nps/[id]", "PATCH", 400, "Campo inválido. Debe ser firma_persona_evaluada.");
       return NextResponse.json(
         { status: false, message: "Campo inválido. Debe ser firma_persona_evaluada." },
         { status: 400 }
@@ -393,6 +409,7 @@ export async function PATCH(
     });
 
     if (!encuesta) {
+      await reportError(req, "api/encuesta-nps/[id]", "PATCH", 404, "Encuesta no encontrada");
       return NextResponse.json(
         { status: false, message: "Encuesta no encontrada" },
         { status: 404 }
@@ -451,6 +468,7 @@ export async function PATCH(
     const errorMessage =
       error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PATCH /api/encuesta-nps/[id]:", errorMessage);
+    await reportError(req, "api/encuesta-nps/[id]", "PATCH", 500, errorMessage);
     return NextResponse.json(
       { status: false, message: errorMessage },
       { status: 500 }

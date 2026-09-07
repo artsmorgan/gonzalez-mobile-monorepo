@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -12,12 +13,14 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         if (!id) {
-            return NextResponse.json({ status: false, message: "Plaza no especificado" }, { status: 200 });
+            await reportError(req, "api/notification/plaza/[id]", "GET", 400, "Plaza no especificado");
+            return NextResponse.json({ status: false, message: "Plaza no especificado" }, { status: 400 });
         }
 
         const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id } });
         if (!plaza) {
-            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+            await reportError(req, "api/notification/plaza/[id]", "GET", 404, "Plaza no encontrada");
+            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 404 });
         }
 
         // limit to 50 notifications at a time
@@ -46,6 +49,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
+        await reportError(req, "api/notification/plaza/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

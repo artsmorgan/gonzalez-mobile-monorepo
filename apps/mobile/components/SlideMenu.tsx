@@ -506,6 +506,12 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
     return hasCurrentMarca;
   };
 
+  /** Entrega de Puestos: solo visible si la marca actual tiene entrada digitada y aún no tiene salida digitada. */
+  const hasMarcaEntradaSinSalida = () => {
+    if (!currentMarca) return false;
+    return currentMarca.hora_entrada_digitada != null && currentMarca.hora_salida_digitada == null;
+  };
+
   if (!shouldRender) {
     return null;
   }
@@ -1088,7 +1094,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
-            {releaseAction('entrega-puestos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+            {releaseAction('entrega-puestos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasMarcaEntradaSinSalida() && (
               <TouchableOpacity
                 style={[
                   styles.menuItem,

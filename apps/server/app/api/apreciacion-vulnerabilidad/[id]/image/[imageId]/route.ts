@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
+import { reportError } from "../../../../../../utils/reportError";
 
 export async function DELETE(
   req: NextRequest,
@@ -16,7 +17,8 @@ export async function DELETE(
     const boletaId = parseInt(String(p.id), 10);
     const imageId = parseInt(String(p.imageId), 10);
     if (!Number.isFinite(boletaId) || !Number.isFinite(imageId)) {
-      return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/image/[imageId]", "DELETE", 400, "Parámetros inválidos");
+      return NextResponse.json({ status: false, message: "Parámetros inválidos" }, { status: 400 });
     }
 
     const boleta = await callDynamicPrisma({
@@ -29,7 +31,8 @@ export async function DELETE(
       },
     });
     if (!boleta || boleta.isActive === false) {
-      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/image/[imageId]", "DELETE", 404, "Registro no encontrado");
+      return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
     const image = await callDynamicPrisma({
@@ -42,7 +45,8 @@ export async function DELETE(
       },
     });
     if (!image || Number(image.boleta_id) !== boletaId) {
-      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 200 });
+      await reportError(req, "api/apreciacion-vulnerabilidad/[id]/image/[imageId]", "DELETE", 404, "Archivo no encontrado");
+      return NextResponse.json({ status: false, message: "Archivo no encontrado" }, { status: 404 });
     }
 
     await callDynamicPrisma({
@@ -74,6 +78,7 @@ export async function DELETE(
     return NextResponse.json({ status: true, message: "Archivo eliminado con éxito" }, { status: 200 });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    await reportError(req, "api/apreciacion-vulnerabilidad/[id]/image/[imageId]", "DELETE", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

@@ -3,6 +3,7 @@ import { toZonedTime } from "date-fns-tz";
 import axios from "axios";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { prisma } from "../../../../../../utils/prismaClient";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -42,28 +43,32 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     const { id } = await context.params;
     const empleadoId = parseInt(id, 10);
     if (Number.isNaN(empleadoId)) {
+      await reportError(req, "api/attendance/user/[id]/next", "GET", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
     const planillasToken =
       decodeURIComponent(req.headers.get("Planillas-Token") ?? "").trim() || null;
     if (!planillasToken) {
+      await reportError(req, "api/attendance/user/[id]/next", "GET", 500, "Token de Planillas no encontrado");
       return NextResponse.json(
         { status: false, message: "Token de Planillas no encontrado" },
-        { status: 200 }
+        { status: 500 }
       );
     }
 
     const empleado = await prisma.c_empleado.findUnique({ where: { id: empleadoId } });
     if (!empleado) {
+      await reportError(req, "api/attendance/user/[id]/next", "GET", 404, "Empleado no encontrado");
       return NextResponse.json(
         { status: false, message: "Empleado no encontrado" },
-        { status: 200 }
+        { status: 404 }
       );
     }
 
     const planillasUrl = String(process.env.PLANILLAS_URL || "").trim().replace(/\/+$/, "");
     if (!planillasUrl) {
+      await reportError(req, "api/attendance/user/[id]/next", "GET", 500, "PLANILLAS_URL no configurada");
       return NextResponse.json(
         { status: false, message: "PLANILLAS_URL no configurada" },
         { status: 500 }
@@ -72,7 +77,9 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
 
     // Misma base de fecha CR que attendance/user/[id]
     let now = toZonedTime(new Date(), "America/Costa_Rica");
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
     let dateCursor = new Date(now.toISOString().split("T")[0]);
 
     const marcasIdsSet = new Set<number>();
@@ -200,6 +207,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in GET /api/attendance/user/[id]/next:", errorMessage);
+    await reportError(req, "api/attendance/user/[id]/next", "GET", 500, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }

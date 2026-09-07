@@ -3,6 +3,7 @@ import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenBy
 import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -49,6 +50,7 @@ export async function PUT(
     const { maintenance_id } = await context.params;
     const maintenanceId = parseInt(String(maintenance_id), 10);
     if (!maintenanceId) {
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "PUT", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -62,6 +64,7 @@ export async function PUT(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "PUT", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
     const existingObj = existing as any;
@@ -186,7 +189,8 @@ export async function PUT(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in PUT /api/corporate-vehicles/maintenances/[maintenance_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "PUT", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 
@@ -201,6 +205,7 @@ export async function DELETE(
     const { maintenance_id } = await context.params;
     const maintenanceId = parseInt(String(maintenance_id), 10);
     if (!maintenanceId) {
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "DELETE", 400, "ID no especificado");
       return NextResponse.json({ status: false, message: "ID no especificado" }, { status: 400 });
     }
 
@@ -214,6 +219,7 @@ export async function DELETE(
       },
     });
     if (!existing) {
+      await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "DELETE", 404, "Registro no encontrado");
       return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
     }
 
@@ -265,7 +271,8 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("Error in DELETE /api/corporate-vehicles/maintenances/[maintenance_id]:", errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/corporate-vehicles/maintenances/[maintenance_id]", "DELETE", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

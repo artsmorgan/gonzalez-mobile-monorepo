@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../../utils/callDynamicPrisma";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../../../../../utils/reportError";
 
 import { prisma } from "../../../../../../../utils/prismaClient";
 
@@ -17,13 +18,19 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id_nota = parseInt(resolvedParams["id-nota"]);
 
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
-        if (!puesto) return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+        if (!puesto) {
+            await reportError(req, "api/puestos/[id]/notas/[id-nota]/changes", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
+        }
 
         const nota = await callDynamicPrisma({
             req,
             data: { action: "GET", table: "c_puesto_notas", operation: "findUnique", where: { id: id_nota } }
         });
-        if (!nota) return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 200 });
+        if (!nota) {
+            await reportError(req, "api/puestos/[id]/notas/[id-nota]/changes", "GET", 404, "Nota no encontrada");
+            return NextResponse.json({ status: false, message: "Nota no encontrada" }, { status: 404 });
+        }
 
         const changes = await callDynamicPrisma({
             req,
@@ -49,6 +56,7 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/puestos/[id]/notas/[id-nota]/changes", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

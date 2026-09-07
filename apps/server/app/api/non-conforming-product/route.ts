@@ -5,6 +5,7 @@ import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -90,9 +91,11 @@ export async function POST(req: NextRequest) {
     const contratoId = Number(contrato_id);
     const puestoId = Number(puesto_id);
     if (!clienteId || !corpoId) {
+      await reportError(req, "api/non-conforming-product", "POST", 400, "Cliente y Sucursal son requeridos");
       return NextResponse.json({ status: false, message: "Cliente y Sucursal son requeridos" }, { status: 400 });
     }
     if (!empresaId || !divisionId || !contratoId || !puestoId) {
+      await reportError(req, "api/non-conforming-product", "POST", 400, "empresa, división, contrato y puesto son requeridos");
       return NextResponse.json(
         { status: false, message: "empresa, división, contrato y puesto son requeridos" },
         { status: 400 }
@@ -102,10 +105,12 @@ export async function POST(req: NextRequest) {
     const fechaIdent = parseDateOnly(fecha_identificacion);
     const fechaSol = parseDateOnly(fecha_solucion);
     if (!fechaIdent || !fechaSol) {
+      await reportError(req, "api/non-conforming-product", "POST", 400, "Fechas inválidas (identificación / solución)");
       return NextResponse.json({ status: false, message: "Fechas inválidas (identificación / solución)" }, { status: 400 });
     }
 
     if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+      await reportError(req, "api/non-conforming-product", "POST", 400, "La firma del responsable es requerida");
       return NextResponse.json({ status: false, message: "La firma del responsable es requerida" }, { status: 400 });
     }
 
@@ -292,7 +297,8 @@ export async function POST(req: NextRequest) {
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error(errorMessage);
-    return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+    await reportError(req, "api/non-conforming-product", "POST", 500, errorMessage);
+    return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
   }
 }
 

@@ -4,6 +4,7 @@ import { toZonedTime } from "date-fns-tz";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -73,6 +74,7 @@ export async function GET(req: NextRequest) {
                 return NextResponse.json({ status: true, data: [] }, { status: 200 });
             }
         } else {
+            await reportError(req, "api/induction-tour-record", "GET", 400, "Debe especificar filtros jer?rquicos");
             return NextResponse.json({ status: false, message: "Debe especificar filtros jer?rquicos" }, { status: 400 });
         }
 
@@ -104,7 +106,8 @@ export async function GET(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 400 });
+        await reportError(req, "api/induction-tour-record", "GET", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage, data: [] }, { status: 500 });
     }
 }
 
@@ -157,16 +160,19 @@ export async function POST(req: NextRequest) {
         } = await req.json();
 
         if (!marca_id) {
+            await reportError(req, "api/induction-tour-record", "POST", 400, "Marca no especificada");
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
         const marcaIdNum = parseInt(String(marca_id), 10);
         if (Number.isNaN(marcaIdNum)) {
+            await reportError(req, "api/induction-tour-record", "POST", 400, "Marca inv?lida");
             return NextResponse.json({ status: false, message: "Marca inv?lida" }, { status: 400 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: marcaIdNum } });
         if (!marcaDia) {
+            await reportError(req, "api/induction-tour-record", "POST", 404, "Marca no encontrada");
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
         const marcaDiaObj = marcaDia as any;
@@ -183,15 +189,18 @@ export async function POST(req: NextRequest) {
         if (
             [empresaId, clienteId, divisionId, contratoId, corpoId, puestoId, plazaId].some((n) => Number.isNaN(n) || n === 0)
         ) {
+            await reportError(req, "api/induction-tour-record", "POST", 400, "No se pudieron derivar los IDs de la marca");
             return NextResponse.json({ status: false, message: "No se pudieron derivar los IDs de la marca" }, { status: 400 });
         }
 
         // Validar empleado_id
         if (!empleado_id) {
+            await reportError(req, "api/induction-tour-record", "POST", 400, "empleado_id es requerido");
             return NextResponse.json({ status: false, message: "empleado_id es requerido" }, { status: 400 });
         }
         const empleadoIdNum = Number(empleado_id);
         if (Number.isNaN(empleadoIdNum) || empleadoIdNum === 0) {
+            await reportError(req, "api/induction-tour-record", "POST", 400, "empleado_id inv?lido");
             return NextResponse.json({ status: false, message: "empleado_id inv?lido" }, { status: 400 });
         }
 
@@ -363,7 +372,8 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/induction-tour-record", "POST", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 

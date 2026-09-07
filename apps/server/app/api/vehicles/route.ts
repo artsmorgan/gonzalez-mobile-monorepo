@@ -7,6 +7,7 @@ import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { assertCorpoAllowedForMarca, resolveClienteYPuestoParaAlta, getRegistroVehiculoLocationAnchors } from "../../../utils/registroCorpoPuesto";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
@@ -18,28 +19,33 @@ export async function GET(req: NextRequest) {
         const corpoParam = searchParams.get("corpo_id");
 
         if (!marca) {
+            await reportError(req, "api/vehicles", "GET", 400, "Marca no especificada");
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 200 });
         }
 
         const corpoIdReq = corpoParam != null && corpoParam !== "" ? parseInt(String(corpoParam), 10) : NaN;
         if (!Number.isFinite(corpoIdReq) || corpoIdReq <= 0) {
+            await reportError(req, "api/vehicles", "GET", 400, "Sucursal no especificada");
             return NextResponse.json({ status: false, message: "Sucursal no especificada" }, { status: 200 });
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca) } });
         if (!marcaDia) {
+            await reportError(req, "api/vehicles", "GET", 404, "Marca no encontrada");
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
         }
 
         const corpoOkGet = await assertCorpoAllowedForMarca(req, marcaDia, corpoIdReq);
         if (!corpoOkGet.ok) {
-            return NextResponse.json({ status: false, message: corpoOkGet.message }, { status: 200 });
+            await reportError(req, "api/vehicles", "GET", 400, corpoOkGet.message);
+            return NextResponse.json({ status: false, message: corpoOkGet.message }, { status: 400 });
         }
 
         if (!marcaDia.empleadoFijo_id) {
+            await reportError(req, "api/vehicles", "GET", 404, "Empleado no encontrado");
             return NextResponse.json(
                 { status: false, message: "Empleado no encontrado" },
-                { status: 200 }
+                { status: 404 }
             );
         }
 
@@ -58,7 +64,16 @@ export async function GET(req: NextRequest) {
 
             const responsable = await prisma.c_empleado.findUnique({ where: { id: v.responsable_id } });
             if (!responsable) {
-                return NextResponse.json({ status: false, message: "Responsable no encontrado" }, { status: 200 });
+                await reportError(req, "api/vehicles", "GET", 404, "Responsable no encontrado");
+                return NextResponse.json({ status: false, message: "Responsable no encontrado" }, { status: 404 });
+            }
+
+            let puesto_salida: { id: number; nombre: string; codigo: string | null } | null = null;
+            if (v.puesto_salida_id) {
+                const puestoSalida = await prisma.e_estructura_puesto.findUnique({ where: { id: v.puesto_salida_id } });
+                if (puestoSalida) {
+                    puesto_salida = { id: puestoSalida.id, nombre: puestoSalida.nombre, codigo: puestoSalida.codigo };
+                }
             }
 
             vehiculos_return.push({
@@ -79,6 +94,8 @@ export async function GET(req: NextRequest) {
                 created_at: v.created_at,
                 corpo_id: v.corpo_id,
                 puesto_id: v.puesto_id,
+                puesto_salida_id: v.puesto_salida_id ?? null,
+                puesto_salida,
                 empresa_id: v.empresa_id,
                 cliente_id: v.cliente_id,
                 division_id: v.division_id,
@@ -92,6 +109,7 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ status: true, data: vehiculos_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/vehicles", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -119,16 +137,34 @@ export async function POST(req: NextRequest) {
             hora_entrada,
             hora_salida,
             razon_visita,
+            puesto_salida_id,
             file
         } = await req.json();
 
         if (!marca_id || !tipo || !placa || !nombre || !cedula || !hora_entrada || !razon_visita) {
-            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
+        }
+
+        let puestoSalidaIdFinal: number | null = null;
+        if (puesto_salida_id != null && puesto_salida_id !== "") {
+            const parsedPuestoSalida = parseInt(String(puesto_salida_id), 10);
+            if (!Number.isFinite(parsedPuestoSalida) || parsedPuestoSalida <= 0) {
+                await reportError(req, "api/vehicles", "POST", 400, "Puesto de salida inválido");
+                return NextResponse.json({ status: false, message: "Puesto de salida inválido" }, { status: 400 });
+            }
+            const puestoSalidaBd = await prisma.e_estructura_puesto.findUnique({ where: { id: parsedPuestoSalida } });
+            if (!puestoSalidaBd) {
+                await reportError(req, "api/vehicles", "POST", 404, "El puesto de salida no existe");
+                return NextResponse.json({ status: false, message: "El puesto de salida no existe" }, { status: 404 });
+            }
+            puestoSalidaIdFinal = parsedPuestoSalida;
         }
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
         if (!marcaDia) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const createdAt = toZonedTime(new Date(), "America/Costa_Rica");
@@ -145,22 +181,26 @@ export async function POST(req: NextRequest) {
 
         const corpoOkPost = await assertCorpoAllowedForMarca(req, marcaDia, targetCorpoId);
         if (!corpoOkPost.ok) {
-            return NextResponse.json({ status: false, message: corpoOkPost.message }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, corpoOkPost.message);
+            return NextResponse.json({ status: false, message: corpoOkPost.message }, { status: 400 });
         }
 
         const resolvedCp = await resolveClienteYPuestoParaAlta(req, marcaDia, targetCorpoId, bodyPuestoId);
         if (!resolvedCp.ok) {
-            return NextResponse.json({ status: false, message: resolvedCp.message }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, resolvedCp.message);
+            return NextResponse.json({ status: false, message: resolvedCp.message }, { status: 400 });
         }
         const clienteIdFinal = resolvedCp.cliente_id;
         const puestoIdFinal = resolvedCp.puesto_id;
 
         const anchors = await getRegistroVehiculoLocationAnchors(req, targetCorpoId);
         if (!anchors.ok) {
-            return NextResponse.json({ status: false, message: anchors.message }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, anchors.message);
+            return NextResponse.json({ status: false, message: anchors.message }, { status: 400 });
         }
         if (Number(clienteIdFinal) !== Number(anchors.cliente_id)) {
-            return NextResponse.json({ status: false, message: "Cliente inconsistente con la sucursal" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "Cliente inconsistente con la sucursal");
+            return NextResponse.json({ status: false, message: "Cliente inconsistente con la sucursal" }, { status: 400 });
         }
 
         const chk = (label: string, bodyVal: unknown, expected: number) => {
@@ -169,16 +209,20 @@ export async function POST(req: NextRequest) {
             return Number.isFinite(n) && n === expected;
         };
         if (!chk("empresa", bodyEmpresaId, anchors.empresa_id)) {
-            return NextResponse.json({ status: false, message: "La empresa no corresponde a la sucursal" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "La empresa no corresponde a la sucursal");
+            return NextResponse.json({ status: false, message: "La empresa no corresponde a la sucursal" }, { status: 400 });
         }
         if (!chk("cliente", bodyClienteId, anchors.cliente_id)) {
-            return NextResponse.json({ status: false, message: "El cliente no corresponde a la sucursal" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "El cliente no corresponde a la sucursal");
+            return NextResponse.json({ status: false, message: "El cliente no corresponde a la sucursal" }, { status: 400 });
         }
         if (!chk("división", bodyDivisionId, anchors.division_id)) {
-            return NextResponse.json({ status: false, message: "La división no corresponde a la sucursal" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "La división no corresponde a la sucursal");
+            return NextResponse.json({ status: false, message: "La división no corresponde a la sucursal" }, { status: 400 });
         }
         if (!chk("contrato", bodyContratoId, anchors.contrato_id)) {
-            return NextResponse.json({ status: false, message: "El contrato no corresponde a la sucursal" }, { status: 200 });
+            await reportError(req, "api/vehicles", "POST", 400, "El contrato no corresponde a la sucursal");
+            return NextResponse.json({ status: false, message: "El contrato no corresponde a la sucursal" }, { status: 400 });
         }
 
         const new_vehicle = await callDynamicPrisma({
@@ -206,6 +250,7 @@ export async function POST(req: NextRequest) {
                     hora_entrada: new Date(hora_entrada).toISOString(),
                     hora_salida: hora_salida ? new Date(hora_salida).toISOString() : null,
                     razon_visita: razon_visita,
+                    puesto_salida_id: puestoSalidaIdFinal,
                 }
             }
         });
@@ -246,9 +291,10 @@ export async function POST(req: NextRequest) {
             if (file) {
                 const result = await createVehicleImage(req, new_vehicle.id, file);
                 if (!result) {
+                    await reportError(req, "api/vehicles", "POST", 400, "El vehículo se guardó pero no se pudo subir la imagen. Verifique el formato o el tamaño.");
                     return NextResponse.json(
                         { status: false, message: "El vehículo se guardó pero no se pudo subir la imagen. Verifique el formato o el tamaño." },
-                        { status: 200 }
+                        { status: 400 }
                     );
                 }
             }
@@ -270,6 +316,7 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/vehicles", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

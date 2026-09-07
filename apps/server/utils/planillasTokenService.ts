@@ -2,6 +2,8 @@ import axios from "axios";
 import { toZonedTime } from "date-fns-tz";
 import { prisma } from "./prismaClient";
 import { decodeJwtPayloadUnsafe } from "./verifyPlanillasToken";
+import dotenv from "dotenv";
+dotenv.config();
 
 const COSTA_RICA_TZ = "America/Costa_Rica";
 
@@ -28,13 +30,21 @@ export function getPlanillasApiUrl(): string {
     return planillasUrl.replace(/\/+$/, "");
 }
 
-/** Misma convención de fechas usada históricamente en login / getPlanillasToken. */
+/**
+ * Misma convención de fechas usada históricamente en login / getPlanillasToken.
+ * `toZonedTime` ya desplaza el instante para que sus getters UTC devuelvan la hora de reloj de
+ * Costa Rica; restar 6 horas otra vez aquí duplicaba el desplazamiento y dejaba `expires_at`
+ * ~6 horas por detrás de la hora usada en `isPlanillasTokenRecordValid` (single-shift), por lo
+ * que el token quedaba "vencido" casi de inmediato y se pedía la contraseña constantemente.
+ */
 export function computePlanillasTokenTimestamps(expires_in: number): {
     created_at: Date;
     expires_at: Date;
 } {
-    let now = toZonedTime(new Date(), COSTA_RICA_TZ);
-    //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+    let now = toZonedTime(new Date(), "America/Costa_Rica");
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
     const expires_at = new Date(now.getTime() + expires_in * 1000);
     return { created_at: now, expires_at };
 }
@@ -43,7 +53,10 @@ export function isPlanillasTokenRecordValid(
     record: Pick<PlanillasTokenRecord, "expires_at">,
     bufferSeconds = 60
 ): boolean {
-    const now = toZonedTime(new Date(), COSTA_RICA_TZ);
+    let now = toZonedTime(new Date(), "America/Costa_Rica");
+    if (process.env.NODE_ENV === "development") {
+        now = toZonedTime(new Date(now.getTime() - 6 * 60 * 60 * 1000), "America/Costa_Rica");
+    }
     const threshold = new Date(now.getTime() + bufferSeconds * 1000);
     return new Date(record.expires_at) > threshold;
 }

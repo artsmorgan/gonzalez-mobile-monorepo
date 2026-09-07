@@ -736,8 +736,15 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
 
     wsDet.columns = [36, 44, 14, 14, 16, 28].map((w) => ({ width: w }));
 
+    /** Cuadrícula jerárquica: Checklist (nivel 0) → Sección (nivel 1, de `evaluacion`) → Subsección (nivel 2) → Pregunta (nivel 3); Artículo es hermano de Sección (nivel 1, de `articulos_puesto`). */
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
     const headers = [
-        "ID",
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Checklist",
         "Empresa",
         "Cliente",
         "División",
@@ -750,10 +757,26 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         "Hora inicio",
         "Hora fin",
         "Creado (servidor)",
-        "Evaluación",
-        "Artículos puesto",
-        "Firma supervisor",
+        "Ver evaluación",
+        "Ver artículos",
+        "Ver firma",
+        "Sección",
+        "Subsección",
+        "Detalle (subsección)",
+        "Pregunta",
+        "Respuesta",
+        "Imágenes (nombres)",
+        "Nombre artículo",
+        "Tipo artículo",
+        "Cant. req. artículo",
+        "Cant. real artículo",
+        "Estado artículo",
+        "Observaciones artículo",
     ];
+    const COL_VER_EVAL = 18;
+    const COL_VER_ART = 19;
+    const COL_VER_FIR = 20;
+
     const h = wsMain.addRow(headers);
     h.font = { bold: true, color: { argb: "FFFFFFFF" } };
     h.eachCell((cell) => {
@@ -762,14 +785,31 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
     wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    const colWidths = [8, 26, 22, 18, 24, 24, 22, 24, 22, 20, 12, 12, 18, 14, 16, 14];
-    wsMain.columns = colWidths.map((w) => ({ width: w, outlineLevel: 1 }));
+    const colWidths = [12, 16, 8, 20, 10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 18, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30];
+    wsMain.columns = colWidths.map((w) => ({ width: w }));
 
-    const linkCols = { eval: 14, art: 15, fir: 16 };
+    const blank = (n: number) => Array.from({ length: n }, () => "");
 
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell) => {
+            cell.border = border;
+            cell.alignment = { vertical: "middle", wrapText: true };
+        });
+        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(4).font = { bold: true };
+    };
+
+    const imagesJoinedFromInput = (inp: any): string => {
+        const items = collectEvalPhotoItems(inp);
+        const names = items.map((p) => String(p?.file_name ?? "").trim()).filter((s) => s && s.length > 0);
+        return names.join(", ");
+    };
+
+    let totalDataRows = 0;
     for (const r of rows) {
         const anchor = anchorById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
+        const general = [
             String(r.id),
             excelCellString(r.empresa_nombre),
             excelCellString(r.cliente_nombre),
@@ -783,34 +823,120 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
             excelCellString(r.hora_inicio_txt ?? timeToHHmm(r.hora_inicio)),
             excelCellString(r.hora_fin_txt ?? timeToHHmm(r.hora_fin)),
             fmtDt(r.created_at),
-            parseEvalJson(r.evaluacion).length ? "Ver evaluación" : "",
-            parseArticulosJson(r.articulos_puesto).length ? "Ver artículos" : "",
+        ];
+
+        const evaluacion = parseEvalJson(r.evaluacion);
+        const articulos = parseArticulosJson(r.articulos_puesto);
+
+        const rootRow = wsMain.addRow([
+            String(r.id),
+            "",
+            0,
+            "Checklist",
+            ...general,
+            evaluacion.length ? "Ver evaluación" : "",
+            articulos.length ? "Ver artículos" : "",
             r.firma_supervisor ? "Ver firma" : "",
+            ...blank(12),
         ]);
-        row.eachCell((cell) => {
-            cell.border = border;
-            cell.alignment = { vertical: "middle", wrapText: true };
-        });
-        if (parseEvalJson(r.evaluacion).length) {
-            const c = wsMain.getCell(row.number, linkCols.eval);
+        if (evaluacion.length) {
+            const c = rootRow.getCell(COL_VER_EVAL);
             c.value = { text: "Ver evaluación", hyperlink: `#'Detalles'!A${anchor}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
-        if (parseArticulosJson(r.articulos_puesto).length) {
-            const c = wsMain.getCell(row.number, linkCols.art);
+        if (articulos.length) {
+            const c = rootRow.getCell(COL_VER_ART);
             c.value = { text: "Ver artículos", hyperlink: `#'Detalles'!A${anchor}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         if (r.firma_supervisor) {
-            const c = wsMain.getCell(row.number, linkCols.fir);
+            const c = rootRow.getCell(COL_VER_FIR);
             c.value = { text: "Ver firma", hyperlink: `#'Detalles'!A${anchor}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
+        styleDataRow(rootRow, 0);
+        totalDataRows += 1;
+
+        evaluacion.forEach((sec: any, secIdx: number) => {
+            const secTitle = excelCellString(sec?.title ?? "").trim() || `Sección ${secIdx + 1}`;
+            const secId = `${r.id}.s${secIdx + 1}`;
+            const secRow = wsMain.addRow([
+                secId,
+                String(r.id),
+                1,
+                "Sección",
+                ...general,
+                ...blank(3),
+                secTitle,
+                ...blank(11),
+            ]);
+            styleDataRow(secRow, 1);
+            totalDataRows += 1;
+
+            const subs = Array.isArray(sec?.subsections) ? sec.subsections : [];
+            subs.forEach((sub: any, subIdx: number) => {
+                const subTitle = excelCellString(sub?.title ?? "").trim() || `Subsección ${subIdx + 1}`;
+                const subDetalle = excelCellString(sub?.detalle ?? "").trim();
+                const subId = `${secId}.sub${subIdx + 1}`;
+                const subRow = wsMain.addRow([
+                    subId,
+                    secId,
+                    2,
+                    "Subsección",
+                    ...general,
+                    ...blank(4),
+                    subTitle,
+                    subDetalle,
+                    ...blank(9),
+                ]);
+                styleDataRow(subRow, 2);
+                totalDataRows += 1;
+
+                const inputs = Array.isArray(sub?.inputs) ? sub.inputs : [];
+                inputs.forEach((inp: any, inpIdx: number) => {
+                    const label = resolveChecklistEvalInputLabel(inp, subTitle);
+                    const val = formatEvalInputDisplayValue(inp);
+                    const row = wsMain.addRow([
+                        `${subId}.q${inpIdx + 1}`,
+                        subId,
+                        3,
+                        "Pregunta",
+                        ...general,
+                        ...blank(6),
+                        label,
+                        val,
+                        imagesJoinedFromInput(inp),
+                        ...blank(6),
+                    ]);
+                    styleDataRow(row, 3);
+                    totalDataRows += 1;
+                });
+            });
+        });
+
+        articulos.forEach((a: any, idx: number) => {
+            const row = wsMain.addRow([
+                `${r.id}.art${idx + 1}`,
+                String(r.id),
+                1,
+                "Artículo",
+                ...general,
+                ...blank(9),
+                excelCellString(a?.nombre ?? ""),
+                excelCellString(a?.tipo ?? ""),
+                excelCellString(a?.cantidad_requerida ?? ""),
+                excelCellString(a?.cantidad_real ?? ""),
+                excelCellString(a?.estado ?? ""),
+                excelCellString(a?.observaciones ?? ""),
+            ]);
+            styleDataRow(row, 1);
+            totalDataRows += 1;
+        });
     }
 
     wsMain.autoFilter = {
         from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        to: { row: Math.max(1, totalDataRows + 1), column: headers.length },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

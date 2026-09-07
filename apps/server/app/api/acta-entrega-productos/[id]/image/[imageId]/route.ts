@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../../../../utils/callDynamicPrisma";
 import { deleteDynamicFile } from "../../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -19,6 +20,7 @@ export async function DELETE(
     const actaId = parseInt(String(resolved.id), 10);
     const imageId = parseInt(String(resolved.imageId), 10);
     if (!actaId || !imageId) {
+      await reportError(req, "api/acta-entrega-productos/[id]/image/[imageId]", "DELETE", 400, "ID inválido");
       return NextResponse.json({ status: false, message: "ID inválido" }, { status: 400 });
     }
 
@@ -32,6 +34,7 @@ export async function DELETE(
       },
     });
     if (!imageRow) {
+      await reportError(req, "api/acta-entrega-productos/[id]/image/[imageId]", "DELETE", 404, "Imagen no encontrada");
       return NextResponse.json({ status: false, message: "Imagen no encontrada" }, { status: 404 });
     }
 
@@ -62,6 +65,7 @@ export async function DELETE(
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     console.error("DELETE acta-entrega image:", errorMessage);
+    await reportError(req, "api/acta-entrega-productos/[id]/image/[imageId]", "DELETE", 400, errorMessage);
     return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
   }
 }

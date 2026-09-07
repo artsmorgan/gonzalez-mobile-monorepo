@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
         }
 
         let now = toZonedTime(new Date(), "America/Costa_Rica");
-        //now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
+        now = new Date(now.getTime() - 6 * 60 * 60 * 1000); // Restarle 6 horas para que sea en la zona horaria de Costa Rica
         // Crear el token de recuperación de contraseña
         const token_recovery = await callDynamicPrisma({
             req,

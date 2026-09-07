@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
 import { getActivities } from "../../../../../utils/createActivities";
 import { prisma } from "../../../../../utils/prismaClient";
+import { reportError } from "../../../../../utils/reportError";
 
 export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
@@ -13,41 +14,52 @@ export async function GET(req: NextRequest, context: { params: Promise<{ id: str
         const id = parseInt(resolvedParams.id);
 
         const marcaDia = await prisma.c_marca_dia.findUnique({ where: { id } });
-        if (!marcaDia) return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+        if (!marcaDia) {
+            await reportError(req, "api/activities/marca/[id]", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
+        }
 
         if (!marcaDia.hora_inicio || !marcaDia.hora_fin) {
-            return NextResponse.json({ status: false, message: "Hora de inicio o fin no establecida" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 500, "Hora de inicio o fin no establecida");
+            return NextResponse.json({ status: false, message: "Hora de inicio o fin no establecida" }, { status: 500 });
         }
 
         if (!marcaDia.hora_entrada_digitada) {
-            return NextResponse.json({ status: false, message: "Hora de entrada del empleado no registrada" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 500, "Hora de entrada del empleado no registrada");
+            return NextResponse.json({ status: false, message: "Hora de entrada del empleado no registrada" }, { status: 500 });
         }
 
         if (!marcaDia.puesto_id) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
         const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: marcaDia.puesto_id } });
         if (!puesto) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
         if (!marcaDia.plaza_id) {
-            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 404, "Plaza no encontrada");
+            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 404 });
         }
         const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: marcaDia.plaza_id } });
         if (!plaza) {
-            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 404, "Plaza no encontrada");
+            return NextResponse.json({ status: false, message: "Plaza no encontrada" }, { status: 404 });
         }
 
         const actividades = await getActivities(req, marcaDia.id);
 
         if (!actividades.status) {
-            return NextResponse.json({ status: false, message: actividades.message }, { status: 200 });
+            await reportError(req, "api/activities/marca/[id]", "GET", 500, String(actividades.message ?? ""));
+            return NextResponse.json({ status: false, message: actividades.message }, { status: 500 });
         }
 
         return NextResponse.json({ status: true, actividades: actividades.actividades }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/activities/marca/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
@@ -88,6 +100,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: true, message: "Revision de equipo creada correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/activities/marca/[id]", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }

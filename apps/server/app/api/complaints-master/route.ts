@@ -6,6 +6,7 @@ import { prisma } from "../../../utils/prismaClient";
 import { sendNotificationByRole } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { mapComplaintMasterPublicRow } from "./mapPublicRow";
+import { reportError } from "../../../utils/reportError";
 
 export const runtime = "nodejs";
 
@@ -78,6 +79,7 @@ export async function POST(req: NextRequest) {
         };
 
         if (!marca_id) {
+            await reportError(req, "api/complaints-master", "POST", 400, "Marca no especificada");
             return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
         }
 
@@ -85,15 +87,18 @@ export async function POST(req: NextRequest) {
             where: { id: parseInt(marca_id) },
         });
         if (!marcaDia) {
+            await reportError(req, "api/complaints-master", "POST", 404, "Marca no encontrada");
             return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
         const marcaDiaObj = marcaDia as any;
         if (!marcaDiaObj.empleadoFijo_id) {
+            await reportError(req, "api/complaints-master", "POST", 404, "Empleado no encontrado");
             return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
         if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+            await reportError(req, "api/complaints-master", "POST", 400, "La firma del responsable es requerida");
             return NextResponse.json({ status: false, message: "La firma del responsable es requerida" }, { status: 400 });
         }
 
@@ -106,6 +111,7 @@ export async function POST(req: NextRequest) {
         const plaza_id = pickNumericId(bodyPlazaId, marcaDiaObj.plaza_id);
         const division_id = pickNumericId(bodyDivisionId, 0);
         if (!division_id) {
+            await reportError(req, "api/complaints-master", "POST", 400, "División requerida (division_id)");
             return NextResponse.json(
                 { status: false, message: "División requerida (division_id)" },
                 { status: 400 }
@@ -280,7 +286,8 @@ export async function POST(req: NextRequest) {
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.error(errorMessage);
-        return NextResponse.json({ status: false, message: errorMessage }, { status: 400 });
+        await reportError(req, "api/complaints-master", "POST", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
