@@ -24,6 +24,7 @@ export type AttendanceMarcaNomencladores = {
   tipoActivosVisitas?: unknown[];
   tipoQuejasClientes?: unknown[];
   tipoQuejas?: unknown[];
+  manualClassification?: unknown[];
 };
 
 function asPersistableNomenclatorArray(value: unknown): unknown[] | null {
@@ -77,6 +78,11 @@ export async function applyNomenclatorsFromAttendanceMarca(marca: unknown): Prom
   const tipoQuejas = asPersistableNomenclatorArray(nom.tipoQuejas);
   if (tipoQuejas) {
     writes.push(AsyncStorage.setItem('tipo_quejas_cache', JSON.stringify(tipoQuejas)));
+  }
+
+  const manualClassification = asPersistableNomenclatorArray(nom.manualClassification);
+  if (manualClassification) {
+    writes.push(AsyncStorage.setItem('manual_classification_cache', JSON.stringify(manualClassification)));
   }
 
   if (writes.length > 0) {
@@ -591,6 +597,36 @@ export const getTiposProductoNoConforme = async (refreshAccessToken: any, logout
     const data = await response.json();
     if (data.status) {
       await AsyncStorage.setItem('tipos_producto_no_conforme_cache', JSON.stringify(data.data || []));
+    }
+  }
+
+export const getManualClassification = async (refreshAccessToken: any, logout: any) => {
+    const cache = await AsyncStorage.getItem('manual_classification_cache');
+    if (cache && (cache != '' && cache != '[]')) {
+      return;
+    }
+    const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+    if (!apiUrl) {
+      throw new Error('Server URL not configured');
+    }
+    const response = await authedFetch({
+      url: `${apiUrl}/api/nomenclators/clasificacion-manuales`,
+      init: {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      },
+      refreshAccessToken,
+      logout,
+    });
+    if (!response) return;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status} getManualClassification`);
+    }
+    const data = await response.json();
+    if (data.status) {
+      await AsyncStorage.setItem('manual_classification_cache', JSON.stringify(data.data || []));
     }
   }
 

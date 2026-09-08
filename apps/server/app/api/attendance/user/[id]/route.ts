@@ -584,6 +584,15 @@ async function getNomenclators(req: NextRequest) {
             operation: "findMany"
         }
     });
+    
+    const manualClassification = await callDynamicPrisma({
+        req,
+        data: {
+            action: "GET",
+            table: "n_manual_classification",
+            operation: "findMany"
+        }
+    });
 
     return {
         categoriasMantenimiento,
@@ -594,5 +603,6 @@ async function getNomenclators(req: NextRequest) {
         tipoActivosVisitas,
         tipoQuejasClientes,
         tipoQuejas,
+        manualClassification
     }
 }

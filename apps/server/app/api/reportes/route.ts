@@ -621,6 +621,14 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
             .filter((n) => Number.isFinite(n) && n > 0);
         if (ids.length > 0) out[outKey] = [...new Set(ids)];
     }
+    const mpClasif = searchParams.get("listMpClasificaciones");
+    if (mpClasif && mpClasif.trim() !== "") {
+        const vals = mpClasif
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+        if (vals.length > 0) out.classificaciones = [...new Set(vals)];
+    }
 
     const mapApIds: Array<[string, string]> = [
         ["listApEmpresaIds", "empresaIds"],

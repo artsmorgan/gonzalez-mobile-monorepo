@@ -24,6 +24,7 @@ export const NOMENCLATOR_SLUG_TO_TABLE: Record<string, string> = {
     "tipo-activo-visitas": "n_tipo_activo_visitas",
     "tipo-quejas-clientes": "n_tipo_cliente_quejas",
     "tipo-quejas": "n_tipo_quejas",
+    "clasificacion-manuales": "n_manual_classification",
     [EJECUTIVO_COORDINADOR_SLUG]: EJECUTIVO_COORDINADOR_TABLE,
     [EMPLEADO_EJECUTIVO_SLUG]: EMPLEADO_TABLE,
     [MOBILE_VARIABLES_SLUG]: MOBILE_VARIABLES_TABLE,

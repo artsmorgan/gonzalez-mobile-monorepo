@@ -92,6 +92,7 @@ const NOMENCLATOR_SLUG_TO_CACHE_KEY: Record<string, string> = {
   'tipo-activo-visitas': 'tipo_activos_cache',
   'tipo-quejas-clientes': 'tipo_clientes_quejas_cache',
   'tipo-quejas': 'tipo_quejas_cache',
+  'clasificacion-manuales': 'manual_classification_cache',
 };
 
 async function syncNomenclatorDependentCache(slug: string, rows: unknown[]): Promise<void> {
@@ -168,6 +169,12 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
     slug: 'tipo-quejas',
     label: 'Tipo de quejas',
     description: 'Utilizado en el módulo de Maestro de Quejas y reclamos.',
+    formKind: 'nombre',
+  },
+  {
+    slug: 'clasificacion-manuales',
+    label: 'Clasificación de manuales',
+    description: 'Utilizado en el módulo de Manuales de puesto.',
     formKind: 'nombre',
   },
   {
