@@ -11,8 +11,16 @@ const MANUALES_PUESTO_INCLUDE = {
 
 export type ManualesPuestoOrderKey = "title" | "created_at";
 
-export const normalizeManualesPuestoFilters = normalizeActaEntregaFilters;
-export type ManualesPuestoModuleFilters = ActaEntregaModuleFilters;
+export type ManualesPuestoModuleFilters = ActaEntregaModuleFilters & { classificaciones?: string[] | null };
+
+export function normalizeManualesPuestoFilters(raw: unknown): ManualesPuestoModuleFilters {
+    const base = normalizeActaEntregaFilters(raw);
+    const o = raw != null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const classificaciones = Array.isArray(o.classificaciones)
+        ? Array.from(new Set((o.classificaciones as unknown[]).map((x) => String(x ?? "").trim()).filter((x) => x !== "")))
+        : [];
+    return classificaciones.length > 0 ? { ...base, classificaciones } : base;
+}
 
 export function hasManualesPuestoListModuleFiltersContent(f: ManualesPuestoModuleFilters): boolean {
     if (f.creadoDesde) return true;
@@ -23,6 +31,7 @@ export function hasManualesPuestoListModuleFiltersContent(f: ManualesPuestoModul
     if (f.contratoIds?.length) return true;
     if (f.corpoIds?.length) return true;
     if (f.puestoIds?.length) return true;
+    if (f.classificaciones?.length) return true;
     return false;
 }
 
@@ -35,6 +44,11 @@ export function filtersMatchManualesPuestoListQuery(parsedRowFilters: any, listM
         if (!right || right.length === 0) return false;
         return left.some((x) => right.includes(x));
     };
+    const overlapsStr = (left?: string[] | null, right?: string[] | null) => {
+        if (!left || left.length === 0) return true;
+        if (!right || right.length === 0) return false;
+        return left.some((x) => right.includes(x));
+    };
     if (listModuleFilters.creadoDesde && String(saved.creadoDesde || "") !== String(listModuleFilters.creadoDesde)) return false;
     if (listModuleFilters.creadoHasta && String(saved.creadoHasta || "") !== String(listModuleFilters.creadoHasta)) return false;
     if (!overlaps(listModuleFilters.empresaIds ?? undefined, saved.empresaIds ?? undefined)) return false;
@@ -43,6 +57,7 @@ export function filtersMatchManualesPuestoListQuery(parsedRowFilters: any, listM
     if (!overlaps(listModuleFilters.contratoIds ?? undefined, saved.contratoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.corpoIds ?? undefined, saved.corpoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.puestoIds ?? undefined, saved.puestoIds ?? undefined)) return false;
+    if (!overlapsStr(listModuleFilters.classificaciones ?? undefined, saved.classificaciones ?? undefined)) return false;
     return true;
 }
 
@@ -291,6 +306,10 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         const arr = [...puestoSet];
         where.OR = [{ puesto_id: { in: arr } }, { e_puestos_manual_puesto: { some: { puesto_id: { in: arr } } } }];
     }
+    if (filters.classificaciones?.length) {
+        const classOr = filters.classificaciones.map((c) => ({ classification: { contains: c } }));
+        where.AND = [...(where.AND ?? []), { OR: classOr }];
+    }
 
     const orderBy =
         orderKey === "created_at"
@@ -396,6 +415,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         "Contrato",
         "Corpo",
         "Puesto principal",
+        "Clasificación",
         "Creado en",
         "Ver estructura",
         "Puestos vinculados",
@@ -699,6 +719,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
             [mainHeaders.indexOf("Contrato") + 1]: r.contrato_txt,
             [mainHeaders.indexOf("Corpo") + 1]: r.corpo_txt,
             [mainHeaders.indexOf("Puesto principal") + 1]: r.puesto_principal_txt,
+            [mainHeaders.indexOf("Clasificación") + 1]: excelCellString(r.classification ?? ""),
             [mainHeaders.indexOf("Creado en") + 1]: r.created_at_txt,
         };
 
@@ -803,6 +824,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         { width: 24 },
         { width: 22 },
         { width: 24 },
+        { width: 20 },
         { width: 18 },
         { width: 16 },
         { width: 18 },

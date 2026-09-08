@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getDocumentTypes, getTiposProductoNoConforme, getIncidentsClassifications, getCategories, getTipoQuejas } from '../hooks/updateNomenclator';
+import { getDocumentTypes, getTiposProductoNoConforme, getIncidentsClassifications, getCategories, getTipoQuejas, getManualClassification } from '../hooks/updateNomenclator';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
 import * as Network from 'expo-network';
@@ -232,7 +232,7 @@ const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_LOGIN_MARCA, label: 'Login de marca' },
   { value: MODULO_LLAVES, label: 'Llaves' },
   { value: MODULO_MAESTRO_QUEJAS, label: 'Maestro de quejas y reclamos' },
-  { value: MODULO_MANUALES_PUESTO, label: 'Manuales de puesto' },
+  { value: MODULO_MANUALES_PUESTO, label: 'Manuales de trabajo' },
   { value: MODULO_MANTENIMIENTO_ARTICULOS, label: 'Mantenimiento de artículos' },
   { value: MODULO_NOTAS_VOZ, label: 'Notas de voz' },
   { value: MODULO_MUTUOS_ACUERDOS, label: 'Mutuos acuerdos' },
@@ -968,6 +968,23 @@ export default function ReportesScreen() {
   }, []);
 
   useEffect(() => {
+    const loadManualClassificationCache = async () => {
+      try {
+        await getManualClassification(refreshAccessToken, logout);
+        const cacheStr = await AsyncStorage.getItem('manual_classification_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+        const parsed = (Array.isArray(cache) ? cache : [])
+          .map((x: any) => ({ id: Number(x?.id), nombre: String(x?.nombre ?? '').trim() }))
+          .filter((x: { id: number; nombre: string }) => Number.isFinite(x.id) && x.id > 0 && x.nombre !== '');
+        setManualClassificationCatalogo(parsed);
+      } catch {
+        setManualClassificationCatalogo([]);
+      }
+    };
+    void loadManualClassificationCache();
+  }, []);
+
+  useEffect(() => {
     const loadPncTiposCache = async () => {
       try {
         await getTiposProductoNoConforme(refreshAccessToken, logout);
@@ -1287,6 +1304,13 @@ export default function ReportesScreen() {
   const [listIncRealHastaT, setListIncRealHastaT] = useState<Date | null>(null);
   const [listIncClasificacion, setListIncClasificacion] = useState<string>('todos');
   const [listIncEstado, setListIncEstado] = useState<'todos' | 'solucionado' | 'no_solucionado'>('todos');
+  const [manualClassificationCatalogo, setManualClassificationCatalogo] = useState<{ id: number; nombre: string }[]>([]);
+  const [listMpClasificacionPick, setListMpClasificacionPick] = useState('');
+  const [listMpClasificacionInput, setListMpClasificacionInput] = useState('');
+  const [listMpClasificacionSelected, setListMpClasificacionSelected] = useState<string[]>([]);
+  const [modalMpClasificacionPick, setModalMpClasificacionPick] = useState('');
+  const [modalMpClasificacionInput, setModalMpClasificacionInput] = useState('');
+  const [modalMpClasificacionSelected, setModalMpClasificacionSelected] = useState<string[]>([]);
   const [listMaEstadoPick, setListMaEstadoPick] = useState<'todos' | 'Bueno' | 'Malo' | 'No está'>('todos');
   const [listMaEstadosSelected, setListMaEstadosSelected] = useState<string[]>([]);
   const [listMaAccionPick, setListMaAccionPick] = useState<
@@ -2505,6 +2529,32 @@ export default function ReportesScreen() {
     setListSpTiposTurnoSelected((prev) => (prev.some((x) => x.toLowerCase() === t.toLowerCase()) ? prev : [...prev, t]));
   };
   const removeListSpTipoTurno = (tipo: string) => setListSpTiposTurnoSelected((prev) => prev.filter((x) => x !== tipo));
+  const addListMpClasificacion = () => {
+    const v = listMpClasificacionPick.trim();
+    if (!v) return;
+    setListMpClasificacionSelected((prev) => (prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]));
+    setListMpClasificacionPick('');
+  };
+  const addListMpClasificacionText = () => {
+    const v = listMpClasificacionInput.trim();
+    if (!v) return;
+    setListMpClasificacionSelected((prev) => (prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]));
+    setListMpClasificacionInput('');
+  };
+  const removeListMpClasificacion = (val: string) => setListMpClasificacionSelected((prev) => prev.filter((x) => x !== val));
+  const addModalMpClasificacion = () => {
+    const v = modalMpClasificacionPick.trim();
+    if (!v) return;
+    setModalMpClasificacionSelected((prev) => (prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]));
+    setModalMpClasificacionPick('');
+  };
+  const addModalMpClasificacionText = () => {
+    const v = modalMpClasificacionInput.trim();
+    if (!v) return;
+    setModalMpClasificacionSelected((prev) => (prev.some((x) => x.toLowerCase() === v.toLowerCase()) ? prev : [...prev, v]));
+    setModalMpClasificacionInput('');
+  };
+  const removeModalMpClasificacion = (val: string) => setModalMpClasificacionSelected((prev) => prev.filter((x) => x !== val));
   const addListMaEstado = () => {
     if (listMaEstadoPick === 'todos') return;
     setListMaEstadosSelected((prev) => (prev.includes(listMaEstadoPick) ? prev : [...prev, listMaEstadoPick]));
@@ -2895,6 +2945,7 @@ export default function ReportesScreen() {
         if (listContratoSelected.length) q.listMpContratoIds = listContratoSelected.map((x) => String(x.id)).join(',');
         if (listCorpoSelected.length) q.listMpCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
         if (listPuestoSelected.length) q.listMpPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
+        if (listMpClasificacionSelected.length) q.listMpClasificaciones = listMpClasificacionSelected.join(',');
       } else if (modulo === MODULO_ARTICULOS_PUESTO) {
         if (listEmpresaSelected.length) q.listApEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
         if (listClienteSelected.length) q.listApClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
@@ -3521,6 +3572,9 @@ export default function ReportesScreen() {
           if (modalSpTipoSalario !== 'todos') mf.tipoSalario = modalSpTipoSalario;
           if (modalSpEstado !== 'todos') mf.estado = modalSpEstado;
         }
+        if (formModulo === MODULO_MANUALES_PUESTO && modalMpClasificacionSelected.length > 0) {
+          mf.classificaciones = [...modalMpClasificacionSelected];
+        }
         if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO && modalCupResponsableSelected.length > 0) {
           mf.responsableIds = modalCupResponsableSelected.map((e) => Number(e.id));
         }
@@ -3983,6 +4037,9 @@ export default function ReportesScreen() {
           if (modalSpTiposTurnoSelected.length) moduleFilters.tiposTurno = [...modalSpTiposTurnoSelected];
           if (modalSpTipoSalario !== 'todos') moduleFilters.tipoSalario = modalSpTipoSalario;
           if (modalSpEstado !== 'todos') moduleFilters.estado = modalSpEstado;
+        }
+        if (formModulo === MODULO_MANUALES_PUESTO && modalMpClasificacionSelected.length > 0) {
+          moduleFilters.classificaciones = [...modalMpClasificacionSelected];
         }
         if (formModulo === MODULO_AGENDA_MINUTA) {
           moduleFilters.estadoMinuta = modalAgendaEstado;
@@ -4967,7 +5024,7 @@ export default function ReportesScreen() {
                                     : modulo === MODULO_SOLICITUDES_PERMISO
                                       ? 'Filtros — Solicitudes de permiso'
                                     : modulo === MODULO_MANUALES_PUESTO
-                                      ? 'Filtros — Manuales de puesto'
+                                      ? 'Filtros — Manuales de trabajo'
                                     : modulo === MODULO_ARTICULOS_PUESTO
                                       ? 'Filtros — Artículos del puesto'
                                     : modulo === MODULO_MANTENIMIENTO_ARTICULOS
@@ -5308,6 +5365,54 @@ export default function ReportesScreen() {
                             </>
                           )}
                         </View>
+                      </>
+                    ) : null}
+                    {modulo === MODULO_MANUALES_PUESTO ? (
+                      <>
+                        <ThemedText style={styles.label}>Clasificación</ThemedText>
+                        <View style={styles.row}>
+                          <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                            <Picker
+                              selectedValue={listMpClasificacionPick}
+                              onValueChange={(v) => setListMpClasificacionPick(String(v))}
+                              style={styles.picker}
+                            >
+                              <Picker.Item label="Seleccione..." value="" color="#000000" />
+                              {manualClassificationCatalogo.map((opt) => (
+                                <Picker.Item key={`list-mp-cls-${opt.id}`} label={opt.nombre} value={opt.nombre} color="#000000" />
+                              ))}
+                            </Picker>
+                          </View>
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListMpClasificacion} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listMpClasificacionInput}
+                            onChangeText={setListMpClasificacionInput}
+                            placeholder="O escriba un texto libre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity style={styles.searchIconBtn} onPress={addListMpClasificacionText} activeOpacity={0.85}>
+                            <Ionicons name="add" size={22} color="#fff" />
+                          </TouchableOpacity>
+                        </View>
+                        <ThemedView style={styles.assignedList}>
+                          {listMpClasificacionSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: una o más clasificaciones.</ThemedText>
+                          ) : (
+                            listMpClasificacionSelected.map((val) => (
+                              <ThemedView key={`list-mp-cls-sel-${val}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>{val}</ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListMpClasificacion(val)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
                       </>
                     ) : null}
                     {modulo === MODULO_REGISTRO_VEHICULOS_CORPORATIVOS ? (
@@ -8071,7 +8176,7 @@ export default function ReportesScreen() {
                                 : formModulo === MODULO_SOLICITUDES_PERMISO
                                   ? 'Filtros — Solicitudes de permiso'
                                 : formModulo === MODULO_MANUALES_PUESTO
-                                  ? 'Filtros — Manuales de puesto'
+                                  ? 'Filtros — Manuales de trabajo'
                                 : formModulo === MODULO_ARTICULOS_PUESTO
                                   ? 'Filtros — Artículos del puesto'
                                 : formModulo === MODULO_MANTENIMIENTO_ARTICULOS
@@ -8297,6 +8402,55 @@ export default function ReportesScreen() {
                           <Ionicons name="time-outline" size={18} color="#007AFF" />
                         </TouchableOpacity>
                       </View>
+                    </>
+                  ) : null}
+
+                  {formModulo === MODULO_MANUALES_PUESTO ? (
+                    <>
+                      <ThemedText style={styles.label}>Clasificación</ThemedText>
+                      <View style={styles.row}>
+                        <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                          <Picker
+                            selectedValue={modalMpClasificacionPick}
+                            onValueChange={(v) => setModalMpClasificacionPick(String(v))}
+                            style={styles.picker}
+                          >
+                            <Picker.Item label="Seleccione..." value="" color="#000000" />
+                            {manualClassificationCatalogo.map((opt) => (
+                              <Picker.Item key={`modal-mp-cls-${opt.id}`} label={opt.nombre} value={opt.nombre} color="#000000" />
+                            ))}
+                          </Picker>
+                        </View>
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalMpClasificacion} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalMpClasificacionInput}
+                          onChangeText={setModalMpClasificacionInput}
+                          placeholder="O escriba un texto libre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity style={styles.searchIconBtn} onPress={addModalMpClasificacionText} activeOpacity={0.85}>
+                          <Ionicons name="add" size={22} color="#fff" />
+                        </TouchableOpacity>
+                      </View>
+                      <ThemedView style={styles.assignedList}>
+                        {modalMpClasificacionSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: una o más clasificaciones.</ThemedText>
+                        ) : (
+                          modalMpClasificacionSelected.map((val) => (
+                            <ThemedView key={`modal-mp-cls-sel-${val}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>{val}</ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalMpClasificacion(val)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
                     </>
                   ) : null}
 

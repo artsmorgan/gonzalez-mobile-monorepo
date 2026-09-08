@@ -19,6 +19,7 @@ import AppHeader from '../components/AppHeader';
 import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
+import { getManualClassification } from '../hooks/updateNomenclator';
 import { appendJobManualPuestos, createJobManual, listJobManualsByPuesto, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
 import {
   getManualPuestoId,
@@ -171,6 +172,7 @@ interface JobManualRemote {
   contrato_id?: number | null;
   /** Puestos vinculados (misma lógica que e_puestos_manual_puesto); offline y merge en caché. */
   puestos_vinculados_ids?: number[];
+  classification?: string | null;
 }
 
 /**
@@ -262,6 +264,13 @@ export default function JobManualsScreen() {
   /** corpo_id (sucursal) de la marca — listado offline OPERATIVO. */
   const [marcaCorpoIdFromMarca, setMarcaCorpoIdFromMarca] = useState<number | null>(null);
   const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
+
+  /** Nomenclador "Clasificación de manuales" (n_manual_classification) — catálogo + filtro expandible. */
+  const [manualClassificationOptions, setManualClassificationOptions] = useState<{ id: number; nombre: string }[]>([]);
+  const [classificationFilterPick, setClassificationFilterPick] = useState('');
+  const [classificationFilterInput, setClassificationFilterInput] = useState('');
+  const [classificationFilterList, setClassificationFilterList] = useState<string[]>([]);
+  const [formClassification, setFormClassification] = useState('');
 
   /** Modal "Actualizar puestos" (misma jerarquía que en creación) */
   const [isUpdManualPuestosModalVisible, setIsUpdManualPuestosModalVisible] = useState(false);
@@ -502,6 +511,27 @@ export default function JobManualsScreen() {
     }
   }, []);
 
+  const loadManualClassificationOptions = useCallback(async () => {
+    try {
+      const online = await getConnectionStatus();
+      if (online) {
+        await getManualClassification(refreshAccessToken, logout);
+      }
+      const cacheStr = await AsyncStorage.getItem('manual_classification_cache');
+      const cache = cacheStr ? JSON.parse(cacheStr) : [];
+      const parsed = (Array.isArray(cache) ? cache : [])
+        .map((x: any) => ({ id: Number(x?.id), nombre: String(x?.nombre ?? '').trim() }))
+        .filter((x: { id: number; nombre: string }) => Number.isFinite(x.id) && x.id > 0 && x.nombre !== '');
+      setManualClassificationOptions(parsed);
+    } catch (error) {
+      console.error('Error loading manual classification options:', error);
+    }
+  }, [refreshAccessToken, logout]);
+
+  useEffect(() => {
+    void loadManualClassificationOptions();
+  }, [loadManualClassificationOptions]);
+
   const syncMarcaContextFromStorage = useCallback(
     async (opts?: { applyFiltersFromMarca?: boolean }) => {
       const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
@@ -564,6 +594,20 @@ export default function JobManualsScreen() {
   const resetListFiltersFromCurrentMarca = useCallback(async () => {
     await syncMarcaContextFromStorage({ applyFiltersFromMarca: true });
   }, [syncMarcaContextFromStorage]);
+
+  const addClassificationFilterEntry = useCallback(() => {
+    const fromPick = classificationFilterPick.trim();
+    const fromInput = classificationFilterInput.trim();
+    const value = fromInput || fromPick;
+    if (!value) return;
+    setClassificationFilterList((prev) => (prev.includes(value) ? prev : [...prev, value]));
+    setClassificationFilterPick('');
+    setClassificationFilterInput('');
+  }, [classificationFilterPick, classificationFilterInput]);
+
+  const removeClassificationFilterEntry = useCallback((value: string) => {
+    setClassificationFilterList((prev) => prev.filter((x) => x !== value));
+  }, []);
 
   const handleFilterHierarchyChange = useCallback((v: HierarchyPickerValues) => {
     setFilterEmpresaId(v.empresaId);
@@ -778,6 +822,7 @@ export default function JobManualsScreen() {
     setIsCreating(true);
     tituloRef.current = '';
     descripcionRef.current = '';
+    setFormClassification('');
     setSelectedPuestos([]);
     setTextFiles([]);
     setImageFiles([]);
@@ -1175,6 +1220,7 @@ export default function JobManualsScreen() {
     // Limpiar formulario
     tituloRef.current = '';
     descripcionRef.current = '';
+    setFormClassification('');
     setSelectedPuestos([]);
     setTextFiles([]);
     setImageFiles([]);
@@ -2204,6 +2250,7 @@ export default function JobManualsScreen() {
             minApprovalPercentage: quizMinApprovalPercentage,
           }) : null,
           files: await buildFilesJsonForOnline(),
+          classification: formClassification || null,
           ...hierarchyFields,
         };
 
@@ -2227,6 +2274,7 @@ export default function JobManualsScreen() {
 
           tituloRef.current = '';
           descripcionRef.current = '';
+          setFormClassification('');
           setSelectedPuestos([]);
           setTextFiles([]);
           setImageFiles([]);
@@ -2257,6 +2305,7 @@ export default function JobManualsScreen() {
             minApprovalPercentage: quizMinApprovalPercentage,
           }) : null,
           files: filesJsonForOfflineQueue,
+          classification: formClassification || null,
           ...hierarchyFields,
         };
         const localId = `local_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -2291,6 +2340,7 @@ export default function JobManualsScreen() {
           title: tituloRef.current,
           description: descripcionRef.current,
           quiz: quizStrToStore,
+          classification: formClassification || null,
           puesto: { id: primaryPuestoId ?? 0, nombre: primaryPuestoNombre },
           puestos_vinculados_ids: puestosVinculados.length > 0 ? puestosVinculados : undefined,
           puesto_id:
@@ -2326,6 +2376,7 @@ export default function JobManualsScreen() {
 
         tituloRef.current = '';
         descripcionRef.current = '';
+        setFormClassification('');
         setSelectedPuestos([]);
         setTextFiles([]);
         setImageFiles([]);
@@ -2417,6 +2468,16 @@ export default function JobManualsScreen() {
   /** Texto del botón principal de envío (confirmación previa vía Alert). */
   const createSubmitButtonLabel = isCreatingManual ? 'Registrando…' : 'Aceptar';
 
+  const visibleManuals = useMemo(() => {
+    if (classificationFilterList.length === 0) return manuals;
+    const needles = classificationFilterList.map((v) => v.toLowerCase());
+    return manuals.filter((m) => {
+      const cls = String(m.classification ?? '').toLowerCase();
+      if (!cls) return false;
+      return needles.some((n) => cls.includes(n));
+    });
+  }, [manuals, classificationFilterList]);
+
   const formatDateLabel = (iso: string) => {
     return convertDateTimestampToLocalString(iso);
   };
@@ -2424,7 +2485,7 @@ export default function JobManualsScreen() {
   if (isLoading) {
     return (
       <ThemedView style={styles.fullContainer}>
-        <AppHeader onMenuPress={handleMenuPress} title="Manuales de puesto" />
+        <AppHeader onMenuPress={handleMenuPress} title="Manuales de trabajo" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
           <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
@@ -2444,13 +2505,13 @@ export default function JobManualsScreen() {
 
   return (
     <ThemedView style={styles.fullContainer}>
-      <AppHeader onMenuPress={handleMenuPress} title="Manuales de puesto" />
+      <AppHeader onMenuPress={handleMenuPress} title="Manuales de trabajo" />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              Manuales de puesto
+              Manuales de trabajo
             </ThemedText>
             <ThemedText style={styles.subtitle}>
               Consulta y registra manuales asociados a tu puesto.
@@ -2470,7 +2531,7 @@ export default function JobManualsScreen() {
             </ThemedView>
           ) : null}
 
-          {!isCreating && roleName !== 'OPERATIVO' && (
+          {!isCreating && (
             <ThemedView style={styles.filtersMain}>
               <ThemedView style={styles.filterHeader}>
                 <TouchableOpacity
@@ -2484,7 +2545,7 @@ export default function JobManualsScreen() {
                     color="#007AFF"
                   />
                 </TouchableOpacity>
-                {isListFiltersExpanded && (
+                {isListFiltersExpanded && roleName !== 'OPERATIVO' && (
                   <TouchableOpacity
                     style={styles.resetFiltersButton}
                     onPress={() => void resetListFiltersFromCurrentMarca()}
@@ -2496,37 +2557,84 @@ export default function JobManualsScreen() {
               </ThemedView>
               {isListFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
-                  {isStructureLoading ? (
-                    <ThemedView style={styles.loadingManualsContainer}>
-                      <ActivityIndicator size="small" color="#007AFF" />
-                      <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
-                    </ThemedView>
-                  ) : structure.length === 0 ? (
-                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
-                  ) : (
-                    <>
-                      <ThemedText style={styles.filterLabel}>Jerarquía (lista)</ThemedText>
-                      <HierarchyPickerFields
-                        structure={structure}
-                        levels={['cliente', 'contrato', 'sucursal', 'puesto']}
-                        isLoading={isStructureLoading}
-                        emptyPickerValue={0}
-                        values={{
-                          empresaId: filterEmpresaId,
-                          clienteId: filterClienteId,
-                          divisionId: filterDivisionId,
-                          contratoId: filterContratoId,
-                          sucursalId: filterSucursalId,
-                          puestoId: filterPuestoId,
-                        }}
-                        onChange={handleFilterHierarchyChange}
-                        labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto *' }}
-                        renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
-                        pickerWrapperStyle={styles.pickerWrapper}
-                        fieldGroupStyle={styles.filterGroup}
-                      />
-                    </>
+                  {roleName !== 'OPERATIVO' && (
+                    isStructureLoading ? (
+                      <ThemedView style={styles.loadingManualsContainer}>
+                        <ActivityIndicator size="small" color="#007AFF" />
+                        <ThemedText style={styles.loadingText}>Cargando estructura...</ThemedText>
+                      </ThemedView>
+                    ) : structure.length === 0 ? (
+                      <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                    ) : (
+                      <>
+                        <ThemedText style={styles.filterLabel}>Jerarquía (lista)</ThemedText>
+                        <HierarchyPickerFields
+                          structure={structure}
+                          levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                          isLoading={isStructureLoading}
+                          emptyPickerValue={0}
+                          values={{
+                            empresaId: filterEmpresaId,
+                            clienteId: filterClienteId,
+                            divisionId: filterDivisionId,
+                            contratoId: filterContratoId,
+                            sucursalId: filterSucursalId,
+                            puestoId: filterPuestoId,
+                          }}
+                          onChange={handleFilterHierarchyChange}
+                          labels={{ sucursal: 'Sucursal (corpo)', puesto: 'Puesto *' }}
+                          renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                          pickerWrapperStyle={styles.pickerWrapper}
+                          fieldGroupStyle={styles.filterGroup}
+                        />
+                      </>
+                    )
                   )}
+
+                  <ThemedText style={styles.filterLabel}>Clasificación</ThemedText>
+                  <View style={styles.row}>
+                    <View style={[styles.pickerWrapper, styles.inputFlex]}>
+                      <Picker
+                        selectedValue={classificationFilterPick}
+                        onValueChange={(v) => setClassificationFilterPick(String(v))}
+                        style={styles.picker}
+                      >
+                        <Picker.Item label="Seleccione..." value="" color="#000000" />
+                        {manualClassificationOptions.map((opt) => (
+                          <Picker.Item key={`cf-${opt.id}`} label={opt.nombre} value={opt.nombre} color="#000000" />
+                        ))}
+                      </Picker>
+                    </View>
+                    <TouchableOpacity style={styles.searchIconBtn} onPress={addClassificationFilterEntry} activeOpacity={0.85}>
+                      <Ionicons name="add" size={22} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.row}>
+                    <TextInput
+                      style={[styles.formInput, styles.inputFlex]}
+                      value={classificationFilterInput}
+                      onChangeText={setClassificationFilterInput}
+                      placeholder="O escriba un texto libre"
+                      placeholderTextColor="#999"
+                    />
+                    <TouchableOpacity style={styles.searchIconBtn} onPress={addClassificationFilterEntry} activeOpacity={0.85}>
+                      <Ionicons name="add" size={22} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                  <ThemedView style={styles.assignedList}>
+                    {classificationFilterList.length === 0 ? (
+                      <ThemedText style={styles.helperText}>Opcional: una o más clasificaciones.</ThemedText>
+                    ) : (
+                      classificationFilterList.map((value) => (
+                        <ThemedView key={`cf-sel-${value}`} style={styles.assignedUserItem}>
+                          <ThemedText style={styles.assignedUserTitle}>{value}</ThemedText>
+                          <TouchableOpacity style={styles.removeUserButton} onPress={() => removeClassificationFilterEntry(value)}>
+                            <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))
+                    )}
+                  </ThemedView>
                 </ThemedView>
               )}
             </ThemedView>
@@ -2569,6 +2677,21 @@ export default function JobManualsScreen() {
                   multiline
                   numberOfLines={4}
                 />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Clasificación (opcional)</ThemedText>
+                <View style={styles.pickerWrapper}>
+                  <Picker
+                    selectedValue={formClassification}
+                    onValueChange={(v) => setFormClassification(String(v))}
+                  >
+                    <Picker.Item label="Sin clasificar" value="" color="#000000" />
+                    {manualClassificationOptions.map((opt) => (
+                      <Picker.Item key={`fc-${opt.id}`} label={opt.nombre} value={opt.nombre} color="#000000" />
+                    ))}
+                  </Picker>
+                </View>
               </ThemedView>
 
               {/* Modal Agregar Pregunta */}
@@ -3261,12 +3384,12 @@ export default function JobManualsScreen() {
                 <ActivityIndicator size="small" color="#007AFF" />
                 <ThemedText style={styles.loadingText}>Cargando manuales...</ThemedText>
               </ThemedView>
-            ) : manuals.length === 0 ? (
+            ) : visibleManuals.length === 0 ? (
               <ThemedText style={styles.emptyText}>
-                No hay manuales de puesto registrados para este puesto.
+                No hay manuales registrados para este puesto.
               </ThemedText>
             ) : (
-              manuals.map((manual) => (
+              visibleManuals.map((manual) => (
                 <ThemedView
                   key={manual.id || manual.id_local || `manual-${manual.title}`}
                   style={styles.manualCard}
@@ -3292,6 +3415,11 @@ export default function JobManualsScreen() {
                       {manual.files?.length || 0} archivo (s)
                     </ThemedText>
                   </ThemedView>
+                  {manual.classification ? (
+                    <ThemedText style={styles.manualMetaText}>
+                      Clasificación: {manual.classification}
+                    </ThemedText>
+                  ) : null}
                   {manual.created_at ? (
                     <ThemedText style={styles.manualMetaText}>
                       Creado: {convertDateTimestampToLocalString(new Date(manual.created_at).toISOString())}
@@ -5199,6 +5327,33 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inputFlex: { flex: 1, marginBottom: 0 },
+  picker: { height: 54, width: '100%', color: '#000' },
+  searchIconBtn: {
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  assignedList: { marginTop: 8 },
+  helperText: { fontSize: 13, color: '#666', lineHeight: 18 },
+  assignedUserItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    marginTop: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  assignedUserTitle: { fontSize: 14, color: '#000', flex: 1, paddingRight: 8 },
+  removeUserButton: { padding: 4 },
   treeActionsRow: {
     flexDirection: 'row',
     gap: 10,

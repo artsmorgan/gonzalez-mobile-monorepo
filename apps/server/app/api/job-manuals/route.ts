@@ -221,6 +221,7 @@ export async function GET(req: NextRequest) {
                     },
                     created_by: manual.created_by,
                     created_at: manual.created_at,
+                    classification: manual.classification ?? null,
                     files: filesMapped,
                     visualizaciones: visualizacionesArray.map((v: any) => ({
                         id: v.id,
@@ -270,6 +271,7 @@ export async function POST(req: NextRequest) {
             puestos,
             files,
             quiz,
+            classification,
             empresa_id: empresa_id_raw,
             cliente_id: cliente_id_raw,
             corpo_id: corpo_id_raw,
@@ -410,6 +412,7 @@ export async function POST(req: NextRequest) {
                     title,
                     description,
                     quiz: quizToStore,
+                    classification: classification != null && String(classification).trim() !== "" ? String(classification).trim() : null,
                     firma: firma_responsable,
                     // Se mantiene el campo puesto_id por compatibilidad, usando el primer puesto
                     puesto_id: primaryPuestoId,
