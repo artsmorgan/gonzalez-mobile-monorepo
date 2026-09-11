@@ -1,16 +1,28 @@
-import { ThemedText } from '@/components/ThemedText';
-import { ThemedView } from '@/components/ThemedView';
-import { useAuth } from '@/contexts/AuthContext';
+import { ThemedText } from './ThemedText';
+import { ThemedView } from './ThemedView';
+import { useAuth } from '../contexts/AuthContext';
 import React from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, Modal, StyleSheet, TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
+import { ActivityIndicator, Alert, Animated, Dimensions, Modal, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../App';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import { eventBus } from '../hooks/eventBus';
+import { CURRENT_MARCA_UPDATED_EVENT } from '@/hooks/pushNotificationsService';
+import {
+  MODULES_RELEASE_UPDATED_EVENT,
+  readModulesReleaseFromStorage,
+} from '@/hooks/getModulesRelease';
+
+type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 interface SlideMenuProps {
   isVisible: boolean;
   onClose: () => void;
-  onProfilePress: () => void;
   onHomePress: () => void;
+  onProfilePress?: () => void;
   currentRoute?: string;
 }
 
@@ -27,13 +39,110 @@ interface Permission {
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MENU_WIDTH = SCREEN_WIDTH * 0.75;
 
-export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePress, currentRoute }: SlideMenuProps) {
-  const { user, logout } = useAuth();
+export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePress, currentRoute }: SlideMenuProps) {
+  const navigation = useNavigation<NavigationProp>();
+  const { employee, logout, accessToken, refreshAccessToken } = useAuth();
   const slideAnim = React.useRef(new Animated.Value(MENU_WIDTH)).current;
   const [shouldRender, setShouldRender] = React.useState(false);
   const [isLoggingOut, setIsLoggingOut] = React.useState(false);
-  const [expandedSections, setExpandedSections] = React.useState<{[key: string]: boolean}>({});
-  const [permissions, setPermissions] = React.useState<Permission[]>([{nombre: 'Acciones', actions: []}]);
+  const [role, setRole] = React.useState<string | null>(null);
+  const [division, setDivision] = React.useState<string | null>(null);
+  const [hasCurrentMarca, setHasCurrentMarca] = React.useState<boolean>(false);
+  const [modulesRelease, setModulesRelease] = React.useState<any[]>([]);
+  const [modulesReleaseReady, setModulesReleaseReady] = React.useState(false);
+  const [currentMarca, setCurrentMarca] = React.useState<any | null>(null);
+  const [isUserSuperAdmin, setIsUserSuperAdmin] = React.useState<boolean>(false);
+  const [expandedSections, setExpandedSections] = React.useState<{ [key: string]: boolean }>({});
+  const [permissions, setPermissions] = React.useState<Permission[]>([{ nombre: 'Acciones', actions: [] }]);
+  const [hasLunchTime, setHasLunchTime] = React.useState<boolean>(false);
+  const [isDev, setIsDev] = React.useState<boolean>(false);
+
+  const applyMarcaSnapshot = React.useCallback((marcaData: any | null) => {
+    if (!marcaData || typeof marcaData !== 'object') {
+      setRole(null);
+      setDivision(null);
+      setHasCurrentMarca(false);
+      setCurrentMarca(null);
+      setHasLunchTime(false);
+      return;
+    }
+
+    setHasCurrentMarca(true);
+    setCurrentMarca(marcaData);
+    setRole(marcaData?.roleDivision?.role?.nombre ?? marcaData?.role_division?.role?.nombre ?? null);
+    setDivision(
+      marcaData?.roleDivision?.division?.nombre ?? marcaData?.role_division?.division?.nombre ?? null
+    );
+  }, []);
+
+  const applyModulesReleaseSnapshot = React.useCallback((modules: any[]) => {
+    setModulesRelease(Array.isArray(modules) ? modules : []);
+    setModulesReleaseReady(true);
+  }, []);
+
+  const reloadModulesReleaseFromStorage = React.useCallback(async () => {
+    const modules = await readModulesReleaseFromStorage();
+    applyModulesReleaseSnapshot(modules);
+  }, [applyModulesReleaseSnapshot]);
+
+  const loadCurrentMarcaFromStorage = React.useCallback(async () => {
+    try {
+      const currentMarcaRaw = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaRaw || currentMarcaRaw.trim() === '') {
+        applyMarcaSnapshot(null);
+        return;
+      }
+
+      const currentMarcaData = JSON.parse(currentMarcaRaw);
+      applyMarcaSnapshot(currentMarcaData);
+
+      const lunchTime = await AsyncStorage.getItem('lunch_time_config');
+      if (lunchTime) {
+        try {
+          const lunchTimeData = JSON.parse(lunchTime);
+          setHasLunchTime(Boolean(lunchTimeData.tiene_almuerzo));
+        } catch {
+          setHasLunchTime(false);
+        }
+      } else {
+        setHasLunchTime(false);
+      }
+    } catch (error) {
+      console.error('Error loading current_marca for SlideMenu:', error);
+      applyMarcaSnapshot(null);
+    }
+  }, [applyMarcaSnapshot]);
+
+  React.useEffect(() => {
+    const onMarcaUpdated = (marca?: unknown) => {
+      if (marca && typeof marca === 'object') {
+        applyMarcaSnapshot(marca as any);
+      } else {
+        void loadCurrentMarcaFromStorage();
+      }
+    };
+
+    const onModulesReleaseUpdated = (modules?: unknown) => {
+      if (Array.isArray(modules)) {
+        applyModulesReleaseSnapshot(modules);
+        return;
+      }
+      void reloadModulesReleaseFromStorage();
+    };
+
+    eventBus.on(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+    eventBus.on(MODULES_RELEASE_UPDATED_EVENT, onModulesReleaseUpdated);
+
+    return () => {
+      eventBus.off(CURRENT_MARCA_UPDATED_EVENT, onMarcaUpdated);
+      eventBus.off(MODULES_RELEASE_UPDATED_EVENT, onModulesReleaseUpdated);
+    };
+  }, [
+    applyMarcaSnapshot,
+    applyModulesReleaseSnapshot,
+    loadCurrentMarcaFromStorage,
+    reloadModulesReleaseFromStorage,
+  ]);
 
   React.useEffect(() => {
     if (isVisible) {
@@ -43,6 +152,10 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
         duration: 300,
         useNativeDriver: true,
       }).start();
+      setModulesReleaseReady(false);
+      void loadCurrentMarcaFromStorage();
+      void reloadModulesReleaseFromStorage();
+      setIsUserSuperAdmin(employee?.isSuperAdmin || false);
     } else {
       Animated.timing(slideAnim, {
         toValue: MENU_WIDTH,
@@ -50,10 +163,11 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
         useNativeDriver: true,
       }).start(() => {
         setShouldRender(false);
+        setModulesReleaseReady(false);
       });
     }
-    fetchPermissions();
-  }, [isVisible, slideAnim]);
+    //fetchPermissions();
+  }, [isVisible, slideAnim, employee?.isSuperAdmin, loadCurrentMarcaFromStorage, reloadModulesReleaseFromStorage]);
 
   const handleLogout = () => {
     Alert.alert(
@@ -102,25 +216,57 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
     if (!apiUrl) {
       throw new Error('Server URL not configured');
     }
-    // El id del usuario actual
-    const userId = user?.id;
-    const response = await fetch(`${apiUrl}/api/check-permissions?id=${userId}&actions=acciones`, {
+
+    let token = await AsyncStorage.getItem('access_token');
+
+    // Try to refresh token if we don't have one
+    if (!token) {
+      const refreshed = await refreshAccessToken();
+      if (!refreshed) {
+        throw new Error('No valid authentication token');
+      }
+      token = await AsyncStorage.getItem('access_token');
+    }
+
+    // El id del empleado actual
+    const employeeId = employee?.id;
+    const response = await fetch(`${apiUrl}/api/check-permissions?id=${employeeId}&actions=contratos`, {
       method: 'GET',
       headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': '69420'
       },
     });
+
+    if (response.status === 401 || response.status === 403) {
+      // Token might be expired, try to refresh
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        // Retry the request with the new token
+        return fetchPermissions();
+      } else {
+        // If refresh fails, logout the user
+        Alert.alert('4', 'Sesión expirada. Por favor inicie sesión nuevamente.');
+        await logout();
+      }
+    }
+
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     const data = await response.json();
-    
+
     setPermissions(data.filter((permission: Permission) => permission.nombre == 'acciones')[0]);
   };
 
   const handleProfilePress = () => {
     onClose();
-    onProfilePress();
+    if (onProfilePress) {
+      onProfilePress();
+    } else {
+      navigation.navigate('EmployeeProfile');
+    }
   };
 
   const handleHomePress = () => {
@@ -137,35 +283,317 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
 
   const handleRolesPress = () => {
     onClose();
-    router.push('roles' as any);
+    navigation.navigate('Roles');
   };
 
   const handleRulesPress = () => {
     onClose();
-    router.push('/rules');
+    navigation.navigate('Rules');
+  };
+
+  const handleLunchTimePress = () => {
+    onClose();
+    navigation.navigate('LunchTime');
+  };
+
+  const handleDigitalSignaturePress = () => {
+    onClose();
+    navigation.navigate('DigitalSignature');
+  };
+
+  const handleTrasladoPlazasPress = () => {
+    onClose();
+    navigation.navigate('TrasladoPlazas');
+  };
+
+  const handleMarcarIngresoSalidaPress = () => {
+    onClose();
+    navigation.navigate('MarcarIngresoSalida');
+  };
+
+  const handleNotesPress = () => {
+    onClose();
+    navigation.navigate('Notes');
+  };
+
+  const handleActivitiesPress = () => {
+    onClose();
+    navigation.navigate('Activities');
+  };
+
+  const handleVehiclesPress = () => {
+    onClose();
+    navigation.navigate('Vehicles');
+  };
+
+  const handleVisitorsPress = () => {
+    onClose();
+    navigation.navigate('Visitors');
+  };
+
+  const handleReportesPress = () => {
+    onClose();
+    navigation.navigate('Reportes');
+  };
+
+  const handleEvaluationsPress = () => {
+    onClose();
+    navigation.navigate('StaffEvaluations');
+  };
+
+  const handleIncidentsPress = () => {
+    onClose();
+    navigation.navigate('Incidents');
+  };
+
+  const handleMutuosAcuerdosPress = () => {
+    onClose();
+    navigation.navigate('MutuosAcuerdos');
+  };
+
+  const handleBitacoraVehiculosDetenidosPress = () => {
+    onClose();
+    navigation.navigate('BitacoraVehiculosDetenidos');
+  };
+
+  const handleLlavesPress = () => {
+    onClose();
+    navigation.navigate('Llaves');
+  };
+
+  const handleMantenimientoEquipoPress = () => {
+    onClose();
+    navigation.navigate('MantenimientoEquipo');
+  };
+
+  const handleApreciacionVulnerabilidadPress = () => {
+    onClose();
+    navigation.navigate('ApreciacionVulnerabilidad');
+  };
+
+  const handleDocumentosEntregadosPress = () => {
+    onClose();
+    navigation.navigate('DocumentosEntregados');
+  };
+
+  const handleSurveysPress = () => {
+    onClose();
+    navigation.navigate('SatisfactionSurveys');
+  };
+
+  const handleTrainingsPress = () => {
+    onClose();
+    navigation.navigate('Trainings');
+  };
+
+  const handleVoiceNotesPress = () => {
+    onClose();
+    navigation.navigate('VoiceNotes');
+  };
+
+  const handleJobManualsPress = () => {
+    onClose();
+    navigation.navigate('JobManuals');
+  };
+
+  const handleComplaintsMasterPress = () => {
+    onClose();
+    navigation.navigate('ComplaintsMaster');
+  };
+
+  const handleNonConformingProductPress = () => {
+    onClose();
+    navigation.navigate('NonConformingProduct');
+  };
+
+  const handleCorporateVehiclesPress = () => {
+    onClose();
+    navigation.navigate('CorporateVehicles');
+  };
+
+  const handleInductionTourRecordPress = () => {
+    onClose();
+    navigation.navigate('InductionTourRecord');
+  };
+
+  const handleGeneralInductionRegisterPress = () => {
+    onClose();
+    navigation.navigate('GeneralInductionRegister');
+  };
+
+  const handlePhysicalMinuteAgendaPress = () => {
+    onClose();
+    navigation.navigate('PhysicalMinuteAgenda');
+  };
+
+  const handleChecklistSupervisionPress = () => {
+    onClose();
+    navigation.navigate('ChecklistSupervision');
+  };
+
+  const handlePermitRequestPress = () => {
+    onClose();
+    navigation.navigate('PermitRequest');
+  };
+
+  const handleAttendanceControlPress = () => {
+    onClose();
+    navigation.navigate('AttendanceControl');
+  };
+
+  const handleOpeningClosingPositionPress = () => {
+    onClose();
+    navigation.navigate('OpeningClosingPosition');
+  };
+
+  const handleActaEntregaProductosPress = () => {
+    onClose();
+    navigation.navigate('ActaEntregaProductos');
+  };
+
+  const handleEntregaPuestosPress = () => {
+    onClose();
+    navigation.navigate('EntregaPuestos');
+  };
+
+  const handlePuestoUbicacionPress = () => {
+    onClose();
+    navigation.navigate('PuestoUbicacion');
+  };
+
+  const handleJerarquiaPress = () => {
+    onClose();
+    navigation.navigate('Jerarquia');
+  };
+
+  const handleNomencladoresPress = () => {
+    onClose();
+    navigation.navigate('Nomencladores');
+  };
+
+  const handleModuleVisibilityPress = () => {
+    onClose();
+    navigation.navigate('ModuleVisibility');
+  };
+
+  const handleSuperAdminsPress = () => {
+    onClose();
+    navigation.navigate('SuperAdmins');
   };
 
   const isActiveRoute = (route: string) => {
     return currentRoute === route;
   };
 
+  const hasPermissionRole = (roles: string[]) => {
+    //return true;
+    // roles será un array de strings con los nombres de los roles que tendrán permitidos y el sistema deberá verificar si la variable role está en el array de roles
+    return roles.some((roleArray: string) => role === roleArray);
+  };
+
+  const hasPermissionDivision = (divisions: string[]) => {
+    //return true;
+    // divisions será un array de strings con los nombres de las divisiones que tendrán permitidos y el sistema deberá verificar si la variable division está en el array de divisions
+    return divisions.some((divisionArray: string) => division === divisionArray);
+  };
+
+  const hasActiveCurrentMarca = (roles: string[]) => {
+    //return true;
+    const isRole = roles.some((roleArray: string) => role === roleArray);
+    if (!isRole) {
+      return true;
+    }
+    return hasCurrentMarca;
+  };
+
+  /** Entrega de Puestos: solo visible si la marca actual tiene entrada digitada y aún no tiene salida digitada. */
+  const hasMarcaEntradaSinSalida = () => {
+    if (!currentMarca) return false;
+    return currentMarca.hora_entrada_digitada != null && currentMarca.hora_salida_digitada == null;
+  };
+
   if (!shouldRender) {
     return null;
+  }
+
+  const getActionIcon = (action: string, isActive: boolean) => {
+    switch (action.toLowerCase()) {
+      case 'home': return <Ionicons name="home-sharp" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'profile': return <Ionicons name="person" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'lunch-time': return <Ionicons name="hourglass" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'digital-signature': return <Ionicons name="finger-print" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'marcar-ingreso-salida': return <Ionicons name="time" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'notes': return <Ionicons name="document" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'activities': return <Ionicons name="list" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'vehicles': return <Ionicons name="car" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'visitors': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'staffevaluations': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'incidents': return <Ionicons name="warning" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'mutuos-acuerdos': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'non-conforming-product': return <Ionicons name="alert-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'corporate-vehicles': return <Ionicons name="bus" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'bitacora-vehiculos-detenidos': return <Ionicons name="build" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'llaves': return <Ionicons name="key" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'mantenimiento-equipo': return <Ionicons name="construct" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'entrega-puestos': return <Ionicons name="briefcase" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'documentos-entregados': return <Ionicons name="file-tray-full" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'apreciacion-vulnerabilidad': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'surveys': return <Ionicons name="mail" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'trainings': return <Ionicons name="school" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'voice-notes': return <Ionicons name="mic" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'job-manuals': return <Ionicons name="book" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'complaints-master': return <Ionicons name="chatbubbles" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'induction-tour-record': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'general-induction-register': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'attendance-control': return <Ionicons name="people" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'permit-request': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'opening-closing-position': return <Ionicons name="business" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'acta-entrega-productos': return <Ionicons name="clipboard" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'physical-minute-agenda': return <Ionicons name="document-text" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'checklist-supervision': return <Ionicons name="checkmark-circle" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'puesto-ubicacion': return <Ionicons name="location" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'jerarquia': return <Ionicons name="git-network" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'nomencladores': return <Ionicons name="albums" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'module-visibility': return <Ionicons name="eye" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'super-admins': return <Ionicons name="shield-checkmark" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'traslado-plazas': return <Ionicons name="swap-horizontal" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'reportes': return <Ionicons name="bar-chart" size={20} color={isActive ? '#007AFF' : '#000000'} />;
+      case 'logout': return <Ionicons name="log-out" size={20} color={isActive ? '#007AFF' : '#ffffff'} />;
+    }
+  };
+
+  const releaseAction = (module: string) => {
+
+    if (employee && employee.isSuperAdmin) {
+      //setIsUserSuperAdmin(true);
+      return true;
+    }
+
+    if (!modulesReleaseReady) {
+      return true;
+    }
+
+    const moduleFind = modulesRelease.find((m: any) => m.module_name === module);
+    if (moduleFind) {
+      //return true;
+      return moduleFind.is_visible;
+    }
+    return false;
   }
 
   return (
     <>
       {/* Overlay */}
-      <TouchableOpacity 
-        style={styles.overlay} 
-        activeOpacity={1} 
+      <TouchableOpacity
+        style={styles.overlay}
+        activeOpacity={1}
         onPress={onClose}
       />
-      
+
       {/* Slide Menu */}
-      <Animated.View 
+      <Animated.View
         style={[
-          styles.menuContainer, 
+          styles.menuContainer,
           { transform: [{ translateX: slideAnim }] }
         ]}
       >
@@ -173,27 +601,35 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
           {/* Header Section */}
           <ThemedView style={styles.headerSection}>
             <ThemedText type="title" style={styles.appTitle}>
-              Gonzalez App
+              MonitoreApp
             </ThemedText>
-            {user && (
+            {employee && (
               <ThemedView style={styles.userInfo}>
-                <ThemedText style={styles.userName}>{user.name}</ThemedText>
-                <ThemedText style={styles.userEmail}>{user.email}</ThemedText>
+                <ThemedText style={styles.userName}>{employee.name}</ThemedText>
+                <ThemedText style={styles.userEmail}>{employee.email}</ThemedText>
               </ThemedView>
             )}
           </ThemedView>
 
           {/* Menu Options */}
-          <ThemedView style={styles.menuOptions}>
+          <ScrollView style={styles.menuOptions} contentContainerStyle={styles.menuOptionsContent}>
             {/* Basic Menu Items */}
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[
-                styles.menuItem, 
+                styles.menuItem,
                 isActiveRoute('home') && styles.activeMenuItem
-              ]} 
+              ]}
               onPress={handleHomePress}
             >
-              <ThemedText 
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('home') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('home', isActiveRoute('home'))}
+              </ThemedText>
+              <ThemedText
                 style={[
                   styles.menuItemText,
                   isActiveRoute('home') && styles.activeMenuItemText
@@ -202,37 +638,1076 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
                 Inicio
               </ThemedText>
             </TouchableOpacity>
-            <TouchableOpacity 
+
+            <TouchableOpacity
               style={[
-                styles.menuItem, 
-                isActiveRoute('profile') && styles.activeMenuItem
-              ]} 
+                styles.menuItem,
+                isActiveRoute('EmployeeProfile') && styles.activeMenuItem
+              ]}
               onPress={handleProfilePress}
             >
-              <ThemedText 
+              <ThemedText
                 style={[
                   styles.menuItemText,
-                  isActiveRoute('profile') && styles.activeMenuItemText
+                  isActiveRoute('EmployeeProfile') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('profile', isActiveRoute('EmployeeProfile'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('EmployeeProfile') && styles.activeMenuItemText
                 ]}
               >
                 Perfil de Usuario
               </ThemedText>
             </TouchableOpacity>
 
-            {/* Collapsible Sections */}
-            <ThemedView style={styles.collapsibleSection}>
-              {/* Configuraciones Section */}
-              <TouchableOpacity 
-                style={styles.sectionHeader} 
-                onPress={() => toggleSection('configuraciones')}
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('marcar-ingreso-salida') && styles.activeMenuItem
+              ]}
+              onPress={handleMarcarIngresoSalidaPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('marcar-ingreso-salida') && styles.activeMenuItemText
+                ]}
               >
-                <ThemedText style={styles.sectionHeaderText}>Configuraciones</ThemedText>
-                <ThemedText style={styles.sectionArrow}>
-                  {expandedSections['configuraciones'] ? '▼' : '▶'}
+                {getActionIcon('marcar-ingreso-salida', isActiveRoute('marcar-ingreso-salida'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('marcar-ingreso-salida') && styles.activeMenuItemText
+                ]}
+              >
+                Marcar Ingreso/Salida
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('digital-signature') && styles.activeMenuItem
+              ]}
+              onPress={handleDigitalSignaturePress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('digital-signature') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('digital-signature', isActiveRoute('digital-signature'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('digital-signature') && styles.activeMenuItemText
+                ]}
+              >
+                Mi Firma Digital
+              </ThemedText>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.menuItem,
+                isActiveRoute('Jerarquia') && styles.activeMenuItem
+              ]}
+              onPress={handleJerarquiaPress}
+            >
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                ]}
+              >
+                {getActionIcon('jerarquia', isActiveRoute('Jerarquia'))}
+              </ThemedText>
+              <ThemedText
+                style={[
+                  styles.menuItemText,
+                  isActiveRoute('Jerarquia') && styles.activeMenuItemText
+                ]}
+              >
+                Jerarquía
+              </ThemedText>
+            </TouchableOpacity>
+
+            {/* AQUÍ DEBE IR EL ENLACE AL MÓDULO DE VISIBILIDAD DE MÓDULOS */}
+
+            {isUserSuperAdmin && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ModuleVisibility') && styles.activeMenuItem
+                ]}
+                onPress={handleModuleVisibilityPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ModuleVisibility') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('module-visibility', isActiveRoute('ModuleVisibility'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ModuleVisibility') && styles.activeMenuItemText
+                  ]}
+                >
+                  Visibilidad de módulos
                 </ThemedText>
               </TouchableOpacity>
-              
-              {expandedSections['configuraciones'] && (
+            )}
+
+            {isUserSuperAdmin && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('SuperAdmins') && styles.activeMenuItem
+                ]}
+                onPress={handleSuperAdminsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SuperAdmins') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('super-admins', isActiveRoute('SuperAdmins'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SuperAdmins') && styles.activeMenuItemText
+                  ]}
+                >
+                  Super admins
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            <ThemedView style={styles.menuSeparator} />
+
+            {releaseAction('acta-entrega-productos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Aseo y Limpieza', 'Administrativos']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ActaEntregaProductos') && styles.activeMenuItem
+                ]}
+                onPress={handleActaEntregaProductosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('acta-entrega-productos', isActiveRoute('ActaEntregaProductos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ActaEntregaProductos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Acta de entrega de productos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('activities') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Activities') && styles.activeMenuItem
+                ]}
+                onPress={handleActivitiesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Activities') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('activities', isActiveRoute('Activities'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Activities') && styles.activeMenuItemText
+                  ]}
+                >
+                  Actividades
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('physical-minute-agenda') && hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItem
+                ]}
+                onPress={handlePhysicalMinuteAgendaPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('physical-minute-agenda', isActiveRoute('PhysicalMinuteAgenda'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PhysicalMinuteAgenda') && styles.activeMenuItemText
+                  ]}
+                >
+                  Agenda minuta
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('opening-closing-position') && hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('OpeningClosingPosition') && styles.activeMenuItem
+                ]}
+                onPress={handleOpeningClosingPositionPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('opening-closing-position', isActiveRoute('OpeningClosingPosition'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('OpeningClosingPosition') && styles.activeMenuItemText
+                  ]}
+                >
+                  Apertura-Cierre de Puesto
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('apreciacion-vulnerabilidad') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItem
+                ]}
+                onPress={handleApreciacionVulnerabilidadPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('apreciacion-vulnerabilidad', isActiveRoute('ApreciacionVulnerabilidad'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ApreciacionVulnerabilidad') && styles.activeMenuItemText
+                  ]}
+                >
+                  Apreciación de vulnerabilidad
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('traslado-plazas') && hasCurrentMarca && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('TrasladoPlazas') && styles.activeMenuItem
+                ]}
+                onPress={handleTrasladoPlazasPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('TrasladoPlazas') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('traslado-plazas', isActiveRoute('TrasladoPlazas'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('TrasladoPlazas') && styles.activeMenuItemText
+                  ]}
+                >
+                  Archivos de acciones
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('notes') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Notes') && styles.activeMenuItem
+                ]}
+                onPress={handleNotesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Notes') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('notes', isActiveRoute('Notes'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Notes') && styles.activeMenuItemText
+                  ]}
+                >
+                  Bitácora de Novedades
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('checklist-supervision') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ChecklistSupervision') && styles.activeMenuItem
+                ]}
+                onPress={handleChecklistSupervisionPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ChecklistSupervision') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('checklist-supervision', isActiveRoute('ChecklistSupervision'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ChecklistSupervision') && styles.activeMenuItemText
+                  ]}
+                >
+                  Checklist de Supervisión
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('attendance-control') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && hasPermissionDivision(['Administrativos', 'Seguridad', 'Aseo y Limpieza']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('AttendanceControl') && styles.activeMenuItem
+                ]}
+                onPress={handleAttendanceControlPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('attendance-control', isActiveRoute('AttendanceControl'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('AttendanceControl') && styles.activeMenuItemText
+                  ]}
+                >
+                  Control de Asistencia
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('documentos-entregados') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('DocumentosEntregados') && styles.activeMenuItem
+                ]}
+                onPress={handleDocumentosEntregadosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('DocumentosEntregados') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('documentos-entregados', isActiveRoute('DocumentosEntregados'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('DocumentosEntregados') && styles.activeMenuItemText
+                  ]}
+                >
+                  Documentos entregados
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('surveys') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionRole(['SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('SatisfactionSurveys') && styles.activeMenuItem
+                ]}
+                onPress={handleSurveysPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('surveys', isActiveRoute('SatisfactionSurveys'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('SatisfactionSurveys') && styles.activeMenuItemText
+                  ]}
+                >
+                  Encuestas de Satisfacción
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('entrega-puestos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasMarcaEntradaSinSalida() && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('EntregaPuestos') && styles.activeMenuItem
+                ]}
+                onPress={handleEntregaPuestosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('entrega-puestos', isActiveRoute('EntregaPuestos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('EntregaPuestos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Entrega de Puestos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+
+            {/* Estamos aquí */}
+            {releaseAction('mantenimiento-equipo') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('MantenimientoEquipo') && styles.activeMenuItem
+                ]}
+                onPress={handleMantenimientoEquipoPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('mantenimiento-equipo', isActiveRoute('MantenimientoEquipo'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MantenimientoEquipo') && styles.activeMenuItemText
+                  ]}
+                >
+                  Equipo del puesto
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('staffEvaluations') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('StaffEvaluations') && styles.activeMenuItem
+                ]}
+                onPress={handleEvaluationsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('staffEvaluations', isActiveRoute('StaffEvaluations'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('StaffEvaluations') && styles.activeMenuItemText
+                  ]}
+                >
+                  Evaluación de personal
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('incidents') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Incidents') && styles.activeMenuItem
+                ]}
+                onPress={handleIncidentsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Incidents') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('incidents', isActiveRoute('Incidents'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Incidents') && styles.activeMenuItemText
+                  ]}
+                >
+                  Incidentes
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('llaves') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Llaves') && styles.activeMenuItem
+                ]}
+                onPress={handleLlavesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Llaves') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('llaves', isActiveRoute('Llaves'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Llaves') && styles.activeMenuItemText
+                  ]}
+                >
+                  Llaves
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('complaints-master') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('ComplaintsMaster') && styles.activeMenuItem
+                ]}
+                onPress={handleComplaintsMasterPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('complaints-master', isActiveRoute('ComplaintsMaster'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('ComplaintsMaster') && styles.activeMenuItemText
+                  ]}
+                >
+                  Maestro de Quejas y reclamos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('job-manuals') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('JobManuals') && styles.activeMenuItem
+                ]}
+                onPress={handleJobManualsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  Manuales de Trabajo
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('mutuos-acuerdos') && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('MutuosAcuerdos') && styles.activeMenuItem
+                ]}
+                onPress={handleMutuosAcuerdosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('mutuos-acuerdos', isActiveRoute('MutuosAcuerdos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('MutuosAcuerdos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Mutuos acuerdos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {isUserSuperAdmin && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Nomencladores') && styles.activeMenuItem
+                ]}
+                onPress={handleNomencladoresPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Nomencladores') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('nomencladores', isActiveRoute('Nomencladores'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Nomencladores') && styles.activeMenuItemText
+                  ]}
+                >
+                  Nomencladores
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('voice-notes') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('VoiceNotes') && styles.activeMenuItem
+                ]}
+                onPress={handleVoiceNotesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('VoiceNotes') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('voice-notes', isActiveRoute('VoiceNotes'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('VoiceNotes') && styles.activeMenuItemText
+                  ]}
+                >
+                  Notas de Voz
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('non-conforming-product') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('NonConformingProduct') && styles.activeMenuItem
+                ]}
+                onPress={handleNonConformingProductPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('NonConformingProduct') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('non-conforming-product', isActiveRoute('NonConformingProduct'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('NonConformingProduct') && styles.activeMenuItemText
+                  ]}
+                >
+                  Producto no conforme
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('trainings') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Trainings') && styles.activeMenuItem
+                ]}
+                onPress={handleTrainingsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('trainings', isActiveRoute('Trainings'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Trainings') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de Capacitaciones
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('induction-tour-record') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('InductionTourRecord') && styles.activeMenuItem
+                ]}
+                onPress={handleInductionTourRecordPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('InductionTourRecord') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('induction-tour-record', isActiveRoute('InductionTourRecord'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('InductionTourRecord') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de Induc. y Recorrd.
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('visitors') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Visitors') && styles.activeMenuItem
+                ]}
+                onPress={handleVisitorsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('visitors', isActiveRoute('Visitors'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Visitors') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de personas
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('reportes') && hasCurrentMarca && (hasPermissionRole(['ADMINISTRATIVO'])) && (
+              <TouchableOpacity
+                style={[styles.menuItem, isActiveRoute('Reportes') && styles.activeMenuItem]}
+                onPress={handleReportesPress}
+              >
+                <ThemedText
+                  style={[styles.menuItemText, isActiveRoute('Reportes') && styles.activeMenuItemText]}
+                >
+                  {getActionIcon('reportes', isActiveRoute('Reportes'))}
+                </ThemedText>
+                <ThemedText
+                  style={[styles.menuItemText, isActiveRoute('Reportes') && styles.activeMenuItemText]}
+                >
+                  Reportes
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('corporate-vehicles') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Administrativos', 'Seguridad']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('CorporateVehicles') && styles.activeMenuItem
+                ]}
+                onPress={handleCorporateVehiclesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('corporate-vehicles', isActiveRoute('CorporateVehicles'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('CorporateVehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro de vehículos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('general-induction-register') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('GeneralInductionRegister') && styles.activeMenuItem
+                ]}
+                onPress={handleGeneralInductionRegisterPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('GeneralInductionRegister') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('general-induction-register', isActiveRoute('GeneralInductionRegister'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('GeneralInductionRegister') && styles.activeMenuItemText
+                  ]}
+                >
+                  Registro Inducción General
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('bitacora-vehiculos-detenidos') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItem
+                ]}
+                onPress={handleBitacoraVehiculosDetenidosPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('bitacora-vehiculos-detenidos', isActiveRoute('BitacoraVehiculosDetenidos'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('BitacoraVehiculosDetenidos') && styles.activeMenuItemText
+                  ]}
+                >
+                  Revisión de vehículos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('permit-request') && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('PermitRequest') && styles.activeMenuItem
+                ]}
+                onPress={handlePermitRequestPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('permit-request', isActiveRoute('PermitRequest'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PermitRequest') && styles.activeMenuItemText
+                  ]}
+                >
+                  Solicitud de permiso
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('lunch-time') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('lunch-time') && styles.activeMenuItem
+                ]}
+                onPress={handleLunchTimePress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('lunch-time') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('lunch-time', isActiveRoute('lunch-time'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('lunch-time') && styles.activeMenuItemText
+                  ]}
+                >
+                  Tiempo de alimentación
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('puesto-ubicacion') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && hasPermissionRole(['ADMINISTRATIVO', 'SUPERVISOR']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('PuestoUbicacion') && styles.activeMenuItem
+                ]}
+                onPress={handlePuestoUbicacionPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('puesto-ubicacion', isActiveRoute('PuestoUbicacion'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('PuestoUbicacion') && styles.activeMenuItemText
+                  ]}
+                >
+                  Ubicación del puesto
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {releaseAction('vehicles') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && hasPermissionDivision(['Seguridad', 'Administrativos']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('Vehicles') && styles.activeMenuItem
+                ]}
+                onPress={handleVehiclesPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Vehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('vehicles', isActiveRoute('Vehicles'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('Vehicles') && styles.activeMenuItemText
+                  ]}
+                >
+                  Visitas de Vehículos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
+            {!releaseAction('home') && !hasCurrentMarca && (
+              <ThemedView style={styles.warningContainer}>
+                <ThemedText
+                  style={[
+                    styles.warningText,
+                  ]}
+                >
+                  {getActionIcon('warning', false)}
+                  Si desea ver las opciones de este menú, debes estar en un turno activo.
+                </ThemedText>
+              </ThemedView>
+            )}
+
+            {false && (
+              <ThemedView style={styles.collapsibleSection}>
+                {/* Configuraciones Section */}
+                <TouchableOpacity
+                  style={styles.sectionHeader}
+                  onPress={() => toggleSection('configuraciones')}
+                >
+                  <ThemedText style={styles.sectionHeaderText}>Configuraciones</ThemedText>
+                  <ThemedText style={styles.sectionArrow}>
+                    {expandedSections['configuraciones'] ? '▼' : '▶'}
+                  </ThemedText>
+                </TouchableOpacity>
+
+                {/*expandedSections['configuraciones'] && (
                 <ThemedView style={styles.sectionContent}>
                   <TouchableOpacity 
                     style={[
@@ -267,14 +1742,15 @@ export default function SlideMenu({ isVisible, onClose, onProfilePress, onHomePr
                     </ThemedText>
                   </TouchableOpacity>
                 </ThemedView>
-              )}
-            </ThemedView>
-          </ThemedView>
+              )*/}
+              </ThemedView>
+            )}
+          </ScrollView>
 
           {/* Logout Section at Bottom */}
           <ThemedView style={styles.logoutSection}>
             <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-              <ThemedText style={styles.logoutButtonText}>🚪 Cerrar Sesión</ThemedText>
+              <ThemedText style={styles.logoutButtonText}>{getActionIcon('logout', false)} Cerrar Sesión</ThemedText>
             </TouchableOpacity>
           </ThemedView>
         </ThemedView>
@@ -344,17 +1820,28 @@ const styles = StyleSheet.create({
   },
   menuOptions: {
     flex: 1,
+  },
+  menuOptionsContent: {
     paddingTop: 20,
     paddingBottom: 20,
   },
   menuItem: {
+    display: 'flex',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderBottomWidth: 1
   },
   menuItemText: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  menuSeparator: {
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginVertical: 8,
+    marginHorizontal: 20,
   },
   collapsibleSection: {
     marginTop: 10,
@@ -376,7 +1863,7 @@ const styles = StyleSheet.create({
     color: '#666666',
   },
   sectionContent: {
-    
+
   },
   subMenuItem: {
     paddingHorizontal: 40,
@@ -449,5 +1936,19 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#333333',
     textAlign: 'center',
+  },
+  warningContainer: {
+    margin: 10,
+    padding: 20,
+    borderRadius: 8,
+    backgroundColor: '#FFF3CD',
+    borderWidth: 1,
+    borderColor: '#FFEEBA',
+  },
+  warningText: {
+    fontSize: 16,
+    color: '#FF3B30',
+    textAlign: 'center',
+    lineHeight: 24,
   },
 });

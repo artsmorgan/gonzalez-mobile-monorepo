@@ -1,0 +1,15 @@
+id: F-001
+module_id: surveys
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "7077-7097"
+category: offline
+title: Create dequeues sin server id
+description: |
+  result.status true dequeues aunque newId inválido; draft removido de cache.
+reproduction: |
+  1. Offline create → sync status:true sin data.id.
+impact: Encuesta desaparece de UI sin fila servidor.
+suggested_fix: |
+  Dequeue solo si newId válido.

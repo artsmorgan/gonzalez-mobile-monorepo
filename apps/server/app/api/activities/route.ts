@@ -1,67 +1,169 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { sendNotificationByPlaza, fetchActivePlazaIdsForPuestos } from "../../../utils/sendNotification";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
+import { reportError } from "../../../utils/reportError";
 
-const prisma = new PrismaClient();
+export async function GET(req: NextRequest) {
+    try {
+        return NextResponse.json({ status: true, message: "Método GET" }, { status: 200 });
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/activities", "GET", 500, errorMessage);
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const { actividad_id, marca_id, empleado_id, estado, bitacora } = await req.json();
+        const { marca_id, nombre_actividad, fecha_inicio, fecha_fin, frecuencia, es_revision_equipo, descripcion_actividad, reglas, puestos_plazas, firma_responsable } = await req.json();
 
-        const actividad = await prisma.e_actividad_corpo.findUnique({ where: { id: actividad_id } });
-        if (!actividad) {
-            return NextResponse.json({ status: false, message: "Actividad no encontrada" }, { status: 200 });
+        if (!marca_id || !nombre_actividad || !fecha_inicio || !frecuencia || es_revision_equipo === undefined || !descripcion_actividad || !reglas || !firma_responsable) {
+            console.log("marca_id", marca_id);
+            console.log("nombre_actividad", nombre_actividad);
+            console.log("fecha_inicio", fecha_inicio);
+            console.log("fecha_fin", fecha_fin);
+            console.log("frecuencia", frecuencia);
+            console.log("es_revision_equipo", es_revision_equipo);
+            console.log("descripcion_actividad", descripcion_actividad);
+            console.log("reglas", reglas);
+            console.log("puestos_plazas", puestos_plazas);
+            console.log("firma_responsable", firma_responsable);
+            console.log("--------------------------------");
+            await reportError(req, "api/activities", "POST", 500, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 500 });
         }
 
         const marca = await prisma.c_marca_dia.findUnique({ where: { id: marca_id } });
         if (!marca) {
-            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 200 });
+            await reportError(req, "api/activities", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
         }
 
-        if (!marca.hora_inicio || !marca.hora_fin) {
-            return NextResponse.json({ status: false, message: "Hora de inicio o fin no establecida" }, { status: 200 });
-        }
+        const actividad = await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "e_actividades",
+                data: {
+                    nombre_actividad: nombre_actividad,
+                    fecha_inicio: new Date(fecha_inicio).toISOString(),
+                    fecha_fin: fecha_fin ? new Date(fecha_fin).toISOString() : new Date(fecha_inicio).toISOString(),
+                    frecuencia: frecuencia,
+                    es_revision_equipo: es_revision_equipo,
+                    descripcion_actividad: descripcion_actividad,
+                    firma_responsable: firma_responsable,
+                }
+            }
+        });
 
-        const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
-        if (!empleado) {
-            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 200 });
-        }
+        if (actividad) {
+            let plazas_ids: number[] = [];
+            const puestos_plazas_parse =
+                typeof puestos_plazas === "string"
+                    ? (Array.isArray(JSON.parse(puestos_plazas || "[]")) ? JSON.parse(puestos_plazas || "[]") : [])
+                    : (Array.isArray(puestos_plazas) ? puestos_plazas : []);
+            const uniquePuestoIds = Array.from(
+                new Set(
+                    puestos_plazas_parse
+                        .map((p: any) => Number(p?.puesto_id))
+                        .filter((v: number) => Number.isFinite(v) && v > 0)
+                )
+            );
 
-        const fecha_inicio = new Date(marca.fecha);
-        fecha_inicio.setHours(marca.hora_inicio.getHours(), marca.hora_inicio.getMinutes(), marca.hora_inicio.getSeconds(), marca.hora_inicio.getMilliseconds());
-        const fecha_fin = toZonedTime(new Date(), "America/Costa_Rica");
+            // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
+            const existingPuestos = uniquePuestoIds.length > 0
+                ? await prisma.e_estructura_puesto.findMany({
+                    where: { id: { in: uniquePuestoIds as number[] } },
+                    select: { id: true },
+                })
+                : [];
 
-        if (estado === "marcar") {
-            const marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
-            if (marcada) {
-                return NextResponse.json({ status: false, message: "Actividad ya marcada" }, { status: 200 });
+            const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
+            const confirmedPuestoIds = Array.from(
+                new Set(
+                    existingPuestosArray
+                        .map((p: any) => Number(p?.id))
+                        .filter((v: number) => Number.isFinite(v) && v > 0)
+                )
+            );
+
+            // 2) Crear relación actividad-puesto en un solo createMany con ids confirmados
+            if (confirmedPuestoIds.length > 0) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "e_actividades_puesto",
+                        operation: "createMany",
+                        many: true,
+                        data: confirmedPuestoIds.map((puesto_id: number) => ({
+                            actividad_id: actividad.id,
+                            puesto_id,
+                        })),
+                    },
+                });
             }
 
-            await prisma.e_actividad_corpo_marcada.create({ data: { actividadCorpo_id: actividad_id, empleado_id: empleado_id, bitacora: bitacora, created_at: toZonedTime(new Date(), "America/Costa_Rica"), updated_at: toZonedTime(new Date(), "America/Costa_Rica"), e_actividad_corpo: { connect: { id: actividad_id } } } });
-
-            return NextResponse.json({ status: true, message: "Actividad marcada correctamente" }, { status: 200 });
-        }
-        else {
-            const marcada = await prisma.e_actividad_corpo_marcada.findFirst({ where: { actividadCorpo_id: actividad_id, created_at: { gte: fecha_inicio, lte: fecha_fin } } });
-            if (!marcada) {
-                return NextResponse.json({ status: false, message: "Actividad no marcada" }, { status: 200 });
+            // 3) Plazas activas (misma lógica que main_structure_cache) para notificaciones
+            if (confirmedPuestoIds.length > 0) {
+                plazas_ids = await fetchActivePlazaIdsForPuestos(req, confirmedPuestoIds);
             }
-            await prisma.e_actividad_corpo_marcada.delete({ where: { id: marcada.id } });
 
-            return NextResponse.json({ status: true, message: "Actividad desmarcada correctamente" }, { status: 200 });
+            const frecuencia_parse = JSON.parse(frecuencia);
+            if (plazas_ids.length > 0) {
+                await sendNotificationByPlaza(
+                    req,
+                    marca_id,
+                    "Actividad asignada",
+                    `Se te ha asignado la actividad ${nombre_actividad}, la cual deberá realizarse "${frecuencia_parse.title}"`,
+                    plazas_ids
+                );
+            }
+
+            const createdBy = payload?.id ? Number(payload.id) : 0;
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    operation: "create",
+                    data: {
+                        nombre_tabla: "e_actividades",
+                        registro_id: actividad.id,
+                        cambios: JSON.stringify([{
+                            prop: "__created__",
+                            before: null,
+                            after: {
+                                id: actividad.id,
+                                nombre_actividad,
+                                descripcion_actividad,
+                                fecha_inicio,
+                                fecha_fin: fecha_fin || fecha_inicio,
+                                frecuencia,
+                                es_revision_equipo,
+                                firma_responsable,
+                                puestos_ids: confirmedPuestoIds,
+                            },
+                        }]),
+                        created_at: toZonedTime(new Date(), "America/Costa_Rica").toISOString(),
+                        created_by: createdBy,
+                    },
+                },
+            });
         }
+
+        return NextResponse.json({ status: true, message: "Actividad creada correctamente" }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log("errorMessage", errorMessage);
+        await reportError(req, "api/activities", "POST", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

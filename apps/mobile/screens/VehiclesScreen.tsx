@@ -1,0 +1,3592 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { StyleSheet, ScrollView, TouchableOpacity, TextInput, Text, Alert, ActivityIndicator, Modal, View, Platform, Image, Dimensions } from 'react-native';
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { useAuth } from '@/contexts/AuthContext';
+import AppHeader from '@/components/AppHeader';
+import AppFooter from '@/components/AppFooter';
+import SlideMenu from '@/components/SlideMenu';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../App';
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Picker } from '@react-native-picker/picker';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import PuestoSalidaPicker, { type PuestoSalidaOption } from '@/components/PuestoSalidaPicker';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import * as Network from 'expo-network';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import {
+  createVehicle as createVehicleAPI,
+  updateVehicle as updateVehicleAPI,
+  deleteVehicle as deleteVehicleAPI,
+  deleteVehicleAttachment as deleteVehicleAttachmentAPI,
+} from '@/hooks/vehiclesFunctions';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { saveFile, getFile, deleteFile, getLocalFileDisplayUri as getStoredFileDisplayUri } from '@/hooks/fileStorage';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { eventBus } from '@/hooks/eventBus';
+import authedFetch from '@/hooks/authedFetch';
+import {
+  filterVehiclesVisitasCacheForCorpo,
+  readVehiclesVisitasCacheRaw,
+  syncVehiclesVisitasCacheFromNetwork,
+  stripVehicleVisitasAttachmentForRow,
+} from '@/hooks/vehiclesVisitasCacheHelpers';
+
+type VehiclesScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Vehicles'>;
+
+interface Responsable {
+  id: number;
+  nombre: string;
+}
+
+interface Vehicle {
+  id: number;
+  tipo: 'Particular' | 'Institucional';
+  placa: string;
+  nombre_propietario: string;
+  cedula_propietario: string;
+  departamento_visita?: string;
+  persona_visita?: string;
+  hora_entrada: string;
+  hora_salida: string | null;
+  razon_visita: string;
+  responsable: Responsable;
+  created_at: string;
+  id_local: string;
+  base64_image: string;
+  /** Sucursal (`e_registro_vehiculos.corpo_id`) para caché / filtrado offline */
+  corpo_id?: number;
+  puesto_id?: number;
+  /** Puesto por donde el vehículo sale (puede diferir del puesto de ingreso). */
+  puesto_salida_id?: number | null;
+  puesto_salida?: PuestoSalidaOption | null;
+  empresa_id?: number;
+  cliente_id?: number;
+  division_id?: number;
+  contrato_id?: number;
+  file_name?: string | null;
+  local_attachment_file?: string | null;
+  isActive?: boolean;
+}
+
+type MainStructureSucursalNode = { id: number; nombre: string; puestos?: { id: number; nombre: string }[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+
+type HierarchyCorpoIds = {
+  empresaId: number;
+  clienteId: number;
+  divisionId: number;
+  contratoId: number;
+  corpoId: number;
+};
+
+type HierarchyFormIds = HierarchyCorpoIds & { puestoId: number };
+
+function numOrNull(v: unknown): number | null {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function getDivisionIdFromMarcaJson(marca: any): number | null {
+  const raw =
+    marca?.roleDivision?.division?.id ??
+    marca?.role_division?.division?.id ??
+    marca?.division?.id ??
+    marca?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function getClienteDivisionArray(cliente: MainStructureClienteNode | any): MainStructureDivisionNode[] {
+  if (!cliente) return [];
+  if (Array.isArray(cliente.division)) return cliente.division;
+  if (Array.isArray((cliente as any).divisiones)) return (cliente as any).divisiones;
+  return [];
+}
+
+function findHierarchyByCorpoIn(structureArr: MainStructureTree, corpoId: number): HierarchyCorpoIds | null {
+  const cid = Number(corpoId);
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            if (Number(sucursal.id) === cid) {
+              return {
+                empresaId: empresa.id,
+                clienteId: cliente.id,
+                divisionId: division.id,
+                contratoId: contrato.id,
+                corpoId: sucursal.id,
+              };
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function findHierarchyByPuestoIn(structureArr: MainStructureTree, puestoId: number): HierarchyFormIds | null {
+  const pid = Number(puestoId);
+  if (!Number.isFinite(pid) || pid <= 0) return null;
+  for (const empresa of structureArr || []) {
+    for (const cliente of empresa.clientes || []) {
+      for (const division of getClienteDivisionArray(cliente)) {
+        for (const contrato of division.contratos || []) {
+          for (const sucursal of contrato.sucursales || []) {
+            for (const puesto of sucursal.puestos || []) {
+              if (Number(puesto.id) === pid) {
+                return {
+                  empresaId: empresa.id,
+                  clienteId: cliente.id,
+                  divisionId: division.id,
+                  contratoId: contrato.id,
+                  corpoId: sucursal.id,
+                  puestoId: pid,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Extrae solo la parte base64 de una imagen (con o sin prefijo data:...;base64,) para enviar al servidor. Referencia: NonConformingProductScreen. */
+const getBase64Only = (imageValue: string | null | undefined): string => {
+  if (!imageValue || typeof imageValue !== 'string') return '';
+  const trimmed = imageValue.trim();
+  if (trimmed.length === 0) return '';
+  if (trimmed.includes(',')) {
+    const parts = trimmed.split(',');
+    return parts.length > 1 ? parts[1].trim() : parts[0].trim();
+  }
+  return trimmed;
+};
+
+/** URI para mostrar imagen en <Image />: acepta base64 crudo o data URL. */
+const getVehicleImageDisplayUri = (base64OrDataUrl: string | null | undefined): string | null => {
+  if (!base64OrDataUrl || typeof base64OrDataUrl !== 'string') return null;
+  const s = base64OrDataUrl.trim();
+  if (s.length === 0) return null;
+  if (s.startsWith('data:')) return s;
+  return `data:image/jpeg;base64,${s}`;
+};
+
+interface EditingVehicle {
+  id: number | null;
+  id_local: string;
+  tipo: 'Particular' | 'Institucional';
+  placa: string;
+  nombre_propietario: string;
+  cedula_propietario: string;
+  departamento_visita: string;
+  persona_visita: string;
+  fecha_entrada: string;
+  fecha_salida: string;
+  hora_entrada_h: string;
+  hora_entrada_m: string;
+  hora_salida_h: string;
+  hora_salida_m: string;
+  razon_visita: string;
+  base64_image?: string;
+}
+
+function stripQueuedVehicleUpdatesForVehicleId(actions: any[], vehicleId: number): any[] {
+  const id = Number(vehicleId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && Number(a.id) === id)
+  );
+}
+
+function stripQueuedVehicleDeletesForVehicleId(actions: any[], vehicleId: number): any[] {
+  const id = Number(vehicleId);
+  if (!Number.isFinite(id)) return actions;
+  return actions.filter(
+    (a: any) => !(a?.type === 'delete' && Number(a.id) === id)
+  );
+}
+
+function appendOfflineVehicleDelete(actions: any[], vehicleId: number): any[] {
+  let next = stripQueuedVehicleDeletesForVehicleId(actions, vehicleId);
+  next = stripQueuedVehicleUpdatesForVehicleId(next, vehicleId);
+  next.push({ id: vehicleId, type: 'delete' });
+  return next;
+}
+
+/** Evita filas `update` erróneas que reutilicen el id_local del borrador como id de vehículo. */
+function stripErroneousVehicleUpdatesForLocalQueueId(actions: any[], idLocal: string): any[] {
+  if (!idLocal) return actions;
+  const k = String(idLocal);
+  return actions.filter(
+    (a: any) => !(a?.type === 'update' && a.id != null && String(a.id) === k)
+  );
+}
+
+export default function VehiclesScreen() {
+  const { employee, refreshAccessToken, logout, accessToken } = useAuth();
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const navigation = useNavigation<VehiclesScreenNavigationProp>();
+  const appendTokenToUrl = (url: string) => {
+    if (!url) return '';
+    if (!accessToken || accessToken.trim().length === 0) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(accessToken)}`;
+  };
+
+  // Vehicles state
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  // Importante: "sin internet" NO cuenta como error (solo es un estado informativo)
+  const [offlineMessage, setOfflineMessage] = useState<string | null>(null);
+  const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+  const [roleName, setRoleName] = useState<string | null>(null);
+  const structureRef = useRef<MainStructureTree>([]);
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
+  const filterSucursalIdRef = useRef<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+
+  const [formEmpresaId, setFormEmpresaId] = useState<number | null>(null);
+  const [formClienteId, setFormClienteId] = useState<number | null>(null);
+  const [formDivisionId, setFormDivisionId] = useState<number | null>(null);
+  const [formContratoId, setFormContratoId] = useState<number | null>(null);
+  const [formSucursalId, setFormSucursalId] = useState<number | null>(null);
+  const [formPuestoId, setFormPuestoId] = useState<number | null>(null);
+  const [formPuestoSalida, setFormPuestoSalida] = useState<PuestoSalidaOption | null>(null);
+
+  // Editing state
+  const [editingVehicle, setEditingVehicle] = useState<EditingVehicle | null>(null);
+
+  // Creating state
+  const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingForm, setIsSubmittingForm] = useState(false);
+  /** Clave del registro en proceso de borrado (`local:id_local` o `id:serverId`) para deshabilitar solo ese botón Eliminar */
+  const [deletingVehicleKey, setDeletingVehicleKey] = useState<string | null>(null);
+  const [newVehicle, setNewVehicle] = useState<EditingVehicle>({
+    id: null,
+    id_local: '',
+    tipo: 'Particular',
+    placa: '',
+    nombre_propietario: '',
+    cedula_propietario: '',
+    departamento_visita: '',
+    persona_visita: '',
+    fecha_entrada: '',
+    fecha_salida: '',
+    hora_entrada_h: '',
+    hora_entrada_m: '',
+    hora_salida_h: '',
+    hora_salida_m: '',
+    razon_visita: '',
+    base64_image: '',
+  });
+
+  // Camera state
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+  const [vehicleImageBase64, setVehicleImageBase64] = useState<string | null>(null);
+  /** Archivo en `fileStorage` (foto capturada) pendiente de enviar */
+  const [vehicleImageLocalFileName, setVehicleImageLocalFileName] = useState<string | null>(null);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+
+  // Form refs for text inputs
+  const tipoRef = useRef<'Particular' | 'Institucional'>('Particular');
+  const placaRef = useRef('');
+  const nombrePropietarioRef = useRef('');
+  const cedulaPropietarioRef = useRef('');
+  const departamentoVisitaRef = useRef('');
+  const personaVisitaRef = useRef('');
+  const fechaEntradaRef = useRef('');
+  const fechaSalidaRef = useRef('');
+  const horaEntradaHRef = useRef('');
+  const horaEntradaMRef = useRef('');
+  const horaSalidaHRef = useRef('');
+  const horaSalidaMRef = useRef('');
+  const razonVisitaRef = useRef('');
+
+  const syncTimeFields = (
+    entradaH: string,
+    entradaM: string,
+    salidaH: string,
+    salidaM: string,
+  ) => {
+    horaEntradaHRef.current = entradaH || '';
+    horaEntradaMRef.current = entradaM || '';
+    horaSalidaHRef.current = salidaH || '';
+    horaSalidaMRef.current = salidaM || '';
+    setHoraEntradaDisplay(
+      entradaH && entradaM ? `${entradaH.padStart(2, '0')}:${entradaM.padStart(2, '0')}` : ''
+    );
+    setHoraSalidaDisplay(
+      salidaH && salidaM ? `${salidaH.padStart(2, '0')}:${salidaM.padStart(2, '0')}` : ''
+    );
+  };
+
+  // Mismo criterio que PhysicalMinuteAgendaScreen.tsx/ChecklistSupervisionScreen.tsx: el valor
+  // de `getHoraAccion` se usa "plano", con getters/pickers LOCALES, sin ninguna conversión de
+  // zona horaria adicional.
+  const horaAccionToLocalDate = (horaAccion: number): Date => new Date(horaAccion);
+
+  const buildDateFromParts = async (hours: string, minutes: string) => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = horaAccionToLocalDate(horaAccion);
+    const hRaw = String(hours || '').trim();
+    const mRaw = String(minutes || '').trim();
+    if (hRaw !== '' && mRaw !== '') {
+      const h = parseInt(hRaw, 10);
+      const m = parseInt(mRaw, 10);
+      if (!Number.isNaN(h) && !Number.isNaN(m)) {
+        baseDate.setHours(h, m, 0, 0);
+      }
+    }
+    return baseDate;
+  };
+
+  // Fecha local (no UTC): evita que un `toISOString()` cerca de medianoche cambie el día.
+  const formatDateDisplay = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+  // Mismo criterio que ChecklistSupervisionScreen.tsx para horas: se usa siempre la hora
+  // LOCAL del dispositivo, sin librerías de zona horaria. IMPORTANTE: nunca se construye el
+  // `Date` a partir de un string sin sufijo "Z" (`new Date("2024-01-01T17:30:00")`), porque en
+  // Hermes ese formato puede interpretarse como UTC en vez de hora local, lo que produce un
+  // desfase. Por eso se usa el constructor multi-argumento `new Date(y, m, d, hh, mm)`, que
+  // siempre construye en hora local sin ambigüedad.
+  const buildIsoFromDateAndTime = (date: string, hours: string, minutes: string) => {
+    const [y, mo, d] = date.split('-').map((v) => parseInt(v, 10));
+    const h = parseInt(hours, 10);
+    const m = parseInt(minutes, 10);
+    if ([y, mo, d, h, m].some((n) => Number.isNaN(n))) return '';
+    const localDate = new Date(y, mo - 1, d, h, m, 0, 0);
+    if (Number.isNaN(localDate.getTime())) return '';
+    return localDate.toISOString();
+  };
+
+  const openFechaEntradaPicker = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = fechaEntradaRef.current ? new Date(`${fechaEntradaRef.current}T00:00:00`) : horaAccionToLocalDate(horaAccion);
+    setFechaEntradaPickerValue(baseDate);
+    setShowFechaEntradaPicker(true);
+  };
+
+  const handleFechaEntradaPickerChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowFechaEntradaPicker(false);
+    }
+    if (!selectedDate) return;
+    const formattedDate = formatDateDisplay(selectedDate);
+    fechaEntradaRef.current = formattedDate;
+    setFechaEntradaDisplay(formattedDate);
+    setFechaEntradaPickerValue(selectedDate);
+  };
+
+  const openFechaSalidaPicker = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = fechaSalidaRef.current ? new Date(`${fechaSalidaRef.current}T00:00:00`) : horaAccionToLocalDate(horaAccion);
+    setFechaSalidaPickerValue(baseDate);
+    setShowFechaSalidaPicker(true);
+  };
+
+  const handleFechaSalidaPickerChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowFechaSalidaPicker(false);
+    }
+    if (!selectedDate) return;
+    const formattedDate = formatDateDisplay(selectedDate);
+    fechaSalidaRef.current = formattedDate;
+    setFechaSalidaDisplay(formattedDate);
+    setFechaSalidaPickerValue(selectedDate);
+  };
+
+  const openHoraEntradaPicker = async () => {
+    const baseDate = await buildDateFromParts(horaEntradaHRef.current, horaEntradaMRef.current);
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setHoraEntradaPickerValue(baseDate);
+    setShowHoraEntradaPicker(true);
+  };
+
+  const handleHoraEntradaPickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowHoraEntradaPicker(false);
+    }
+    if (!selectedTime) return;
+    setHoraEntradaPickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+    syncTimeFields(hours, minutes, horaSalidaHRef.current, horaSalidaMRef.current);
+  };
+
+  const openHoraSalidaPicker = async () => {
+    const baseDate = await buildDateFromParts(horaSalidaHRef.current, horaSalidaMRef.current);
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setHoraSalidaPickerValue(baseDate);
+    setShowHoraSalidaPicker(true);
+  };
+
+  const handleHoraSalidaPickerChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowHoraSalidaPicker(false);
+    }
+    if (!selectedTime) return;
+    setHoraSalidaPickerValue(selectedTime);
+    const hours = selectedTime.getHours().toString().padStart(2, '0');
+    const minutes = selectedTime.getMinutes().toString().padStart(2, '0');
+    syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, hours, minutes);
+  };
+
+  const clearHoraSalida = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    syncTimeFields(horaEntradaHRef.current, horaEntradaMRef.current, '', '');
+    const baseDate = await buildDateFromParts('', '');
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setHoraSalidaPickerValue(baseDate);
+    setShowHoraSalidaPicker(false);
+    fechaSalidaRef.current = '';
+    setFechaSalidaDisplay('');
+    setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
+    setShowFechaSalidaPicker(false);
+  };
+
+  // Minimal state for Picker (needs controlled value)
+  const [vehicleTipo, setVehicleTipo] = useState<'Particular' | 'Institucional'>('Particular');
+
+  // Time picker state
+  const [showFechaEntradaPicker, setShowFechaEntradaPicker] = useState(false);
+  const [fechaEntradaPickerValue, setFechaEntradaPickerValue] = useState(new Date());
+  const [fechaEntradaDisplay, setFechaEntradaDisplay] = useState('');
+  const [showFechaSalidaPicker, setShowFechaSalidaPicker] = useState(false);
+  const [fechaSalidaPickerValue, setFechaSalidaPickerValue] = useState(new Date());
+  const [fechaSalidaDisplay, setFechaSalidaDisplay] = useState('');
+  const [showHoraEntradaPicker, setShowHoraEntradaPicker] = useState(false);
+  const [horaEntradaPickerValue, setHoraEntradaPickerValue] = useState(new Date());
+  const [horaEntradaDisplay, setHoraEntradaDisplay] = useState('');
+  const [showHoraSalidaPicker, setShowHoraSalidaPicker] = useState(false);
+  const [horaSalidaPickerValue, setHoraSalidaPickerValue] = useState(new Date());
+  const [horaSalidaDisplay, setHoraSalidaDisplay] = useState('');
+
+  // Filters state
+  const [searchText, setSearchText] = useState('');
+  const [selectedTipo, setSelectedTipo] = useState<string>('all');
+  const [isFiltersExpanded, setIsFiltersExpanded] = useState(false);
+
+  // Función auxiliar para generar ID aleatorio
+  const generateRandomId = () => {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let result = '';
+    for (let i = 0; i < 10; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+
+  const mapCacheBase64 = (list: Vehicle[]): Vehicle[] =>
+    list
+      .filter((v) => v.isActive !== false)
+      .map((v) => ({
+        ...v,
+        base64_image: v.base64_image || '',
+      }));
+
+  const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
+  };
+
+  const isProbablyNetworkError = (err: any) => {
+    const msg = String(err?.message ?? err ?? '').toLowerCase();
+    return (
+      msg.includes('network request failed') ||
+      msg.includes('failed to fetch') ||
+      msg.includes('networkerror') ||
+      msg.includes('timeout') ||
+      msg.includes('timed out')
+    );
+  };
+
+  type MarcaSnapshot = {
+    current: Record<string, any>;
+    roleName: string | null;
+    isOperativo: boolean;
+    marcaCorpoId: number | null;
+    filterEmpresaId: number | null;
+    filterClienteId: number | null;
+    filterDivisionId: number | null;
+    filterContratoId: number | null;
+    filterSucursalId: number | null;
+  };
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean }): Promise<MarcaSnapshot | null> => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterSucursalId(null);
+          filterSucursalIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        const corpoIdRaw = current?.corpo?.id ?? current?.corpo_id;
+        const corpoId = numOrNull(corpoIdRaw);
+        const role =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        const rn = typeof role === 'string' ? role : null;
+        setRoleName(rn);
+
+        const divFromMarca = getDivisionIdFromMarcaJson(current);
+        const fe = numOrNull(current?.empresa?.id);
+        const fc = numOrNull(current?.cliente?.id);
+        const fco = numOrNull(current?.contrato?.id);
+        const fs = numOrNull(current?.corpo?.id ?? current?.corpo_id);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(fe);
+          setFilterClienteId(fc);
+          setFilterDivisionId(divFromMarca);
+          setFilterContratoId(fco);
+          setFilterSucursalId(fs);
+          filterSucursalIdRef.current = fs;
+        }
+
+        return {
+          current,
+          roleName: rn,
+          isOperativo: rn === 'OPERATIVO',
+          marcaCorpoId: corpoId,
+          filterEmpresaId: fe,
+          filterClienteId: fc,
+          filterDivisionId: divFromMarca,
+          filterContratoId: fco,
+          filterSucursalId: fs,
+        };
+      } catch {
+        setHasCurrentMarca(false);
+        setRoleName(null);
+        return null;
+      }
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      const divId = getDivisionIdFromMarcaJson(currentMarca);
+      setFilterEmpresaId(currentMarca.empresa?.id != null ? Number(currentMarca.empresa.id) : null);
+      setFilterClienteId(currentMarca.cliente?.id != null ? Number(currentMarca.cliente.id) : null);
+      setFilterDivisionId(divId);
+      setFilterContratoId(currentMarca.contrato?.id != null ? Number(currentMarca.contrato.id) : null);
+      const fs = numOrNull(currentMarca.corpo?.id ?? currentMarca.corpo_id);
+      setFilterSucursalId(fs);
+      filterSucursalIdRef.current = fs;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (Vehicles):', e);
+    }
+  }, []);
+
+  /** Solo caché local (main_structure_cache); no llama a /api/main-structure. */
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (structureRef.current.length > 0) {
+      return structureRef.current;
+    }
+    setIsStructureLoading(true);
+    try {
+      const merged = await loadMainStructureTreeMerged();
+      if (Array.isArray(merged) && merged.length > 0) {
+        structureRef.current = merged;
+        setStructure(merged);
+        return merged;
+      }
+      structureRef.current = [];
+      setStructure([]);
+      return [];
+    } catch (e) {
+      console.error('Error loading main structure (Vehicles):', e);
+      structureRef.current = [];
+      setStructure([]);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, []);
+
+  const applyVehicleHierarchyToForm = useCallback((vehicle: Vehicle): boolean => {
+    const empresaId = numOrNull(vehicle.empresa_id);
+    const clienteId = numOrNull(vehicle.cliente_id);
+    const divisionId = numOrNull(vehicle.division_id);
+    const contratoId = numOrNull(vehicle.contrato_id);
+    if (empresaId && clienteId && divisionId && contratoId) {
+      setFormEmpresaId(empresaId);
+      setFormClienteId(clienteId);
+      setFormDivisionId(divisionId);
+      setFormContratoId(contratoId);
+      setFormSucursalId(numOrNull(vehicle.corpo_id));
+      setFormPuestoId(numOrNull(vehicle.puesto_id));
+      setFormPuestoSalida(
+        vehicle.puesto_salida
+          ? {
+              id: vehicle.puesto_salida.id,
+              nombre: vehicle.puesto_salida.nombre,
+              codigo: vehicle.puesto_salida.codigo,
+            }
+          : null,
+      );
+      return true;
+    }
+    return false;
+  }, []);
+
+  const resetFormHierarchyFields = useCallback(() => {
+    setFormEmpresaId(null);
+    setFormClienteId(null);
+    setFormDivisionId(null);
+    setFormContratoId(null);
+    setFormSucursalId(null);
+    setFormPuestoId(null);
+    setFormPuestoSalida(null);
+  }, []);
+
+  const applyCurrentMarcaToCreateFormHierarchy = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const marca = JSON.parse(currentMarcaStr);
+      if (marca?.id == null) return;
+
+      setFormEmpresaId(marca.empresa?.id != null ? Number(marca.empresa.id) : null);
+      setFormClienteId(marca.cliente?.id != null ? Number(marca.cliente.id) : null);
+      setFormDivisionId(getDivisionIdFromMarcaJson(marca));
+      setFormContratoId(marca.contrato?.id != null ? Number(marca.contrato.id) : null);
+      setFormSucursalId(marca.corpo?.id != null ? Number(marca.corpo.id) : null);
+      setFormPuestoId(
+        marca.puesto?.id != null
+          ? Number(marca.puesto.id)
+          : marca.puesto_id != null
+            ? Number(marca.puesto_id)
+            : null
+      );
+    } catch (e) {
+      console.error('applyCurrentMarcaToCreateFormHierarchy (Vehicles):', e);
+    }
+  }, []);
+
+  const resolveCorpoIdForSave = useCallback(async (): Promise<number | null> => {
+    const fromForm = numOrNull(formSucursalId);
+    if (fromForm) return fromForm;
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    return numOrNull(marca?.corpo?.id ?? marca?.corpo_id);
+  }, [formSucursalId]);
+
+  const resolvePuestoIdForSave = useCallback(async (): Promise<number | null> => {
+    const fromForm = numOrNull(formPuestoId);
+    if (fromForm) return fromForm;
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    if (!currentMarcaStr) return null;
+    const marca = JSON.parse(currentMarcaStr);
+    return numOrNull(marca?.puesto?.id ?? marca?.puesto_id);
+  }, [formPuestoId]);
+
+  const resolveHierarchyIdsForSave = useCallback(async (): Promise<{
+    empresa_id: number | null;
+    cliente_id: number | null;
+    division_id: number | null;
+    contrato_id: number | null;
+  }> => {
+    const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+    const marca = currentMarcaStr ? JSON.parse(currentMarcaStr) : null;
+    return {
+      empresa_id: numOrNull(formEmpresaId) ?? numOrNull(marca?.empresa?.id ?? marca?.empresa_id),
+      cliente_id: numOrNull(formClienteId) ?? numOrNull(marca?.cliente?.id ?? marca?.cliente_id),
+      division_id: numOrNull(formDivisionId) ?? getDivisionIdFromMarcaJson(marca),
+      contrato_id: numOrNull(formContratoId) ?? numOrNull(marca?.contrato?.id ?? marca?.contrato_id),
+    };
+  }, [formEmpresaId, formClienteId, formDivisionId, formContratoId]);
+
+  const buildVehicleFilePayloadForApi = useCallback(async (): Promise<string | null> => {
+    if (vehicleImageLocalFileName) {
+      try {
+        const g = await getFile(vehicleImageLocalFileName);
+        return g.base64 || null;
+      } catch {
+        return null;
+      }
+    }
+    const b = getBase64Only(vehicleImageBase64);
+    return b || null;
+  }, [vehicleImageLocalFileName, vehicleImageBase64]);
+
+  const clearPendingVehicleCaptureFiles = useCallback(async () => {
+    if (vehicleImageLocalFileName) {
+      try {
+        await deleteFile(vehicleImageLocalFileName);
+      } catch {
+        /* idempotente */
+      }
+      setVehicleImageLocalFileName(null);
+    }
+    setVehicleImageBase64(null);
+  }, [vehicleImageLocalFileName]);
+
+  const runFetchVehicles = useCallback(
+    async (snap: MarcaSnapshot) => {
+      try {
+        setIsLoading(true);
+        setError(null);
+        setOfflineMessage(null);
+
+        const marcaId = numOrNull(snap.current?.id);
+        const corpoId = snap.isOperativo
+          ? numOrNull(snap.marcaCorpoId)
+          : numOrNull(snap.filterSucursalId) ?? numOrNull(filterSucursalIdRef.current);
+
+        if (!marcaId || marcaId <= 0) {
+          setVehicles([]);
+          setOfflineMessage('Marca no válida.');
+          return;
+        }
+
+        if (!corpoId || corpoId <= 0) {
+          setVehicles([]);
+          setError(
+            snap.isOperativo
+              ? 'No se encontró la sucursal (corpo) en la marca actual.'
+              : 'Seleccione sucursal en el filtro para cargar o sincronizar visitas de vehículos.'
+          );
+          return;
+        }
+
+        const applyFilteredCache = async (hint: string | null) => {
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoId);
+          setVehicles(mapCacheBase64(filtered));
+          if (hint) setOfflineMessage(hint);
+        };
+
+        const isConnected = await getConnectionStatus();
+
+        if (!isConnected) {
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoId);
+          setVehicles(mapCacheBase64(filtered));
+          setOfflineMessage(
+            filtered.length > 0
+              ? 'Modo Offline: mostrando visitas de vehículos guardadas para esta sucursal.'
+              : 'Sin conexión: no hay visitas guardadas para esta sucursal.'
+          );
+          return;
+        }
+
+        const syncResult = await syncVehiclesVisitasCacheFromNetwork({
+          marcaId,
+          corpoId,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (syncResult.ok) {
+          await applyFilteredCache(null);
+        } else {
+          await applyFilteredCache(
+            'No se pudo actualizar desde el servidor; mostrando visitas en caché para esta sucursal.'
+          );
+          if (syncResult.message) {
+            setError(syncResult.message);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching vehicles:', err);
+        try {
+          const snap2 = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          const marcaId2 = numOrNull(snap2?.current?.id);
+          const corpoErr = snap2?.isOperativo
+            ? numOrNull(snap2.marcaCorpoId)
+            : numOrNull(filterSucursalIdRef.current) ?? numOrNull(snap2?.filterSucursalId);
+          if (!marcaId2 || !corpoErr || corpoErr <= 0) {
+            setVehicles([]);
+            return;
+          }
+          const cached = await readVehiclesVisitasCacheRaw();
+          const filtered = filterVehiclesVisitasCacheForCorpo(cached as Vehicle[], corpoErr);
+          if (filtered.length > 0) {
+            setVehicles(mapCacheBase64(filtered));
+            setOfflineMessage(
+              'Error de conexión. Mostrando visitas de vehículos guardadas para esta sucursal.'
+            );
+          } else if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+            setVehicles([]);
+          } else {
+            setError('Error al cargar los vehículos');
+          }
+        } catch {
+          if (isProbablyNetworkError(err)) {
+            setOfflineMessage('Sin conexión: no hay visitas guardadas para esta sucursal.');
+          setVehicles([]);
+        } else {
+          setError('Error al cargar los vehículos');
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
+    },
+    [refreshAccessToken, logout, syncMarcaFromStorage]
+  );
+
+  const fetchVehicles = useCallback(async () => {
+    const snap = await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+    if (!snap) return;
+    await runFetchVehicles({
+      ...snap,
+      filterSucursalId: filterSucursalIdRef.current,
+    });
+  }, [syncMarcaFromStorage, runFetchVehicles]);
+
+  const handleFilterHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setFilterEmpresaId(v.empresaId);
+      setFilterClienteId(v.clienteId);
+      setFilterDivisionId(v.divisionId);
+      setFilterContratoId(v.contratoId);
+      filterSucursalIdRef.current = v.sucursalId;
+      setFilterSucursalId(v.sucursalId);
+      if (v.sucursalId != null) {
+        void fetchVehicles();
+      }
+    },
+    [fetchVehicles],
+  );
+
+  const handleFormHierarchyChange = useCallback((v: HierarchyPickerValues) => {
+    setFormEmpresaId(v.empresaId);
+    setFormClienteId(v.clienteId);
+    setFormDivisionId(v.divisionId);
+    setFormContratoId(v.contratoId);
+    setFormSucursalId(v.sucursalId);
+    setFormPuestoId(v.puestoId ?? null);
+  }, []);
+
+  useEffect(() => {
+    filterSucursalIdRef.current = filterSucursalId;
+  }, [filterSucursalId]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        void fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          const snap =
+            currentMarca?.id != null
+              ? await syncMarcaFromStorage({ applyFiltersFromMarca: true })
+              : await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          if (cancelled) return;
+          listFiltersSyncedFromMarcaOnceRef.current = true;
+          if (snap) await runFetchVehicles(snap);
+          else await fetchVehicles();
+        } else {
+          await fetchVehicles();
+        }
+      })();
+      const handler = () => {
+        void fetchVehicles();
+      };
+      eventBus.on('connectionRestored', handler);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', handler);
+      };
+    }, [syncMarcaFromStorage, runFetchVehicles, fetchVehicles, fetchMainStructure])
+  );
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
+  const openCamera = async () => {
+    if (!permission) {
+      const permissionResult = await requestPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Error', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    }
+
+    if (!permission?.granted) {
+      const permissionResult = await requestPermission();
+      if (!permissionResult.granted) {
+        Alert.alert('Error', 'Se necesita permiso para acceder a la cámara');
+        return;
+      }
+    }
+
+    setIsCameraVisible(true);
+  };
+
+  const takePicture = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'Cámara no disponible');
+      return;
+    }
+
+    try {
+      if (vehicleImageLocalFileName) {
+        try {
+          await deleteFile(vehicleImageLocalFileName);
+        } catch {
+          /* reemplazo */
+        }
+        setVehicleImageLocalFileName(null);
+      }
+      setVehicleImageBase64(null);
+
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: false,
+      });
+
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
+        setIsCameraVisible(false);
+        return;
+      }
+
+      const fileName = await saveFile({
+        uri: photo.uri,
+        originalName: 'vehiculo_visita',
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'vehicle_visita',
+      });
+
+      setIsCameraVisible(false);
+      setVehicleImageLocalFileName(fileName);
+    } catch (error) {
+      console.error('Error capturing image:', error);
+      Alert.alert('Error', 'No se pudo capturar la imagen');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const getVehicleRowKey = (vehicleId: number, id_local: string) =>
+    id_local ? `local:${id_local}` : `id:${vehicleId}`;
+
+  const createVehicle = async () => {
+    if (isSubmittingForm) return;
+    // Validaciones
+    if (!placaRef.current.trim()) {
+      Alert.alert('Error', 'La placa es obligatoria');
+      return;
+    }
+
+    if (!nombrePropietarioRef.current.trim()) {
+      Alert.alert('Error', 'El nombre del conductor es obligatorio');
+      return;
+    }
+
+    if (!cedulaPropietarioRef.current.trim()) {
+      Alert.alert('Error', 'La cédula del conductor es obligatoria');
+      return;
+    }
+
+    if (!fechaEntradaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es obligatoria');
+      return;
+    }
+
+    if (!horaEntradaHRef.current || !horaEntradaMRef.current) {
+      Alert.alert('Error', 'La hora de entrada es obligatoria');
+      return;
+    }
+
+    if (!razonVisitaRef.current.trim()) {
+      Alert.alert('Error', 'La razón de visita es obligatoria');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar ubicación',
+      '¿Deseas registrar esta visita de vehículo con los datos ingresados?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            setIsSubmittingForm(true);
+            try {
+              const currentMarca = await AsyncStorage.getItem('current_marca');
+              if (!currentMarca) {
+                Alert.alert('Error', 'No se encontró la marca actual');
+                return;
+              }
+
+              const currentMarcaData = JSON.parse(currentMarca);
+
+              const entradaIso = buildIsoFromDateAndTime(
+                fechaEntradaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const salidaCompleta = !!(fechaSalidaRef.current && horaSalidaHRef.current && horaSalidaMRef.current);
+              const salidaIso = salidaCompleta
+                ? buildIsoFromDateAndTime(
+                  fechaSalidaRef.current,
+                  horaSalidaHRef.current,
+                  horaSalidaMRef.current
+                )
+                : null;
+
+              const requestBody: any = {
+                marca_id: currentMarcaData.id,
+                tipo: tipoRef.current,
+                placa: placaRef.current,
+                nombre: nombrePropietarioRef.current,
+                cedula: cedulaPropietarioRef.current,
+                departamento_visita: departamentoVisitaRef.current || null,
+                persona_visita: personaVisitaRef.current || null,
+                hora_entrada: entradaIso,
+                hora_salida: salidaIso,
+                razon_visita: razonVisitaRef.current,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
+              };
+
+              const corpoForSave = await resolveCorpoIdForSave();
+              const puestoForSave = await resolvePuestoIdForSave();
+              if (!corpoForSave || corpoForSave <= 0) {
+                Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
+                return;
+              }
+              if (!puestoForSave || puestoForSave <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
+                return;
+              }
+              requestBody.corpo_id = corpoForSave;
+              requestBody.puesto_id = puestoForSave;
+
+              const hierarchyIds = await resolveHierarchyIdsForSave();
+              if (
+                hierarchyIds.empresa_id == null ||
+                hierarchyIds.empresa_id <= 0 ||
+                hierarchyIds.cliente_id == null ||
+                hierarchyIds.cliente_id <= 0 ||
+                hierarchyIds.division_id == null ||
+                hierarchyIds.division_id <= 0 ||
+                hierarchyIds.contrato_id == null ||
+                hierarchyIds.contrato_id <= 0
+              ) {
+                Alert.alert(
+                  'Error',
+                  'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía o la marca actual.'
+                );
+                return;
+              }
+              requestBody.empresa_id = hierarchyIds.empresa_id;
+              requestBody.cliente_id = hierarchyIds.cliente_id;
+              requestBody.division_id = hierarchyIds.division_id;
+              requestBody.contrato_id = hierarchyIds.contrato_id;
+
+              const fileBase64 = await buildVehicleFilePayloadForApi();
+              requestBody.file = fileBase64 || null;
+
+              // Verificar conectividad
+              const isConnected = await getConnectionStatus();
+
+              if (isConnected) {
+                // Con internet: llamar a la función API
+                const data = await createVehicleAPI({
+                  requestData: requestBody,
+                  marcaId: currentMarcaData.id,
+                  refreshAccessToken,
+                  logout,
+                });
+
+                const horaAccion = await getHoraAccion();
+                if (!horaAccion) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
+                const baseDate = await buildDateFromParts('', '');
+                if (!baseDate) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
+                if (data.status) {
+                  Alert.alert('Éxito', data.message || 'Visita de vehículo registrada correctamente');
+                  setIsCreating(false);
+                  setNewVehicle({
+                    id: null,
+                    id_local: '',
+                    tipo: 'Particular',
+                    placa: '',
+                    nombre_propietario: '',
+                    cedula_propietario: '',
+                    departamento_visita: '',
+                    persona_visita: '',
+                    fecha_entrada: '',
+                    fecha_salida: '',
+                    hora_entrada_h: '',
+                    hora_entrada_m: '',
+                    hora_salida_h: '',
+                    hora_salida_m: '',
+                    razon_visita: '',
+                    base64_image: '',
+                  });
+                  syncTimeFields('', '', '', '');
+                  fechaEntradaRef.current = '';
+                  fechaSalidaRef.current = '';
+                  setFechaEntradaDisplay('');
+                  setFechaSalidaDisplay('');
+                  setFechaEntradaPickerValue(horaAccionToLocalDate(horaAccion));
+                  setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
+                  setShowFechaEntradaPicker(false);
+                  setShowFechaSalidaPicker(false);
+                  setHoraEntradaPickerValue(baseDate);
+                  setHoraSalidaPickerValue(baseDate);
+                  setShowHoraEntradaPicker(false);
+                  setShowHoraSalidaPicker(false);
+                  await clearPendingVehicleCaptureFiles();
+                  fetchVehicles();
+                } else {
+                  Alert.alert('Error', data.message || 'Error al registrar la visita de vehículo');
+                }
+              } else {
+                // Sin internet: modo offline
+                const localId = generateRandomId();
+                const horaAccion = await getHoraAccion();
+
+                // Crear entrada en vehicles_actions
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = actions.filter(
+                  (a: any) => !(a?.type === 'create' && String(a?.id) === String(localId))
+                );
+                const offlineBody = { ...requestBody, file: null };
+                actions.push({
+                  requestData: offlineBody,
+                  marcaId: currentMarcaData.id,
+                  id: localId,
+                  type: 'create',
+                  ...(vehicleImageLocalFileName
+                    ? { attachmentLocalFileName: vehicleImageLocalFileName }
+                    : {}),
+                });
+                await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+
+                // Crear vehículo en cache
+                const cacheStr = await AsyncStorage.getItem('vehicles_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                const newVehicleCache = {
+                  id: 0,
+                  tipo: tipoRef.current,
+                  placa: placaRef.current,
+                  nombre_propietario: nombrePropietarioRef.current,
+                  cedula_propietario: cedulaPropietarioRef.current,
+                  departamento_visita: departamentoVisitaRef.current || '',
+                  persona_visita: personaVisitaRef.current || '',
+                  hora_entrada: entradaIso,
+                  hora_salida: salidaIso,
+                  razon_visita: razonVisitaRef.current,
+                  responsable: {
+                    id: parseInt(employee?.id || '0'),
+                    nombre: employee?.name || 'Desconocido',
+                  },
+                  created_at: horaAccion ? horaAccionToLocalDate(horaAccion).toISOString() : new Date().toISOString(),
+                  id_local: localId,
+                  base64_image: '',
+                  local_attachment_file: vehicleImageLocalFileName || null,
+                  file_name: null,
+                  corpo_id: corpoForSave,
+                  puesto_id: puestoForSave,
+                  puesto_salida_id: formPuestoSalida?.id ?? null,
+                  puesto_salida: formPuestoSalida,
+                  empresa_id: hierarchyIds.empresa_id ?? undefined,
+                  cliente_id: hierarchyIds.cliente_id ?? undefined,
+                  division_id: hierarchyIds.division_id ?? undefined,
+                  contrato_id: hierarchyIds.contrato_id ?? undefined,
+                  isActive: true,
+                };
+
+                cache.push(newVehicleCache);
+                await AsyncStorage.setItem('vehicles_cache', JSON.stringify(cache));
+
+                Alert.alert('Modo Offline', 'Visita de vehículo registrada localmente. Se sincronizará cuando haya conexión.');
+                
+                const baseDate = await buildDateFromParts('', '');
+                if (!baseDate) {
+                  Alert.alert('Error', 'No se pudo obtener la hora');
+                  return;
+                }
+
+                setIsCreating(false);
+                setNewVehicle({
+                  id: null,
+                  id_local: '',
+                  tipo: 'Particular',
+                  placa: '',
+                  nombre_propietario: '',
+                  cedula_propietario: '',
+                  departamento_visita: '',
+                  persona_visita: '',
+                  fecha_entrada: '',
+                  fecha_salida: '',
+                  hora_entrada_h: '',
+                  hora_entrada_m: '',
+                  hora_salida_h: '',
+                  hora_salida_m: '',
+                  razon_visita: '',
+                  base64_image: '',
+                });
+                syncTimeFields('', '', '', '');
+                fechaEntradaRef.current = '';
+                fechaSalidaRef.current = '';
+                setFechaEntradaDisplay('');
+                setFechaSalidaDisplay('');
+                setFechaEntradaPickerValue(horaAccionToLocalDate(horaAccion));
+                setFechaSalidaPickerValue(horaAccionToLocalDate(horaAccion));
+                setShowFechaEntradaPicker(false);
+                setShowFechaSalidaPicker(false);
+                setHoraEntradaPickerValue(baseDate);
+                setHoraSalidaPickerValue(baseDate);
+                setShowHoraEntradaPicker(false);
+                setShowHoraSalidaPicker(false);
+                setVehicleImageLocalFileName(null);
+                setVehicleImageBase64(null);
+                fetchVehicles();
+              }
+            } catch (err) {
+              console.error('Error creating vehicle:', err);
+              Alert.alert('Error', 'No se pudo registrar la visita de vehículo');
+            } finally {
+              setIsSubmittingForm(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const updateVehicle = async (vehicleId: number) => {
+    if (isSubmittingForm) return;
+    if (!editingVehicle) return;
+
+    // Validaciones
+    if (!placaRef.current.trim()) {
+      Alert.alert('Error', 'La placa es obligatoria');
+      return;
+    }
+
+    if (!nombrePropietarioRef.current.trim()) {
+      Alert.alert('Error', 'El nombre del conductor es obligatorio');
+      return;
+    }
+
+    if (!cedulaPropietarioRef.current.trim()) {
+      Alert.alert('Error', 'La cédula del conductor es obligatoria');
+      return;
+    }
+
+    if (!fechaEntradaRef.current.trim()) {
+      Alert.alert('Error', 'La fecha de entrada es obligatoria');
+      return;
+    }
+
+    if (!horaEntradaHRef.current || !horaEntradaMRef.current) {
+      Alert.alert('Error', 'La hora de entrada es obligatoria');
+      return;
+    }
+
+    if (!razonVisitaRef.current.trim()) {
+      Alert.alert('Error', 'La razón de visita es obligatoria');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar modificación',
+      '¿Deseas guardar los cambios en esta visita de vehículo?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          onPress: async () => {
+            setIsSubmittingForm(true);
+            try {
+              const currentMarca = await AsyncStorage.getItem('current_marca');
+              if (!currentMarca) {
+                Alert.alert('Error', 'No se encontró la marca actual');
+                return;
+              }
+              const currentMarcaData = JSON.parse(currentMarca);
+
+              const entradaIso = buildIsoFromDateAndTime(
+                fechaEntradaRef.current,
+                horaEntradaHRef.current,
+                horaEntradaMRef.current
+              );
+              const salidaCompleta = !!(fechaSalidaRef.current && horaSalidaHRef.current && horaSalidaMRef.current);
+              const salidaIso = salidaCompleta
+                ? buildIsoFromDateAndTime(
+                  fechaSalidaRef.current,
+                  horaSalidaHRef.current,
+                  horaSalidaMRef.current
+                )
+                : null;
+
+              const requestBody: any = {
+                marca_id: currentMarcaData.id,
+                tipo: tipoRef.current,
+                placa: placaRef.current,
+                nombre: nombrePropietarioRef.current,
+                cedula: cedulaPropietarioRef.current,
+                departamento_visita: departamentoVisitaRef.current || null,
+                persona_visita: personaVisitaRef.current || null,
+                hora_entrada: entradaIso,
+                hora_salida: salidaIso,
+                razon_visita: razonVisitaRef.current,
+                puesto_salida_id: formPuestoSalida?.id ?? null,
+              };
+
+              const corpoUp = await resolveCorpoIdForSave();
+              const puestoUp = await resolvePuestoIdForSave();
+              if (!corpoUp || corpoUp <= 0) {
+                Alert.alert('Error', 'No se pudo determinar la sucursal para el registro.');
+                return;
+              }
+              if (!puestoUp || puestoUp <= 0) {
+                Alert.alert('Error', 'No se pudo determinar el puesto para el registro.');
+                return;
+              }
+              requestBody.corpo_id = corpoUp;
+              requestBody.puesto_id = puestoUp;
+              const hierarchyUp = await resolveHierarchyIdsForSave();
+              if (
+                hierarchyUp.empresa_id == null ||
+                hierarchyUp.empresa_id <= 0 ||
+                hierarchyUp.cliente_id == null ||
+                hierarchyUp.cliente_id <= 0 ||
+                hierarchyUp.division_id == null ||
+                hierarchyUp.division_id <= 0 ||
+                hierarchyUp.contrato_id == null ||
+                hierarchyUp.contrato_id <= 0
+              ) {
+                Alert.alert(
+                  'Error',
+                  'No se pudo determinar empresa, cliente, división y contrato. Verifique la jerarquía.'
+                );
+                return;
+              }
+              requestBody.empresa_id = hierarchyUp.empresa_id;
+              requestBody.cliente_id = hierarchyUp.cliente_id;
+              requestBody.division_id = hierarchyUp.division_id;
+              requestBody.contrato_id = hierarchyUp.contrato_id;
+
+              const newFilePayload = await buildVehicleFilePayloadForApi();
+              requestBody.file = newFilePayload || null;
+
+              // Verificar conectividad
+              const isConnected = await getConnectionStatus();
+
+              if (isConnected) {
+                // Con internet: llamar a la función API
+                const data = await updateVehicleAPI({
+                  requestData: requestBody,
+                  vehicleId: vehicleId,
+                  marcaId: currentMarcaData.id,
+                  refreshAccessToken,
+                  logout,
+                });
+
+                if (data.status) {
+                  Alert.alert('Éxito', data.message || 'Vehículo actualizado correctamente');
+                  setEditingVehicle(null);
+                  await clearPendingVehicleCaptureFiles();
+                  // Wait a bit for server to process, then fetch vehicles
+                  setTimeout(() => {
+                    fetchVehicles();
+                  }, 500);
+                } else {
+                  Alert.alert('Error', data.message || 'Error al actualizar el vehículo');
+                }
+              } else {
+                // Sin internet: modo offline
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+
+                const offlineBody = { ...requestBody, file: null };
+                const attachMeta =
+                  vehicleImageLocalFileName != null && vehicleImageLocalFileName !== ''
+                    ? { attachmentLocalFileName: vehicleImageLocalFileName }
+                    : {};
+
+                if (editingVehicle.id_local !== '') {
+                  actions = stripErroneousVehicleUpdatesForLocalQueueId(actions, editingVehicle.id_local);
+                  const actionIndex = actions.findIndex(
+                    (a: any) =>
+                      a?.type === 'create' && String(a.id) === String(editingVehicle.id_local)
+                  );
+                  if (actionIndex !== -1) {
+                    actions[actionIndex].requestData = offlineBody;
+                    if (actions[actionIndex].marcaId == null && currentMarcaData.id != null) {
+                      actions[actionIndex].marcaId = currentMarcaData.id;
+                  }
+                    if ('attachmentLocalFileName' in attachMeta) {
+                      (actions[actionIndex] as any).attachmentLocalFileName = (
+                        attachMeta as any
+                      ).attachmentLocalFileName;
+                } else {
+                      delete (actions[actionIndex] as any).attachmentLocalFileName;
+                    }
+                  } else {
+                    actions.push({
+                      requestData: offlineBody,
+                      marcaId: currentMarcaData.id,
+                      id: editingVehicle.id_local,
+                      type: 'create',
+                      ...attachMeta,
+                    });
+                  }
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                } else {
+                  const filteredActions = actions.filter(
+                    (a: any) =>
+                      !(a?.type === 'update' && Number(a.id) === Number(vehicleId))
+                  );
+                  filteredActions.push({
+                    requestData: offlineBody,
+                    id: vehicleId,
+                    type: 'update',
+                    ...attachMeta,
+                  });
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
+                }
+
+                // Actualizar vehicles_cache
+                const cacheStr = await AsyncStorage.getItem('vehicles_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                const vehicleIndex = cache.findIndex((v: Vehicle) =>
+                  editingVehicle.id_local !== '' ? v.id_local === editingVehicle.id_local : v.id === vehicleId
+                );
+
+                if (vehicleIndex !== -1) {
+                  const prevRow = cache[vehicleIndex] as Vehicle;
+                  let nextLocalAtt = prevRow.local_attachment_file || null;
+                  let nextFileName = prevRow.file_name ?? null;
+                  let nextBase64 = prevRow.base64_image || '';
+                  if (vehicleImageLocalFileName) {
+                    nextLocalAtt = vehicleImageLocalFileName;
+                    nextBase64 = '';
+                  }
+
+                  cache[vehicleIndex] = {
+                    ...prevRow,
+                    tipo: tipoRef.current,
+                    placa: placaRef.current,
+                    nombre_propietario: nombrePropietarioRef.current,
+                    cedula_propietario: cedulaPropietarioRef.current,
+                    departamento_visita: departamentoVisitaRef.current || '',
+                    persona_visita: personaVisitaRef.current || '',
+                    hora_entrada: entradaIso,
+                    hora_salida: salidaIso,
+                    razon_visita: razonVisitaRef.current,
+                    base64_image: nextBase64,
+                    local_attachment_file: nextLocalAtt,
+                    file_name: nextFileName,
+                    puesto_salida_id: formPuestoSalida?.id ?? null,
+                    puesto_salida: formPuestoSalida,
+                    ...(requestBody.corpo_id != null && requestBody.puesto_id != null
+                      ? {
+                          corpo_id: requestBody.corpo_id,
+                          puesto_id: requestBody.puesto_id,
+                          empresa_id: requestBody.empresa_id,
+                          cliente_id: requestBody.cliente_id,
+                          division_id: requestBody.division_id,
+                          contrato_id: requestBody.contrato_id,
+                        }
+                      : {}),
+                  };
+                  await AsyncStorage.setItem('vehicles_cache', JSON.stringify(cache));
+                }
+
+                Alert.alert('Modo Offline', 'Vehículo actualizado localmente. Se sincronizará cuando haya conexión.');
+                setEditingVehicle(null);
+                setVehicleImageLocalFileName(null);
+                setVehicleImageBase64(null);
+                // Wait a bit to ensure cache is written, then fetch vehicles
+                setTimeout(() => {
+                  fetchVehicles();
+                }, 100);
+              }
+            } catch (err) {
+              console.error('Error updating vehicle:', err);
+              Alert.alert('Error', 'No se pudo actualizar el vehículo');
+            } finally {
+              setIsSubmittingForm(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const confirmRemoveVehicleAttachment = (vehicle: Vehicle) => {
+    const hasAtt =
+      Boolean(vehicle.local_attachment_file) ||
+      Boolean(vehicle.file_name && String(vehicle.file_name).trim() !== '') ||
+      Boolean(vehicle.base64_image && vehicle.base64_image.trim() !== '');
+    if (!hasAtt) return;
+
+    Alert.alert('Confirmar', '¿Eliminar la foto de la matrícula de este registro?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              const isDraft = vehicle.id === 0 && vehicle.id_local;
+              if (isDraft) {
+                if (vehicle.local_attachment_file) {
+                  try {
+                    await deleteFile(String(vehicle.local_attachment_file));
+                  } catch {
+                    /* */
+                  }
+                }
+                const actionsStr0 = await AsyncStorage.getItem('vehicles_actions');
+                let actions0: any[] = actionsStr0 ? JSON.parse(actionsStr0) : [];
+                if (!Array.isArray(actions0)) actions0 = [];
+                const idx0 = actions0.findIndex(
+                  (a: any) => a?.type === 'create' && String(a?.id) === String(vehicle.id_local)
+                );
+                if (idx0 !== -1) {
+                  delete actions0[idx0].attachmentLocalFileName;
+                  if (actions0[idx0].requestData) {
+                    actions0[idx0].requestData = { ...actions0[idx0].requestData, file: null };
+                  }
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions0));
+                }
+                await stripVehicleVisitasAttachmentForRow(0, vehicle.id_local);
+                fetchVehicles();
+                return;
+              }
+
+              const connected = await getConnectionStatus();
+              if (vehicle.id > 0 && connected) {
+                const r = await deleteVehicleAttachmentAPI({
+                  vehicleId: vehicle.id,
+                  refreshAccessToken,
+                  logout,
+                });
+                if (!r?.status) {
+                  Alert.alert('Error', (r as any)?.message || 'No se pudo eliminar el adjunto');
+                  return;
+                }
+                await stripVehicleVisitasAttachmentForRow(vehicle.id, '');
+                fetchVehicles();
+              } else if (vehicle.id > 0 && !connected) {
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                actions = actions.filter(
+                  (a: any) =>
+                    !(a?.type === 'delete_vehicle_attachment' && Number(a?.id) === Number(vehicle.id))
+                );
+                actions.push({ type: 'delete_vehicle_attachment', id: vehicle.id });
+                await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                await stripVehicleVisitasAttachmentForRow(vehicle.id, '');
+                fetchVehicles();
+              }
+            } catch (e) {
+              console.error('confirmRemoveVehicleAttachment:', e);
+              Alert.alert('Error', 'No se pudo eliminar el adjunto');
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
+  const deleteVehicle = (vehicleId: number, id_local: string) => {
+    if (deletingVehicleKey) return;
+    Alert.alert(
+      'Confirmar eliminación',
+      '¿Estás seguro de que deseas eliminar esta visita de vehículo?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Aceptar',
+          style: 'destructive',
+          onPress: () => {
+            const key = getVehicleRowKey(vehicleId, id_local);
+            void (async () => {
+              setDeletingVehicleKey(key);
+            try {
+              const isConnected = await getConnectionStatus();
+
+              if (isConnected) {
+                const data = await deleteVehicleAPI({
+                  vehicleId: vehicleId,
+                  refreshAccessToken,
+                  logout,
+                });
+
+                if (data.status) {
+                  Alert.alert('Éxito', data.message || 'Visita de vehículo eliminada correctamente');
+                  fetchVehicles();
+                } else {
+                  Alert.alert('Error', data.message || 'Error al eliminar la visita de vehículo');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('vehicles_actions');
+                  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                  if (!Array.isArray(actions)) actions = [];
+
+                if (id_local !== '') {
+                    const filteredActions = actions.filter(
+                      (a: any) =>
+                        !(a?.type === 'create' && String(a?.id) === String(id_local))
+                    );
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(filteredActions));
+                } else {
+                    actions = appendOfflineVehicleDelete(actions, vehicleId);
+                  await AsyncStorage.setItem('vehicles_actions', JSON.stringify(actions));
+                }
+
+                const cacheStr = await AsyncStorage.getItem('vehicles_cache');
+                const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+                const filteredCache = cache.filter((v: Vehicle) =>
+                  id_local !== '' ? v.id_local !== id_local : v.id !== vehicleId
+                );
+                await AsyncStorage.setItem('vehicles_cache', JSON.stringify(filteredCache));
+
+                Alert.alert('Modo Offline', 'Vehículo eliminado localmente. Se sincronizará cuando haya conexión.');
+                fetchVehicles();
+              }
+            } catch (err) {
+              console.error('Error deleting vehicle:', err);
+              Alert.alert('Error', 'No se pudo eliminar el vehículo');
+              } finally {
+                setDeletingVehicleKey(null);
+            }
+            })();
+          },
+        },
+      ]
+    );
+  };
+
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case 'add': return <Ionicons name="add-sharp" size={20} color='#000000' />;
+      case 'edit': return <Ionicons name="pencil" size={20} color='#FFFFFF' />;
+      case 'delete': return <Ionicons name="trash" size={20} color='#FFFFFF' />;
+      case 'vehicles': return <Ionicons name="car" size={25} color='#000000' />;
+      case 'cancel': return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+      case 'confirm': return <Ionicons name="checkmark-sharp" size={20} color='#FFFFFF' />;
+      default: return <Ionicons name="close-sharp" size={20} color='#FFFFFF' />;
+    }
+  };
+
+  const renderVehicleForm = (vehicle: EditingVehicle, isCreating: boolean) => {
+    return (
+      <ThemedView style={[styles.vehicleCard, styles.formCard]}>
+        <ThemedText style={styles.formTitle}>
+          {isCreating ? 'Nuevo Vehículo' : 'Editar Vehículo'}
+        </ThemedText>
+
+        <ThemedView style={styles.formHierarchySection}>
+          <ThemedText style={styles.formHierarchyHint}>
+            Ubicación del registro (empresa → puesto)
+          </ThemedText>
+          {structure.length === 0 ? (
+            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+          ) : null}
+          <HierarchyPickerFields
+            structure={structure}
+            levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+            isLoading={false}
+            emptyPickerValue={0}
+            values={{
+              empresaId: formEmpresaId,
+              clienteId: formClienteId,
+              divisionId: formDivisionId,
+              contratoId: formContratoId,
+              sucursalId: formSucursalId,
+              puestoId: formPuestoId,
+            }}
+            onChange={handleFormHierarchyChange}
+            labels={{
+              sucursal: 'Sucursal *',
+              puesto: 'Puesto *',
+            }}
+            renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+            pickerStyle={styles.picker}
+            fieldGroupStyle={styles.formGroup}
+          />
+          <PuestoSalidaPicker
+            value={formPuestoSalida}
+            onChange={setFormPuestoSalida}
+            refreshAccessToken={refreshAccessToken}
+            logout={logout}
+          />
+        </ThemedView>
+
+        {/* Tipo */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Tipo:</ThemedText>
+          <ThemedView style={styles.pickerContainer}>
+            <Picker
+              selectedValue={vehicleTipo}
+              onValueChange={(value) => {
+                const tipoValue = value as 'Particular' | 'Institucional';
+                tipoRef.current = tipoValue;
+                setVehicleTipo(tipoValue);
+              }}
+              style={styles.picker}
+            >
+              <Picker.Item label="Particular" value="Particular" color="#000000" />
+              <Picker.Item label="Institucional" value="Institucional" color="#000000" />
+            </Picker>
+          </ThemedView>
+        </ThemedView>
+
+        {/* Placa */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Placa:</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.placa}
+            onChangeText={(text) => { placaRef.current = text; }}
+            placeholder="Ej: ABC-123"
+            placeholderTextColor="#999"
+            key={`placa-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Nombre Conductor */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Nombre del Conductor:</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.nombre_propietario}
+            onChangeText={(text) => { nombrePropietarioRef.current = text; }}
+            placeholder="Nombre completo"
+            placeholderTextColor="#999"
+            key={`nombre-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Cédula Conductor */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Cédula del Conductor:</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.cedula_propietario}
+            onChangeText={(text) => { cedulaPropietarioRef.current = text; }}
+            placeholder="Ej: 1234567890"
+            placeholderTextColor="#999"
+            keyboardType="numeric"
+            key={`cedula-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Departamento visita */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Departamento (opcional):</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.departamento_visita}
+            onChangeText={(text) => { departamentoVisitaRef.current = text; }}
+            placeholder="Departamento de visita"
+            placeholderTextColor="#999"
+            key={`departamento-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Persona visita */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Persona a visitar (opcional):</ThemedText>
+          <TextInput
+            style={styles.formInput}
+            defaultValue={vehicle.persona_visita}
+            onChangeText={(text) => { personaVisitaRef.current = text; }}
+            placeholder="Persona de contacto"
+            placeholderTextColor="#999"
+            key={`persona-visita-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Fecha y hora Entrada */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Entrada (fecha y hora):</ThemedText>
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => void openFechaEntradaPicker()}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {fechaEntradaDisplay || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showFechaEntradaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={fechaEntradaPickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleFechaEntradaPickerChange}
+              />
+            </View>
+          )}
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => openHoraEntradaPicker()}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {horaEntradaDisplay || 'Seleccionar hora'}
+            </ThemedText>
+            <Ionicons name="time-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showHoraEntradaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={horaEntradaPickerValue}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleHoraEntradaPickerChange}
+              />
+            </View>
+          )}
+        </ThemedView>
+
+        {/* Fecha y hora Salida */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Salida (fecha y hora, opcional):</ThemedText>
+          <TouchableOpacity style={styles.timePickerButton} onPress={() => void openFechaSalidaPicker()}>
+            <ThemedText style={styles.timePickerButtonText}>
+              {fechaSalidaDisplay || 'Seleccionar fecha'}
+            </ThemedText>
+            <Ionicons name="calendar-outline" size={20} color="#007AFF" />
+          </TouchableOpacity>
+          {showFechaSalidaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={fechaSalidaPickerValue}
+                mode="date"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleFechaSalidaPickerChange}
+              />
+            </View>
+          )}
+          <View style={styles.timePickerRow}>
+            <TouchableOpacity style={styles.timePickerButton} onPress={() => openHoraSalidaPicker()}>
+              <ThemedText style={styles.timePickerButtonText}>
+                {horaSalidaDisplay || 'Seleccionar hora'}
+              </ThemedText>
+              <Ionicons name="time-outline" size={20} color="#007AFF" />
+            </TouchableOpacity>
+            {horaSalidaDisplay !== '' && (
+              <TouchableOpacity style={styles.clearTimeButton} onPress={() => clearHoraSalida()}>
+                <Ionicons name="close-circle" size={18} color="#FF3B30" />
+                <ThemedText style={styles.clearTimeText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+            )}
+          </View>
+          {showHoraSalidaPicker && (
+            <View style={styles.inlinePickerContainer}>
+              <DateTimePicker
+                value={horaSalidaPickerValue}
+                mode="time"
+                display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                onChange={handleHoraSalidaPickerChange}
+              />
+            </View>
+          )}
+        </ThemedView>
+
+        {/* Razón Visita */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Razón de Visita:</ThemedText>
+          <TextInput
+            style={[styles.formInput, styles.textArea]}
+            defaultValue={vehicle.razon_visita}
+            onChangeText={(text) => { razonVisitaRef.current = text; }}
+            placeholder="Describe la razón de la visita..."
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={4}
+            key={`razon-${isCreating ? 'create' : vehicle.id}`}
+          />
+        </ThemedView>
+
+        {/* Foto de la matrícula */}
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Foto de la matrícula (opcional):</ThemedText>
+          <ThemedText style={styles.formHierarchyHint}>
+            {isCreating
+              ? 'La imagen se guarda en el dispositivo y se sube al confirmar.'
+              : 'Solo se envían fotos nuevas. Use el detalle del registro para ver o eliminar la foto actual.'}
+          </ThemedText>
+          <TouchableOpacity style={styles.captureImageButton} onPress={openCamera}>
+            <Ionicons name="camera" size={20} color="#007AFF" />
+            <ThemedText style={styles.captureImageButtonText}>
+              {vehicleImageLocalFileName || vehicleImageBase64 ? 'Cambiar imagen' : 'Capturar imagen'}
+            </ThemedText>
+          </TouchableOpacity>
+
+          {(vehicleImageLocalFileName || vehicleImageBase64) && (() => {
+            const displayUri = vehicleImageLocalFileName
+              ? getStoredFileDisplayUri(vehicleImageLocalFileName) || null
+              : getVehicleImageDisplayUri(vehicleImageBase64);
+            if (!displayUri) return null;
+            return (
+              <ThemedView style={styles.imagePreviewContainer}>
+                <ThemedText style={styles.imagePreviewTitle}>Nueva imagen:</ThemedText>
+                <View style={{ position: 'relative' }}>
+                  <Image source={{ uri: displayUri }} style={styles.imagePreview} resizeMode="contain" />
+                  <TouchableOpacity
+                    style={styles.vehicleImageTrashButton}
+                    onPress={() => {
+                      Alert.alert('Confirmar', '¿Quitar esta imagen del formulario?', [
+                        { text: 'Cancelar', style: 'cancel' },
+                        {
+                          text: 'Quitar',
+                          style: 'destructive',
+                          onPress: () => {
+                            void clearPendingVehicleCaptureFiles();
+                          },
+                        },
+                      ]);
+                    }}
+                  >
+                    <Ionicons name="trash-outline" size={22} color="#fff" />
+                  </TouchableOpacity>
+                </View>
+              </ThemedView>
+            );
+          })()}
+        </ThemedView>
+
+        {/* Buttons */}
+        <ThemedView style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[styles.confirmButton, isSubmittingForm && styles.disabledButton]}
+            onPress={
+              isCreating
+                ? createVehicle
+                : () => {
+                    const vid = vehicle.id != null ? Number(vehicle.id) : NaN;
+                    if (!Number.isFinite(vid)) {
+                      Alert.alert('Error', 'No se pudo identificar el registro a actualizar.');
+                      return;
+                    }
+                    void updateVehicle(vid);
+                  }
+            }
+            disabled={isSubmittingForm}
+          >
+            {isSubmittingForm ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <View style={styles.confirmButtonInner}>
+              {getActionIcon('confirm')}
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.cancelButton, isSubmittingForm && styles.disabledButton]}
+            onPress={isCreating ? cancelCreating : cancelEditing}
+            disabled={isSubmittingForm}
+          >
+            <ThemedText style={styles.cancelButtonText}>
+              {getActionIcon('cancel')}
+            </ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+      </ThemedView>
+    );
+  };
+
+  const convertDate = (dateString: string) => {
+    try {
+      const d = new Date(dateString);
+      if (Number.isNaN(d.getTime())) return dateString;
+      const ymd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const hms = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+      return `${ymd} ${hms}`;
+    } catch (error) {
+      return dateString;
+    }
+  };
+
+  // Handle menu press from header
+  const handleMenuPress = () => {
+    setIsMenuVisible(true);
+  };
+
+  // Handle menu close
+  const handleMenuClose = () => {
+    setIsMenuVisible(false);
+  };
+
+  // Handle home navigation from slide menu
+  const handleHomePress = () => {
+    navigation.navigate('Home');
+  };
+
+  const startEditing = async (vehicle: Vehicle) => {
+    const entradaDateRaw = new Date(vehicle.hora_entrada);
+    if (Number.isNaN(entradaDateRaw.getTime())) {
+      Alert.alert('Error', 'La fecha/hora de entrada del registro no es válida.');
+      return;
+    }
+    // Extraer hora/fecha local del dispositivo (sin librerías de zona horaria), igual que
+    // `buildIsoFromDateAndTime` la construyó.
+    const hours = entradaDateRaw.getHours().toString().padStart(2, '0');
+    const minutes = entradaDateRaw.getMinutes().toString().padStart(2, '0');
+    const fechaEntrada = formatDateDisplay(entradaDateRaw);
+
+    let exitHours = '';
+    let exitMinutes = '';
+    let fechaSalida = '';
+    if (vehicle.hora_salida) {
+      const salidaDateRaw = new Date(vehicle.hora_salida);
+      if (!Number.isNaN(salidaDateRaw.getTime())) {
+      exitHours = salidaDateRaw.getHours().toString().padStart(2, '0');
+      exitMinutes = salidaDateRaw.getMinutes().toString().padStart(2, '0');
+      fechaSalida = formatDateDisplay(salidaDateRaw);
+      }
+    }
+
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    const baseDateEntrada = await buildDateFromParts(hours, minutes);
+    if (!baseDateEntrada) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    const baseDateSalida = await buildDateFromParts(exitHours, exitMinutes);
+    if (!baseDateSalida) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    /**
+     * Jerarquía ANTES de `setEditingVehicle`: IDs guardados en el registro o caché local
+     * (sin /api/main-structure). Evita Pickers con selectedValue inexistente en Android.
+     */
+    const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
+    if (!applyVehicleHierarchyToForm(vehicle)) {
+      if (tree.length > 0) {
+        const pid = numOrNull(vehicle.puesto_id);
+        const byPuesto = pid ? findHierarchyByPuestoIn(tree, pid) : null;
+        if (byPuesto) {
+          setFormEmpresaId(byPuesto.empresaId);
+          setFormClienteId(byPuesto.clienteId);
+          setFormDivisionId(byPuesto.divisionId);
+          setFormContratoId(byPuesto.contratoId);
+          setFormSucursalId(byPuesto.corpoId);
+          setFormPuestoId(byPuesto.puestoId);
+        } else {
+          const cid = numOrNull(vehicle.corpo_id);
+          const h = cid ? findHierarchyByCorpoIn(tree, cid) : null;
+          if (h) {
+            setFormEmpresaId(h.empresaId);
+            setFormClienteId(h.clienteId);
+            setFormDivisionId(h.divisionId);
+            setFormContratoId(h.contratoId);
+            setFormSucursalId(h.corpoId);
+            let pId = numOrNull(vehicle.puesto_id);
+            if (!pId || pId <= 0) {
+              outerLoop:
+              for (const empresa of tree) {
+                for (const cliente of empresa.clientes || []) {
+                  for (const division of getClienteDivisionArray(cliente)) {
+                    for (const contrato of division.contratos || []) {
+                      for (const sucursal of contrato.sucursales || []) {
+                        if (Number(sucursal.id) === h.corpoId) {
+                          const first = sucursal.puestos?.[0];
+                          pId = first?.id != null ? Number(first.id) : null;
+                          break outerLoop;
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            setFormPuestoId(pId);
+          } else {
+            resetFormHierarchyFields();
+          }
+        }
+      } else {
+        resetFormHierarchyFields();
+      }
+    }
+
+    const razonSafe = vehicle.razon_visita != null ? String(vehicle.razon_visita) : '';
+
+    setEditingVehicle({
+      id: vehicle.id,
+      id_local: vehicle.id_local ?? '',
+      tipo: vehicle.tipo,
+      placa: vehicle.placa,
+      nombre_propietario: vehicle.nombre_propietario,
+      cedula_propietario: vehicle.cedula_propietario,
+      departamento_visita: vehicle.departamento_visita || '',
+      persona_visita: vehicle.persona_visita || '',
+      fecha_entrada: fechaEntrada,
+      fecha_salida: fechaSalida,
+      hora_entrada_h: hours,
+      hora_entrada_m: minutes,
+      hora_salida_h: exitHours,
+      hora_salida_m: exitMinutes,
+      razon_visita: razonSafe,
+      base64_image: vehicle.base64_image || '',
+    });
+    syncTimeFields(hours, minutes, exitHours, exitMinutes);
+    fechaEntradaRef.current = fechaEntrada;
+    fechaSalidaRef.current = fechaSalida;
+    setFechaEntradaDisplay(fechaEntrada);
+    setFechaSalidaDisplay(fechaSalida);
+    setFechaEntradaPickerValue(new Date(`${fechaEntrada}T00:00:00`));
+    setFechaSalidaPickerValue(fechaSalida ? new Date(`${fechaSalida}T00:00:00`) : horaAccionToLocalDate(horaAccion));
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
+
+    setHoraEntradaPickerValue(baseDateEntrada);
+    setHoraSalidaPickerValue(baseDateSalida);
+    setShowHoraEntradaPicker(false);
+    setShowHoraSalidaPicker(false);
+
+    tipoRef.current = vehicle.tipo;
+    setVehicleTipo(vehicle.tipo);
+    placaRef.current = vehicle.placa;
+    nombrePropietarioRef.current = vehicle.nombre_propietario;
+    cedulaPropietarioRef.current = vehicle.cedula_propietario;
+    departamentoVisitaRef.current = vehicle.departamento_visita || '';
+    personaVisitaRef.current = vehicle.persona_visita || '';
+    horaEntradaHRef.current = hours;
+    horaEntradaMRef.current = minutes;
+    horaSalidaHRef.current = exitHours;
+    horaSalidaMRef.current = exitMinutes;
+    razonVisitaRef.current = razonSafe;
+
+    setVehicleImageBase64(null);
+    setVehicleImageLocalFileName(null);
+  };
+
+  const cancelEditing = () => {
+    void clearPendingVehicleCaptureFiles();
+    setEditingVehicle(null);
+    setVehicleImageLocalFileName(null);
+    fechaEntradaRef.current = '';
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay('');
+    setFechaSalidaDisplay('');
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
+    setVehicleTipo('Particular');
+    tipoRef.current = 'Particular';
+    resetFormHierarchyFields();
+  };
+
+  const startCreating = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    const baseDate = await buildDateFromParts('', '');
+    if (!baseDate) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    // Hora de entrada automática (getHoraAccion): igual que PhysicalMinuteAgendaScreen.tsx, se
+    // usa "plano" con getters locales, y puede editarse desde el picker.
+    const nowLocal = horaAccionToLocalDate(horaAccion);
+    const autoEntradaH = nowLocal.getHours().toString().padStart(2, '0');
+    const autoEntradaM = nowLocal.getMinutes().toString().padStart(2, '0');
+    const autoFechaEntrada = formatDateDisplay(nowLocal);
+    syncTimeFields(autoEntradaH, autoEntradaM, '', '');
+    fechaEntradaRef.current = autoFechaEntrada;
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay(autoFechaEntrada);
+    setFechaSalidaDisplay('');
+    const pickerSeedDate = nowLocal;
+    setFechaEntradaPickerValue(pickerSeedDate);
+    setFechaSalidaPickerValue(pickerSeedDate);
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
+    console.log(pickerSeedDate);
+    setHoraEntradaPickerValue(pickerSeedDate);
+    setHoraSalidaPickerValue(pickerSeedDate);
+    setShowHoraEntradaPicker(false);
+    setShowHoraSalidaPicker(false);
+    setIsCreating(true);
+    setNewVehicle({
+      id: null,
+      id_local: '',
+      tipo: 'Particular',
+      placa: '',
+      nombre_propietario: '',
+      cedula_propietario: '',
+      departamento_visita: '',
+      persona_visita: '',
+      fecha_entrada: autoFechaEntrada,
+      fecha_salida: '',
+      hora_entrada_h: autoEntradaH,
+      hora_entrada_m: autoEntradaM,
+      hora_salida_h: '',
+      hora_salida_m: '',
+      razon_visita: '',
+      base64_image: '',
+    });
+    // Initialize refs
+    tipoRef.current = 'Particular';
+    setVehicleTipo('Particular');
+    placaRef.current = '';
+    nombrePropietarioRef.current = '';
+    cedulaPropietarioRef.current = '';
+    departamentoVisitaRef.current = '';
+    personaVisitaRef.current = '';
+    horaEntradaHRef.current = autoEntradaH;
+    horaEntradaMRef.current = autoEntradaM;
+    horaSalidaHRef.current = '';
+    horaSalidaMRef.current = '';
+    razonVisitaRef.current = '';
+    setFormPuestoSalida(null);
+    void clearPendingVehicleCaptureFiles();
+    await applyCurrentMarcaToCreateFormHierarchy();
+  };
+
+  const cancelCreating = () => {
+    void clearPendingVehicleCaptureFiles();
+    setIsCreating(false);
+    setNewVehicle({
+      id: null,
+      id_local: '',
+      tipo: 'Particular',
+      placa: '',
+      nombre_propietario: '',
+      cedula_propietario: '',
+      departamento_visita: '',
+      persona_visita: '',
+      fecha_entrada: '',
+      fecha_salida: '',
+      hora_entrada_h: '',
+      hora_entrada_m: '',
+      hora_salida_h: '',
+      hora_salida_m: '',
+      razon_visita: '',
+      base64_image: '',
+    });
+    setVehicleImageLocalFileName(null);
+    fechaEntradaRef.current = '';
+    fechaSalidaRef.current = '';
+    setFechaEntradaDisplay('');
+    setFechaSalidaDisplay('');
+    setShowFechaEntradaPicker(false);
+    setShowFechaSalidaPicker(false);
+    setVehicleTipo('Particular');
+    tipoRef.current = 'Particular';
+    resetFormHierarchyFields();
+  };
+
+  const resetAllFilters = () => {
+    setSearchText('');
+    setSelectedTipo('all');
+    void resetListFiltersFromCurrentMarca();
+    void fetchVehicles();
+  };
+
+  const filteredVehicles = vehicles.filter(vehicle => {
+    const matchesSearch =
+      vehicle.placa.toLowerCase().includes(searchText.toLowerCase()) ||
+      vehicle.nombre_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
+      vehicle.cedula_propietario.toLowerCase().includes(searchText.toLowerCase()) ||
+      (vehicle.departamento_visita || '').toLowerCase().includes(searchText.toLowerCase()) ||
+      (vehicle.persona_visita || '').toLowerCase().includes(searchText.toLowerCase()) ||
+      vehicle.razon_visita.toLowerCase().includes(searchText.toLowerCase()) ||
+      vehicle.responsable.nombre.toLowerCase().includes(searchText.toLowerCase());
+
+    const matchesTipo =
+      selectedTipo === 'all' || vehicle.tipo === selectedTipo;
+
+    return matchesSearch && matchesTipo;
+  });
+
+  if (isLoading) {
+    return (
+      <ThemedView style={styles.container}>
+        <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
+        <ThemedView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando visitas de vehículos...</ThemedText>
+        </ThemedView>
+        <AppFooter />
+        <SlideMenu
+          isVisible={isMenuVisible}
+          onClose={handleMenuClose}
+          onHomePress={handleHomePress}
+          currentRoute="Vehicles"
+        />
+      </ThemedView>
+    );
+  }
+
+  // Si no hay marca registrada, mostrar mensaje
+  if (!hasCurrentMarca) {
+    return (
+      <ThemedView style={styles.container}>
+        <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
+        <ThemedView style={styles.noMarcaContainer}>
+          <Ionicons name="alert-circle-outline" size={80} color="#FF9500" />
+          <ThemedText style={styles.noMarcaTitle}>No hay marca registrada</ThemedText>
+          <ThemedText style={styles.noMarcaMessage}>
+            Debes registrar una marca de ingreso antes de acceder a las visitas de vehículos.
+          </ThemedText>
+          <TouchableOpacity
+            style={styles.goBackButton}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back" size={20} color="#000000" />
+            <ThemedText style={styles.goBackButtonText}>Volver</ThemedText>
+          </TouchableOpacity>
+        </ThemedView>
+        <AppFooter />
+        <SlideMenu
+          isVisible={isMenuVisible}
+          onClose={handleMenuClose}
+          onHomePress={handleHomePress}
+          currentRoute="Vehicles"
+        />
+      </ThemedView>
+    );
+  }
+
+  return (
+    <ThemedView style={styles.container}>
+      <AppHeader onMenuPress={handleMenuPress} title="Visitas de vehículos" />
+      {!!error && (
+        <ThemedView style={styles.errorBanner}>
+          <Ionicons name="alert-circle-outline" size={18} color="#B00020" />
+          <ThemedText style={styles.errorBannerText}>{error}</ThemedText>
+        </ThemedView>
+      )}
+      {!!offlineMessage && !error && (
+        <ThemedView style={styles.offlineBanner}>
+          <Ionicons name="cloud-offline-outline" size={18} color="#8A6D00" />
+          <ThemedText style={styles.offlineBannerText}>{offlineMessage}</ThemedText>
+        </ThemedView>
+      )}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+      >
+        <ThemedView style={styles.contentContainer}>
+          {/* Module Title */}
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('vehicles')} Registro de visitas de vehículos
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Gestiona las visitas de vehículos
+            </ThemedText>
+          </ThemedView>
+
+          {/* Filters */}
+          <ThemedView style={styles.filtersMain}>
+            <ThemedView style={styles.filterHeader}>
+              <TouchableOpacity
+                style={styles.filterToggleButton}
+                onPress={() => setIsFiltersExpanded(!isFiltersExpanded)}
+              >
+                <ThemedText style={styles.filterToggleText}>
+                  Filtros
+                </ThemedText>
+                <Ionicons
+                  name={isFiltersExpanded ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color="#007AFF"
+                />
+              </TouchableOpacity>
+
+              {isFiltersExpanded && (
+                <TouchableOpacity
+                  style={styles.resetFiltersButton}
+                  onPress={resetAllFilters}
+                >
+                  <Ionicons name="refresh" size={16} color="#FF3B30" />
+                  <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+                </TouchableOpacity>
+              )}
+            </ThemedView>
+
+            {/* Filter Content */}
+            {isFiltersExpanded && (
+              <ThemedView style={styles.filterContent}>
+                <ThemedView style={styles.filterGroupSearch}>
+                  <ThemedText style={styles.filterLabel}>
+                    Ubicación del listado (empresa → sucursal)
+                  </ThemedText>
+                </ThemedView>
+                {structure.length === 0 ? (
+                  <ThemedView style={styles.filterGroupSearch}>
+                    <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+                  </ThemedView>
+                ) : null}
+                <HierarchyPickerFields
+                  structure={structure}
+                  levels={['cliente', 'contrato', 'sucursal']}
+                  isLoading={false}
+                  emptyPickerValue={0}
+                  values={{
+                    empresaId: filterEmpresaId,
+                    clienteId: filterClienteId,
+                    divisionId: filterDivisionId,
+                    contratoId: filterContratoId,
+                    sucursalId: filterSucursalId,
+                  }}
+                  onChange={handleFilterHierarchyChange}
+                  labels={{ sucursal: 'Sucursal (sincroniza listado)' }}
+                  renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+                  pickerStyle={styles.picker}
+                  fieldGroupStyle={styles.filterGroupSearch}
+                />
+
+                <ThemedView style={styles.filterGroupSearch}>
+                  <ThemedText style={styles.filterLabel}>Buscar por placa, conductor, cédula, departamento, persona, razón o responsable:</ThemedText>
+                  <TextInput
+                    style={styles.searchInput}
+                    value={searchText}
+                    onChangeText={setSearchText}
+                    placeholder="Buscar..."
+                    placeholderTextColor="#999"
+                  />
+                </ThemedView>
+
+                <ThemedView style={styles.filterGroupSearch}>
+                  <ThemedText style={styles.filterLabel}>Tipo:</ThemedText>
+                  <ThemedView style={styles.pickerContainer}>
+                    <Picker
+                      selectedValue={selectedTipo}
+                      onValueChange={(value) => setSelectedTipo(value)}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Todos los tipos" value="all" color="#000000" />
+                      <Picker.Item label="Particular" value="Particular" color="#000000" />
+                      <Picker.Item label="Institucional" value="Institucional" color="#000000" />
+                    </Picker>
+                  </ThemedView>
+                </ThemedView>
+              </ThemedView>
+            )}
+          </ThemedView>
+
+          {/* Create Button */}
+          {!isCreating && !editingVehicle && !error && (
+            <TouchableOpacity style={styles.createButton} onPress={() => startCreating()}>
+              <ThemedText style={styles.createButtonText}>{getActionIcon('add')}</ThemedText>
+            </TouchableOpacity>
+          )}
+
+          {/* Create Form */}
+          {isCreating && renderVehicleForm(newVehicle, true)}
+
+          {/* Edit Form */}
+          {editingVehicle && renderVehicleForm(editingVehicle, false)}
+
+          {/* Vehicles List */}
+          {!isCreating && !editingVehicle && (
+            <ThemedView style={styles.vehiclesContainer}>
+              {filteredVehicles.length === 0 ? (
+                <ThemedView style={styles.emptyContainer}>
+                  <ThemedText style={styles.emptyText}>
+                    {vehicles.length === 0
+                      ? 'No hay visitas de vehículos registradas aún'
+                      : 'No se encontraron visitas de vehículos con los filtros aplicados'}
+                  </ThemedText>
+                </ThemedView>
+              ) : (
+                filteredVehicles.map(vehicle => (
+                  <VehicleItemComponent
+                    key={getVehicleRowKey(vehicle.id, vehicle.id_local)}
+                    vehicle={vehicle}
+                    onEdit={() => startEditing(vehicle)}
+                    onDelete={() => deleteVehicle(vehicle.id, vehicle.id_local)}
+                    onRemoveAttachment={() => confirmRemoveVehicleAttachment(vehicle)}
+                    isDeleting={
+                      deletingVehicleKey === getVehicleRowKey(vehicle.id, vehicle.id_local)
+                    }
+                    onViewChanges={() => {
+                      if (vehicle.id_local || vehicle.id === 0) {
+                        Alert.alert('Sin conexión', 'Este vehículo es local/offline. Los cambios solo se pueden consultar en el servidor.');
+                        return;
+                      }
+                      setCambiosTitle(`Cambios - Vehículo #${vehicle.id}`);
+                      fetchCambios('e_registro_vehiculos', vehicle.id);
+                    }}
+                    getActionIcon={getActionIcon}
+                    convertDate={convertDate}
+                    getConnectionStatus={getConnectionStatus}
+                    appendTokenToUrl={appendTokenToUrl}
+                  />
+                ))
+              )}
+            </ThemedView>
+          )}
+        </ThemedView>
+      </ScrollView>
+
+      {/* Camera Modal */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <ThemedView style={{ flex: 1, backgroundColor: '#000' }}>
+          <CameraView
+            ref={cameraRef}
+            style={{ flex: 1 }}
+            facing="back"
+          >
+            <TouchableOpacity
+              style={styles.cameraCloseButton}
+              onPress={() => setIsCameraVisible(false)}
+            >
+              <Ionicons name="close" size={30} color="#000000" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.cameraCaptureButton}
+              onPress={takePicture}
+            >
+              <ThemedView style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </CameraView>
+        </ThemedView>
+      </Modal>
+
+      <CambiosAppsModulesModal
+        visible={isCambiosModalVisible}
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
+
+      <AppFooter />
+      <SlideMenu
+        isVisible={isMenuVisible}
+        onClose={handleMenuClose}
+        onHomePress={handleHomePress}
+        currentRoute="Vehicles"
+      />
+    </ThemedView>
+  );
+}
+
+// Vehicle Item Component for displaying image
+interface VehicleItemComponentProps {
+  vehicle: Vehicle;
+  onEdit: () => void;
+  onDelete: () => void;
+  onRemoveAttachment: () => void;
+  onViewChanges?: () => void;
+  isDeleting?: boolean;
+  getActionIcon: (action: string) => React.ReactElement;
+  convertDate: (dateString: string) => string;
+  getConnectionStatus: () => Promise<boolean>;
+  appendTokenToUrl: (url: string) => string;
+}
+
+const VehicleItemComponent: React.FC<VehicleItemComponentProps> = ({
+  vehicle,
+  onEdit,
+  onDelete,
+  onRemoveAttachment,
+  onViewChanges,
+  isDeleting = false,
+  getActionIcon,
+  convertDate,
+  getConnectionStatus,
+  appendTokenToUrl,
+}) => {
+  const { employee, refreshAccessToken, logout } = useAuth();
+  const [imageBase64, setImageBase64] = React.useState<string | null>(null);
+  const [isLoadingImage, setIsLoadingImage] = React.useState<boolean>(false);
+  const [isImageExpanded, setIsImageExpanded] = React.useState<boolean>(false);
+  const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+
+  const hasAttachment =
+    Boolean(vehicle.local_attachment_file) ||
+    Boolean(vehicle.file_name && String(vehicle.file_name).trim() !== '') ||
+    Boolean(vehicle.base64_image && vehicle.base64_image.trim() !== '');
+
+  const hasImage = true;
+
+  const loadImageFromServer = React.useCallback(async () => {
+    if (!apiUrl || !vehicle.id || vehicle.id <= 0) {
+      console.warn('No API URL or vehicle ID available');
+      return;
+    }
+
+    try {
+      const response = await authedFetch({
+        url: appendTokenToUrl(`${apiUrl}/api/vehicles/${vehicle.id}/get-image?t=${Date.now()}`),
+        init: {
+          method: 'GET',
+        },
+        refreshAccessToken,
+        logout,
+      });
+      if (!response) return;
+
+      if (response.ok) {
+        const blob = await response.blob();
+
+        // Convert blob to base64
+        const base64Image = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+
+          reader.onerror = () => {
+            console.error('Error al leer la imagen con FileReader');
+            resolve(null);
+          };
+
+          reader.onloadend = () => {
+            try {
+              const base64data = reader.result as string;
+              if (!base64data) {
+                console.warn('No se pudo convertir la imagen a base64');
+                resolve(null);
+              } else {
+                resolve(base64data);
+              }
+            } catch (error) {
+              console.error('Error al procesar base64:', error);
+              resolve(null);
+            }
+          };
+
+          reader.readAsDataURL(blob);
+        });
+
+        if (base64Image) {
+          setImageBase64(base64Image);
+        }
+      } else {
+        console.warn(`Failed to load vehicle image: ${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      console.error('Error fetching vehicle image:', error);
+    }
+  }, [apiUrl, vehicle.id, refreshAccessToken, appendTokenToUrl, logout]);
+
+  React.useEffect(() => {
+    if (!isImageExpanded) {
+      setImageBase64(null);
+      setIsLoadingImage(false);
+      return;
+    }
+
+    const checkConnectionAndLoadImage = async () => {
+      setIsLoadingImage(true);
+
+      if (vehicle.local_attachment_file) {
+        const u = getStoredFileDisplayUri(String(vehicle.local_attachment_file));
+        if (u) setImageBase64(u);
+        else setImageBase64(null);
+        setIsLoadingImage(false);
+        return;
+      }
+
+      const connectionStatus = await getConnectionStatus();
+
+      if (vehicle.base64_image && vehicle.base64_image.trim() !== '') {
+        const formattedImage = getVehicleImageDisplayUri(vehicle.base64_image);
+        if (formattedImage) setImageBase64(formattedImage);
+      } else {
+        setImageBase64(null);
+      }
+
+      if (!connectionStatus) {
+        setIsLoadingImage(false);
+      } else if (vehicle.file_name && String(vehicle.file_name).trim() !== '' && vehicle.id > 0) {
+        await loadImageFromServer();
+        setIsLoadingImage(false);
+      } else {
+        setIsLoadingImage(false);
+      }
+    };
+
+    checkConnectionAndLoadImage();
+  }, [
+    vehicle.id,
+    vehicle.base64_image,
+    vehicle.local_attachment_file,
+    vehicle.file_name,
+    isImageExpanded,
+    getConnectionStatus,
+    loadImageFromServer,
+  ]);
+
+  return (
+    <ThemedView style={styles.vehicleCard}>
+      <ThemedView style={styles.vehicleHeader}>
+        <ThemedText style={styles.vehiclePlaca}>{vehicle.placa}</ThemedText>
+        <ThemedText style={styles.vehicleTipo}>{vehicle.tipo}</ThemedText>
+      </ThemedView>
+      <ThemedText style={styles.vehicleInfo}>Conductor: {vehicle.nombre_propietario}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Cédula: {vehicle.cedula_propietario}</ThemedText>
+      {!!vehicle.departamento_visita && (
+        <ThemedText style={styles.vehicleInfo}>Departamento: {vehicle.departamento_visita}</ThemedText>
+      )}
+      {!!vehicle.persona_visita && (
+        <ThemedText style={styles.vehicleInfo}>Persona a visitar: {vehicle.persona_visita}</ThemedText>
+      )}
+      <ThemedText style={styles.vehicleInfo}>Entrada: {convertDate(vehicle.hora_entrada)}</ThemedText>
+      {vehicle.hora_salida && (
+        <ThemedText style={styles.vehicleInfo}>Salida: {convertDate(vehicle.hora_salida)}</ThemedText>
+      )}
+      {vehicle.puesto_salida && (
+        <ThemedText style={styles.vehicleInfo}>
+          Puesto de salida: {vehicle.puesto_salida.nombre}
+          {vehicle.puesto_salida.codigo ? ` (${vehicle.puesto_salida.codigo})` : ''}
+        </ThemedText>
+      )}
+      <ThemedText style={styles.vehicleInfo}>Razón: {vehicle.razon_visita}</ThemedText>
+      <ThemedText style={styles.vehicleInfo}>Responsable: {vehicle.responsable.nombre}</ThemedText>
+
+      {/* Collapsable image section */}
+      {hasImage && (
+        <ThemedView style={styles.collapsableSection}>
+          <TouchableOpacity
+            style={styles.collapsableHeader}
+            onPress={() => setIsImageExpanded(!isImageExpanded)}
+          >
+            <ThemedText style={styles.collapsableHeaderText}>Foto de la matrícula</ThemedText>
+            <Ionicons
+              name={isImageExpanded ? "chevron-up" : "chevron-down"}
+              size={20}
+              color="#007AFF"
+            />
+          </TouchableOpacity>
+
+          {isImageExpanded && (
+            <ThemedView style={styles.collapsableContent}>
+              {isLoadingImage ? (
+                <ThemedView style={styles.imageLoadingContainer}>
+                  <ActivityIndicator size="small" color="#007AFF" />
+                  <ThemedText style={styles.imageLoadingText}>Cargando imagen...</ThemedText>
+                </ThemedView>
+              ) : imageBase64 ? (
+                <ThemedView style={styles.imagePreviewContainer}>
+                  <View style={{ position: 'relative' }}>
+                  <Image
+                    source={{ uri: imageBase64 }}
+                    style={styles.imagePreview}
+                    resizeMode="contain"
+                  />
+                    {hasAttachment ? (
+                      <TouchableOpacity
+                        style={styles.vehicleImageTrashButton}
+                        onPress={onRemoveAttachment}
+                      >
+                        <Ionicons name="trash-outline" size={22} color="#fff" />
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </ThemedView>
+              ) : (
+                <ThemedView style={styles.imageLoadingContainer}>
+                  <ThemedText style={styles.imageLoadingText}>
+                    {!hasAttachment ? 'No hay imagen para este registro' : 'No hay imagen disponible'}
+                  </ThemedText>
+                </ThemedView>
+              )}
+            </ThemedView>
+          )}
+        </ThemedView>
+      )}
+
+      {/* Solo serán visibles si el dato responsable_id es igual al id del empleado actual */}
+      {vehicle.responsable.id === parseInt(employee?.id || '0') && (
+        <ThemedView style={styles.buttonRow}>
+          <TouchableOpacity style={styles.editButton} onPress={onEdit}>
+            <ThemedText style={styles.editButtonText}>{getActionIcon('edit')}</ThemedText>
+          </TouchableOpacity>
+          {onViewChanges && (
+            <TouchableOpacity style={styles.changesButton} onPress={onViewChanges}>
+              <Ionicons name="list-outline" size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity
+            style={[styles.deleteButton, isDeleting && styles.disabledButton]}
+            onPress={onDelete}
+            disabled={isDeleting}
+          >
+            {isDeleting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+            <ThemedText style={styles.deleteButtonText}>{getActionIcon('delete')}</ThemedText>
+            )}
+          </TouchableOpacity>
+        </ThemedView>
+      )}
+    </ThemedView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    alignItems: 'center',
+    padding: 20,
+  },
+  contentContainer: {
+    width: '100%',
+    maxWidth: 600,
+  },
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 30,
+    paddingBottom: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    width: '100%',
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  subtitle: {
+    fontSize: 16,
+    opacity: 0.7,
+    textAlign: 'center',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    opacity: 0.7,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#F5C2C7',
+    backgroundColor: '#F8D7DA',
+  },
+  errorBannerText: {
+    flex: 1,
+    color: '#B00020',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  offlineBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 20,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FFEBAA',
+    backgroundColor: '#FFF3CD',
+  },
+  offlineBannerText: {
+    flex: 1,
+    color: '#8A6D00',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  noMarcaContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+    gap: 20,
+  },
+  noMarcaTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#FF9500',
+    textAlign: 'center',
+  },
+  noMarcaMessage: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 24,
+    maxWidth: 400,
+  },
+  goBackButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#007AFF',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  goBackButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  filtersMain: {
+    width: '100%',
+    marginBottom: 20,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  filterHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#F8F9FA',
+  },
+  filterToggleText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  resetFiltersButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#FF3B30',
+  },
+  resetFiltersText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#FF3B30',
+  },
+  filterContent: {
+    padding: 16,
+    gap: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  inlineLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  inlineLoadingText: {
+    color: '#666666',
+  },
+  formHierarchySection: {
+    marginBottom: 16,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8E8E8',
+  },
+  formHierarchyHint: {
+    fontSize: 13,
+    color: '#666',
+    marginBottom: 8,
+  },
+  filterGroupSearch: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  filterLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  searchInput: {
+    width: '100%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+  },
+  picker: {
+    width: '100%',
+    height: 50,
+  },
+  createButton: {
+    backgroundColor: '#007AFF',
+    padding: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  createButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  vehiclesContainer: {
+    width: '100%',
+    gap: 16,
+  },
+  vehicleCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 8,
+  },
+  vehicleHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    backgroundColor: '#fff',
+  },
+  vehiclePlaca: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007AFF',
+  },
+  vehicleTipo: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#34C759',
+    backgroundColor: '#F0F9F4',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  vehicleInfo: {
+    fontSize: 14,
+    color: '#666',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+    backgroundColor: '#fff',
+  },
+  editButton: {
+    flex: 1,
+    backgroundColor: '#007AFF',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  editButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  deleteButton: {
+    flex: 1,
+    backgroundColor: '#FF3B30',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    opacity: 0.5,
+    textAlign: 'center',
+  },
+  formCard: {
+    marginBottom: 20,
+  },
+  formTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#007AFF',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  formGroup: {
+    marginBottom: 16,
+    backgroundColor: '#fff',
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  formInput: {
+    width: '100%',
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+    color: '#000000',
+  },
+  textArea: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  timeInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#fff',
+  },
+  timeInput: {
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    fontSize: 16,
+    backgroundColor: '#F9F9F9',
+    textAlign: 'center',
+    color: '#000000',
+  },
+  timeInputHour: {
+    width: '40%',
+  },
+  timeInputMinute: {
+    width: '40%',
+  },
+  timeSeparator: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  timePickerButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+  },
+  timePickerButtonText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  timePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  clearTimeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    marginLeft: 8,
+  },
+  clearTimeText: {
+    color: '#FF3B30',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  inlinePickerContainer: {
+    marginTop: 8,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  confirmButton: {
+    flex: 1,
+    backgroundColor: '#34C759',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  confirmButtonInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'transparent',
+  },
+  confirmButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  cancelButton: {
+    backgroundColor: '#8E8E93',
+    padding: 12,
+    borderRadius: 6,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.7,
+  },
+  captureImageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F0F0F0',
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    marginTop: 8,
+  },
+  captureImageButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  imagePreviewContainer: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  imagePreviewTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#333',
+  },
+  imagePreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+  },
+  vehicleImageTrashButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 18,
+    padding: 8,
+  },
+  cameraCloseButton: {
+    position: 'absolute',
+    top: 40,
+    right: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1,
+  },
+  cameraCaptureButton: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: '#fff',
+  },
+  cameraCaptureButtonInner: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#fff',
+  },
+  collapsableSection: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    backgroundColor: '#F9F9F9',
+    overflow: 'hidden',
+
+  },
+  collapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 12,
+    backgroundColor: '#F0F0F0',
+  },
+  collapsableHeaderText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+  },
+  collapsableContent: {
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  imageLoadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 20,
+    backgroundColor: '#F9F9F9',
+  },
+  imageLoadingText: {
+    fontSize: 14,
+    color: '#666',
+  },
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  floatModalCardMovimientos: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    width: '100%',
+    maxWidth: 500,
+    maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  floatModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+  },
+  cambioCollapsableMain: {
+    width: '100%',
+    marginBottom: 10,
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  cambioCollapsableHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#F8F9FA',
+  },
+  cambioCollapsableTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#007AFF',
+    flex: 1,
+  },
+  cambioCollapsableContent: {
+    padding: 12,
+    gap: 8,
+    backgroundColor: '#F8F9FA',
+  },
+  changeDescription: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#666',
+    marginBottom: 8,
+  },
+  changesButton: {
+    backgroundColor: '#5856D6',
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+});
+

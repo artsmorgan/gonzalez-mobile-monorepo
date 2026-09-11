@@ -1,0 +1,15 @@
+id: F-002
+module_id: physical-minute-agenda
+severity: low
+status: fixed
+file: apps/mobile/screens/PhysicalMinuteAgendaScreen.tsx
+lines: "1-50"
+category: api
+title: Tipos agenda_minuta vs physical_minute_agenda duplicados
+description: |
+  Mismo flujo evaluations_actions con dos type strings; aumenta superficie de bugs en sync.
+reproduction: |
+  1. Inspeccionar encolado offline con type mixto.
+impact: Ramas sync pueden omitir acciones si type no coincide.
+suggested_fix: |
+  Unificar type string en mobile y server.

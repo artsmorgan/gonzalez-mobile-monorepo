@@ -1,0 +1,16 @@
+id: F-002
+module_id: attendance-control
+severity: medium
+status: fixed
+file: apps/mobile/screens/AttendanceControlScreen.tsx
+lines: "1893-1916"
+category: api
+title: Update sin firmas_empleados no borra firmas en servidor
+description: |
+  PUT omitiendo firmas_empleados no dispara deleteMany en servidor.
+reproduction: |
+  1. Editar control quitando todas las firmas.
+  2. Guardar.
+impact: Firmas antiguas permanecen en DB.
+suggested_fix: |
+  Enviar firmas_empleados: [] explícito al quitar todas.

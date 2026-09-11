@@ -1,0 +1,16 @@
+id: F-001
+module_id: bitacora-vehiculos-detenidos
+severity: medium
+status: fixed
+file: apps/mobile/App.tsx
+lines: "3788-3792"
+category: offline
+title: Migración legacy omite delete_image
+description: |
+  legacyBitActions filter excluye delete_image.
+reproduction: |
+  1. Cola legacy con delete_image.
+  2. Migración.
+impact: Delete imagen atascado en cola legacy.
+suggested_fix: |
+  Incluir delete_image en migración.

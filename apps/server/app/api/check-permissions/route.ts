@@ -1,87 +1,52 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
 import { actions } from "../../../public/actions";
-import { verifyAccessToken } from "../../../utils/verifyToken";
-
-const prisma = new PrismaClient();
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(request: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(request);
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const { searchParams } = new URL(request.url);
         const id = searchParams.get("id");
         const actionsInParams = searchParams.get("actions");
 
         if (!id) {
-            return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Usuario no especificado");
+            return NextResponse.json({ message: "Usuario no especificado" }, { status: 400 });
         }
-        const empleado = await prisma.c_empleado.findFirst({
-            where: { id: parseInt(id) }
-        });
-
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: parseInt(id ?? "0") } });
         if (!empleado) {
-            return NextResponse.json(
-                { status: false, message: "Empleado no encontrado" },
-                { status: 401 }
-            );
+            await reportError(request, "api/check-permissions", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
         }
 
-        const empleado_plaza = await prisma.c_empleado_plaza.findMany({
-            where: {
-                empleado_id: empleado.id
-            }
-        });
-
+        const empleado_plaza = await prisma.c_empleado_plaza.findMany({ where: { empleado_id: empleado.id } });
         const roles: { role: { name: string, id: number }, division: { id: number, name: string } }[] = [];
         for (const item of empleado_plaza) {
-
             if (!item.plaza_id || !item.division_id) {
                 continue;
             }
 
-            const division = await prisma.n_division.findFirst({
-                where: {
-                    id: item.division_id
-                }
-            });
-
+            const division = await prisma.n_division.findUnique({ where: { id: item.division_id } });
             if (!division) {
                 continue;
             }
 
-            const plaza = await prisma.e_estructura_plazas.findFirst({
-                where: {
-                    id: item.plaza_id
-                }
-            });
-
+            const plaza = await prisma.e_estructura_plazas.findUnique({ where: { id: item.plaza_id } });
             if (!plaza || !plaza.categoriaSalarial_id) {
                 continue;
             }
 
-            const categoria_salarial = await prisma.pg_categoria_salarial.findFirst({
-                where: {
-                    id: plaza.categoriaSalarial_id
-                }
-            });
-
+            const categoria_salarial = await prisma.pg_categoria_salarial.findUnique({ where: { id: plaza.categoriaSalarial_id } });
             if (!categoria_salarial || !categoria_salarial.categoriaEmpleado_id) {
                 continue;
             }
 
-            const categoria_empleado = await prisma.pg_categoria_empleado.findFirst({
-                where: {
-                    id: categoria_salarial.categoriaEmpleado_id
-                }
-            });
-
+            const categoria_empleado = await prisma.pg_categoria_empleado.findUnique({ where: { id: categoria_salarial.categoriaEmpleado_id } });
             if (!categoria_empleado) {
                 continue;
             }
@@ -120,11 +85,13 @@ export async function GET(request: NextRequest) {
         }
 
         if (!id) {
-            return NextResponse.json({ message: "Usuario no especificado" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Usuario no especificado");
+            return NextResponse.json({ message: "Usuario no especificado" }, { status: 400 });
         }
 
         if (!actionsInParams) {
-            return NextResponse.json({ message: "Acciones no especificadas" }, { status: 404 });
+            await reportError(request, "api/check-permissions", "GET", 400, "Acciones no especificadas");
+            return NextResponse.json({ message: "Acciones no especificadas" }, { status: 400 });
         }
 
 
@@ -133,7 +100,8 @@ export async function GET(request: NextRequest) {
         // Verificar que todos los actionsInParams estén en el array de actions
         for (const action of actionParams) {
             if (!actions.find(a => a.nombre === action)) {
-                return NextResponse.json({ message: "Acción no encontrada" }, { status: 404 });
+                await reportError(request, "api/check-permissions", "GET", 400, "Acción no encontrada");
+                return NextResponse.json({ message: "Acción no encontrada" }, { status: 400 });
             }
         }
 
@@ -149,21 +117,11 @@ export async function GET(request: NextRequest) {
             })) ?? []
         }));
 
-        for (const role of roles) {
-            for (const action of actionsForUserWithValidate) {
-                const roleModules = await prisma.roles_security_modules.findFirst({ where: { role_name: role.role.name, module_name: action.nombre } });
-                if (roleModules && roleModules.actions != null && roleModules.actions != "") {
-                    action.actions.forEach(a => {
-                        if (a.validate) return;
-                        a.validate = JSON.parse(roleModules.actions).includes(a.nombre) ? true : false;
-                    });
-                }
-            }
-        }
 
         return NextResponse.json(actionsForUserWithValidate, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(request, "api/check-permissions", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

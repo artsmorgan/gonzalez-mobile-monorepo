@@ -1,0 +1,567 @@
+import { NextRequest, NextResponse } from "next/server";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
+import { reportError } from "../../../utils/reportError";
+import { toZonedTime, format } from "date-fns-tz";
+import path from "path";
+import fs from "fs";
+import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
+import { prisma } from "../../../utils/prismaClient";
+import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
+import { sendNotificationByEmployee, sendNotificationByRole } from "../../../utils/sendNotification";
+import {
+    buildTrainingUploadPartsFromDataUris,
+    collectTrainingUploadDataUrisFromBody,
+    parseTrainingFileField,
+    resolveTrainingFilesMetaList,
+} from "./trainingFileField";
+import {
+    getRequestBaseUrl,
+    mapArchivoRowToApiPayload,
+    mapLegacyFileItemToApiPayload,
+} from "./trainingArchivosHelpers";
+
+export async function GET(req: NextRequest) {
+    try {
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+        const marcaId = req.nextUrl.searchParams.get("m");
+        if (!marcaId) {
+            await reportError(req, "api/training", "GET", 400, "Marca no especificada");
+            return NextResponse.json({ status: false, message: "Marca no especificada" }, { status: 400 });
+        }
+
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marcaId) } });
+        if (!marca) {
+            await reportError(req, "api/training", "GET", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
+        }
+
+        const marcaObj = marca as any;
+        if (!marcaObj.empleadoFijo_id) {
+            await reportError(req, "api/training", "GET", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
+
+        // Obtener la última marca usando callDynamicPrisma directamente
+        const now = toZonedTime(new Date(), "America/Costa_Rica");
+        const nowPlus15 = new Date(now.getTime() + 15 * 60 * 1000);
+        const currentDate = new Date(now.toISOString().split("T")[0]);
+        const currentTime = new Date("1970-01-01 " + now.toTimeString().slice(0, 8));
+
+        const proximo = await prisma.c_marca_dia.findFirst({
+            where: {
+                empleadoFijo_id: marcaObj.empleadoFijo_id,
+                OR: [
+                    { fecha: { gt: now } },
+                    { fecha: { equals: currentDate }, hora_inicio: { gte: currentTime } },
+                ],
+            },
+            orderBy: [{ fecha: "asc" }, { hora_inicio: "asc" }],
+        });
+
+        let lastMarca: any = null;
+        if (proximo) {
+            const proximoObj = proximo as any;
+            const proximoDateTime = new Date(`${proximoObj.fecha}T${proximoObj.hora_inicio}`);
+            if (proximoDateTime <= nowPlus15) {
+                lastMarca = proximo;
+            }
+        }
+
+        if (!lastMarca) {
+            const ultimo = await prisma.c_marca_dia.findFirst({
+                where: {
+                    empleadoFijo_id: marcaObj.empleadoFijo_id,
+                    OR: [
+                        { fecha: { lt: now } },
+                        { fecha: { equals: currentDate }, hora_inicio: { lt: currentTime } },
+                    ],
+                },
+                orderBy: [{ fecha: "desc" }, { hora_inicio: "desc" }],
+            });
+            lastMarca = ultimo;
+        }
+
+        if (!lastMarca) {
+            await reportError(req, "api/training", "GET", 404, "No se encontró la última marca");
+            return NextResponse.json({ status: false, message: "No se encontró la última marca" }, { status: 404 });
+        }
+
+        const lastMarcaObj = lastMarca as any;
+
+        const corpoIdParam = req.nextUrl.searchParams.get("corpo_id");
+        const effectiveCorpoId =
+            corpoIdParam != null && corpoIdParam !== "" && !isNaN(parseInt(corpoIdParam, 10))
+                ? parseInt(corpoIdParam, 10)
+                : marcaObj.corpo_id;
+
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoId } });
+        if (!corpo) {
+            await reportError(req, "api/training", "GET", 404, "Corpo no encontrada");
+            return NextResponse.json({ status: false, message: "Corpo no encontrada" }, { status: 404 });
+        }
+
+        const capacitaciones = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_registro_capacitaciones",
+                operation: "findMany",
+                where: { corpo_id: effectiveCorpoId, isActive: true },
+            },
+        });
+        const capacitacionesArray = Array.isArray(capacitaciones) ? capacitaciones : [];
+
+        const capacitaciones_return: {
+            id: number,
+            empresa: { id: number, nombre: string },
+            cliente: { id: number, nombre: string },
+            sucursal: { id: number, nombre: string },
+            division_id: number,
+            contrato_id: number,
+            puesto_id: number,
+            titulo: string,
+            descripcion: string,
+            tipo: string,
+            resultado: string,
+            observaciones: string,
+            responsable: { nombre: string, cedula: string },
+            firma_responsable: string,
+            nombre_firma: string,
+            fecha: string,
+            base64_file: string,
+            archivos: {
+                id: number;
+                name: string;
+                original_name: string;
+                type: string;
+                extension: string;
+                url: string;
+            }[],
+            empleados: { id: number, nombre: string, cedula: string }[],
+            puestos: { id: number, nombre: string }[],
+            id_local: string,
+        }[] = [];
+
+        const baseUrl = getRequestBaseUrl(req);
+
+        const empresaCache = new Map<number, any>();
+        const clienteCache = new Map<number, any>();
+        const corpoCache = new Map<number, any>();
+
+        const loadEmpresa = async (id: number) => {
+            if (empresaCache.has(id)) return empresaCache.get(id);
+            const row = await prisma.e_estructura_empresa.findUnique({ where: { id } });
+            empresaCache.set(id, row);
+            return row;
+        };
+        const loadCliente = async (id: number) => {
+            if (clienteCache.has(id)) return clienteCache.get(id);
+            const row = await prisma.e_estructura_cliente.findUnique({ where: { id } });
+            clienteCache.set(id, row);
+            return row;
+        };
+        const loadCorpo = async (id: number) => {
+            if (corpoCache.has(id)) return corpoCache.get(id);
+            const row = await prisma.e_estructura_sucursal.findUnique({ where: { id } });
+            corpoCache.set(id, row);
+            return row;
+        };
+
+        for (const capacitacion of capacitacionesArray) {
+            const capacitacionObj = capacitacion as any;
+            if (capacitacionObj.isActive === false) {
+                continue;
+            }
+            // Desconvertir de base64 a string
+            const id_firma = atob(capacitacionObj.firma_responsable).split(":")[1];
+            const firma = await prisma.c_empleado.findUnique({ where: { id: parseInt(id_firma) } });
+            let nombre_firma = "No disponible";
+            if (firma) {
+                const firmaObj = firma as any;
+                nombre_firma = (firmaObj.nombre || "") + " " + (firmaObj.primer_apellido || "") + " " + (firmaObj.segundo_apellido || "");
+                if (firmaObj.cedula) {
+                    nombre_firma += " (" + firmaObj.cedula + ")";
+                }
+            }
+
+            const empleados = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_capacitacion_empleado",
+                    operation: "findMany",
+                    where: { capacitacion_id: capacitacionObj.id },
+                },
+            });
+            const empleadosArray = Array.isArray(empleados) ? empleados : [];
+            const all_empleados: { id: number, nombre: string, cedula: string }[] = [];
+            for (const empleado of empleadosArray) {
+                const empleadoObj = empleado as any;
+                const empleado_data = await prisma.c_empleado.findUnique({ where: { id: empleadoObj.empleado_id } });
+                if (empleado_data) {
+                    const empleadoDataObj = empleado_data as any;
+                    all_empleados.push({
+                        id: empleadoObj.empleado_id,
+                        nombre: (empleadoDataObj.nombre || "") + " " + (empleadoDataObj.primer_apellido || "") + " " + (empleadoDataObj.segundo_apellido || ""),
+                        cedula: empleadoDataObj.cedula
+                    });
+                }
+            }
+
+            const puestos = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_capacitacion_puesto",
+                    operation: "findMany",
+                    where: { capacitacion_id: capacitacionObj.id },
+                },
+            });
+            const puestosArray = Array.isArray(puestos) ? puestos : [];
+            const all_puestos: { id: number, nombre: string }[] = [];
+            for (const puesto of puestosArray) {
+                const puestoObj = puesto as any;
+                const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoObj.puesto_id } });
+                if (puesto_data) {
+                    const puestoDataObj = puesto_data as any;
+                    all_puestos.push({
+                        id: puestoObj.puesto_id,
+                        nombre: puestoDataObj.nombre
+                    });
+                }
+            }
+
+            const fechaValue = capacitacionObj.fecha instanceof Date ? capacitacionObj.fecha : (typeof capacitacionObj.fecha === 'string' ? new Date(capacitacionObj.fecha) : new Date());
+
+            const empresaRow = await loadEmpresa(capacitacionObj.empresa_id);
+            const clienteRow = await loadCliente(capacitacionObj.cliente_id);
+            const corpoRow = await loadCorpo(capacitacionObj.corpo_id);
+            const empresaObj = (empresaRow || {}) as any;
+            const clienteObj = (clienteRow || {}) as any;
+            const corpoObj = (corpoRow || {}) as any;
+
+            const archivosDbRows = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_archivos_adjuntos_capacitaciones",
+                    operation: "findMany",
+                    where: { capacitacion_id: capacitacionObj.id },
+                },
+            });
+            const archivosDb = Array.isArray(archivosDbRows) ? archivosDbRows : [];
+            const seenNames = new Set(archivosDb.map((r: any) => String(r?.name ?? "")));
+            const archivosApi = archivosDb.map((r: any) =>
+                mapArchivoRowToApiPayload(baseUrl, capacitacionObj.id, {
+                    id: r.id,
+                    name: r.name,
+                    original_name: r.original_name,
+                    type: r.type,
+                    extension: r.extension,
+                    capacitacion_id: r.capacitacion_id,
+                })
+            );
+            const legacyItems = parseTrainingFileField(capacitacionObj.file);
+            for (const li of legacyItems) {
+                if (seenNames.has(li.name)) continue;
+                archivosApi.push(mapLegacyFileItemToApiPayload(baseUrl, capacitacionObj.id, li));
+            }
+
+            capacitaciones_return.push({
+                id: capacitacionObj.id,
+                empresa: {
+                    id: empresaObj.id ?? capacitacionObj.empresa_id,
+                    nombre: empresaObj.nombre ?? "—"
+                },
+                cliente: {
+                    id: clienteObj.id ?? capacitacionObj.cliente_id,
+                    nombre: clienteObj.nombre ?? "—"
+                },
+                sucursal: {
+                    id: corpoObj.id ?? capacitacionObj.corpo_id,
+                    nombre: corpoObj.nombre ?? "—"
+                },
+                division_id: Number(capacitacionObj.division_id) || 0,
+                contrato_id: Number(capacitacionObj.contrato_id) || 0,
+                puesto_id: Number(capacitacionObj.puesto_id) || 0,
+                titulo: capacitacionObj.titulo,
+                descripcion: capacitacionObj.descripcion,
+                tipo: capacitacionObj.tipo,
+                resultado: capacitacionObj.resultado || "No disponible",
+                observaciones: capacitacionObj.observaciones,
+                responsable: {
+                    nombre: capacitacionObj.nombre_responsable,
+                    cedula: capacitacionObj.cedula_responsable
+                },
+                firma_responsable: capacitacionObj.firma_responsable,
+                nombre_firma: nombre_firma,
+                fecha: fechaValue.toISOString(),
+                base64_file: "",
+                archivos: archivosApi,
+                empleados: all_empleados,
+                puestos: all_puestos,
+                id_local: ""
+            });
+        }
+
+        return NextResponse.json({ status: true, capacitaciones: capacitaciones_return }, { status: 200 });
+    }
+    catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
+        await reportError(req, "api/training", "GET", 500, errorMessage);
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
+
+export async function POST(req: NextRequest) {
+    try {
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+        const body = await req.json();
+        const {
+            marca_id,
+            empresa_id: body_empresa_id,
+            cliente_id: body_cliente_id,
+            corpo_id: body_corpo_id,
+            division_id: body_division_id,
+            contrato_id: body_contrato_id,
+            puesto_id: body_puesto_id,
+            titulo,
+            descripcion,
+            tipo,
+            resultado, // Opcional
+            observaciones,
+            nombre_responsable,
+            cedula_responsable,
+            firma_responsable,
+            file, // Opcional (una imagen legacy)
+            files, // Opcional string[] data URI
+            fecha,
+            empleados,
+            puestos
+        } = body;
+
+        console.log("marca_id", marca_id);
+        console.log("titulo", titulo);
+        console.log("descripcion", descripcion);
+        console.log("tipo", tipo);
+        //console.log("resultado", resultado);
+        console.log("observaciones", observaciones);
+        console.log("nombre_responsable", nombre_responsable);
+        console.log("cedula_responsable", cedula_responsable);
+        console.log("firma_responsable", firma_responsable);
+        console.log("file", file);
+        console.log("fecha", fecha);
+        console.log("empleados", empleados);
+        console.log("puestos", puestos);
+        console.log("--------------------------------");
+
+        const divId = body_division_id != null && body_division_id !== "" ? parseInt(String(body_division_id), 10) : NaN;
+        const conId = body_contrato_id != null && body_contrato_id !== "" ? parseInt(String(body_contrato_id), 10) : NaN;
+        const puestoJerId = body_puesto_id != null && body_puesto_id !== "" ? parseInt(String(body_puesto_id), 10) : NaN;
+
+        if (!marca_id ||
+            !titulo ||
+            !descripcion ||
+            !tipo ||
+            !observaciones ||
+            !nombre_responsable ||
+            !cedula_responsable ||
+            !firma_responsable ||
+            !fecha ||
+            !empleados ||
+            !puestos ||
+            !Number.isFinite(divId) ||
+            !Number.isFinite(conId) ||
+            !Number.isFinite(puestoJerId)) {
+            await reportError(req, "api/training", "POST", 400, "Datos incompletos");
+            return NextResponse.json({ status: false, message: "Datos incompletos" }, { status: 400 });
+        }
+
+        const marca = await prisma.c_marca_dia.findUnique({ where: { id: parseInt(marca_id) } });
+        if (!marca) {
+            await reportError(req, "api/training", "POST", 404, "Marca no encontrada");
+            return NextResponse.json({ status: false, message: "Marca no encontrada" }, { status: 404 });
+        }
+
+        const marcaObj = marca as any;
+        if (!marcaObj.empleadoFijo_id) {
+            await reportError(req, "api/training", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
+
+        const empleado = await prisma.c_empleado.findUnique({ where: { id: marcaObj.empleadoFijo_id } });
+        if (!empleado) {
+            await reportError(req, "api/training", "POST", 404, "Empleado no encontrado");
+            return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+        }
+
+        const effectiveEmpresaId =
+            body_empresa_id != null && body_empresa_id !== "" && !isNaN(parseInt(String(body_empresa_id), 10))
+                ? parseInt(String(body_empresa_id), 10)
+                : marcaObj.empresa_id;
+        const effectiveClienteId =
+            body_cliente_id != null && body_cliente_id !== "" && !isNaN(parseInt(String(body_cliente_id), 10))
+                ? parseInt(String(body_cliente_id), 10)
+                : marcaObj.cliente_id;
+        const effectiveCorpoIdPost =
+            body_corpo_id != null && body_corpo_id !== "" && !isNaN(parseInt(String(body_corpo_id), 10))
+                ? parseInt(String(body_corpo_id), 10)
+                : marcaObj.corpo_id;
+
+        const empresa = await prisma.e_estructura_empresa.findUnique({ where: { id: effectiveEmpresaId } });
+        if (!empresa) {
+            await reportError(req, "api/training", "POST", 404, "Empresa no encontrada");
+            return NextResponse.json({ status: false, message: "Empresa no encontrada" }, { status: 404 });
+        }
+
+        const cliente = await prisma.e_estructura_cliente.findUnique({ where: { id: effectiveClienteId } });
+        if (!cliente) {
+            await reportError(req, "api/training", "POST", 404, "Cliente no encontrado");
+            return NextResponse.json({ status: false, message: "Cliente no encontrado" }, { status: 404 });
+        }
+
+        const corpo = await prisma.e_estructura_sucursal.findUnique({ where: { id: effectiveCorpoIdPost } });
+        if (!corpo) {
+            await reportError(req, "api/training", "POST", 404, "Corpo no encontrado");
+            return NextResponse.json({ status: false, message: "Corpo no encontrado" }, { status: 404 });
+        }
+
+        const empresaObj = empresa as any;
+        const clienteObj = cliente as any;
+        const corpoObj = corpo as any;
+        const fechaDate = fecha instanceof Date ? fecha : new Date(fecha);
+
+        const new_capacitacion = await callDynamicPrisma({
+            req,
+            data: {
+                action: "POST",
+                table: "e_registro_capacitaciones",
+                operation: "create",
+                data: {
+                    empresa_id: empresaObj.id,
+                    cliente_id: clienteObj.id,
+                    corpo_id: corpoObj.id,
+                    division_id: divId,
+                    contrato_id: conId,
+                    puesto_id: puestoJerId,
+                    titulo: titulo,
+                    descripcion: descripcion,
+                    tipo: tipo,
+                    resultado: resultado,
+                    observaciones: observaciones,
+                    nombre_responsable: nombre_responsable,
+                    cedula_responsable: cedula_responsable,
+                    firma_responsable: firma_responsable,
+                    file: "-",
+                    fecha: fechaDate.toISOString(),
+                    responsable_id: payload?.id
+                }
+            }
+        });
+
+        const capacitacionObj = new_capacitacion as any;
+        const fechaValue = capacitacionObj.fecha instanceof Date ? capacitacionObj.fecha : (typeof capacitacionObj.fecha === 'string' ? new Date(capacitacionObj.fecha) : new Date());
+        const date = fechaValue.toISOString().split("T")[0];
+        const hour = fechaValue.toISOString().split("T")[1].split(".")[0];
+
+        for (const emp of empleados) {
+            const empleado_data = await prisma.c_empleado.findUnique({ where: { id: parseInt(emp) } });
+            if (!empleado_data) {
+                continue;
+            }
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "e_capacitacion_empleado",
+                    operation: "create",
+                    data: {
+                        capacitacion_id: capacitacionObj.id,
+                        empleado_id: parseInt(emp)
+                    }
+                }
+            });
+
+            const desc = `Has recibido la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`;
+            await sendNotificationByEmployee(req, effectiveCorpoIdPost, [marcaObj.empleadoFijo_id], "Capacitación recibida", desc, [parseInt(emp)]);
+        }
+
+        for (const puesto of puestos) {
+            const puesto_data = await prisma.e_estructura_puesto.findUnique({ where: { id: parseInt(puesto) } });
+            if (!puesto_data) {
+                continue;
+            }
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "e_capacitacion_puesto",
+                    operation: "create",
+                    data: {
+                        capacitacion_id: capacitacionObj.id,
+                        puesto_id: parseInt(puesto)
+                    }
+                }
+            });
+        }
+
+        const dataUriList = collectTrainingUploadDataUrisFromBody({ files, file });
+
+        if (dataUriList.length > 0) {
+            const metaList = resolveTrainingFilesMetaList(body);
+            const uploadParts = buildTrainingUploadPartsFromDataUris(dataUriList, metaList);
+            const uploadResp = await uploadDynamicFiles({
+                req,
+                folderPath: `training/${capacitacionObj.id}`,
+                files: uploadParts,
+            });
+            const uploaded = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+            for (let i = 0; i < uploaded.length; i++) {
+                const u = uploaded[i] as { name?: string; original_name?: string };
+                const name = u?.name || "";
+                if (!name) continue;
+                const part = uploadParts[i];
+                const extRaw = part?.extension || name.split(".").pop() || "bin";
+                const ext = String(extRaw).replace(/^\./, "").slice(0, 25);
+                const orig = (u?.original_name && String(u.original_name).trim() !== "")
+                    ? String(u.original_name)
+                    : name;
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "c_archivos_adjuntos_capacitaciones",
+                        operation: "create",
+                        data: {
+                            name,
+                            original_name: orig,
+                            type: (part?.type || "file").slice(0, 25),
+                            extension: ext,
+                            capacitacion_id: capacitacionObj.id,
+                        },
+                    },
+                });
+            }
+        }
+
+        await sendNotificationByRole(req, effectiveCorpoIdPost, [marcaObj.plaza_id], "Capacitación creada", `Se ha registrado la capacitación ${capacitacionObj.titulo} en la sucursal ${corpoObj.nombre} de ${clienteObj.nombre} el día ${date} a las ${hour}`, ["ADMINISTRATIVO", "SUPERVISOR"]);
+
+        return NextResponse.json({
+            status: true,
+            message: "Capacitación creada correctamente",
+            id: capacitacionObj.id,
+            data: { id: capacitacionObj.id },
+        }, { status: 200 });
+    }
+    catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.log(errorMessage);
+        await reportError(req, "api/training", "POST", 500, errorMessage);
+        return NextResponse.json({ message: errorMessage }, { status: 500 });
+    }
+}
