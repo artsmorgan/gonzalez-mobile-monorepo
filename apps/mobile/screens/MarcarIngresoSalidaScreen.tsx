@@ -1241,7 +1241,10 @@ export default function MarcarIngresoSalidaScreen() {
 
   const validateBeforeMarkAction = async (
     type: 'entrada' | 'salida'
-  ): Promise<{ ok: true; horaAccionMs: number } | { ok: false; message: string }> => {
+  ): Promise<
+    | { ok: true; horaAccionMs: number; lat: number | null; lng: number | null }
+    | { ok: false; message: string }
+  > => {
     if (!attendanceData?.marca) {
       return { ok: false, message: 'No se encontró la marca.' };
     }
@@ -1358,7 +1361,7 @@ export default function MarcarIngresoSalidaScreen() {
       }
     }
 
-    return { ok: true, horaAccionMs: nowMs };
+    return { ok: true, horaAccionMs: nowMs, lat, lng };
   };
 
   const executeToggleAttendance = async () => {
@@ -1567,6 +1570,7 @@ export default function MarcarIngresoSalidaScreen() {
     }
 
     const actionHoraAccion = preCheck.horaAccionMs;
+    const actionCords = { lat: preCheck.lat?.toString() || null, lng: preCheck.lng?.toString() || null };
 
       if (type === 'salida') {
         const gpsSalidaEnabled = await getValidateGpsSalidaFromStorage();
@@ -1594,7 +1598,7 @@ export default function MarcarIngresoSalidaScreen() {
           }
 
           data = await saveMarca({
-            data_params: { type, reason, horaAccion: actionHoraAccion },
+            data_params: { type, reason, horaAccion: actionHoraAccion, cords: actionCords },
             marcaId: attendanceData.marca.id,
             refreshAccessToken,
             logout,
@@ -1637,7 +1641,7 @@ export default function MarcarIngresoSalidaScreen() {
         }
 
         data = await saveMarca({
-          data_params: { type, reason, horaAccion: actionHoraAccion },
+          data_params: { type, reason, horaAccion: actionHoraAccion, cords: actionCords },
           marcaId: attendanceData.marca.id,
           refreshAccessToken,
           logout,

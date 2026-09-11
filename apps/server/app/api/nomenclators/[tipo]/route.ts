@@ -16,6 +16,7 @@ import {
     parseEmpleadoEjecutivoPayload,
 } from "../../../../utils/nomenclatorsEmpleadoEjecutivo";
 import { fetchMobileVariablesList } from "../../../../utils/nomenclatorsMobileVariables";
+import { fetchReportesControlVersionesList } from "../../../../utils/nomenclatorsReportesControlVersiones";
 import {
     articuloCorpoPuestoExists,
     fetchTipoMantenimientoArticuloList,
@@ -90,6 +91,11 @@ export async function GET(
 
         if (resolveNomenclatorKind(tipo) === "mobile-variable") {
             const data = await fetchMobileVariablesList(req);
+            return NextResponse.json({ status: true, data }, { status: 200 });
+        }
+
+        if (resolveNomenclatorKind(tipo) === "reportes-control-versiones") {
+            const data = await fetchReportesControlVersionesList(req);
             return NextResponse.json({ status: true, data }, { status: 200 });
         }
 
@@ -186,6 +192,14 @@ export async function POST(
             await reportError(req, "api/nomenclators/[tipo]", "POST", 405, "No se pueden crear variables del sistema desde esta pantalla");
             return NextResponse.json(
                 { status: false, message: "No se pueden crear variables del sistema desde esta pantalla" },
+                { status: 405 }
+            );
+        }
+
+        if (resolveNomenclatorKind(tipo) === "reportes-control-versiones") {
+            await reportError(req, "api/nomenclators/[tipo]", "POST", 405, "No se pueden crear registros de control de versiones desde esta pantalla");
+            return NextResponse.json(
+                { status: false, message: "No se pueden crear registros de control de versiones desde esta pantalla" },
                 { status: 405 }
             );
         }

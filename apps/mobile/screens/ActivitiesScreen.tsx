@@ -3192,6 +3192,21 @@ export default function ActivitiesScreen() {
     setUpdPSucursalId(null);
   };
 
+  const mergeEffectivePuestosIntoAssignedResponsables = (puestos: any[]) => {
+    setAssignedResponsables(prev => {
+      const existingIds = new Set(prev.map((r: any) => r.puestoId));
+      const additions = puestos
+        .filter((puesto: any) => !existingIds.has(puesto.id))
+        .map((puesto: any) => ({
+          puestoId: puesto.id,
+          puestoNombre: puesto.nombre,
+          assignAll: true,
+          plazas: [],
+        }));
+      return [...prev, ...additions];
+    });
+  };
+
   const handleConfirmPuestosSelection = () => {
     if (assignToAllDivision && !selectedDivisionForAll) {
       Alert.alert('Validación', 'Selecciona una división para asignar todos sus puestos.');
@@ -3212,28 +3227,14 @@ export default function ActivitiesScreen() {
             text: 'Confirmar',
             style: 'default',
             onPress: () => {
-              setAssignedResponsables(
-                effectivePuestos.map((puesto: any) => ({
-                  puestoId: puesto.id,
-                  puestoNombre: puesto.nombre,
-                  assignAll: true,
-                  plazas: [],
-                }))
-              );
+              mergeEffectivePuestosIntoAssignedResponsables(effectivePuestos);
             },
           },
         ]
       );
       return;
     }
-    setAssignedResponsables(
-      effectivePuestos.map((puesto: any) => ({
-        puestoId: puesto.id,
-        puestoNombre: puesto.nombre,
-        assignAll: true,
-        plazas: [],
-      }))
-    );
+    mergeEffectivePuestosIntoAssignedResponsables(effectivePuestos);
     setIsSelectedPuestosExpanded(false);
     Alert.alert('Listo', `Se utilizarán ${uniquePuestosCount} puestos en el formulario.`);
   };

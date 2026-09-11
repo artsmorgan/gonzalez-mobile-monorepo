@@ -7,6 +7,57 @@ import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
 import { toZonedTime } from "date-fns-tz";
 import axios from "axios";
 
+export async function GET(
+    req: NextRequest,
+    context: { params: Promise<{ id: string }> }
+) {
+    try {
+        const { valid, expired, message } = await verifyAccessTokenByApi(req);
+        if (!valid) {
+            return NextResponse.json(
+                { status: false, expired: expired, message: message },
+                { status: expired ? 401 : 403 }
+            );
+        }
+
+        const resolvedParams = await context.params;
+        const puestoId = parseInt(resolvedParams.id);
+
+        if (!puestoId || isNaN(puestoId)) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "GET", 400, "ID de puesto inválido");
+            return NextResponse.json(
+                { status: false, message: "ID de puesto inválido" },
+                { status: 400 }
+            );
+        }
+
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoId } });
+        if (!puesto) {
+            await reportError(req, "api/puestos/[id]/ubicacion", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json(
+                { status: false, message: "Puesto no encontrado" },
+                { status: 404 }
+            );
+        }
+
+        return NextResponse.json(
+            {
+                status: true,
+                data: {
+                    lat: puesto.coordenadas_gpslat ?? null,
+                    lng: puesto.coordenadas_gpslng ?? null,
+                },
+            },
+            { status: 200 }
+        );
+    } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        console.error("Error fetching puesto ubicacion:", errorMessage);
+        await reportError(req, "api/puestos/[id]/ubicacion", "GET", 500, errorMessage);
+        return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+    }
+}
+
 export async function PUT(
     req: NextRequest,
     context: { params: Promise<{ id: string }> }

@@ -7,6 +7,7 @@ interface saveMarcaParams {
         type: string;
         reason: string;
         horaAccion: number;
+        cords?: { lat: string | null; lng: string | null } | null;
     };
     marcaId: number;
     planillasToken?: string | null;
@@ -51,6 +52,7 @@ export default async function saveMarca({
                     type: data_params.type,
                     reason: data_params.reason,
                     horaAccion: data_params.horaAccion,
+                    cords: data_params.cords ?? { lat: null, lng: null },
                 }),
             },
             refreshAccessToken,

@@ -120,7 +120,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
         const resolvedParams = await context.params;
         const id = parseInt(resolvedParams.id);
 
-        const { type, reason, horaAccion } = await req.json();
+        const { type, reason, horaAccion, cords } = await req.json();
 
         // Planillas token deben ser obtenido del header de la request
         const planillasToken = decodeURIComponent(req.headers.get('Planillas-Token') ?? '') || null;
@@ -181,6 +181,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                             reason,
                             payload,
                             planillasToken,
+                            cords
                         );
                         if (!closePrevious.status) {
                             console.warn(
@@ -247,7 +248,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                 const marca_hora_entrada_date = new Date(`${marca_fecha}T${marca_hora_entrada}`);
                 const hora_entrada_digitada = updated.hora_entrada_digitada ? new Date(updated.hora_entrada_digitada) : null;
 
-                await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, hora_entrada_digitada, null, null, true);
+                await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, hora_entrada_digitada, cords, null, null, true);
                 
                 if (!marcaDia.corpo_id) {
                     await reportError(req, "api/attendance/[id]", "PUT", 404, "No se encontró la sucursal");
@@ -281,7 +282,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
                     return NextResponse.json({ status: false, message: "Ya has marcado la salida", marca_id: marcaDia.id, already_synced: true }, { status: 500 });
                 }
 
-                const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken);
+                const response = await marcar_salida(req, marcaDia.id, horaAccion, reason, payload, planillasToken, cords);
                 if (!response.status) {
                     await reportError(req, "api/attendance/[id]", "PUT", 500, response.message);
                     return NextResponse.json({ status: false, message: response.message }, { status: 500 });
@@ -298,7 +299,7 @@ export async function PUT(req: NextRequest, context: { params: Promise<{ id: str
 }
 }
 
-async function marcar_salida(req: NextRequest, id: number, horaAccion: string, reason: string, payload: any, planillasToken: any) {
+async function marcar_salida(req: NextRequest, id: number, horaAccion: string, reason: string, payload: any, planillasToken: any, cords: { lat: string | null, lng: string | null}) {
 try {
     const now = new Date(horaAccion);
 
@@ -406,7 +407,7 @@ try {
         hora_salida_real = new Date(`${marca_fecha_salida}T${marca_hora_salida}`);
     }
     
-    await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, null, hora_salida_real, now, false);
+    await updateOrCreateLoginMarca(req, marcaDia.id, marcaDia.puesto_id ?? 0, payload.sessionId, payload.id, marca_hora_entrada_date, null, cords, hora_salida_real, now, false);
 
     const activitiesCheck = await check_unmarked_activities(req, marcaDia.id);
     if (!activitiesCheck.status) {
@@ -422,7 +423,7 @@ catch (error: unknown) {
 }
 }
 
-async function updateOrCreateLoginMarca(req: NextRequest, marca_id: number, puesto_id: number, sessionId: string, empleado_id: number, hora_entrada_teorica: Date | null, hora_entrada_real: Date | null, hora_salida_teorica: Date | null, hora_salida_real: Date | null, isEntrada: boolean) {
+async function updateOrCreateLoginMarca(req: NextRequest, marca_id: number, puesto_id: number, sessionId: string, empleado_id: number, hora_entrada_teorica: Date | null, hora_entrada_real: Date | null, cords: { lat: string | null, lng: string | null }, hora_salida_teorica: Date | null, hora_salida_real: Date | null, isEntrada: boolean) {
 try {
     const session = await callDynamicPrisma({
         req,
@@ -440,7 +441,7 @@ try {
         data: { action: "GET", table: "c_login_marca_almuerzo", operation: "findFirst", where: { session_id: sessionId } }
     });
     if (!loginMarca) {
-        const loginMarcaResponse = await createLoginMarca(req, empleado_id, session.createdAt, session.device, sessionId);
+        const loginMarcaResponse = await createLoginMarca(req, empleado_id, session.createdAt, session.device, sessionId, cords);
         if (loginMarcaResponse) {
             loginMarca = loginMarcaResponse;
         }
@@ -454,7 +455,9 @@ try {
         puesto_id: puesto_id,
         fecha_hora: session.createdAt,
         marca_entrada_teorica: hora_entrada_teorica,
-        marca_entrada_real: hora_entrada_real
+        marca_entrada_real: hora_entrada_real,
+        lat: cords.lat,
+        lng: cords.lng
     } : {
         marca_id: marca_id,
         puesto_id: puesto_id,

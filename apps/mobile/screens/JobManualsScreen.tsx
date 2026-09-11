@@ -247,6 +247,8 @@ export default function JobManualsScreen() {
   const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
   const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
   const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null);
+  /** Puesto elegido individualmente (select aparte, no forma parte del filtro de jerarquía). */
+  const [formIndividualPuestoId, setFormIndividualPuestoId] = useState<number | null>(null);
   const [hasConfirmedPuestos, setHasConfirmedPuestos] = useState(false);
   const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
 
@@ -626,6 +628,7 @@ export default function JobManualsScreen() {
     setSelectedContratoId(v.contratoId);
     setSelectedSucursalId(v.sucursalId);
     setSelectedPuestoId(v.puestoId ?? null);
+    setFormIndividualPuestoId(null);
     setHasConfirmedPuestos(false);
     setIsSelectedPuestosExpanded(false);
   }, []);
@@ -1235,6 +1238,7 @@ export default function JobManualsScreen() {
     setSelectedContratoId(null);
     setSelectedSucursalId(null);
     setSelectedPuestoId(null);
+    setFormIndividualPuestoId(null);
     setHasConfirmedPuestos(false);
     setIsSelectedPuestosExpanded(false);
   };
@@ -1341,7 +1345,7 @@ export default function JobManualsScreen() {
         Alert.alert('Información', 'No se encontraron puestos para la división seleccionada.');
         return;
       }
-      setSelectedPuestos(puestosFromDivision.map(p => p.id));
+      setSelectedPuestos(prev => Array.from(new Set([...prev, ...puestosFromDivision.map(p => p.id)])));
       setHasConfirmedPuestos(true);
       setIsSelectedPuestosExpanded(true);
       return;
@@ -1351,7 +1355,7 @@ export default function JobManualsScreen() {
       Alert.alert('Información', 'Selecciona un nivel del árbol para obtener puestos.');
       return;
     }
-    setSelectedPuestos(filteredPuestosFromTree.map(p => p.id));
+    setSelectedPuestos(prev => Array.from(new Set([...prev, ...filteredPuestosFromTree.map(p => p.id)])));
     setHasConfirmedPuestos(true);
     setIsSelectedPuestosExpanded(true);
   };
@@ -2994,7 +2998,7 @@ export default function JobManualsScreen() {
 
                         <HierarchyPickerFields
                           structure={structure}
-                          levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                          levels={['cliente', 'contrato', 'sucursal']}
                           isLoading={isStructureLoading}
                           emptyPickerValue={0}
                           values={{
@@ -3006,20 +3010,67 @@ export default function JobManualsScreen() {
                             puestoId: selectedPuestoId,
                           }}
                           onChange={handleFormHierarchyChange}
-                          labels={{ sucursal: 'Sucursal (Corpo)', puesto: 'Puesto' }}
+                          labels={{ sucursal: 'Sucursal (Corpo)' }}
                           renderLabel={(text) => <ThemedText style={styles.smallLabel}>{text}</ThemedText>}
                           pickerWrapperStyle={styles.pickerWrapper}
                           fieldGroupStyle={styles.structureGroup}
+                          renderAfterSucursal={
+                            <>
+                              <TouchableOpacity style={styles.selectAllSucursalButton} onPress={applyPuestosFromTree}>
+                                <Ionicons name="checkmark-circle-outline" size={16} color="#007AFF" />
+                                <ThemedText style={styles.selectAllSucursalButtonText}>
+                                  Confirmar selección de puestos
+                                </ThemedText>
+                              </TouchableOpacity>
+
+                              {!!selectedSucursalId && (
+                                <ThemedView style={styles.structureGroup}>
+                                  <ThemedText style={styles.smallLabel}>Puesto</ThemedText>
+                                  <ThemedView style={[styles.pickerWrapper, {marginBottom: 10}]}>
+                                    <Picker
+                                      selectedValue={formIndividualPuestoId ?? 0}
+                                      onValueChange={(v) => setFormIndividualPuestoId(Number(v) || null)}
+                                    >
+                                      <Picker.Item label="Seleccionar..." value={0} color="#000000" />
+                                      {puestoOptions.map((p: Puesto) => (
+                                        <Picker.Item key={p.id} label={p.nombre} value={p.id} color="#000000" />
+                                      ))}
+                                    </Picker>
+                                  </ThemedView>
+                                  <TouchableOpacity
+                                    style={[
+                                      styles.selectAllSucursalButton,
+                                      !formIndividualPuestoId && styles.selectAllSucursalButtonDisabled,
+                                    ]}
+                                    disabled={!formIndividualPuestoId}
+                                    onPress={() => {
+                                      if (!formIndividualPuestoId) return;
+                                      setSelectedPuestos(prev =>
+                                        prev.includes(formIndividualPuestoId) ? prev : [...prev, formIndividualPuestoId]
+                                      );
+                                      setHasConfirmedPuestos(true);
+                                      setIsSelectedPuestosExpanded(true);
+                                    }}
+                                  >
+                                    <Ionicons name="add-circle-outline" size={16} color="#007AFF" />
+                                    <ThemedText style={styles.selectAllSucursalButtonText}>Agregar puesto</ThemedText>
+                                  </TouchableOpacity>
+                                </ThemedView>
+                              )}
+                            </>
+                          }
                         />
                       </>
                     )}
 
-                    {/* Botón Confirmar y contador (siempre visible) */}
+                    {/* Botón Confirmar (visible en modo "toda la división") y Limpiar (siempre visible) */}
                     <ThemedView style={styles.treeActionsRow}>
-                      <TouchableOpacity style={styles.treeActionPrimary} onPress={applyPuestosFromTree}>
-                        <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.treeActionPrimaryText}>Confirmar</ThemedText>
-                      </TouchableOpacity>
+                      {assignToAllDivision && (
+                        <TouchableOpacity style={styles.treeActionPrimary} onPress={applyPuestosFromTree}>
+                          <Ionicons name="checkmark-circle-outline" size={18} color="#FFFFFF" />
+                          <ThemedText style={styles.treeActionPrimaryText}>Confirmar</ThemedText>
+                        </TouchableOpacity>
+                      )}
                       <TouchableOpacity
                         style={styles.treeActionSecondary}
                         onPress={() => {
@@ -5354,6 +5405,26 @@ const styles = StyleSheet.create({
   },
   assignedUserTitle: { fontSize: 14, color: '#000', flex: 1, paddingRight: 8 },
   removeUserButton: { padding: 4 },
+  selectAllSucursalButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    backgroundColor: '#FFFFFF',
+    marginBottom: 10,
+  },
+  selectAllSucursalButtonDisabled: {
+    opacity: 0.5,
+  },
+  selectAllSucursalButtonText: {
+    color: '#007AFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
   treeActionsRow: {
     flexDirection: 'row',
     gap: 10,

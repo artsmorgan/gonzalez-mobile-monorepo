@@ -20,6 +20,7 @@ import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { renderReportesPreviewRow, reportesPreviewRowKey } from '../utils/reportesPreviewRender';
 import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import authedFetch from '@/hooks/authedFetch';
 
 import { useNavigation } from '@react-navigation/native';
 import AppHeader from '../components/AppHeader';
@@ -890,6 +891,54 @@ function formatTipoReporteDisplay(raw: string | null | undefined): string {
   return t;
 }
 
+/** Fila del nomenclador "Control de versiones de reportes" (n_reportes_control_versiones). */
+type ReportesControlVersionRow = {
+  id: number;
+  report_original_name: string;
+  module: string;
+  title: string;
+  version: number;
+  approve_date: string | null;
+  department: string;
+};
+
+function formatControlVersionDateDisplay(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+/** Nombre plano (sin saltos de línea) para guardar en base de datos. */
+function buildControlVersionFlatNombre(cv: ReportesControlVersionRow): string {
+  return `${cv.title}, V${cv.version}, ${formatControlVersionDateDisplay(cv.approve_date)}, ${cv.department}`;
+}
+
+/**
+ * Vista previa con la estructura pedida (título, versión / fecha / departamento), centrada.
+ * Se devuelve como líneas separadas (en vez de un solo string con "\n") porque el `Text` de
+ * React Native / react-native-web no siempre respeta saltos de línea embebidos en un mismo nodo.
+ */
+function getControlVersionPreviewLines(cv: ReportesControlVersionRow | null): string[] {
+  if (!cv) return ['No hay un registro de control de versiones para este módulo.'];
+  return [
+    `${cv.title}, V${cv.version},`,
+    `${formatControlVersionDateDisplay(cv.approve_date)},`,
+    cv.department,
+  ];
+}
+
+/** Reconstruye la estructura (como líneas separadas) a partir del nombre plano guardado. */
+function getReconstructedControlVersionLines(flatNombre: string): string[] {
+  const parts = String(flatNombre ?? '').split(', ');
+  if (parts.length < 4) return [flatNombre];
+  const [title, versionPart, datePart, ...rest] = parts;
+  return [`${title}, ${versionPart},`, `${datePart},`, rest.join(', ')];
+}
+
 function formatEstadoDisplay(raw: string | null | undefined): string {
   const s = String(raw ?? '').trim().toLowerCase();
   if (!s) return '—';
@@ -983,6 +1032,40 @@ export default function ReportesScreen() {
     };
     void loadManualClassificationCache();
   }, []);
+
+  useEffect(() => {
+    const loadReportesControlVersiones = async () => {
+      try {
+        const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+        if (!apiUrl) return;
+        const response = await authedFetch({
+          url: `${apiUrl}/api/nomenclators/control-versiones-reportes`,
+          init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+          refreshAccessToken,
+          logout,
+        });
+        if (!response) return;
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.status) return;
+        const rows = Array.isArray(data.data) ? data.data : [];
+        const parsed: ReportesControlVersionRow[] = rows
+          .map((x: any) => ({
+            id: Number(x?.id),
+            report_original_name: String(x?.report_original_name ?? '').trim(),
+            module: String(x?.module ?? '').trim(),
+            title: String(x?.title ?? '').trim(),
+            version: Number(x?.version ?? 0),
+            approve_date: x?.approve_date != null ? String(x.approve_date) : null,
+            department: String(x?.department ?? '').trim(),
+          }))
+          .filter((x: ReportesControlVersionRow) => Number.isFinite(x.id) && x.id > 0);
+        setReportesControlVersionesCatalogo(parsed);
+      } catch {
+        setReportesControlVersionesCatalogo([]);
+      }
+    };
+    void loadReportesControlVersiones();
+  }, [refreshAccessToken, logout]);
 
   useEffect(() => {
     const loadPncTiposCache = async () => {
@@ -1379,11 +1462,13 @@ export default function ReportesScreen() {
 
   const [modalVisible, setModalVisible] = useState(false);
   const [puestoModalVisible, setPuestoModalVisible] = useState(false);
-  const [formNombre, setFormNombre] = useState('');
+  const [reportesControlVersionesCatalogo, setReportesControlVersionesCatalogo] = useState<ReportesControlVersionRow[]>([]);
   const [formNumero, setFormNumero] = useState('');
   const [formNomenclatura, setFormNomenclatura] = useState('');
   const [formDescripcion, setFormDescripcion] = useState('');
   const [formModulo, setFormModulo] = useState(MODULO_INGRESOS);
+  const matchedControlVersion =
+    reportesControlVersionesCatalogo.find((r) => r.report_original_name === formModulo) ?? null;
   const [formOrder, setFormOrder] = useState('nombre_usuario');
   const [formTipoReporte, setFormTipoReporte] = useState<ReporteTipoSalida>('Consolidado');
   const formTipoReporteRef = useRef<ReporteTipoSalida>('Consolidado');
@@ -1660,7 +1745,6 @@ export default function ReportesScreen() {
 
   const resetNewReportForm = useCallback(() => {
     const meta = buildDefaultReportMetaFields(MODULO_INGRESOS, 'Consolidado');
-    setFormNombre(meta.nombre);
     setFormNumero(meta.numero);
     setFormNomenclatura(meta.nomenclatura);
     setFormDescripcion('');
@@ -1833,7 +1917,6 @@ export default function ReportesScreen() {
     }
     const tipo = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
     const meta = buildDefaultReportMetaFields(formModulo, tipo);
-    setFormNombre(meta.nombre);
     setFormNumero(meta.numero);
     setFormNomenclatura(meta.nomenclatura);
   }, [formModulo, modalVisible]);
@@ -1841,7 +1924,6 @@ export default function ReportesScreen() {
   useEffect(() => {
     if (!modalVisible) return;
     const tipo = resolveTipoReporteForCreate(formModulo, formTipoReporte);
-    setFormNombre((prev) => applyTipoToReportLabel(prev, tipo));
     setFormNomenclatura((prev) => applyTipoToReportLabel(prev, tipo));
   }, [formTipoReporte, modalVisible]);
 
@@ -3860,6 +3942,10 @@ export default function ReportesScreen() {
         Alert.alert('Sin conexión', 'Se requiere internet.');
         return;
       }
+      if (!matchedControlVersion) {
+        Alert.alert('Formulario', 'No existe un registro de control de versiones para el módulo seleccionado.');
+        return;
+      }
       const moduleFilters: Record<string, unknown> = {};
       if (formModulo === MODULO_INGRESOS) {
         applyOptionalCreatedRange(moduleFilters, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
@@ -4163,7 +4249,7 @@ export default function ReportesScreen() {
       }
 
       const tipoReporte = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
-      const nombreReporte = applyTipoToReportLabel(formNombre.trim(), tipoReporte);
+      const nombreReporte = buildControlVersionFlatNombre(matchedControlVersion);
       const nomenclaturaReporte = applyTipoToReportLabel(formNomenclatura.trim(), tipoReporte);
 
       const res = await createReportJob({
@@ -4195,8 +4281,12 @@ export default function ReportesScreen() {
   };
 
   const confirmCreate = async () => {
-    if (!formNombre.trim() || !formNumero.trim() || !formNomenclatura.trim()) {
-      Alert.alert('Formulario', 'Nombre, número y nomenclatura son obligatorios.');
+    if (!matchedControlVersion) {
+      Alert.alert('Formulario', 'No existe un registro de control de versiones para el módulo seleccionado.');
+      return;
+    }
+    if (!formNumero.trim() || !formNomenclatura.trim()) {
+      Alert.alert('Formulario', 'Número y nomenclatura son obligatorios.');
       return;
     }
     if (!firmaModal.trim()) {
@@ -4304,7 +4394,15 @@ export default function ReportesScreen() {
     ];
     return (
       <ThemedView style={styles.card}>
-        <ThemedText style={styles.cardTitle}>{item.nombre}</ThemedText>
+        {String(item.tipo_reporte || '').trim() === 'Individual' ? (
+          getReconstructedControlVersionLines(item.nombre).map((line, idx) => (
+            <ThemedText key={idx} style={styles.cardTitle}>
+              {line}
+            </ThemedText>
+          ))
+        ) : (
+          <ThemedText style={styles.cardTitle}>{item.nombre}</ThemedText>
+        )}
 
         {reportFields.map((field) => (
           <ThemedText key={field.label} style={styles.cardLine}>
@@ -7612,7 +7710,13 @@ export default function ReportesScreen() {
                 {isModalReportMetaOpen ? (
                   <ThemedView style={styles.filtersContent}>
                     <ThemedText style={styles.label}>Nombre del reporte</ThemedText>
-                    <TextInput style={styles.input} value={formNombre} onChangeText={setFormNombre} placeholderTextColor="#999" />
+                    <ThemedView style={styles.controlVersionPreviewBox}>
+                      {getControlVersionPreviewLines(matchedControlVersion).map((line, idx) => (
+                        <ThemedText key={idx} style={styles.controlVersionPreviewText}>
+                          {line}
+                        </ThemedText>
+                      ))}
+                    </ThemedView>
                     <ThemedText style={styles.label}>Número del reporte</ThemedText>
                     <TextInput style={styles.input} value={formNumero} onChangeText={setFormNumero} placeholderTextColor="#999" />
                     <ThemedText style={styles.label}>Nomenclatura del reporte</ThemedText>
@@ -10726,6 +10830,21 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   inputFlex: { flex: 1, marginBottom: 0 },
+  controlVersionPreviewBox: {
+    borderWidth: 1,
+    borderColor: '#C8E1FF',
+    backgroundColor: '#EEF6FF',
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    marginBottom: 10,
+  },
+  controlVersionPreviewText: {
+    fontSize: 14,
+    color: '#000',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
   epWebDtInput: { minHeight: 44 },
   textArea: { minHeight: 90, textAlignVertical: 'top' as const },
 

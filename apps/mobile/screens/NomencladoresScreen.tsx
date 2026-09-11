@@ -4,6 +4,7 @@ import {
   Alert,
   Dimensions,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   TextInput,
@@ -14,6 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Picker } from '@react-native-picker/picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Network from 'expo-network';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
@@ -47,7 +49,8 @@ type NomenclatorFormKind =
   | 'ejecutivo-coordinador'
   | 'empleado-ejecutivo'
   | 'mobile-variable'
-  | 'tipo-mantenimiento-articulo';
+  | 'tipo-mantenimiento-articulo'
+  | 'reportes-control-versiones';
 
 type NomenclatorRow = {
   id: number;
@@ -66,6 +69,12 @@ type NomenclatorRow = {
   articulo_nombre?: string;
   employee_cedula?: string;
   created_at?: string;
+  report_original_name?: string;
+  module?: string;
+  title?: string;
+  version?: number;
+  approve_date?: string;
+  department?: string;
 };
 
 type SelectOption = { id: number; nombre: string };
@@ -81,6 +90,8 @@ const EJECUTIVO_COORDINADOR_SLUG = 'coordinadores-ejecutivos';
 const EMPLEADO_EJECUTIVO_SLUG = 'empleados-ejecutivos';
 const MOBILE_VARIABLES_SLUG = 'variables-sistema';
 const TIPO_MANTENIMIENTO_ARTICULO_SLUG = 'tipos-mantenimiento-articulos';
+const REPORTES_CONTROL_VERSIONES_SLUG = 'control-versiones-reportes';
+const REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH = 50;
 
 /** AsyncStorage keys used by other modules for nomenclador slugs edited here. */
 const NOMENCLATOR_SLUG_TO_CACHE_KEY: Record<string, string> = {
@@ -113,6 +124,26 @@ function getVariableKeyboardType(variableType: string): 'default' | 'number-pad'
   if (type === 'int' || type === 'integer') return 'number-pad';
   if (['float', 'decimal', 'double', 'number'].includes(type)) return 'decimal-pad';
   return 'default';
+}
+
+/** Evita que el usuario ingrese comas en campos de texto libre. */
+function stripCommas(value: string): string {
+  return value.replace(/,/g, '');
+}
+
+function formatDateOnlyDisplay(date: Date | null): string {
+  if (!date) return 'Seleccionar fecha';
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const yyyy = date.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function toIsoDateOnly(date: Date): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}T00:00:00.000Z`;
 }
 
 const NOMENCLATOR_TYPES: NomenclatorType[] = [
@@ -197,6 +228,12 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
     description: 'Administra las variables de configuración utilizadas en la aplicación (p. ej. monitoring_previous_minutes, validate_gps_salida).',
     formKind: 'mobile-variable',
   },
+  {
+    slug: REPORTES_CONTROL_VERSIONES_SLUG,
+    label: 'Control de versiones de reportes',
+    description: 'Permite editar el título, versión, fecha de aprobación y departamento de los registros de control de versiones de reportes ya existentes.',
+    formKind: 'reportes-control-versiones',
+  },
 ];
 
 function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
@@ -218,6 +255,12 @@ function parseRecordsFromResponse(rows: any[]): NomenclatorRow[] {
       articulo_nombre: x?.articulo_nombre != null ? String(x.articulo_nombre) : undefined,
       employee_cedula: x?.employee_cedula != null ? String(x.employee_cedula) : undefined,
       created_at: x?.created_at != null ? String(x.created_at) : undefined,
+      report_original_name: x?.report_original_name != null ? String(x.report_original_name) : undefined,
+      module: x?.module != null ? String(x.module) : undefined,
+      title: x?.title != null ? String(x.title) : undefined,
+      version: x?.version != null ? Number(x.version) : undefined,
+      approve_date: x?.approve_date != null ? String(x.approve_date) : undefined,
+      department: x?.department != null ? String(x.department) : undefined,
     }))
     .filter((x) => Number.isFinite(x.id) && x.id > 0 && x.nombre !== '');
 }
@@ -254,6 +297,13 @@ export default function NomencladoresScreen() {
   const [articuloOptions, setArticuloOptions] = useState<SelectOption[]>([]);
   const [filterArticuloId, setFilterArticuloId] = useState('0');
   const [formArticuloId, setFormArticuloId] = useState('');
+  const [formCvReportOriginalName, setFormCvReportOriginalName] = useState('');
+  const [formCvModule, setFormCvModule] = useState('');
+  const [formCvTitle, setFormCvTitle] = useState('');
+  const [formCvVersion, setFormCvVersion] = useState('');
+  const [formCvApproveDate, setFormCvApproveDate] = useState<Date | null>(null);
+  const [showCvApproveDatePicker, setShowCvApproveDatePicker] = useState(false);
+  const [formCvDepartment, setFormCvDepartment] = useState('');
 
   const planillasRevalidationModalShownRef = useRef(false);
   const [showPlanillasRevalidationModal, setShowPlanillasRevalidationModal] = useState(false);
@@ -479,6 +529,13 @@ export default function NomencladoresScreen() {
     setFormVariableType('');
     setFormVariableValue('');
     setFormArticuloId('');
+    setFormCvReportOriginalName('');
+    setFormCvModule('');
+    setFormCvTitle('');
+    setFormCvVersion('');
+    setFormCvApproveDate(null);
+    setShowCvApproveDatePicker(false);
+    setFormCvDepartment('');
   };
 
   const openTypeModal = async (type: NomenclatorType) => {
@@ -568,6 +625,13 @@ export default function NomencladoresScreen() {
     } else if (selectedType?.formKind === 'tipo-mantenimiento-articulo') {
       setFormArticuloId(row.articulo_id != null ? String(row.articulo_id) : '');
       setFormNombre(row.nombre);
+    } else if (selectedType?.formKind === 'reportes-control-versiones') {
+      setFormCvReportOriginalName(row.report_original_name ?? '');
+      setFormCvModule(row.module ?? '');
+      setFormCvTitle(row.title ?? '');
+      setFormCvVersion(row.version != null ? String(row.version) : '');
+      setFormCvApproveDate(row.approve_date ? new Date(row.approve_date) : null);
+      setFormCvDepartment(row.department ?? '');
     } else {
       setFormNombre(row.nombre);
     }
@@ -693,6 +757,36 @@ export default function NomencladoresScreen() {
         return;
       }
       body = { articulo_id, nombre };
+    } else if (selectedType.formKind === 'reportes-control-versiones') {
+      const title = stripCommas(formCvTitle.trim());
+      if (!title) {
+        Alert.alert('Validación', 'El título es obligatorio.');
+        return;
+      }
+      if (title.length > REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH) {
+        Alert.alert('Validación', `El título no puede superar los ${REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH} caracteres.`);
+        return;
+      }
+      const versionTrimmed = formCvVersion.trim();
+      if (!/^-?\d+$/.test(versionTrimmed)) {
+        Alert.alert('Validación', 'La versión debe ser un número entero.');
+        return;
+      }
+      if (!formCvApproveDate) {
+        Alert.alert('Validación', 'Debe seleccionar la fecha de aprobación.');
+        return;
+      }
+      const department = stripCommas(formCvDepartment.trim());
+      if (!department) {
+        Alert.alert('Validación', 'El departamento es obligatorio.');
+        return;
+      }
+      body = {
+        title,
+        version: Number(versionTrimmed),
+        approve_date: toIsoDateOnly(formCvApproveDate),
+        department,
+      };
     } else {
       const nombre = formNombre.trim();
       if (!nombre) {
@@ -859,7 +953,8 @@ export default function NomencladoresScreen() {
   const isEmpleadoEjecutivoForm = selectedType?.formKind === 'empleado-ejecutivo';
   const isMobileVariableForm = selectedType?.formKind === 'mobile-variable';
   const isTipoMantenimientoArticuloForm = selectedType?.formKind === 'tipo-mantenimiento-articulo';
-  const isEditOnlyForm = isMobileVariableForm;
+  const isReportesControlVersionesForm = selectedType?.formKind === 'reportes-control-versiones';
+  const isEditOnlyForm = isMobileVariableForm || isReportesControlVersionesForm;
   const isOptionsForm = isCompositeForm || isEmpleadoEjecutivoForm || isTipoMantenimientoArticuloForm;
 
   const handleFilterArticuloChange = (value: string) => {
@@ -965,7 +1060,13 @@ export default function NomencladoresScreen() {
               ) : showForm ? (
                 <ThemedView style={styles.formCard}>
                   <ThemedText style={styles.formTitle}>
-                    {isMobileVariableForm ? 'Editar variable' : editingId ? 'Editar registro' : 'Nuevo registro'}
+                    {isMobileVariableForm
+                      ? 'Editar variable'
+                      : isReportesControlVersionesForm
+                        ? 'Editar control de versión'
+                        : editingId
+                          ? 'Editar registro'
+                          : 'Nuevo registro'}
                   </ThemedText>
 
                   {isCompositeForm ? (
@@ -1136,6 +1237,69 @@ export default function NomencladoresScreen() {
                         />
                       </>
                     )
+                  ) : isReportesControlVersionesForm ? (
+                    <>
+                      <ThemedView style={styles.previewBox}>
+                        <ThemedText style={styles.previewText}>
+                          {`${formCvTitle || '(Sin título)'}, V${formCvVersion || '0'},`}
+                        </ThemedText>
+                        <ThemedText style={styles.previewText}>
+                          {`${formatDateOnlyDisplay(formCvApproveDate)},`}
+                        </ThemedText>
+                        <ThemedText style={styles.previewText}>{formCvDepartment}</ThemedText>
+                      </ThemedView>
+
+                      <ThemedText style={styles.label}>Reporte</ThemedText>
+                      <ThemedView style={styles.readOnlyBox}>
+                        <ThemedText style={styles.readOnlyText}>{formCvReportOriginalName}</ThemedText>
+                      </ThemedView>
+
+                      <ThemedText style={styles.label}>Módulo</ThemedText>
+                      <ThemedView style={styles.readOnlyBox}>
+                        <ThemedText style={styles.readOnlyText}>{formCvModule}</ThemedText>
+                      </ThemedView>
+
+                      <ThemedText style={styles.label}>Título</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={formCvTitle}
+                        onChangeText={(text) => setFormCvTitle(stripCommas(text))}
+                        placeholder="Título del reporte"
+                        placeholderTextColor="#999"
+                        maxLength={REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH}
+                      />
+
+                      <ThemedText style={styles.label}>Versión</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={formCvVersion}
+                        onChangeText={(text) => setFormCvVersion(stripCommas(text).replace(/[^0-9-]/g, ''))}
+                        placeholder="Versión (número entero)"
+                        placeholderTextColor="#999"
+                        keyboardType="number-pad"
+                      />
+
+                      <ThemedText style={styles.label}>Fecha de aprobación</ThemedText>
+                      <TouchableOpacity
+                        style={styles.dateButton}
+                        onPress={() => setShowCvApproveDatePicker(true)}
+                        activeOpacity={0.85}
+                      >
+                        <ThemedText style={styles.dateButtonText}>
+                          {formatDateOnlyDisplay(formCvApproveDate)}
+                        </ThemedText>
+                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                      </TouchableOpacity>
+
+                      <ThemedText style={styles.label}>Departamento</ThemedText>
+                      <TextInput
+                        style={styles.input}
+                        value={formCvDepartment}
+                        onChangeText={(text) => setFormCvDepartment(stripCommas(text))}
+                        placeholder="Departamento"
+                        placeholderTextColor="#999"
+                      />
+                    </>
                   ) : isMobileVariableForm ? (
                     <>
                       <ThemedText style={styles.label}>Variable</ThemedText>
@@ -1229,6 +1393,18 @@ export default function NomencladoresScreen() {
                       )}
                     </TouchableOpacity>
                   </View>
+
+                  {isReportesControlVersionesForm && showCvApproveDatePicker ? (
+                    <DateTimePicker
+                      value={formCvApproveDate || new Date()}
+                      mode="date"
+                      display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                      onChange={(_event, date) => {
+                        setShowCvApproveDatePicker(false);
+                        if (date) setFormCvApproveDate(date);
+                      }}
+                    />
+                  ) : null}
                 </ThemedView>
               ) : null}
 
@@ -1270,11 +1446,20 @@ export default function NomencladoresScreen() {
                   <ThemedView key={row.id} style={styles.recordRow}>
                     <View style={styles.recordInfo}>
                       <ThemedText style={styles.recordName}>
-                        {isEditOnlyForm ? row.slug : row.nombre}
+                        {isMobileVariableForm
+                          ? row.slug
+                          : isReportesControlVersionesForm
+                            ? row.report_original_name
+                            : row.nombre}
                       </ThemedText>
-                      {isEditOnlyForm && row.variable_type ? (
+                      {isMobileVariableForm && row.variable_type ? (
                         <ThemedText style={styles.recordMeta}>
                           {row.variable_type} · {row.variable_value ?? ''}
+                        </ThemedText>
+                      ) : null}
+                      {isReportesControlVersionesForm ? (
+                        <ThemedText style={styles.recordMeta}>
+                          Módulo: {row.module} · {row.title}, V{row.version}
                         </ThemedText>
                       ) : null}
                       {isTipoMantenimientoArticuloForm && row.articulo_nombre ? (
@@ -1497,6 +1682,34 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   readOnlyText: { fontSize: 14, color: '#333' },
+  previewBox: {
+    borderWidth: 1,
+    borderColor: '#C8E1FF',
+    backgroundColor: '#EEF6FF',
+    borderRadius: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    marginBottom: 14,
+  },
+  previewText: {
+    fontSize: 14,
+    color: '#000',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#D0D0D0',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    marginBottom: 10,
+  },
+  dateButtonText: { fontSize: 14, color: '#000' },
   textArea: { minHeight: 100, textAlignVertical: 'top' as const },
   formActions: { flexDirection: 'row', gap: 10, marginTop: 4 },
   recordRow: {
