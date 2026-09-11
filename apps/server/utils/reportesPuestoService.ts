@@ -50,9 +50,66 @@ function formatReportMetaTimestamp(at: Date = new Date()): string {
   return `${dd}${mm}${aa}${hh}${mi}${ss}`;
 }
 
-function buildChildReportMeta(modulo: string, tipo: string, ts: string) {
+function pad2Date(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function formatControlVersionDateDisplay(value: unknown): string {
+  if (!value) return "";
+  const d = new Date(value as string);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${pad2Date(d.getDate())}/${pad2Date(d.getMonth() + 1)}/${d.getFullYear()}`;
+}
+
+type ControlVersionRow = {
+  title: string;
+  version: number;
+  approve_date: unknown;
+  department: string;
+};
+
+async function fetchControlVersionsByModules(
+  req: NextRequest,
+  modulos: string[],
+): Promise<Map<string, ControlVersionRow>> {
+  const map = new Map<string, ControlVersionRow>();
+  const uniqueModules = [...new Set(modulos.filter((m) => m))];
+  if (uniqueModules.length === 0) return map;
+
+  const rows = await callDynamicPrisma({
+    req,
+    data: {
+      action: "GET",
+      table: "n_reportes_control_versiones",
+      operation: "findMany",
+      where: { report_original_name: { in: uniqueModules } },
+    },
+  });
+
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const key = String((row as any)?.report_original_name ?? "").trim();
+    if (!key) continue;
+    map.set(key, {
+      title: String((row as any)?.title ?? "").trim(),
+      version: Number((row as any)?.version ?? 0),
+      approve_date: (row as any)?.approve_date ?? null,
+      department: String((row as any)?.department ?? "").trim(),
+    });
+  }
+  return map;
+}
+
+function buildChildReportMeta(
+  modulo: string,
+  tipo: string,
+  ts: string,
+  controlVersion: ControlVersionRow | undefined,
+) {
+  const nombre = controlVersion
+    ? `${controlVersion.title}, V${controlVersion.version}, ${formatControlVersionDateDisplay(controlVersion.approve_date)}, ${controlVersion.department}`
+    : `${modulo} ${tipo} ${ts}`;
   return {
-    nombre: `${modulo} ${tipo} ${ts}`,
+    nombre,
     numero: ts,
     nomenclatura: `${modulo} ${tipo} ${ts}`,
   };
@@ -96,6 +153,10 @@ export async function createReportePuestoBatch(
 
   const ts = formatReportMetaTimestamp();
   const batchId = buildPuestoBatchId(params.empleadoId);
+  const controlVersionsByModule = await fetchControlVersionsByModules(
+    req,
+    selections.map((s) => String(s.modulo).trim()),
+  );
 
   const jobRows = selections.map((sel) => {
     const modulo = String(sel.modulo).trim();
@@ -107,7 +168,7 @@ export async function createReportePuestoBatch(
       creadoHasta: params.creadoHasta,
     });
     const moduleFilters = enrichModuleFiltersForTipo(modulo, tipo, rawFilters);
-    const meta = buildChildReportMeta(modulo, tipo, ts);
+    const meta = buildChildReportMeta(modulo, tipo, ts, controlVersionsByModule.get(modulo));
 
     return buildMobileReportJobCreateData({
       modulo,

@@ -65,6 +65,8 @@ export type HierarchyPickerFieldsProps = {
   fieldGroupStyle?: ViewStyle;
   /** Contenido opcional debajo del select de plaza (p. ej. mensaje de ayuda). */
   renderAfterPlaza?: React.ReactNode;
+  /** Contenido opcional entre el select de sucursal y el select de puesto (p. ej. un botón "Seleccionar todos"). */
+  renderAfterSucursal?: React.ReactNode;
 };
 
 /** Altura del select y del botón de búsqueda (sin incluir la etiqueta). */
@@ -117,6 +119,7 @@ export default function HierarchyPickerFields({
   pickerStyle,
   fieldGroupStyle,
   renderAfterPlaza,
+  renderAfterSucursal,
 }: HierarchyPickerFieldsProps) {
   const labels = { ...DEFAULT_LABELS, ...labelsProp };
   const Label = renderLabel ?? ((text: string) => <DefaultLabel text={text} />);
@@ -344,6 +347,8 @@ export default function HierarchyPickerFields({
             }),
           'sucursal',
         )}
+
+      {levels.includes('sucursal') ? renderAfterSucursal : null}
 
       {levels.includes('puesto') &&
         renderPickerRow(

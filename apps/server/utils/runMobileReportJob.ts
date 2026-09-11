@@ -242,6 +242,20 @@ type StoredFilters = {
     serviceAccessToken?: string;
 };
 
+/**
+ * El `nombre` de `e_reportes_mobile` se guarda "plano" (sin saltos de línea) siguiendo el formato
+ * `"<título>, V<versión>, <fecha de aprobación>, <departamento>"` (ver control de versiones de reportes).
+ * Para los reportes "Individual" se reconstruye con saltos de línea reales (`\n`), que ExcelJS sí
+ * respeta en la celda de encabezado gracias a `wrapText: true`.
+ */
+function reconstructControlVersionExcelName(flatNombre: unknown): string {
+    const s = String(flatNombre ?? "");
+    const parts = s.split(", ");
+    if (parts.length < 4) return s;
+    const [title, versionPart, datePart, ...rest] = parts;
+    return `${title}, ${versionPart},\n${datePart},\n${rest.join(", ")}`;
+}
+
 export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: number): Promise<void> {
     const row = await queueDb.e_reportes_mobile.findUnique({ where: { id: reportId } });
     if (!row) return;
@@ -272,6 +286,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
 
     const moduleKey = parsed.moduleKey || row.modulo;
     const orderKey = String(row.order_by || "nombre_usuario").trim();
+    const individualReportName = reconstructControlVersionExcelName(row.nombre);
 
     try {
         if (moduleKey === "ingresos_usuario") {
@@ -289,7 +304,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim() as ActaEntregaReportType;
             const buf =
                 reportType === "Individual"
-                    ? await buildActaEntregaExcelBufferByType(rows, "Individual", row.nombre)
+                    ? await buildActaEntregaExcelBufferByType(rows, "Individual", individualReportName)
                     : await buildActaEntregaExcelBuffer(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -302,7 +317,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = reportType === "Individual" ? "zip" : "xlsx";
             const buf =
                 reportType === "Individual"
-                    ? await buildAgendaMinutaIndividualZip(rows, row.nombre)
+                    ? await buildAgendaMinutaIndividualZip(rows, individualReportName)
                     : await buildAgendaMinutaExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -314,7 +329,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildAperturaCierrePuestoExcelIndividual(rows, row.nombre)
+                    ? await buildAperturaCierrePuestoExcelIndividual(rows, individualReportName)
                     : await buildAperturaCierrePuestoExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -326,7 +341,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildVulnerabilidadExcelIndividual(rows, row.nombre)
+                    ? await buildVulnerabilidadExcelIndividual(rows, individualReportName)
                     : await buildVulnerabilidadExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -338,7 +353,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildActividadesExcelIndividual(rows, row.nombre)
+                    ? await buildActividadesExcelIndividual(rows, individualReportName)
                     : await buildActividadesExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -350,7 +365,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildControlAsistenciaExcelIndividual(rows, row.nombre)
+                    ? await buildControlAsistenciaExcelIndividual(rows, individualReportName)
                     : await buildControlAsistenciaExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -362,7 +377,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildDocumentosEntregadosExcelIndividual(rows, row.nombre)
+                    ? await buildDocumentosEntregadosExcelIndividual(rows, individualReportName)
                     : await buildDocumentosEntregadosExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -374,7 +389,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildEncuestaSatisfaccionExcelIndividual(rows, row.nombre)
+                    ? await buildEncuestaSatisfaccionExcelIndividual(rows, individualReportName)
                     : await buildEncuestaSatisfaccionExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -386,7 +401,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildEntregaPuestoExcelIndividual(rows, row.nombre)
+                    ? await buildEntregaPuestoExcelIndividual(rows, individualReportName)
                     : await buildEntregaPuestoExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -405,7 +420,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildIncidenteExcelIndividual(rows, row.nombre)
+                    ? await buildIncidenteExcelIndividual(rows, individualReportName)
                     : await buildIncidenteExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -417,7 +432,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = reportType === "Individual" ? "zip" : "xlsx";
             const buf =
                 reportType === "Individual"
-                    ? await buildLlavesIndividualZip(rows, row.nombre)
+                    ? await buildLlavesIndividualZip(rows, individualReportName)
                     : await buildLlavesExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -429,7 +444,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = reportType === "Individual" ? "zip" : "xlsx";
             const buf =
                 reportType === "Individual"
-                    ? await buildLlaverosIndividualZip(rows, row.nombre)
+                    ? await buildLlaverosIndividualZip(rows, individualReportName)
                     : await buildLlaverosExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -449,7 +464,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildMaestroQuejasExcelIndividual(rows, String(row.nombre ?? ""))
+                    ? await buildMaestroQuejasExcelIndividual(rows, individualReportName)
                     : await buildMaestroQuejasExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -469,7 +484,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildMutuosAcuerdosExcelIndividual(rows, row.nombre)
+                    ? await buildMutuosAcuerdosExcelIndividual(rows, individualReportName)
                     : await buildMutuosAcuerdosExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -491,7 +506,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildProductoNoConformeExcelIndividual(rows, row.nombre)
+                    ? await buildProductoNoConformeExcelIndividual(rows, individualReportName)
                     : await buildProductoNoConformeExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -504,7 +519,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = String(row.tipo_reporte || "Grupal").trim();
             const buf =
                 reportType === "Individual"
-                    ? await buildInduccionRecorridoExcelIndividual(rows, row.nombre)
+                    ? await buildInduccionRecorridoExcelIndividual(rows, individualReportName)
                     : await buildInduccionRecorridoExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -553,7 +568,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const reportType = resolveMobileReportTipoFromRow(row);
             const buf =
                 reportType === "Individual"
-                    ? await buildRevisionVehiculosExcelIndividual(rows, String(row.nombre ?? ""))
+                    ? await buildRevisionVehiculosExcelIndividual(rows, individualReportName)
                     : await buildRevisionVehiculosExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
@@ -567,7 +582,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = reportType === "Individual" ? "zip" : "xlsx";
             const buf =
                 reportType === "Individual"
-                    ? await buildRegistroVisitasIndividualZip(rows, String(row.nombre ?? ""))
+                    ? await buildRegistroVisitasIndividualZip(rows, individualReportName)
                     : await buildRegistroVisitasExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -608,7 +623,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const isIndividual = reportType === "Individual";
             const ext = isIndividual ? "zip" : "xlsx";
             const buf = isIndividual
-                ? await buildRegistroInduccionGeneralIndividualZip(rows, row.nombre)
+                ? await buildRegistroInduccionGeneralIndividualZip(rows, individualReportName)
                 : await buildRegistroInduccionGeneralExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -640,7 +655,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const isIndividual = reportType === "Individual";
             const ext = isIndividual ? "xlsx" : "xlsx";
             const buf = isIndividual
-                ? await buildSolicitudesPermisoExcelIndividual(rows, row.nombre)
+                ? await buildSolicitudesPermisoExcelIndividual(rows, individualReportName)
                 : await buildSolicitudesPermisoExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
@@ -654,7 +669,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const isIndividual = reportType === "Individual";
             const ext = isIndividual ? "zip" : "xlsx";
             const buf = isIndividual
-                ? await buildVisitasVehiculosIndividualZip(rows, String(row.nombre ?? ""))
+                ? await buildVisitasVehiculosIndividualZip(rows, individualReportName)
                 : await buildVisitasVehiculosExcelConsolidado(rows);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;

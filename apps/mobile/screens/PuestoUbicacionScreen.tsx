@@ -348,6 +348,9 @@ export default function PuestoUbicacionScreen() {
     // Estados de carga
     const [isUpdating, setIsUpdating] = useState(false);
 
+    // Mensaje informativo jerarquía (cerrable), igual que en ChecklistSupervisionScreen
+    const [isHierarchyHintVisible, setIsHierarchyHintVisible] = useState(true);
+
     /** Snapshot de AsyncStorage current_marca; se combina con la estructura mergeada al aplicar filtros. */
     const currentMarcaRef = useRef<Record<string, unknown> | null>(null);
     /** Evita volver a pisar filtros desde `current_marca` en cada foco. */
@@ -404,6 +407,46 @@ export default function PuestoUbicacionScreen() {
         },
         []
     );
+
+    /** GET `/api/puestos/[id]/ubicacion`: refresca las coordenadas oficiales guardadas en la base de datos
+     * y actualiza el fragmento de estructura en AsyncStorage (misma caché que lee JerarquiaModule). */
+    const fetchPuestoUbicacionFromServer = useCallback(
+        async (puestoId: number, corpoId: number | null) => {
+            try {
+                const isConnected = await getConnectionStatus();
+                if (!isConnected) return;
+
+                const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+                if (!apiUrl) return;
+
+                const response = await authedFetch({
+                    url: `${apiUrl}/api/puestos/${puestoId}/ubicacion`,
+                    init: { method: 'GET', headers: { 'Content-Type': 'application/json' } },
+                    refreshAccessToken,
+                    logout,
+                });
+                if (!response || !response.ok) return;
+
+                const data = await response.json();
+                if (!data?.status) return;
+
+                const lat = data?.data?.lat != null ? String(data.data.lat) : null;
+                const lng = data?.data?.lng != null ? String(data.data.lng) : null;
+                await updatePuestoCoordsInMainStructureCache(puestoId, lat, lng, corpoId);
+            } catch (error) {
+                console.error('Error fetching puesto ubicacion from server:', error);
+            }
+        },
+        [refreshAccessToken, logout, updatePuestoCoordsInMainStructureCache],
+    );
+
+    // Al seleccionar un puesto (con conexión), refrescar sus coordenadas desde el servidor.
+    useEffect(() => {
+        const pid = numOrNull(filterPuestoId);
+        const cid = numOrNull(filterCorpoId);
+        if (pid == null || cid == null) return;
+        void fetchPuestoUbicacionFromServer(pid, cid);
+    }, [filterPuestoId, filterCorpoId, fetchPuestoUbicacionFromServer]);
 
     // Misma base que los pickers: fragmentos mergeados; fallback solo si no hay árbol mergeable.
     const loadMainStructureCache = useCallback(async (): Promise<MainStructureTree> => {
@@ -888,6 +931,37 @@ export default function PuestoUbicacionScreen() {
                         )}
                     </ThemedView>
 
+                    {isHierarchyHintVisible && (
+                        <ThemedView style={[styles.hierarchyHintBox, styles.hierarchyHintBoxColumn]}>
+                            <ThemedView style={styles.hierarchyHintTopRow}>
+                                <Ionicons name="information-circle-outline" size={22} color="#007AFF" style={{ marginRight: 10 }} />
+                                <ThemedView style={styles.hierarchyHintTextRow}>
+                                    <ThemedText style={[styles.hierarchyHintText, { flex: 1 }]}>
+                                        Algunos datos podrían estar desactualizados. Para mayor precisión, vaya a la sección de jerarquía y actualice la información.
+                                    </ThemedText>
+                                    <TouchableOpacity
+                                        onPress={() => setIsHierarchyHintVisible(false)}
+                                        style={styles.hierarchyHintClose}
+                                        accessibilityLabel="Cerrar aviso"
+                                    >
+                                        <ThemedText style={styles.hierarchyHintCloseText}>Cerrar</ThemedText>
+                                    </TouchableOpacity>
+                                </ThemedView>
+                            </ThemedView>
+                            <TouchableOpacity
+                                style={[styles.goEntregaButton, styles.hierarchyHintGoButton]}
+                                onPress={() => navigation.navigate('Jerarquia')}
+                                activeOpacity={0.85}
+                                accessibilityLabel="Abrir Jerarquía para actualizar"
+                            >
+                                <Ionicons name="open-outline" size={16} color="#007AFF" />
+                                <ThemedText style={styles.goEntregaButtonText}>
+                                    Actualiza los datos en Jerarquía
+                                </ThemedText>
+                            </TouchableOpacity>
+                        </ThemedView>
+                    )}
+
                     {/* Datos del puesto seleccionado */}
                             {filterPuestoId && puestoData && (
                                 <ThemedView style={styles.infoSection}>
@@ -1291,6 +1365,81 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         paddingVertical: 14,
         paddingHorizontal: 16,
+    },
+
+    // Aviso de jerarquía desactualizada (igual que ChecklistSupervisionScreen)
+    hierarchyHintBox: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#E8F4FF',
+        borderWidth: 1,
+        borderColor: '#B8DAF8',
+        borderRadius: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        marginTop: 16,
+    },
+    hierarchyHintBoxColumn: {
+        flexDirection: 'column',
+        alignItems: 'stretch',
+    },
+    hierarchyHintTopRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        width: '100%',
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintTextRow: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+        minWidth: 0,
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintGoButton: {
+        width: '100%',
+        marginTop: 10,
+        marginBottom: 0,
+    },
+    hierarchyHintText: {
+        fontSize: 14,
+        color: '#1a1a1a',
+        lineHeight: 20,
+        backgroundColor: '#E8F4FF',
+    },
+    hierarchyHintClose: {
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        backgroundColor: '#E8F4FF',
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        flexShrink: 0,
+        alignSelf: 'flex-start',
+    },
+    hierarchyHintCloseText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#007AFF',
+    },
+    goEntregaButton: {
+        borderWidth: 1,
+        borderColor: '#007AFF',
+        borderRadius: 8,
+        paddingVertical: 8,
+        paddingHorizontal: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: '#F4F9FF',
+        marginTop: 10,
+    },
+    goEntregaButtonText: {
+        color: '#007AFF',
+        fontWeight: '700',
+        fontSize: 12,
+        flex: 1,
     },
 });
 

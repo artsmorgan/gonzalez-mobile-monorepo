@@ -27,6 +27,11 @@ import {
     updateMobileVariable,
 } from "../../../../../utils/nomenclatorsMobileVariables";
 import {
+    mapReportesControlVersionesRow,
+    parseReportesControlVersionesUpdatePayload,
+    updateReportesControlVersiones,
+} from "../../../../../utils/nomenclatorsReportesControlVersiones";
+import {
     articuloCorpoPuestoExists,
     mapTipoMantenimientoArticuloRow,
     parseTipoMantenimientoArticuloPayload,
@@ -123,6 +128,15 @@ export async function GET(
 
         if (kind === "tipo-mantenimiento-articulo") {
             const mapped = await mapTipoMantenimientoArticuloRow(req, row);
+            if (!mapped) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
+                return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
+            }
+            return NextResponse.json({ status: true, data: mapped }, { status: 200 });
+        }
+
+        if (kind === "reportes-control-versiones") {
+            const mapped = mapReportesControlVersionesRow(row);
             if (!mapped) {
                 await reportError(req, "api/nomenclators/[tipo]/[id]", "GET", 404, "Registro no encontrado");
                 return NextResponse.json({ status: false, message: "Registro no encontrado" }, { status: 404 });
@@ -315,6 +329,26 @@ export async function PUT(
             }
         }
 
+        if (kind === "reportes-control-versiones") {
+            const payload = parseReportesControlVersionesUpdatePayload(body);
+            if ("error" in payload) {
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 400, payload.error);
+                return NextResponse.json({ status: false, message: payload.error }, { status: 400 });
+            }
+
+            try {
+                const mapped = await updateReportesControlVersiones(req, idNum, payload);
+                return NextResponse.json(
+                    { status: true, message: "Registro actualizado correctamente", data: mapped },
+                    { status: 200 }
+                );
+            } catch (error: unknown) {
+                const errorMessage = error instanceof Error ? error.message : "No se pudo actualizar el registro";
+                await reportError(req, "api/nomenclators/[tipo]/[id]", "PUT", 500, errorMessage);
+                return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
+            }
+        }
+
         if (kind === "tipo-mantenimiento-articulo") {
             const payload = parseTipoMantenimientoArticuloPayload(body);
             if (!payload) {
@@ -496,6 +530,14 @@ export async function DELETE(
             await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 405, "No se pueden eliminar variables del sistema desde esta pantalla");
             return NextResponse.json(
                 { status: false, message: "No se pueden eliminar variables del sistema desde esta pantalla" },
+                { status: 405 }
+            );
+        }
+
+        if (kind === "reportes-control-versiones") {
+            await reportError(req, "api/nomenclators/[tipo]/[id]", "DELETE", 405, "No se pueden eliminar registros de control de versiones desde esta pantalla");
+            return NextResponse.json(
+                { status: false, message: "No se pueden eliminar registros de control de versiones desde esta pantalla" },
                 { status: 405 }
             );
         }

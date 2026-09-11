@@ -6,6 +6,10 @@ import {
     TIPO_MANTENIMIENTO_ARTICULO_TABLE,
 } from "./nomenclatorsTipoMantenimientoArticulo";
 import { SUPER_ADMINS_SLUG, SUPER_ADMINS_TABLE } from "./nomenclatorsSuperAdmins";
+import {
+    REPORTES_CONTROL_VERSIONES_SLUG,
+    REPORTES_CONTROL_VERSIONES_TABLE,
+} from "./nomenclatorsReportesControlVersiones";
 
 export type NomenclatorKind =
     | "nombre"
@@ -13,7 +17,8 @@ export type NomenclatorKind =
     | "empleado-ejecutivo"
     | "mobile-variable"
     | "tipo-mantenimiento-articulo"
-    | "super-admin";
+    | "super-admin"
+    | "reportes-control-versiones";
 
 export const NOMENCLATOR_SLUG_TO_TABLE: Record<string, string> = {
     "categorias-mantenimiento": "c_categoria_mantenimiento",
@@ -30,6 +35,7 @@ export const NOMENCLATOR_SLUG_TO_TABLE: Record<string, string> = {
     [MOBILE_VARIABLES_SLUG]: MOBILE_VARIABLES_TABLE,
     [TIPO_MANTENIMIENTO_ARTICULO_SLUG]: TIPO_MANTENIMIENTO_ARTICULO_TABLE,
     [SUPER_ADMINS_SLUG]: SUPER_ADMINS_TABLE,
+    [REPORTES_CONTROL_VERSIONES_SLUG]: REPORTES_CONTROL_VERSIONES_TABLE,
 };
 
 const NOMENCLATOR_KINDS: Record<string, NomenclatorKind> = {
@@ -38,6 +44,7 @@ const NOMENCLATOR_KINDS: Record<string, NomenclatorKind> = {
     [MOBILE_VARIABLES_SLUG]: "mobile-variable",
     [TIPO_MANTENIMIENTO_ARTICULO_SLUG]: "tipo-mantenimiento-articulo",
     [SUPER_ADMINS_SLUG]: "super-admin",
+    [REPORTES_CONTROL_VERSIONES_SLUG]: "reportes-control-versiones",
 };
 
 export function resolveNomenclatorTable(tipo: string): string | null {

@@ -1,5 +1,5 @@
 {
-  "created_at": 1788900477058,
+  "created_at": 1789155133600,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -4999,66 +4999,12 @@
     "sucursal_126_llaveros": [],
     "sucursal_126_puestos": [
       {
-        "id": 12,
-        "nombre": "0-CG-RRHH - RRHH",
-        "codigo": "0-CG-RRHH",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 13,
-        "nombre": "0-CG-FIN - ADM FINANCIERO",
-        "codigo": "0-CG-FIN",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 14,
-        "nombre": "0-P - PRESIDENCIA",
-        "codigo": "0-P",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 15,
-        "nombre": "0-CG-SEG - SEGURIDAD",
-        "codigo": "0-CG-SEG",
-        "ubicacion": {
-          "lat": "9.9131459",
-          "lng": "-84.0427534"
-        }
-      },
-      {
         "id": 16,
         "nombre": "0-CG-AYL - ASEO Y LIMPIEZA",
         "codigo": "0-CG-AYL",
         "ubicacion": {
-          "lat": "10.0748791",
-          "lng": "-84.7291437"
-        }
-      },
-      {
-        "id": 960,
-        "nombre": "0-CG-DL - Departamento Legal",
-        "codigo": "0-CG-DL",
-        "ubicacion": {
-          "lat": null,
-          "lng": null
-        }
-      },
-      {
-        "id": 1024,
-        "nombre": "0-CG-GG - GERENCIA GENERAL",
-        "codigo": "0-CG-GG",
-        "ubicacion": {
-          "lat": "9.9182285",
-          "lng": "-84.1479432"
+          "lat": "10.0747717",
+          "lng": "-84.7291765"
         }
       }
     ],
