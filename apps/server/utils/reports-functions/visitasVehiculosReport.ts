@@ -8,6 +8,14 @@ import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const REGISTRO_VEHICULOS_INCLUDE = {
     c_empleado: { select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true } },
@@ -74,12 +82,6 @@ function excelCellString(v: unknown): string {
     if (v === null || v === undefined) return "";
     const s = String(v);
     return s.length > 32767 ? s.slice(0, 32767) : s;
-}
-
-function formatDt(d: Date | null | undefined): string {
-    if (!d || Number.isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function fmtDateOnly(v: unknown): string {
@@ -311,11 +313,21 @@ export async function queryVisitasVehiculosRows(
     });
 }
 
-export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildVisitasVehiculosExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Visitas vehículos");
     const wsCed = wb.addWorksheet("Cédulas");
     const anchorById = new Map<number, number>();
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_registro_vehiculos",
+        rows.map((r) => Number(r.id)),
+    );
 
     const sortedForCed = [...rows].sort((a, b) => Number(b.id) - Number(a.id));
     for (const r of sortedForCed) {
@@ -386,34 +398,49 @@ export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promis
         "Visitante",
         "Cédula",
         "Ver cédula",
+        "Fecha entrada",
         "Hora entrada",
+        "Fecha salida",
         "Hora salida",
         "Puesto de salida",
         "Motivo visita",
         "Persona / lugar visita",
         "Responsable",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
     const cedulaLinkCol = 12;
+    // +1 adicional: columna real en la hoja (con margen de `addMainRow` en A).
+    const cedulaLinkColReal = cedulaLinkCol + 1;
 
-    const h = wsMain.addRow(mainHeaders);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    addMainRow(wsMain, mainHeaders);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((cell) => {
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = h.getCell(c);
         cell.fill = HDR_FILL_CONSOLIDADO;
         cell.border = BORDER;
         cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: 1, column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: mainHeaders.length + 1 },
     };
-    wsMain.columns = [8, 22, 22, 18, 22, 22, 20, 14, 12, 24, 14, 14, 16, 16, 22, 28, 28, 26, 18].map((w) => ({ width: w }));
+    wsMain.columns = [
+        { width: 3 },
+        ...[8, 22, 22, 18, 22, 22, 20, 14, 12, 24, 14, 14, 14, 12, 14, 12, 22, 28, 28, 26, 14, 12, 16, 20].map((w) => ({ width: w })),
+    ];
 
     for (const r of rows) {
         const rid = Number(r.id);
         const anchor = anchorById.get(rid);
-        const row = wsMain.addRow([
+        const cambio = cambiosByRegistro.get(rid);
+        const row = addMainRow(wsMain, [
             rid,
             excelCellString(r.empresa_nombre),
             excelCellString(r.e_estructura_cliente?.nombre),
@@ -426,19 +453,25 @@ export async function buildVisitasVehiculosExcelConsolidado(rows: any[]): Promis
             excelCellString(r.nombre),
             excelCellString(r.cedula),
             "",
-            formatDt(r.hora_entrada instanceof Date ? r.hora_entrada : new Date(r.hora_entrada)),
-            r.hora_salida ? formatDt(r.hora_salida instanceof Date ? r.hora_salida : new Date(r.hora_salida)) : "",
+            formatDateOnlyDMY(r.hora_entrada),
+            formatTimeOnlyHMS(r.hora_entrada),
+            formatDateOnlyDMY(r.hora_salida),
+            formatTimeOnlyHMS(r.hora_salida),
             excelCellString(r.puesto_salida_nombre),
             excelCellString(r.razon_visita),
             excelCellString(r.persona_lugar_visita),
             excelCellString(r.responsable_label),
-            formatDt(r.created_at instanceof Date ? r.created_at : new Date(r.created_at)),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = BORDER;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        const linkCell = row.getCell(cedulaLinkCol);
+        const linkCell = row.getCell(cedulaLinkColReal);
         if (anchor && String(r.file_name ?? "").trim() !== "") {
             linkCell.value = { text: "Ver cédula", hyperlink: `#'Cédulas'!A${anchor}` };
             linkCell.font = { color: { argb: "FF0563C1" }, underline: true };

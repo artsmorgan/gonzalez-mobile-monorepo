@@ -1,6 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type AccionesPersonalesModuleFilters = {
     empleadoIds?: number[] | null;
@@ -87,9 +94,7 @@ export function filtersMatchAccionesPersonalesListQuery(
 }
 
 function fmtDate(d: unknown): string {
-    if (d instanceof Date) return d.toISOString().slice(0, 10);
-    if (d == null) return "";
-    return String(d);
+    return formatDateOnlyDMY(d);
 }
 
 function fmtDateTime(d: unknown): string {
@@ -386,20 +391,29 @@ function buildColumnDefs(): ColDef[] {
             header: "Fecha fin traslado (fecha_fin_traslado)",
             cell: (r) => (r.fecha_fin_traslado ? fmtDate(r.fecha_fin_traslado) : ""),
         },
-        { header: "Fecha inserción (fecha_insercion)", cell: (r) => fmtDateTime(r.fecha_insercion) },
+        { header: "Fecha inserción (fecha_insercion)", cell: (r) => formatDateOnlyDMY(r.fecha_insercion) },
+        { header: "Hora inserción (fecha_insercion)", cell: (r) => formatTimeOnlyHMS(r.fecha_insercion) },
         { header: "Usuario inserción (usuario_insercion)", cell: (r) => fmtScalarExcel(r.usuario_insercion) },
         { header: "Salario (salario)", cell: (r) => fmtScalarExcel(r.salario) },
         { header: "Motivo reversión (motivo_reversion)", cell: (r) => fmtScalarExcel(r.motivo_reversion) },
         {
             header: "Fecha reversión (fecha_reversion)",
-            cell: (r) => (r.fecha_reversion ? fmtDateTime(r.fecha_reversion) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_reversion),
+        },
+        {
+            header: "Hora reversión (fecha_reversion)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_reversion),
         },
         { header: "Usuario reversión (usuario_reversion)", cell: (r) => fmtScalarExcel(r.usuario_reversion) },
         { header: "Comentarios (comentarios)", cell: (r) => String(r.comentarios ?? "").slice(0, 5000) },
         { header: "Documento (document)", cell: (r) => String(r.document ?? "").slice(0, 500) },
         {
             header: "Fecha actualización (fecha_actualizacion)",
-            cell: (r) => (r.fecha_actualizacion ? fmtDateTime(r.fecha_actualizacion) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_actualizacion),
+        },
+        {
+            header: "Hora actualización (fecha_actualizacion)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_actualizacion),
         },
         {
             header: "Tipo de acción (tipoAccion_id)",
@@ -498,22 +512,38 @@ function buildColumnDefs(): ColDef[] {
         },
         {
             header: "Vence subir adjunto (fecha_vence_subir_adjunto)",
-            cell: (r) => (r.fecha_vence_subir_adjunto ? fmtDateTime(r.fecha_vence_subir_adjunto) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_vence_subir_adjunto),
+        },
+        {
+            header: "Hora vence subir adjunto (fecha_vence_subir_adjunto)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_vence_subir_adjunto),
         },
         { header: "Usuario actualización (usuario_actualizacion)", cell: (r) => fmtScalarExcel(r.usuario_actualizacion) },
         {
             header: "Vence justificar ausencia (fecha_vence_justificar_ausencia)",
-            cell: (r) => (r.fecha_vence_justificar_ausencia ? fmtDateTime(r.fecha_vence_justificar_ausencia) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_vence_justificar_ausencia),
+        },
+        {
+            header: "Hora vence justificar ausencia (fecha_vence_justificar_ausencia)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_vence_justificar_ausencia),
         },
         { header: "Estado aprobación (estado_aprobacion)", cell: (r) => fmtScalarExcel(r.estado_aprobacion) },
         {
             header: "Fecha aprobado EC (fecha_aprobado_ec)",
-            cell: (r) => (r.fecha_aprobado_ec ? fmtDateTime(r.fecha_aprobado_ec) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_aprobado_ec),
+        },
+        {
+            header: "Hora aprobado EC (fecha_aprobado_ec)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_aprobado_ec),
         },
         { header: "Usuario aprueba EC (usuario_aprueba_ec)", cell: (r) => fmtScalarExcel(r.usuario_aprueba_ec) },
         {
             header: "Fecha aprobado JO (fecha_aprobado_jo)",
-            cell: (r) => (r.fecha_aprobado_jo ? fmtDateTime(r.fecha_aprobado_jo) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_aprobado_jo),
+        },
+        {
+            header: "Hora aprobado JO (fecha_aprobado_jo)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_aprobado_jo),
         },
         { header: "Usuario aprueba JO (usuario_aprueba_jo)", cell: (r) => fmtScalarExcel(r.usuario_aprueba_jo) },
         { header: "Operación (operacion)", cell: (r) => fmtScalarExcel(r.operacion) },
@@ -556,7 +586,11 @@ function buildColumnDefs(): ColDef[] {
         },
         {
             header: "Fecha sobrepuesto (fecha_sobrepuesto)",
-            cell: (r) => (r.fecha_sobrepuesto ? fmtDateTime(r.fecha_sobrepuesto) : ""),
+            cell: (r) => formatDateOnlyDMY(r.fecha_sobrepuesto),
+        },
+        {
+            header: "Hora sobrepuesto (fecha_sobrepuesto)",
+            cell: (r) => formatTimeOnlyHMS(r.fecha_sobrepuesto),
         },
         {
             header: "Adenda (adenda_id)",
@@ -748,7 +782,12 @@ export async function queryAccionesPersonalesRows(
     });
 }
 
-export async function buildAccionesPersonalesExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildAccionesPersonalesExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
+    void reportDb; // `c_accion_personal` no tiene tracking en `c_cambios_apps_modules`: no hay ancla para auditoría.
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Acciones");
     const borderThin: Partial<ExcelJS.Borders> = {
@@ -761,28 +800,32 @@ export async function buildAccionesPersonalesExcelConsolidado(rows: any[]): Prom
 
     const headers = ACCIONES_COLUMN_DEFS.map((c) => c.header);
 
-    const hdrRow = ws.addRow(headers);
+    applyConsolidadoReportBanner(ws, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const hdrRow = addMainRow(ws, headers);
     hdrRow.font = { bold: true };
     hdrRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    hdrRow.eachCell((c) => {
+    hdrRow.eachCell((c, colNumber) => {
+        if (colNumber === 1) return;
         c.fill = hdrFill;
         c.border = borderThin;
     });
-    ws.views = [{ state: "frozen", ySplit: 1 }];
-    ws.columns = headers.map(() => ({ width: 22, outlineLevel: 1 }));
+    ws.views = [{ state: "frozen", ySplit: 12 }];
+    ws.columns = [{ width: 3 }, ...headers.map(() => ({ width: 22, outlineLevel: 1 }))];
 
     for (const r of rows) {
         const values = ACCIONES_COLUMN_DEFS.map((def) => def.cell(r));
-        const row = ws.addRow(values);
-        row.eachCell((c) => {
+        const row = addMainRow(ws, values);
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", wrapText: true };
         });
     }
 
     ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

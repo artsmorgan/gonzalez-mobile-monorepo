@@ -2489,7 +2489,7 @@ export default function JobManualsScreen() {
   if (isLoading) {
     return (
       <ThemedView style={styles.fullContainer}>
-        <AppHeader onMenuPress={handleMenuPress} title="Manuales de trabajo" />
+        <AppHeader onMenuPress={handleMenuPress} title="Documentos" />
         <ThemedView style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
           <ThemedText style={styles.loadingText}>Cargando...</ThemedText>
@@ -2509,13 +2509,13 @@ export default function JobManualsScreen() {
 
   return (
     <ThemedView style={styles.fullContainer}>
-      <AppHeader onMenuPress={handleMenuPress} title="Manuales de trabajo" />
+      <AppHeader onMenuPress={handleMenuPress} title="Documentos" />
 
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         <ThemedView style={styles.contentContainer}>
           <ThemedView style={styles.titleContainer}>
             <ThemedText type="title" style={styles.title}>
-              Manuales de trabajo
+              Documentos
             </ThemedText>
             <ThemedText style={styles.subtitle}>
               Consulta y registra manuales asociados a tu puesto.

@@ -4,6 +4,14 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type EncuestaSatisfaccionModuleFilters = ActaEntregaModuleFilters & {
     responsableIds?: number[] | null;
@@ -806,12 +814,23 @@ function appendIndividualFormToWorksheet(
     return rr + 1;
 }
 
-export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildEncuestaSatisfaccionExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Encuestas");
     const wsDet = wb.addWorksheet("Detalles");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+
+    // No existe `created_by` en `c_encuesta_cliente`: no hay ancla para "Creado por".
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_encuesta_cliente",
+        rows.map((r: any) => Number(r.id)),
+    );
 
     const anchorEvalById = new Map<number, number>();
     const anchorFirmaById = new Map<number, number>();
@@ -852,7 +871,8 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         "Nivel",
         "Tipo de fila",
         "ID Encuesta",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Fecha encuesta",
         "Empresa",
         "Cliente",
@@ -869,25 +889,34 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         "Sección",
         "Pregunta",
         "Respuesta",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
-    const COL_VER_EVAL = 16;
-    const COL_VER_FIRMA = 17;
+    // Posiciones dentro de la hoja (incluyen la columna de margen A que agrega `addMainRow`).
+    const COL_VER_EVAL = 18;
+    const COL_VER_FIRMA = 19;
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
         { width: 20 },
         { width: 10 },
-        { width: 18 },
+        { width: 14 },
+        { width: 12 },
         { width: 12 },
         { width: 24 },
         { width: 22 },
@@ -904,28 +933,33 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         { width: 26 },
         { width: 40 },
         { width: 26 },
+        { width: 16 },
+        { width: 20 },
     ];
 
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
     for (const r of rows) {
         const evRow = anchorEvalById.get(Number(r.id)) ?? 1;
         const fiRow = anchorFirmaById.get(Number(r.id)) ?? 1;
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general = [
             String(r.id),
-            r.created_at_txt,
-            r.fecha_txt,
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
+            formatDateOnlyDMY(r.fecha),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -939,7 +973,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
         const decoded = parseEncuestaEvaluacionesJson(r.evaluaciones);
         const conoceTxt = decoded.kind === "form" ? (decoded.know_process ? "Sí" : "No") : "";
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(r.id),
             "",
             0,
@@ -950,6 +984,8 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
             String(r.observaciones ?? "").slice(0, 5000),
             conoceTxt,
             ...blank(3),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
         rootRow.getCell(COL_VER_EVAL).value = { text: "Ver evaluaciones", hyperlink: `#'Detalles'!A${evRow}` };
         rootRow.getCell(COL_VER_EVAL).font = { color: { argb: "FF0563C1" }, underline: true };
@@ -962,7 +998,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
             decoded.items.forEach((item, idx) => {
                 const q = String((item as any)?.question ?? "").trim();
                 const v = (item as any)?.result ?? (item as any)?.value ?? "";
-                const row = wsMain.addRow([
+                const row = addMainRow(wsMain, [
                     `${r.id}.q${idx + 1}`,
                     String(r.id),
                     1,
@@ -972,6 +1008,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                     "",
                     q,
                     String(v ?? ""),
+                    ...blank(2),
                 ]);
                 styleDataRow(row, 1);
                 totalDataRows += 1;
@@ -982,7 +1019,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                 const secTitle = String(secObj.section_title ?? "").trim() || `Sección ${secIdx + 1}`;
                 const secId = `${r.id}.s${secIdx + 1}`;
                 const globalSec = isGlobalSectionTitle(secTitle);
-                const secRow = wsMain.addRow([
+                const secRow = addMainRow(wsMain, [
                     secId,
                     String(r.id),
                     1,
@@ -992,6 +1029,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                     secTitle,
                     "",
                     "",
+                    ...blank(2),
                 ]);
                 styleDataRow(secRow, 1);
                 totalDataRows += 1;
@@ -1003,7 +1041,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                     const apply = coerceQuestionApply(qRow.apply);
                     const val = apply && Number.isFinite(Number(qRow.value)) ? Number(qRow.value) : 0;
                     const label = apply ? likertLabel5(val, globalSec) : "No aplica";
-                    const row = wsMain.addRow([
+                    const row = addMainRow(wsMain, [
                         `${secId}.q${qIdx + 1}`,
                         secId,
                         2,
@@ -1012,6 +1050,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                         ...blank(5),
                         qt,
                         label,
+                        ...blank(2),
                     ]);
                     styleDataRow(row, 2);
                     totalDataRows += 1;
@@ -1019,7 +1058,7 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
 
                 const secObs = String(secObj.observations ?? "").trim();
                 if (secObs) {
-                    const row = wsMain.addRow([
+                    const row = addMainRow(wsMain, [
                         `${secId}.obs`,
                         secId,
                         2,
@@ -1028,13 +1067,14 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                         ...blank(5),
                         "Observaciones",
                         secObs,
+                        ...blank(2),
                     ]);
                     styleDataRow(row, 2);
                     totalDataRows += 1;
                 }
             });
         } else if (decoded.kind === "raw" && decoded.text.trim()) {
-            const row = wsMain.addRow([
+            const row = addMainRow(wsMain, [
                 `${r.id}.raw`,
                 String(r.id),
                 1,
@@ -1044,12 +1084,16 @@ export async function buildEncuestaSatisfaccionExcelConsolidado(rows: any[]): Pr
                 "",
                 "",
                 decoded.text.slice(0, 5000),
+                ...blank(2),
             ]);
             styleDataRow(row, 1);
             totalDataRows += 1;
         }
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
+    };
     wsDet.columns = [
         { width: 28 },
         { width: 12 },

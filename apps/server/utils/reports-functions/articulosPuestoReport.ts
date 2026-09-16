@@ -12,6 +12,13 @@ import {
     loadNomencladorById,
     type ArticuloPuestoBatchSlice,
 } from "./articulosPuestoBatchData";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type ArticulosPuestoModuleFilters = ActaEntregaModuleFilters;
 export type ArticulosPuestoOrderKey =
@@ -137,6 +144,8 @@ type ArticuloDetalleRow = {
     modelo: string;
     serie: string;
     fecha_entrega: string;
+    /** Valor crudo de `fecha_entrega` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
+    fecha_entrega_raw: Date | string | null;
     combo_nombre: string;
     nomenclador_nombre: string;
     movimientos_count: number;
@@ -182,6 +191,7 @@ function buildArticulosDetalleFromSlice(
             modelo: "",
             serie: "",
             fecha_entrega: "",
+            fecha_entrega_raw: null,
             combo_nombre: combo?.nombre ?? "",
             nomenclador_nombre: "",
             movimientos_count: 0,
@@ -201,6 +211,7 @@ function buildArticulosDetalleFromSlice(
             modelo: "",
             serie: "",
             fecha_entrega: "",
+            fecha_entrega_raw: null,
             combo_nombre: "",
             nomenclador_nombre: "",
             movimientos_count: 0,
@@ -220,6 +231,7 @@ function buildArticulosDetalleFromSlice(
             modelo: art.modelo ?? "",
             serie: art.serie ?? "",
             fecha_entrega: fmtDateTime(art.fechaEntrega),
+            fecha_entrega_raw: art.fechaEntrega ?? null,
             combo_nombre: "",
             nomenclador_nombre: "",
             movimientos_count: 0,
@@ -550,11 +562,12 @@ function addMovimientoDataRow(
 }
 
 export async function buildArticulosPuestoExcelConsolidado(
-    prisma: ReportDataAccess,
     rows: PuestoReportRow[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
 ): Promise<Buffer> {
     const allArticulos = rows.flatMap((r) => r.articulos);
-    if (allArticulos.length) await attachMovimientosToArticulos(prisma, allArticulos);
+    if (allArticulos.length) await attachMovimientosToArticulos(reportDb, allArticulos);
 
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Puestos");
@@ -628,6 +641,7 @@ export async function buildArticulosPuestoExcelConsolidado(
         "Modelo (artículo)",
         "Serie (artículo)",
         "Fecha entrega (artículo)",
+        "Hora entrega (artículo)",
         "Combo",
         "Nomenclador",
         "Ver movimientos",
@@ -642,10 +656,22 @@ export async function buildArticulosPuestoExcelConsolidado(
         "Tiene firma entrega (movimiento)",
         "Tiene firma recibe (movimiento)",
     ];
-    const COL_VER_ARTICULOS = 12;
-    const COL_VER_MOVIMIENTOS = 23;
-    wsMain.addRow(mainHeaders);
-    applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos de valores.
+    const COL_VER_ARTICULOS = mainHeaders.indexOf("Ver artículos") + 1;
+    const COL_VER_MOVIMIENTOS = mainHeaders.indexOf("Ver movimientos") + 1;
+    // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
+    const SHEET_COL_VER_ARTICULOS = COL_VER_ARTICULOS + 1;
+    const SHEET_COL_VER_MOVIMIENTOS = COL_VER_MOVIMIENTOS + 1;
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+    const mh = addMainRow(wsMain, mainHeaders);
+    mh.font = { bold: true };
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = mh.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
 
     const artHeaders = [
         "Puesto",
@@ -709,13 +735,14 @@ export async function buildArticulosPuestoExcelConsolidado(
         origen === "Asignado" ? "as" : origen === "Plan (combo)" ? "pc" : "pl";
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { wrapText: true, vertical: "top" };
         });
-        row.getCell(4).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
@@ -724,17 +751,17 @@ export async function buildArticulosPuestoExcelConsolidado(
         const linkText = r.articulos_count > 0 ? `Ver artículos (${r.articulos_count})` : "Sin artículos";
         const general = [String(r.puesto_id), r.empresa_txt, r.cliente_txt, r.division_txt, r.contrato_txt, r.corpo_txt, r.puesto_txt];
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(r.puesto_id),
             "",
             0,
             "Puesto",
             ...general,
             linkText,
-            ...blank(21),
+            ...blank(22),
         ]);
         if (anchor && r.articulos_count > 0) {
-            const cell = rootRow.getCell(COL_VER_ARTICULOS);
+            const cell = rootRow.getCell(SHEET_COL_VER_ARTICULOS);
             cell.value = { text: linkText, hyperlink: `#'Artículos'!A${anchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
@@ -748,7 +775,7 @@ export async function buildArticulosPuestoExcelConsolidado(
             const movCount = a.movimientos_count ?? 0;
             const movLinkText = movCount > 0 ? `Ver movimientos (${movCount})` : "";
 
-            const artRowMain = wsMain.addRow([
+            const artRowMain = addMainRow(wsMain, [
                 artId,
                 String(r.puesto_id),
                 1,
@@ -762,14 +789,15 @@ export async function buildArticulosPuestoExcelConsolidado(
                 a.marca,
                 a.modelo,
                 a.serie,
-                a.fecha_entrega,
+                formatDateOnlyDMY(a.fecha_entrega_raw),
+                formatTimeOnlyHMS(a.fecha_entrega_raw),
                 a.combo_nombre,
                 a.nomenclador_nombre,
                 movLinkText,
                 ...blank(10),
             ]);
             if (movAnchor && movCount > 0) {
-                const cell = artRowMain.getCell(COL_VER_MOVIMIENTOS);
+                const cell = artRowMain.getCell(SHEET_COL_VER_MOVIMIENTOS);
                 cell.value = { text: movLinkText, hyperlink: `#'Movimientos'!A${movAnchor}` };
                 cell.font = { color: { argb: "FF0563C1" }, underline: true };
             }
@@ -777,14 +805,14 @@ export async function buildArticulosPuestoExcelConsolidado(
             totalDataRows += 1;
 
             for (const m of a.movimientos) {
-                const movRow = wsMain.addRow([
+                const movRow = addMainRow(wsMain, [
                     String(m.id),
                     artId,
                     2,
                     "Movimiento",
                     ...general,
                     "",
-                    ...blank(10),
+                    ...blank(11),
                     "",
                     excelCellString(m.nombre_persona_entrega),
                     excelCellString(m.nombre_persona_recibe),
@@ -792,8 +820,8 @@ export async function buildArticulosPuestoExcelConsolidado(
                     excelCellString(m.telefono),
                     excelCellString(m.entrega),
                     excelCellString(m.recibe),
-                    fmtDate(m.fecha),
-                    fmtTime(m.hora),
+                    formatDateOnlyDMY(m.fecha),
+                    formatTimeOnlyHMS(m.hora),
                     m.firma_entrega ? "Sí" : "No",
                     m.firma_recibe ? "Sí" : "No",
                 ]);
@@ -804,15 +832,16 @@ export async function buildArticulosPuestoExcelConsolidado(
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: mainHeaders.length + 1 },
     };
 
     wsMain.columns = [
+        { width: 3 },
         { width: 14 }, { width: 16 }, { width: 8 }, { width: 20 }, { width: 10 },
         { width: 28 }, { width: 24 }, { width: 22 }, { width: 28 }, { width: 24 }, { width: 28 },
         { width: 18 },
-        { width: 16 }, { width: 14 }, { width: 28 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 20 }, { width: 22 }, { width: 28 }, { width: 20 },
+        { width: 16 }, { width: 14 }, { width: 28 }, { width: 10 }, { width: 14 }, { width: 14 }, { width: 20 }, { width: 14 }, { width: 12 }, { width: 28 }, { width: 20 },
         { width: 18 },
         { width: 22 }, { width: 22 }, { width: 20 }, { width: 16 }, { width: 18 }, { width: 18 }, { width: 14 }, { width: 12 }, { width: 18 }, { width: 18 },
     ];

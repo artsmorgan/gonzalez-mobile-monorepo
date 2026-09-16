@@ -5,6 +5,14 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer, getImageDimensionsFromFile } from "./imageDimensions";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type InduccionRecorridoModuleFilters = ActaEntregaModuleFilters & {
     responsableEmpleadoIds?: number[];
@@ -51,12 +59,6 @@ function fmtDateOnly(v: unknown): string {
     const d = v instanceof Date ? v : new Date(String(v ?? ""));
     if (Number.isNaN(d.getTime())) return "";
     return d.toISOString().slice(0, 10);
-}
-
-function fmtDateTime(v: unknown): string {
-    const d = v instanceof Date ? v : new Date(String(v ?? ""));
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
 function normalizeSignatureDataUri(raw: unknown): string | null {
@@ -337,7 +339,6 @@ export async function queryInduccionRecorridoRows(
                 ? [plaza.nro_plaza != null ? String(plaza.nro_plaza) : "", plaza.codigo_plaza, plaza.nombre].filter(Boolean).join(" - ")
                 : String(r.plaza_id ?? ""),
             empleado_txt: empleado ? empleadoDisplayName(empleado) : String(r.empleado_id),
-            created_at_txt: r.created_at instanceof Date ? fmtDateTime(r.created_at) : String(r.created_at ?? ""),
             fecha_txt: fmtDateOnly(r.fecha),
             created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
             firma_supervisor_data_uri: normalizeSignatureDataUri(r.firma_supervisor),
@@ -622,7 +623,11 @@ async function appendDetalleBlocks(
     return { rt: rowTemasTitle, ra: rowAspTitle, rp: rowPartTitle, rs: rowSupTitle };
 }
 
-export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildInduccionRecorridoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Inducción recorrido");
     const wsDet = wb.addWorksheet("Detalles");
@@ -649,7 +654,8 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         "Nivel",
         "Tipo de fila",
         "ID Registro",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Empresa",
         "Cliente",
         "División",
@@ -658,12 +664,15 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         "Puesto",
         "Plaza",
         "Fecha (visita)",
+        "Hora (visita)",
         "Renglón / edificio",
         "Supervisor cliente",
         "Supervisor corporación",
         "División (texto)",
         "Empleado",
         "Responsable (creado por)",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver temas",
         "Ver aspectos",
         "Ver participantes",
@@ -677,29 +686,45 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         "Nombre completo (participante)",
         "Cédula (participante)",
     ];
-    const c1 = headers.indexOf("Ver temas") + 1;
-    const c2 = headers.indexOf("Ver aspectos") + 1;
-    const c3 = headers.indexOf("Ver participantes") + 1;
-    const c4 = headers.indexOf("Ver firma supervisor") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+    // +2 (no +1): 1 por la posición basada en índice de `headers`, 1 más por la columna de margen que agrega `addMainRow`.
+    const c1 = headers.indexOf("Ver temas") + 2;
+    const c2 = headers.indexOf("Ver aspectos") + 2;
+    const c3 = headers.indexOf("Ver participantes") + 2;
+    const c4 = headers.indexOf("Ver firma supervisor") + 2;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
     const linkCols = new Set([c1, c2, c3, c4]);
 
-    const h = wsMain.addRow(headers);
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_registro_induccion_recorrido",
+        rows.map((r: any) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const h = addMainRow(wsMain, headers);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = GRP_HDR;
-        c.border = borderThin as ExcelJS.Borders;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    wsMain.columns = headers.map((lab) => {
-        if (lab.includes("Renglón") || lab.includes("Supervisor")) return { width: 28 };
-        if (lab.startsWith("Ver")) return { width: 16 };
-        return { width: 22 };
-    });
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    wsMain.columns = [
+        { width: 3 },
+        ...headers.map((lab) => {
+            if (lab.includes("Renglón") || lab.includes("Supervisor")) return { width: 28 };
+            if (lab.startsWith("Ver")) return { width: 16 };
+            if (lab === "Usuario modifica") return { width: 16 };
+            if (lab === "Fecha y hora modifica") return { width: 20 };
+            return { width: 22 };
+        }),
+    ];
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, col) => {
+            if (col === 1) return;
             cell.border = borderThin as ExcelJS.Borders;
             if (!linkCols.has(col)) cell.alignment = { vertical: "middle", wrapText: true };
         });
@@ -713,9 +738,11 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         const ra = anchorAsp.get(Number(r.id)) ?? 1;
         const rp = anchorPart.get(Number(r.id)) ?? 1;
         const rs = anchorSup.get(Number(r.id)) ?? 1;
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
             [headers.indexOf("ID Registro") + 1]: r.id,
-            [headers.indexOf("Creado en") + 1]: r.created_at_txt,
+            [headers.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [headers.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
             [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
             [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
             [headers.indexOf("División") + 1]: r.division_nombre,
@@ -723,13 +750,16 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
             [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
             [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
             [headers.indexOf("Plaza") + 1]: r.plaza_nombre,
-            [headers.indexOf("Fecha (visita)") + 1]: r.fecha_txt,
+            [headers.indexOf("Fecha (visita)") + 1]: formatDateOnlyDMY(r.fecha),
+            [headers.indexOf("Hora (visita)") + 1]: formatTimeOnlyHMS(r.fecha),
             [headers.indexOf("Renglón / edificio") + 1]: excelCellString(r.renglon_edificio),
             [headers.indexOf("Supervisor cliente") + 1]: excelCellString(r.supervisor_cliente),
             [headers.indexOf("Supervisor corporación") + 1]: excelCellString(r.supervisor_corporacion),
             [headers.indexOf("División (texto)") + 1]: excelCellString(r.division),
             [headers.indexOf("Empleado") + 1]: r.empleado_txt,
             [headers.indexOf("Responsable (creado por)") + 1]: r.created_by_nombre,
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(headers.length).fill("");
@@ -737,7 +767,7 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
         rootValues[2] = 0;
         rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
         rootRow.getCell(c1).value = { text: "Ver", hyperlink: `#'Detalles'!A${rt}` };
         rootRow.getCell(c1).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(c2).value = { text: "Ver", hyperlink: `#'Detalles'!A${ra}` };
@@ -758,7 +788,7 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
             values[headers.indexOf("Tema")] = excelCellString(t?.tema);
             values[headers.indexOf("Respuesta (tema)")] = excelCellString(t?.respuesta);
             values[headers.indexOf("Comentarios (tema)")] = excelCellString(t?.comentarios);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -772,7 +802,7 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
             values[headers.indexOf("Aspecto")] = excelCellString(a?.aspecto);
             values[headers.indexOf("Respuesta (aspecto)")] = excelCellString(a?.respuesta);
             values[headers.indexOf("Comentarios (aspecto)")] = excelCellString(a?.comentarios);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -785,7 +815,7 @@ export async function buildInduccionRecorridoExcelConsolidado(rows: any[]): Prom
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Nombre completo (participante)")] = excelCellString(p?.nombre_completo);
             values[headers.indexOf("Cédula (participante)")] = excelCellString(p?.cedula);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }

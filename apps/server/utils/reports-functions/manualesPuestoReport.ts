@@ -3,6 +3,14 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { hydratePreexistentChildRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const MANUALES_PUESTO_INCLUDE = {
     e_puestos_manual_puesto: true,
@@ -74,6 +82,24 @@ function parseBoundaryDateTime(s: string | undefined | null): Date | null {
 function excelCellString(v: unknown): string {
     const s = String(v ?? "");
     return s.length > 32767 ? s.slice(0, 32767) : s;
+}
+
+/** `e_manual_puesto.created_by` almacena el id de `c_empleado` como texto (API móvil). */
+function parseEmpleadoIdFromCreatedBy(raw: unknown): number | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
+function empleadoDisplayName(e: {
+    codigo: string;
+    nombre: string | null;
+    primer_apellido: string | null;
+    segundo_apellido: string | null;
+}): string {
+    const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+    return full ? `${e.codigo} - ${full}` : e.codigo;
 }
 
 function safeJsonParse(raw: string | null | undefined): any {
@@ -345,8 +371,9 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
     const contratoIds = [...new Set(rows.map((r) => r.contrato_id).filter((n) => n > 0))];
     const corpoIds = [...new Set(rows.map((r) => r.corpo_id).filter((n) => n > 0))];
     const puestoIds = [...new Set(rows.map((r) => r.puesto_id).filter((n) => n > 0))];
+    const creadorIds = [...new Set(rows.map((r: any) => parseEmpleadoIdFromCreatedBy(r.created_by)).filter((n): n is number => n != null))];
 
-    const [empresas, clientes, divisiones, contratos, corpos, puestos] = await Promise.all([
+    const [empresas, clientes, divisiones, contratos, corpos, puestos, creadores] = await Promise.all([
         empresaIds.length ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empresaIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
         clienteIds.length ? prisma.e_estructura_cliente.findMany({ where: { id: { in: clienteIds } }, select: { id: true, nombre: true } }) : [],
         divisionIds.length ? prisma.n_division.findMany({ where: { id: { in: divisionIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
@@ -355,6 +382,12 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
             : [],
         corpoIds.length ? prisma.e_estructura_sucursal.findMany({ where: { id: { in: corpoIds } }, select: { id: true, nombre: true, nro_sucursal: true } }) : [],
         puestoIds.length ? prisma.e_estructura_puesto.findMany({ where: { id: { in: puestoIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
+        creadorIds.length
+            ? prisma.c_empleado.findMany({
+                  where: { id: { in: creadorIds } },
+                  select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+              })
+            : [],
     ]);
     const empresaById = new Map(empresas.map((e) => [e.id, e]));
     const clienteById = new Map(clientes.map((c) => [c.id, c]));
@@ -362,6 +395,7 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
     const contratoById = new Map(contratos.map((c) => [c.id, c]));
     const corpoById = new Map(corpos.map((c) => [c.id, c]));
     const puestoById = new Map(puestos.map((p) => [p.id, p]));
+    const creadorById = new Map(creadores.map((e) => [e.id, e]));
 
     return rows.map((r: any) => {
         const emp = empresaById.get(r.empresa_id);
@@ -370,6 +404,8 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         const con = contratoById.get(r.contrato_id);
         const cor = corpoById.get(r.corpo_id);
         const pto = puestoById.get(r.puesto_id);
+        const empCreadorId = parseEmpleadoIdFromCreatedBy(r.created_by);
+        const creador = empCreadorId != null ? creadorById.get(empCreadorId) : undefined;
         return {
             ...r,
             empresa_txt: emp ? `${emp.codigo ? `${emp.codigo} - ` : ""}${emp.nombre}` : String(r.empresa_id),
@@ -378,7 +414,7 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
             contrato_txt: con ? `${con.nro_contrato ? `${con.nro_contrato} - ` : ""}${con.nombre}` : String(r.contrato_id),
             corpo_txt: cor ? `${cor.nro_sucursal ? `${cor.nro_sucursal} - ` : ""}${cor.nombre}` : String(r.corpo_id),
             puesto_principal_txt: pto ? `${pto.codigo ? `${pto.codigo} - ` : ""}${pto.nombre}` : String(r.puesto_id),
-            created_at_txt: r.created_at instanceof Date ? r.created_at.toISOString().replace("T", " ").slice(0, 19) : String(r.created_at ?? ""),
+            created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
         };
     });
 }
@@ -393,7 +429,11 @@ function applyHeaderRow(row: ExcelJS.Row, cols: number) {
     }
 }
 
-export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildManualesPuestoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Manuales");
     const wsQuiz = wb.addWorksheet("Quices");
@@ -416,7 +456,11 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         "Corpo",
         "Puesto principal",
         "Clasificación",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver estructura",
         "Puestos vinculados",
         "Visualización empleados",
@@ -431,25 +475,47 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         "ID pregunta (respuesta)",
         "Respuesta empleado",
     ];
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`/`rootValues`.
     const COL_VER_ESTRUCTURA = mainHeaders.indexOf("Ver estructura") + 1;
     const COL_PUESTOS_VINC = mainHeaders.indexOf("Puestos vinculados") + 1;
     const COL_VIS_EMPLEADOS = mainHeaders.indexOf("Visualización empleados") + 1;
     const COL_QUICES = mainHeaders.indexOf("Quices") + 1;
     const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
+    const SHEET_COL_VER_ESTRUCTURA = COL_VER_ESTRUCTURA + 1;
+    const SHEET_COL_PUESTOS_VINC = COL_PUESTOS_VINC + 1;
+    const SHEET_COL_VIS_EMPLEADOS = COL_VIS_EMPLEADOS + 1;
+    const SHEET_COL_QUICES = COL_QUICES + 1;
+    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
 
-    const h = wsMain.addRow(mainHeaders);
-    applyHeaderRow(h, mainHeaders.length);
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_manual_puesto",
+        rows.map((r: any) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(wsMain, mainHeaders);
+    h.font = { bold: true };
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = borderThin as ExcelJS.Borders;
             cell.alignment = { wrapText: true, vertical: "top" };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
     };
 
     let quizRow = 0;
@@ -708,6 +774,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         const qAns = anchorQuizAnswers.get(id) ?? qStruct;
         const pA = anchorPuestos.get(id) ?? 2;
         const vA = anchorVis.get(id) ?? 2;
+        const cambio = cambiosByRegistro.get(id);
 
         const general: Record<number, unknown> = {
             [mainHeaders.indexOf("ID Manual") + 1]: id,
@@ -720,7 +787,11 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
             [mainHeaders.indexOf("Corpo") + 1]: r.corpo_txt,
             [mainHeaders.indexOf("Puesto principal") + 1]: r.puesto_principal_txt,
             [mainHeaders.indexOf("Clasificación") + 1]: excelCellString(r.classification ?? ""),
-            [mainHeaders.indexOf("Creado en") + 1]: r.created_at_txt,
+            [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [mainHeaders.indexOf("Creado por") + 1]: r.created_by_nombre,
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(mainHeaders.length).fill("");
@@ -732,15 +803,15 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         rootValues[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
         rootValues[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
         rootValues[COL_QUICES - 1] = "Quices";
-        const rootRow = wsMain.addRow(rootValues);
-        rootRow.getCell(COL_VER_ESTRUCTURA).value = { text: "Ver estructura", hyperlink: `#'Quices'!A${qStruct}` };
-        rootRow.getCell(COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
-        rootRow.getCell(COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
-        rootRow.getCell(COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(COL_QUICES).value = { text: "Quices", hyperlink: `#'Quices'!A${qAns}` };
-        rootRow.getCell(COL_QUICES).font = { color: { argb: "FF0563C1" }, underline: true };
+        const rootRow = addMainRow(wsMain, rootValues);
+        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).value = { text: "Ver estructura", hyperlink: `#'Quices'!A${qStruct}` };
+        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
+        rootRow.getCell(SHEET_COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
+        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_QUICES).value = { text: "Quices", hyperlink: `#'Quices'!A${qAns}` };
+        rootRow.getCell(SHEET_COL_QUICES).font = { color: { argb: "FF0563C1" }, underline: true };
         styleDataRow(rootRow, 0);
 
         const questionObjs = extractQuizQuestionArray(r.quiz);
@@ -757,7 +828,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
             const ptsRaw = q?.points;
             const ptsNum = typeof ptsRaw === "number" ? ptsRaw : Number(ptsRaw);
             values[mainHeaders.indexOf("Puntos (plantilla)")] = Number.isFinite(ptsNum) ? String(ptsNum) : "—";
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -772,7 +843,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
             values[3] = "Puesto vinculado";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[mainHeaders.indexOf("Puesto (vínculo)")] = excelCellString(ptxt);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -791,7 +862,7 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
             for (const [col, val] of Object.entries(general)) visValues[Number(col) - 1] = val;
             visValues[mainHeaders.indexOf("Empleado (visualización)")] = excelCellString(empTxt);
             visValues[mainHeaders.indexOf("Estado (visualización)")] = approvedLabel(v.approved);
-            const visRow = wsMain.addRow(visValues);
+            const visRow = addMainRow(wsMain, visValues);
             styleDataRow(visRow, 1);
 
             const ansItems = parseQuizAnswersPayload(v.quiz_answear);
@@ -804,13 +875,14 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
                 for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
                 values[mainHeaders.indexOf("ID pregunta (respuesta)")] = String(ans?.question_id ?? "").trim() || "—";
                 values[mainHeaders.indexOf("Respuesta empleado")] = displayUserAnswerCell(ans);
-                const row = wsMain.addRow(values);
+                const row = addMainRow(wsMain, values);
                 styleDataRow(row, 2);
             });
         });
     }
 
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -825,7 +897,11 @@ export async function buildManualesPuestoExcelConsolidado(rows: any[]): Promise<
         { width: 22 },
         { width: 24 },
         { width: 20 },
-        { width: 18 },
+        { width: 14 },
+        { width: 12 },
+        { width: 16 },
+        { width: 16 },
+        { width: 20 },
         { width: 16 },
         { width: 18 },
         { width: 22 },

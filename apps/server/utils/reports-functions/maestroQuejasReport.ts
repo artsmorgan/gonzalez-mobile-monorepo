@@ -4,6 +4,14 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 /** Filtros de fecha usan `creadoDesde` / `creadoHasta` (string sin TZ) aplicados a `created_at` del registro (equivalente operativo a “fecha reporte” hasta existir columna dedicada). */
 export type MaestroQuejasModuleFilters = ActaEntregaModuleFilters & {
@@ -31,12 +39,6 @@ function parseBoundaryDate(s: string | undefined | null): Date | null {
 function excelCellString(v: unknown, max = 32767): string {
     const s = String(v ?? "");
     return s.length > max ? s.slice(0, max) : s;
-}
-
-function fmtDateTime(v: unknown): string {
-    const d = v instanceof Date ? v : new Date(String(v ?? ""));
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
 /** `c_maestro_quejas.created_by` guarda el id de `c_empleado` como texto. */
@@ -248,11 +250,21 @@ function sortMaestroQuejasRows(rows: any[], orderKey: MaestroQuejasOrderKey): an
     return copy;
 }
 
-export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildMaestroQuejasExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Maestro de quejas");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F3D63" } } as const;
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_maestro_quejas",
+        rows.map((r) => Number(r.id)),
+    );
 
     const headers = [
         "ID",
@@ -263,7 +275,8 @@ export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<B
         "Sucursal",
         "Puesto",
         "Plaza",
-        "Creado (servidor)",
+        "Creado (fecha)",
+        "Creado (hora)",
         "Sociedad",
         "Nombre quien recibió la queja",
         "Cliente (texto formulario)",
@@ -284,21 +297,26 @@ export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<B
         "Acción correctiva / preventiva",
         "Estado",
         "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Firma responsable",
     ];
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FF1F3D63", mainColumnCount: headers.length });
+
+    const h = addMainRow(wsMain, headers);
     h.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    h.eachCell((cell) => {
+    h.eachCell((cell, colNumber) => {
+        if (colNumber === 1) return;
         cell.fill = hdrFill;
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     const colWidths = [
-        8, 26, 22, 18, 24, 24, 22, 22, 18, 14, 22, 18, 20, 20, 14, 14, 14, 16, 12, 14, 24, 40, 18, 14, 14, 32, 28, 12, 28, 36,
+        8, 26, 22, 18, 24, 24, 22, 22, 14, 12, 14, 22, 18, 20, 20, 14, 14, 14, 16, 12, 14, 24, 40, 18, 14, 14, 32, 28, 12, 28, 16, 20, 36,
     ];
-    wsMain.columns = colWidths.map((w) => ({ width: w, outlineLevel: 1 }));
+    wsMain.columns = [{ width: 3 }, ...colWidths.map((w) => ({ width: w, outlineLevel: 1 }))];
 
     for (const r of rows) {
         const desc =
@@ -309,8 +327,9 @@ export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<B
             excelCellString(r.resolucion_queja).length > 800
                 ? `${excelCellString(r.resolucion_queja).slice(0, 800)}…`
                 : excelCellString(r.resolucion_queja);
+        const cambio = cambiosByRegistro.get(Number(r.id));
 
-        const row = wsMain.addRow([
+        const row = addMainRow(wsMain, [
             String(r.id),
             excelCellString(r.empresa_nombre),
             excelCellString(r.cliente_nombre),
@@ -319,7 +338,8 @@ export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<B
             excelCellString(r.corpo_nombre),
             excelCellString(r.puesto_nombre),
             excelCellString(r.plaza_nombre ?? ""),
-            fmtDateTime(r.created_at),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             excelCellString(r.sociedad),
             excelCellString(r.nombre_realiza_queja),
             excelCellString(r.cliente),
@@ -340,17 +360,20 @@ export async function buildMaestroQuejasExcelConsolidado(rows: any[]): Promise<B
             excelCellString(r.accion_correctiva_preventiva),
             excelCellString(r.estado),
             excelCellString(r.creado_por_nombre ?? r.created_by),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             excelCellString(r.firma_responsable),
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
     };
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

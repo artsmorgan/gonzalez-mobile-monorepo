@@ -233,7 +233,7 @@ const MODULO_PICKER_OPTIONS: { value: string; label: string }[] = [
   { value: MODULO_LOGIN_MARCA, label: 'Login de marca' },
   { value: MODULO_LLAVES, label: 'Llaves' },
   { value: MODULO_MAESTRO_QUEJAS, label: 'Maestro de quejas y reclamos' },
-  { value: MODULO_MANUALES_PUESTO, label: 'Manuales de trabajo' },
+  { value: MODULO_MANUALES_PUESTO, label: 'Documentos' },
   { value: MODULO_MANTENIMIENTO_ARTICULOS, label: 'Mantenimiento de artículos' },
   { value: MODULO_NOTAS_VOZ, label: 'Notas de voz' },
   { value: MODULO_MUTUOS_ACUERDOS, label: 'Mutuos acuerdos' },
@@ -912,6 +912,17 @@ function formatControlVersionDateDisplay(iso: string | null | undefined): string
   return `${dd}/${mm}/${yyyy}`;
 }
 
+/** Solo se considera completo si tiene todos sus datos; si falta alguno, la casilla del nombre queda en blanco. */
+function isControlVersionComplete(cv: ReportesControlVersionRow | null): cv is ReportesControlVersionRow {
+  if (!cv) return false;
+  return (
+    Boolean(String(cv.title ?? '').trim()) &&
+    Boolean(cv.version) &&
+    Boolean(cv.approve_date) &&
+    Boolean(String(cv.department ?? '').trim())
+  );
+}
+
 /** Nombre plano (sin saltos de línea) para guardar en base de datos. */
 function buildControlVersionFlatNombre(cv: ReportesControlVersionRow): string {
   return `${cv.title}, V${cv.version}, ${formatControlVersionDateDisplay(cv.approve_date)}, ${cv.department}`;
@@ -924,6 +935,12 @@ function buildControlVersionFlatNombre(cv: ReportesControlVersionRow): string {
  */
 function getControlVersionPreviewLines(cv: ReportesControlVersionRow | null): string[] {
   if (!cv) return ['No hay un registro de control de versiones para este módulo.'];
+  if (!isControlVersionComplete(cv)) {
+    return [
+      'El registro de control de versiones para este módulo está incompleto.',
+      'Este dato se guardará en blanco en el reporte.',
+    ];
+  }
   return [
     `${cv.title}, V${cv.version},`,
     `${formatControlVersionDateDisplay(cv.approve_date)},`,
@@ -3942,10 +3959,6 @@ export default function ReportesScreen() {
         Alert.alert('Sin conexión', 'Se requiere internet.');
         return;
       }
-      if (!matchedControlVersion) {
-        Alert.alert('Formulario', 'No existe un registro de control de versiones para el módulo seleccionado.');
-        return;
-      }
       const moduleFilters: Record<string, unknown> = {};
       if (formModulo === MODULO_INGRESOS) {
         applyOptionalCreatedRange(moduleFilters, modalDesdeD, modalDesdeT, modalHastaD, modalHastaT);
@@ -4249,7 +4262,9 @@ export default function ReportesScreen() {
       }
 
       const tipoReporte = resolveTipoReporteForCreate(formModulo, formTipoReporteRef.current);
-      const nombreReporte = buildControlVersionFlatNombre(matchedControlVersion);
+      const nombreReporte = isControlVersionComplete(matchedControlVersion)
+        ? buildControlVersionFlatNombre(matchedControlVersion)
+        : '';
       const nomenclaturaReporte = applyTipoToReportLabel(formNomenclatura.trim(), tipoReporte);
 
       const res = await createReportJob({
@@ -4281,10 +4296,6 @@ export default function ReportesScreen() {
   };
 
   const confirmCreate = async () => {
-    if (!matchedControlVersion) {
-      Alert.alert('Formulario', 'No existe un registro de control de versiones para el módulo seleccionado.');
-      return;
-    }
     if (!formNumero.trim() || !formNomenclatura.trim()) {
       Alert.alert('Formulario', 'Número y nomenclatura son obligatorios.');
       return;
@@ -5122,7 +5133,7 @@ export default function ReportesScreen() {
                                     : modulo === MODULO_SOLICITUDES_PERMISO
                                       ? 'Filtros — Solicitudes de permiso'
                                     : modulo === MODULO_MANUALES_PUESTO
-                                      ? 'Filtros — Manuales de trabajo'
+                                      ? 'Filtros — Documentos'
                                     : modulo === MODULO_ARTICULOS_PUESTO
                                       ? 'Filtros — Artículos del puesto'
                                     : modulo === MODULO_MANTENIMIENTO_ARTICULOS
@@ -8280,7 +8291,7 @@ export default function ReportesScreen() {
                                 : formModulo === MODULO_SOLICITUDES_PERMISO
                                   ? 'Filtros — Solicitudes de permiso'
                                 : formModulo === MODULO_MANUALES_PUESTO
-                                  ? 'Filtros — Manuales de trabajo'
+                                  ? 'Filtros — Documentos'
                                 : formModulo === MODULO_ARTICULOS_PUESTO
                                   ? 'Filtros — Artículos del puesto'
                                 : formModulo === MODULO_MANTENIMIENTO_ARTICULOS

@@ -5,6 +5,14 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type RegistroVehiculosCorporativosModuleFilters = ActaEntregaModuleFilters & {
     tiposVehiculo?: string[] | null;
@@ -230,6 +238,10 @@ type UsoRow = {
     fecha_txt: string;
     inicio_txt: string;
     fin_txt: string;
+    /** Valores crudos (sin formatear) — usados solo en la hoja principal para separar fecha/hora. */
+    fecha: Date;
+    inicio: Date;
+    fin: Date;
     km_inicio: number;
     km_fin: number;
     motivo: string;
@@ -241,6 +253,8 @@ type MantenimientoRow = {
     id: number;
     vehiculo_id: number;
     fecha_txt: string;
+    /** Valor crudo de `fecha` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
+    fecha: Date;
     tipo: string;
     mantenimiento: string;
     diagnostico: string;
@@ -278,6 +292,9 @@ export type RegistroVehiculoCorporativoReportRow = {
     marchamo_txt: string;
     activo_txt: string;
     created_at_txt: string;
+    /** Valor crudo de `created_at` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
+    created_at: Date;
+    created_by: number;
     usos_count: number;
     mantenimientos_count: number;
     usos: UsoRow[];
@@ -455,6 +472,9 @@ export async function queryRegistroVehiculosCorporativosRows(
             fecha_txt: fmtDateTime(u.fecha),
             inicio_txt: fmtDateTime(u.inicio),
             fin_txt: fmtDateTime(u.fin),
+            fecha: u.fecha,
+            inicio: u.inicio,
+            fin: u.fin,
             km_inicio: u.km_inicio,
             km_fin: u.km_fin,
             motivo: u.motivo,
@@ -465,6 +485,7 @@ export async function queryRegistroVehiculosCorporativosRows(
             id: m.id,
             vehiculo_id: m.vehiculo_id,
             fecha_txt: fmtDateTime(m.fecha),
+            fecha: m.fecha,
             tipo: m.tipo,
             mantenimiento: m.mantenimiento,
             diagnostico: m.diagnostico,
@@ -496,6 +517,8 @@ export async function queryRegistroVehiculosCorporativosRows(
             marchamo_txt: fmtBool(v.marchamo),
             activo_txt: fmtBool(v.isActive),
             created_at_txt: fmtDateTime(v.created_at),
+            created_at: v.created_at,
+            created_by: v.created_by,
             usos_count: usos.length,
             mantenimientos_count: mantenimientos.length,
             usos,
@@ -535,6 +558,8 @@ const MANT_HEADERS = [
 
 export async function buildRegistroVehiculosCorporativosExcelConsolidado(
     rows: RegistroVehiculoCorporativoReportRow[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
 ): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Vehículos");
@@ -638,42 +663,88 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         "Marchamo",
         "Activo",
         "Fecha de creación",
+        "Hora de creación",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver usos",
         "Ver mantenimientos",
         "Conductor (uso)",
         "Código conductor (uso)",
         "Fecha (uso)",
+        "Hora (uso)",
         "Inicio (uso)",
+        "Hora inicio (uso)",
         "Fin (uso)",
+        "Hora fin (uso)",
         "Km inicio (uso)",
         "Km fin (uso)",
         "Motivo (uso)",
         "Combustible inicio (uso)",
         "Combustible fin (uso)",
         "Fecha (mantenimiento)",
+        "Hora (mantenimiento)",
         "Tipo (mantenimiento)",
         "Mantenimiento",
         "Diagnóstico (mantenimiento)",
         "Km próxima revisión (mantenimiento)",
         "Mecánico (mantenimiento)",
     ];
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`).
     const colUsos = mainHeaders.indexOf("Ver usos") + 1;
     const colMant = mainHeaders.indexOf("Ver mantenimientos") + 1;
     const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
-    const linkCols = new Set([colUsos, colMant]);
-    wsMain.addRow(mainHeaders);
-    applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
+    // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
+    const SHEET_COL_USOS = colUsos + 1;
+    const SHEET_COL_MANT = colMant + 1;
+    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
+    const linkCols = new Set([SHEET_COL_USOS, SHEET_COL_MANT]);
+
+    const creadorIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = creadorIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: creadorIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
+    const fmtCreador = (e: any): string => {
+        if (!e) return "";
+        const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+        return full ? `${e.codigo} - ${full}` : e.codigo;
+    };
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_vehiculos_corporativos",
+        rows.map((r) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+    const mh = addMainRow(wsMain, mainHeaders);
+    mh.font = { bold: true };
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = mh.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        applyDataRow(row, mainHeaders.length);
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
+            cell.border = borderThin;
+            cell.alignment = { wrapText: true, vertical: "top" };
+        });
+        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
     };
 
     for (const r of rows) {
         const usoLink = r.usos_count > 0 ? `Ver usos (${r.usos_count})` : "";
         const mantLink = r.mantenimientos_count > 0 ? `Ver mantenimientos (${r.mantenimientos_count})` : "";
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
             [mainHeaders.indexOf("ID vehículo") + 1]: r.id,
             [mainHeaders.indexOf("Empresa") + 1]: r.empresa_txt,
@@ -696,7 +767,11 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             [mainHeaders.indexOf("RTV") + 1]: r.rtv_txt,
             [mainHeaders.indexOf("Marchamo") + 1]: r.marchamo_txt,
             [mainHeaders.indexOf("Activo") + 1]: r.activo_txt,
-            [mainHeaders.indexOf("Fecha de creación") + 1]: r.created_at_txt,
+            [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
+            [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
+            [mainHeaders.indexOf("Creado por") + 1]: fmtCreador(creadorById.get(Number(r.created_by))),
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(mainHeaders.length).fill("");
@@ -704,16 +779,16 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
         rootValues[2] = 0;
         rootValues[3] = "Vehículo";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
         const usoAnchor = usoAnchorByVehiculoId.get(r.id);
         if (usoAnchor && r.usos_count > 0) {
-            const cell = rootRow.getCell(colUsos);
+            const cell = rootRow.getCell(SHEET_COL_USOS);
             cell.value = { text: usoLink, hyperlink: `#'Detalles'!A${usoAnchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const mantAnchor = mantAnchorByVehiculoId.get(r.id);
         if (mantAnchor && r.mantenimientos_count > 0) {
-            const cell = rootRow.getCell(colMant);
+            const cell = rootRow.getCell(SHEET_COL_MANT);
             cell.value = { text: mantLink, hyperlink: `#'Detalles'!A${mantAnchor}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
@@ -728,15 +803,18 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[mainHeaders.indexOf("Conductor (uso)")] = excelCellString(u.nombre_conductor);
             values[mainHeaders.indexOf("Código conductor (uso)")] = excelCellString(u.codigo_conductor);
-            values[mainHeaders.indexOf("Fecha (uso)")] = u.fecha_txt;
-            values[mainHeaders.indexOf("Inicio (uso)")] = u.inicio_txt;
-            values[mainHeaders.indexOf("Fin (uso)")] = u.fin_txt;
+            values[mainHeaders.indexOf("Fecha (uso)")] = formatDateOnlyDMY(u.fecha);
+            values[mainHeaders.indexOf("Hora (uso)")] = formatTimeOnlyHMS(u.fecha);
+            values[mainHeaders.indexOf("Inicio (uso)")] = formatDateOnlyDMY(u.inicio);
+            values[mainHeaders.indexOf("Hora inicio (uso)")] = formatTimeOnlyHMS(u.inicio);
+            values[mainHeaders.indexOf("Fin (uso)")] = formatDateOnlyDMY(u.fin);
+            values[mainHeaders.indexOf("Hora fin (uso)")] = formatTimeOnlyHMS(u.fin);
             values[mainHeaders.indexOf("Km inicio (uso)")] = u.km_inicio;
             values[mainHeaders.indexOf("Km fin (uso)")] = u.km_fin;
             values[mainHeaders.indexOf("Motivo (uso)")] = excelCellString(u.motivo);
             values[mainHeaders.indexOf("Combustible inicio (uso)")] = excelCellString(u.combustible_inicio);
             values[mainHeaders.indexOf("Combustible fin (uso)")] = excelCellString(u.combustible_fin);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -747,30 +825,36 @@ export async function buildRegistroVehiculosCorporativosExcelConsolidado(
             values[2] = 1;
             values[3] = "Mantenimiento";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
-            values[mainHeaders.indexOf("Fecha (mantenimiento)")] = m.fecha_txt;
+            values[mainHeaders.indexOf("Fecha (mantenimiento)")] = formatDateOnlyDMY(m.fecha);
+            values[mainHeaders.indexOf("Hora (mantenimiento)")] = formatTimeOnlyHMS(m.fecha);
             values[mainHeaders.indexOf("Tipo (mantenimiento)")] = excelCellString(m.tipo);
             values[mainHeaders.indexOf("Mantenimiento")] = excelCellString(m.mantenimiento);
             values[mainHeaders.indexOf("Diagnóstico (mantenimiento)")] = excelCellString(m.diagnostico);
             values[mainHeaders.indexOf("Km próxima revisión (mantenimiento)")] = m.kilometraje_siguiente_revision;
             values[mainHeaders.indexOf("Mecánico (mantenimiento)")] = excelCellString(m.nombre_mecanico);
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, wsMain.rowCount), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, wsMain.rowCount), column: mainHeaders.length + 1 },
     };
 
     wsMain.columns = [
-        12, 14, 8, 20, 12,
-        28, 24, 22, 28, 24, 28,
-        14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8, 20,
-        16, 22,
-        22, 18, 16, 14, 14, 12, 12, 22, 18, 18,
-        16, 16, 26, 26, 22, 22,
-    ].map((w) => ({ width: w }));
+        { width: 3 },
+        ...[
+            12, 14, 8, 20, 12,
+            28, 24, 22, 28, 24, 28,
+            14, 14, 14, 16, 8, 12, 14, 12, 14, 24, 12, 8, 10, 8,
+            14, 12, 16, 16, 20,
+            16, 22,
+            22, 18, 14, 12, 14, 12, 14, 12, 12, 12, 22, 18, 18,
+            14, 12, 16, 26, 26, 22, 22,
+        ].map((w) => ({ width: w })),
+    ];
     wsDet.columns = [12, 12, 22, 14, 20, 20, 20, 10, 10, 28, 16, 16].map((w) => ({ width: w }));
 
     return Buffer.from(await wb.xlsx.writeBuffer());

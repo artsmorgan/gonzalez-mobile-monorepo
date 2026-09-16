@@ -2,6 +2,7 @@
 import { createReportPrismaClient, createReportServiceRequest, type ReportDataAccess } from "./reportDynamicPrisma";
 import { finalizeReportJobAsError, hasExceededReportAttempts } from "./reportJobQueue";
 import { completeReportJob } from "./reportMobileFileStorage";
+import { buildFiltersSummary, type ConsolidadoBannerMeta } from "./reports-functions/reportConsolidadoBanner";
 import {
     buildActaEntregaExcelBuffer,
     buildActaEntregaExcelBufferByType,
@@ -287,6 +288,13 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
     const moduleKey = parsed.moduleKey || row.modulo;
     const orderKey = String(row.order_by || "nombre_usuario").trim();
     const individualReportName = reconstructControlVersionExcelName(row.nombre);
+    const bannerMeta: ConsolidadoBannerMeta = {
+        moduleKey,
+        tipoReporte: String(row.tipo_reporte || "Consolidado").trim(),
+        nomenclatura: row.nomenclatura,
+        nombreEstructurado: individualReportName,
+        filtersSummary: buildFiltersSummary(parsed.moduleFilters as Record<string, unknown>),
+    };
 
     try {
         if (moduleKey === "ingresos_usuario") {
@@ -318,7 +326,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildAgendaMinutaIndividualZip(rows, individualReportName)
-                    : await buildAgendaMinutaExcelConsolidado(rows);
+                    : await buildAgendaMinutaExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -330,7 +338,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildAperturaCierrePuestoExcelIndividual(rows, individualReportName)
-                    : await buildAperturaCierrePuestoExcelConsolidado(rows);
+                    : await buildAperturaCierrePuestoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -342,7 +350,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildVulnerabilidadExcelIndividual(rows, individualReportName)
-                    : await buildVulnerabilidadExcelConsolidado(rows);
+                    : await buildVulnerabilidadExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -354,7 +362,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildActividadesExcelIndividual(rows, individualReportName)
-                    : await buildActividadesExcelConsolidado(rows);
+                    : await buildActividadesExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -366,7 +374,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildControlAsistenciaExcelIndividual(rows, individualReportName)
-                    : await buildControlAsistenciaExcelConsolidado(rows);
+                    : await buildControlAsistenciaExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -378,7 +386,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildDocumentosEntregadosExcelIndividual(rows, individualReportName)
-                    : await buildDocumentosEntregadosExcelConsolidado(rows);
+                    : await buildDocumentosEntregadosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -390,7 +398,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildEncuestaSatisfaccionExcelIndividual(rows, individualReportName)
-                    : await buildEncuestaSatisfaccionExcelConsolidado(rows);
+                    : await buildEncuestaSatisfaccionExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -402,7 +410,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildEntregaPuestoExcelIndividual(rows, individualReportName)
-                    : await buildEntregaPuestoExcelConsolidado(rows);
+                    : await buildEntregaPuestoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -410,7 +418,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
         if (moduleKey === "acciones_personales") {
             const mf = normalizeAccionesPersonalesFilters(parsed.moduleFilters || {});
             const rows = await queryAccionesPersonalesRows(reportDb, mf, orderKey as AccionesPersonalesOrderKey);
-            const buf = await buildAccionesPersonalesExcelConsolidado(rows);
+            const buf = await buildAccionesPersonalesExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -421,7 +429,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildIncidenteExcelIndividual(rows, individualReportName)
-                    : await buildIncidenteExcelConsolidado(rows);
+                    : await buildIncidenteExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -433,7 +441,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildLlavesIndividualZip(rows, individualReportName)
-                    : await buildLlavesExcelConsolidado(rows);
+                    : await buildLlavesExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -445,7 +453,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildLlaverosIndividualZip(rows, individualReportName)
-                    : await buildLlaverosExcelConsolidado(rows);
+                    : await buildLlaverosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -453,7 +461,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeBitacoraNovedadesFilters(parsed.moduleFilters || {});
             const bnvOrder = String(row.order_by || "titulo").trim();
             const rows = await queryBitacoraNovedadesRows(reportDb, mf, bnvOrder as BitacoraNovedadesOrderKey);
-            const buf = await buildBitacoraNovedadesExcelConsolidado(rows);
+            const buf = await buildBitacoraNovedadesExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -465,7 +473,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildMaestroQuejasExcelIndividual(rows, individualReportName)
-                    : await buildMaestroQuejasExcelConsolidado(rows);
+                    : await buildMaestroQuejasExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -473,7 +481,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeChecklistSupervisionFilters(parsed.moduleFilters || {});
             const ckOrder = String(row.order_by || "empresa_id").trim();
             const rows = await queryChecklistSupervisionRows(reportDb, mf, ckOrder as ChecklistSupervisionOrderKey);
-            const buf = await buildChecklistSupervisionExcelConsolidado(rows);
+            const buf = await buildChecklistSupervisionExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -485,7 +493,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildMutuosAcuerdosExcelIndividual(rows, individualReportName)
-                    : await buildMutuosAcuerdosExcelConsolidado(rows);
+                    : await buildMutuosAcuerdosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -494,7 +502,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeEvaluacionPersonalFilters(parsed.moduleFilters || {});
             const evpOrder = String(row.order_by || "empresa_id").trim();
             const rows = await queryEvaluacionEmpleadoRows(reportDb, mf, evpOrder as EvaluacionPersonalOrderKey);
-            const buf = await buildEvaluacionPersonalExcelConsolidado(rows);
+            const buf = await buildEvaluacionPersonalExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -507,7 +515,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildProductoNoConformeExcelIndividual(rows, individualReportName)
-                    : await buildProductoNoConformeExcelConsolidado(rows);
+                    : await buildProductoNoConformeExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -520,7 +528,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildInduccionRecorridoExcelIndividual(rows, individualReportName)
-                    : await buildInduccionRecorridoExcelConsolidado(rows);
+                    : await buildInduccionRecorridoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -529,7 +537,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeManualesPuestoFilters(parsed.moduleFilters || {});
             const mpOrder = String(row.order_by || "title").trim() as ManualesPuestoOrderKey;
             const rows = await queryManualesPuestoRows(reportDb, mf, mpOrder);
-            const buf = await buildManualesPuestoExcelConsolidado(rows);
+            const buf = await buildManualesPuestoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -538,7 +546,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeArticulosPuestoFilters(parsed.moduleFilters || {});
             const apOrder = String(row.order_by || "empresa_id").trim() as ArticulosPuestoOrderKey;
             const rows = await queryArticulosPuestoRows(reportDb, mf, apOrder);
-            const buf = await buildArticulosPuestoExcelConsolidado(reportDb, rows);
+            const buf = await buildArticulosPuestoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -547,7 +555,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeMantenimientoArticulosFilters(parsed.moduleFilters || {});
             const maOrder = String(row.order_by || "puesto_id").trim() as MantenimientoArticulosOrderKey;
             const rows = await queryMantenimientoArticulosRows(reportDb, mf, maOrder);
-            const buf = await buildMantenimientoArticulosExcelConsolidado(rows);
+            const buf = await buildMantenimientoArticulosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -556,7 +564,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeRegistroVehiculosCorporativosFilters(parsed.moduleFilters || {});
             const rvcOrder = String(row.order_by || "puesto_id").trim() as RegistroVehiculosCorporativosOrderKey;
             const rows = await queryRegistroVehiculosCorporativosRows(reportDb, mf, rvcOrder);
-            const buf = await buildRegistroVehiculosCorporativosExcelConsolidado(rows);
+            const buf = await buildRegistroVehiculosCorporativosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -569,7 +577,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildRevisionVehiculosExcelIndividual(rows, individualReportName)
-                    : await buildRevisionVehiculosExcelConsolidado(rows);
+                    : await buildRevisionVehiculosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -583,7 +591,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const buf =
                 reportType === "Individual"
                     ? await buildRegistroVisitasIndividualZip(rows, individualReportName)
-                    : await buildRegistroVisitasExcelConsolidado(rows);
+                    : await buildRegistroVisitasExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -592,7 +600,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeNotasVozFilters(parsed.moduleFilters || {});
             const nvOrder = String(row.order_by || "empresa_id").trim() as NotasVozOrderKey;
             const rows = await queryNotasVozRows(reportDb, mf, nvOrder);
-            const buf = await buildNotasVozExcelConsolidado(rows);
+            const buf = await buildNotasVozExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -601,7 +609,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeCambiosUbicacionPuestoFilters(parsed.moduleFilters || {});
             const cupOrder = String(row.order_by || "empresa_id").trim() as CambiosUbicacionPuestoOrderKey;
             const rows = await queryCambiosUbicacionPuestoRows(reportDb, mf, cupOrder);
-            const buf = await buildCambiosUbicacionPuestoExcelConsolidado(rows);
+            const buf = await buildCambiosUbicacionPuestoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -610,7 +618,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeRegistroCapacitacionesFilters(parsed.moduleFilters || {});
             const rcOrder = String(row.order_by || "empresa_id").trim() as RegistroCapacitacionesOrderKey;
             const rows = await queryRegistroCapacitacionesRows(reportDb, mf, rcOrder);
-            const buf = await buildRegistroCapacitacionesExcelConsolidado(rows);
+            const buf = await buildRegistroCapacitacionesExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -624,7 +632,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = isIndividual ? "zip" : "xlsx";
             const buf = isIndividual
                 ? await buildRegistroInduccionGeneralIndividualZip(rows, individualReportName)
-                : await buildRegistroInduccionGeneralExcelConsolidado(rows);
+                : await buildRegistroInduccionGeneralExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -633,7 +641,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeTiempoAlmuerzoFilters(parsed.moduleFilters || {});
             const taOrder = String(row.order_by || "empresa_id").trim() as TiempoAlmuerzoOrderKey;
             const rows = await queryTiempoAlmuerzoRows(reportDb, mf, taOrder);
-            const buf = await buildTiempoAlmuerzoExcelConsolidado(rows);
+            const buf = await buildTiempoAlmuerzoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -642,7 +650,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const mf = normalizeLoginMarcaFilters(parsed.moduleFilters || {});
             const lmOrder = String(row.order_by || "cedula_empleado").trim() as LoginMarcaOrderKey;
             const rows = await queryLoginMarcaRows(reportDb, mf, lmOrder);
-            const buf = await buildLoginMarcaExcelConsolidado(rows);
+            const buf = await buildLoginMarcaExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: "xlsx" });
             return;
         }
@@ -656,7 +664,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = isIndividual ? "xlsx" : "xlsx";
             const buf = isIndividual
                 ? await buildSolicitudesPermisoExcelIndividual(rows, individualReportName)
-                : await buildSolicitudesPermisoExcelConsolidado(rows);
+                : await buildSolicitudesPermisoExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }
@@ -670,7 +678,7 @@ export async function runMobileReportJob(queueDb: ReportDataAccess, reportId: nu
             const ext = isIndividual ? "zip" : "xlsx";
             const buf = isIndividual
                 ? await buildVisitasVehiculosIndividualZip(rows, individualReportName)
-                : await buildVisitasVehiculosExcelConsolidado(rows);
+                : await buildVisitasVehiculosExcelConsolidado(rows, reportDb, bannerMeta);
             await completeReportJob({ req, reportDb: queueDb, reportId, row, buffer: buf, extension: ext });
             return;
         }

@@ -3,6 +3,13 @@ import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type NotasVozModuleFilters = ActaEntregaModuleFilters;
 
@@ -25,12 +32,6 @@ function parseNaiveDateTime(s: string | undefined | null): Date | null {
     }
     const d = new Date(t.includes("T") ? t : t.replace(" ", "T"));
     return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function fmtDateTime(d: Date | null | undefined): string {
-    if (!d || Number.isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function excelCellString(v: unknown): string {
@@ -149,7 +150,6 @@ export async function queryNotasVozRows(
         const creatorNombre = emp
             ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ").trim()
             : String(r.created_by);
-        const createdAt = r.created_at instanceof Date ? r.created_at : new Date(String(r.created_at));
         return {
             ...r,
             empresa_nombre: empresa ? `${empresa.codigo ? `${empresa.codigo} - ` : ""}${empresa.nombre}` : String(r.empresa_id),
@@ -159,7 +159,6 @@ export async function queryNotasVozRows(
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : String(r.corpo_id),
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : pid != null ? String(pid) : "—",
             creador_nombre: creatorNombre,
-            fecha_txt: fmtDateTime(createdAt),
             audio_relpath: r.path ? `voice-notes/${r.id}/${path.basename(String(r.path))}` : "",
         };
     });
@@ -185,7 +184,11 @@ export async function queryNotasVozRows(
     });
 }
 
-export async function buildNotasVozExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildNotasVozExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Notas de voz");
     const border: Partial<ExcelJS.Borders> = {
@@ -199,6 +202,7 @@ export async function buildNotasVozExcelConsolidado(rows: any[]): Promise<Buffer
     const headers = [
         "ID",
         "Fecha",
+        "Hora",
         "Empresa",
         "Cliente",
         "División",
@@ -211,17 +215,24 @@ export async function buildNotasVozExcelConsolidado(rows: any[]): Promise<Buffer
         "Archivo",
         "Creado por",
     ];
-    const h = ws.addRow(headers);
+
+    applyConsolidadoReportBanner(ws, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(ws, headers);
+    const h = ws.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    ws.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    ws.views = [{ state: "frozen", ySplit: 12 }];
     ws.columns = [
+        { width: 3 },
         { width: 8 },
-        { width: 20 },
+        { width: 14 },
+        { width: 12 },
         { width: 26 },
         { width: 24 },
         { width: 20 },
@@ -236,9 +247,10 @@ export async function buildNotasVozExcelConsolidado(rows: any[]): Promise<Buffer
     ];
 
     for (const r of rows) {
-        const row = ws.addRow([
+        const row = addMainRow(ws, [
             r.id,
-            r.fecha_txt,
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -251,15 +263,16 @@ export async function buildNotasVozExcelConsolidado(rows: any[]): Promise<Buffer
             excelCellString(r.path ? path.basename(String(r.path)) : ""),
             r.creador_nombre,
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
     }
 
     ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

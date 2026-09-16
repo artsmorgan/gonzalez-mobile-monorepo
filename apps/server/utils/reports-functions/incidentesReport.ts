@@ -10,6 +10,12 @@ import {
     hydratePreexistentRelations,
     splitIncludeByTableGroup,
 } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const INCIDENTES_REPORT_INCLUDE = {
     n_clasificacion_incidente: { select: { id: true, nombre: true } },
@@ -85,6 +91,17 @@ function parseSignatureDataForExcel(dataUriOrBase64: unknown): { extension: "png
         return { extension: m[1].toLowerCase() === "png" ? "png" : "jpeg", base64: String(m[2]).replace(/\s+/g, "") };
     }
     return { extension: "png", base64: d.replace(/^data:image\/\w+;base64,/, "").replace(/\s+/g, "") };
+}
+
+/** Formatea un empleado como "código — Nombre Apellido1 Apellido2" (usado para "Creado por"). */
+function fmtCreadorEmpleado(
+    e: { codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null } | undefined,
+): string {
+    if (!e) return "";
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean);
+    const name = parts.join(" ").trim();
+    const c = e.codigo ? String(e.codigo).trim() : "";
+    return c ? `${c} — ${name}` : name;
 }
 
 function fmtDate(v: unknown): string {
@@ -299,12 +316,27 @@ export async function queryIncidenteRows(prisma: ReportDataAccess, filters: Inci
     });
 }
 
-export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildIncidenteExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Incidentes");
     const wsDet = wb.addWorksheet("Detalles");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+
+    // "Creado por": `c_incidente.created_by` no se renderizaba; se resuelve por batch de `c_empleado`.
+    // `c_incidente` no tiene tracking en `c_cambios_apps_modules`: no hay ancla para auditoría.
+    const createdByIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = createdByIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: createdByIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
 
     const detAnchorById = new Map<number, number>();
     for (const r of [...rows].sort((a, b) => Number(b.id) - Number(a.id))) {
@@ -395,26 +427,31 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
         "Tiene firma tercero (aporte)",
         "Fecha (aporte)",
         "Archivos adjuntos (aporte)",
+        "Creado por",
     ];
     const COL_VER_DETALLE = headers.indexOf("Ver detalle") + 1;
     const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
 
-    const hr = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const hr = addMainRow(wsMain, headers);
     hr.font = { bold: true };
-    hr.eachCell((cell) => {
+    hr.eachCell((cell, colNumber) => {
+        if (colNumber === 1) return;
         cell.fill = hdrFill;
         cell.border = border;
         cell.alignment = { vertical: "middle", wrapText: true };
     });
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -434,14 +471,15 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
             [headers.indexOf("Responsable") + 1]: excelCellString(r.nombre_responsable),
             [headers.indexOf("Responsable atención") + 1]: excelCellString(r.nombre_responsable_atencion),
             [headers.indexOf("Descripción") + 1]: excelCellString(r.descripcion),
-            [headers.indexOf("Fecha incidente") + 1]: fmtDate(r.fecha_incidente),
-            [headers.indexOf("Fecha reporte") + 1]: fmtDate(r.fecha_reporte),
+            [headers.indexOf("Fecha incidente") + 1]: formatDateOnlyDMY(r.fecha_incidente),
+            [headers.indexOf("Fecha reporte") + 1]: formatDateOnlyDMY(r.fecha_reporte),
             [headers.indexOf("Solución propuesta") + 1]: excelCellString(r.solucion || ""),
-            [headers.indexOf("Fecha solución") + 1]: fmtDate(r.fecha_solucion),
-            [headers.indexOf("Fecha solución real") + 1]: fmtDate(r.fecha_real_solucion),
+            [headers.indexOf("Fecha solución") + 1]: formatDateOnlyDMY(r.fecha_solucion),
+            [headers.indexOf("Fecha solución real") + 1]: formatDateOnlyDMY(r.fecha_real_solucion),
             [headers.indexOf("Costo asociado") + 1]: excelCellString(r.costo_asociado),
             [headers.indexOf("Consecutivo informe") + 1]: excelCellString(r.consecutivo_informe),
             [headers.indexOf("Link informe") + 1]: excelCellString(r.link_informe),
+            [headers.indexOf("Creado por") + 1]: fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
         };
 
         const rootValues = new Array(headers.length).fill("");
@@ -451,9 +489,9 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         const detRow = detAnchorById.get(Number(r.id));
         if (detRow) rootValues[COL_VER_DETALLE - 1] = "Ver detalle";
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
         if (detRow) {
-            const c = rootRow.getCell(COL_VER_DETALLE);
+            const c = rootRow.getCell(COL_VER_DETALLE + 1);
             c.value = { text: "Ver detalle", hyperlink: `#'Detalles'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
@@ -468,7 +506,7 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Nombre (involucrado)")] = excelCellString(x?.nombre ?? "");
             values[headers.indexOf("Código (involucrado)")] = excelCellString(x?.codigo ?? "");
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -481,7 +519,7 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Número (novedad libro)")] = excelCellString(x?.numero ?? "");
             values[headers.indexOf("Fecha (novedad libro)")] = excelCellString(x?.fecha ?? "");
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -502,18 +540,20 @@ export async function buildIncidenteExcelConsolidado(rows: any[]): Promise<Buffe
             values[headers.indexOf("Archivos adjuntos (aporte)")] = String(
                 Array.isArray(c.c_archivos_aporte_incidente) ? c.c_archivos_aporte_incidente.length : 0,
             );
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
     wsMain.columns = [
+        3,
         12, 14, 8, 20, 10,
         24, 24, 18, 24, 24, 24, 18, 14, 24, 24, 44, 14, 14, 40, 14, 18, 16, 18, 24,
         14,
         24, 14,
         16, 16,
         16, 24, 24, 34, 18, 14, 18,
+        20,
     ].map((w) => ({ width: w }));
     wsDet.columns = [14, 24, 24, 60, 24, 14, 10, 10].map((w) => ({ width: w }));
 

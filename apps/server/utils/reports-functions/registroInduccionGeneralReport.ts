@@ -28,6 +28,14 @@ import {
     type FlatDocxTemaRow,
 } from "./registroInduccionGeneralTemas";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const SIG_ROW_HEIGHT = 88;
 const SIG_BOX_W = 260;
@@ -622,7 +630,11 @@ function appendDetalleRigBlocks(
     return { rowTemas: rowTemasTitle, rowColab: rowColabTitle, rowCap: rowCapTitle };
 }
 
-export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildRegistroInduccionGeneralExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Inducción general");
     const wsDet = wb.addWorksheet("Detalles");
@@ -637,6 +649,12 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         anchorK.set(Number(r.id), a.rowCap);
     }
 
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_registro_induccion_general",
+        rows.map((r) => Number(r.id)),
+    );
+
     /** Cuadrícula jerárquica: Registro (nivel 0) → Sección de tema (nivel 1, de `temas_a_tratar`) → Ítem del tema (nivel 2); Colaborador / Capacitador son hermanos de Sección (nivel 1). */
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
@@ -646,8 +664,10 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         "Nivel",
         "Tipo de fila",
         "ID Registro",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Fecha",
+        "Hora",
         "Empresa",
         "Cliente",
         "División",
@@ -655,6 +675,8 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         "Sucursal",
         "Puesto",
         "Empleado (creador)",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver temas",
         "Ver colaboradores",
         "Ver capacitadores",
@@ -670,24 +692,30 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         "Cédula (capacitador)",
         "Tiene firma (capacitador)",
     ];
-    const cT = headers.indexOf("Ver temas") + 1;
-    const cC = headers.indexOf("Ver colaboradores") + 1;
-    const cK = headers.indexOf("Ver capacitadores") + 1;
-    const cF = headers.indexOf("Firma responsable") + 1;
-    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+    // +2 (no +1) para columnas dirigidas por `getCell`: `addMainRow` inserta una columna de
+    // margen (A) antes de los datos, así que la posición real en la hoja es índice+2.
+    const cT = headers.indexOf("Ver temas") + 2;
+    const cC = headers.indexOf("Ver colaboradores") + 2;
+    const cK = headers.indexOf("Ver capacitadores") + 2;
+    const cF = headers.indexOf("Firma responsable") + 2;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
     const linkCols = new Set([cT, cC, cK]);
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const h = addMainRow(wsMain, headers);
     h.font = { bold: true };
-    h.eachCell((c) => {
+    h.eachCell((c, colNumber) => {
+        if (colNumber === 1) return;
         c.fill = GRP_HDR;
         c.border = borderThin;
         c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
     });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = borderThin;
             if (!linkCols.has(colNumber) && colNumber !== cF) {
                 cell.alignment = { vertical: "top", wrapText: true };
@@ -702,10 +730,13 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         const rt = anchorT.get(Number(r.id)) ?? 1;
         const rc = anchorC.get(Number(r.id)) ?? 1;
         const rk = anchorK.get(Number(r.id)) ?? 1;
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
             [headers.indexOf("ID Registro") + 1]: r.id,
-            [headers.indexOf("Creado en") + 1]: r.created_at_txt,
-            [headers.indexOf("Fecha") + 1]: r.fecha_txt,
+            [headers.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [headers.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [headers.indexOf("Fecha") + 1]: formatDateOnlyDMY(r.fecha),
+            [headers.indexOf("Hora") + 1]: formatTimeOnlyHMS(r.fecha),
             [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
             [headers.indexOf("Cliente") + 1]: r.cliente_nombre,
             [headers.indexOf("División") + 1]: r.division_nombre,
@@ -713,6 +744,8 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
             [headers.indexOf("Sucursal") + 1]: r.corpo_nombre,
             [headers.indexOf("Puesto") + 1]: r.puesto_nombre,
             [headers.indexOf("Empleado (creador)") + 1]: r.empleado_creador_nombre,
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(headers.length).fill("");
@@ -720,8 +753,8 @@ export async function buildRegistroInduccionGeneralExcelConsolidado(rows: any[])
         rootValues[2] = 0;
         rootValues[3] = "Registro";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        rootValues[cF - 1] = excelCellString(r.firma_responsable);
-        const rootRow = wsMain.addRow(rootValues);
+        rootValues[cF - 2] = excelCellString(r.firma_responsable);
+        const rootRow = addMainRow(wsMain, rootValues);
         rootRow.getCell(cT).value = { text: "Ver temas", hyperlink: `#'Detalles'!A${rt}` };
         rootRow.getCell(cT).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(cC).value = { text: "Ver colaboradores", hyperlink: `#'Detalles'!A${rc}` };

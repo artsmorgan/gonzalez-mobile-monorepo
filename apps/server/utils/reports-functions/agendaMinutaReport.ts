@@ -23,6 +23,13 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type AgendaMinutaModuleFilters = ActaEntregaModuleFilters & {
     estadoMinuta?: "todos" | "completado" | "pendiente";
@@ -712,7 +719,29 @@ function zipBuffers(files: { name: string; buf: Buffer }[]): Promise<Buffer> {
     });
 }
 
-export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+/** `c_agenda_minuta.created_by` almacena el id de `c_empleado` como texto (API móvil). */
+function parseEmpleadoIdFromCreatedBy(raw: unknown): number | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
+function empleadoDisplayName(e: {
+    codigo: string;
+    nombre: string | null;
+    primer_apellido: string | null;
+    segundo_apellido: string | null;
+}): string {
+    const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+    return full ? `${e.codigo} - ${full}` : e.codigo;
+}
+
+export async function buildAgendaMinutaExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const workbook = new ExcelJS.Workbook();
     const main = workbook.addWorksheet("Agenda minuta");
     const details = workbook.addWorksheet("Detalles");
@@ -722,6 +751,21 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         bottom: { style: "thin" },
         right: { style: "thin" },
     };
+
+    const creadorIds = [...new Set(rows.map((r) => parseEmpleadoIdFromCreatedBy(r.created_by)).filter((n): n is number => n != null))];
+    const creadores = creadorIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: creadorIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const empById = new Map(creadores.map((e) => [e.id, e]));
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_agenda_minuta",
+        rows.map((r) => Number(r.id)),
+    );
 
     /** Cuadrícula jerárquica: la agenda (nivel 0) más sus subregistros hermanos (participantes / acuerdos / temas, nivel 1). */
     main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
@@ -742,6 +786,9 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         "Número",
         "Título",
         "Autor",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Estado",
         "Ver participantes",
         "Ver acuerdos",
@@ -754,20 +801,24 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         "Fecha límite (acuerdo)",
         "Tema",
     ];
-    const COL_VER_PARTICIPANTES = 17;
-    const COL_VER_ACUERDOS = 18;
-    const COL_VER_TEMAS = 19;
+    const COL_VER_PARTICIPANTES = 21;
+    const COL_VER_ACUERDOS = 22;
+    const COL_VER_TEMAS = 23;
 
-    const h = main.addRow(mainHeaders);
+    applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(main, mainHeaders);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    h.eachCell((c) => {
-        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
-        c.border = borderThin;
-    });
-    main.getRow(1).height = 28;
-    main.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+        cell.border = borderThin;
+    }
+    main.getRow(12).height = 28;
+    main.views = [{ state: "frozen", ySplit: 12 }];
     main.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -783,6 +834,9 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         { width: 12 },
         { width: 36 },
         { width: 36 },
+        { width: 16 },
+        { width: 16 },
+        { width: 20 },
         { width: 14 },
         { width: 20 },
         { width: 18 },
@@ -882,19 +936,24 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
         row.height = 22;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
+        const empId = parseEmpleadoIdFromCreatedBy(r.created_by);
+        const emp = empId != null ? empById.get(empId) : undefined;
+        const creadoPorTxt = emp ? empleadoDisplayName(emp) : String(r.created_by ?? "");
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general = [
             String(r.id),
             r.empresa_nombre,
@@ -903,14 +962,17 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
             r.contrato_nombre,
             r.corpo_nombre,
             r.puesto_nombre,
-            r.fecha_txt,
+            formatDateOnlyDMY(r.fecha),
             r.numero,
             r.titulo,
             r.autor,
+            creadoPorTxt,
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             r.estado ? "Completado" : "Pendiente",
         ];
 
-        const rootRow = main.addRow([
+        const rootRow = addMainRow(main, [
             String(r.id),
             "",
             0,
@@ -931,7 +993,7 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         totalDataRows += 1;
 
         parseParticipantes(r.participantes).forEach((p, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.p${idx + 1}`,
                 String(r.id),
                 1,
@@ -948,7 +1010,7 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         });
 
         parseAcuerdosItems(r.acuerdos).forEach((a, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.a${idx + 1}`,
                 String(r.id),
                 1,
@@ -965,7 +1027,7 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
         });
 
         parseTemas(r.temas_a_tratar).forEach((t, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.t${idx + 1}`,
                 String(r.id),
                 1,
@@ -980,8 +1042,8 @@ export async function buildAgendaMinutaExcelConsolidado(rows: any[]): Promise<Bu
     }
 
     main.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: mainHeaders.length + 1 },
     };
 
     const ab = await workbook.xlsx.writeBuffer();

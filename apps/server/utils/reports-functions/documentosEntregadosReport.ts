@@ -4,6 +4,13 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type DocumentosEntregadosModuleFilters = ActaEntregaModuleFilters & {
     tipoDocumento?: string | null;
@@ -187,12 +194,23 @@ export async function queryDocumentosEntregadosRows(
     });
 }
 
-export async function buildDocumentosEntregadosExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildDocumentosEntregadosExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Documentos");
     const wsFirmas = wb.addWorksheet("Firmas");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+
+    // No existe `created_by` en `e_control_documento_entregado_cliente`: no hay ancla para "Creado por".
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_control_documento_entregado_cliente",
+        rows.map((r: any) => Number(r.id)),
+    );
 
     const firmaAnchorById = new Map<number, number>();
     const descRows = [...rows].sort((a, b) => Number(b.id) - Number(a.id));
@@ -239,34 +257,51 @@ export async function buildDocumentosEntregadosExcelConsolidado(rows: any[]): Pr
         "Nombre oficial recibe",
         "Descripción",
         "Firma representante cliente",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
-    const h = wsMain.addRow(headers);
+    // Posición dentro de la hoja (incluye la columna de margen A que agrega `addMainRow`).
+    const COL_VER_FIRMA = 14;
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 8, outlineLevel: 1 }, { width: 12, outlineLevel: 1 }, { width: 24, outlineLevel: 1 }, { width: 24, outlineLevel: 1 },
         { width: 20, outlineLevel: 1 }, { width: 22, outlineLevel: 1 }, { width: 22, outlineLevel: 1 }, { width: 20, outlineLevel: 1 },
         { width: 20, outlineLevel: 1 }, { width: 22, outlineLevel: 1 }, { width: 22, outlineLevel: 1 }, { width: 36, outlineLevel: 1 }, { width: 26, outlineLevel: 1 },
+        { width: 16, outlineLevel: 1 }, { width: 20, outlineLevel: 1 },
     ];
     for (const r of rows) {
         const anchor = firmaAnchorById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
-            r.id, r.fecha_txt, r.empresa_nombre, r.cliente_nombre, r.division_nombre, r.contrato_nombre, r.corpo_nombre, r.puesto_nombre,
+        const cambio = cambiosByRegistro.get(Number(r.id));
+        const row = addMainRow(wsMain, [
+            r.id, formatDateOnlyDMY(r.fecha), r.empresa_nombre, r.cliente_nombre, r.division_nombre, r.contrato_nombre, r.corpo_nombre, r.puesto_nombre,
             r.tipo_documento, r.nombre_oficial_entrega, r.nombre_oficial_recibe, r.descripcion, "",
+            cambio?.cedula ?? "", cambio?.fechaHoraTexto ?? "",
         ]);
-        row.getCell(13).value = { text: "Ver firma", hyperlink: `#'Firmas'!A${anchor}` };
-        row.getCell(13).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
+        row.getCell(COL_VER_FIRMA).value = { text: "Ver firma", hyperlink: `#'Firmas'!A${anchor}` };
+        row.getCell(COL_VER_FIRMA).font = { color: { argb: "FF0563C1" }, underline: true };
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
+    };
     wsFirmas.columns = [{ width: 26 }, { width: 26 }, { width: 26 }, { width: 28 }];
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

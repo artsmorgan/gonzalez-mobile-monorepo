@@ -1280,7 +1280,7 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                     isActiveRoute('JobManuals') && styles.activeMenuItemText
                   ]}
                 >
-                  Manuales de Trabajo
+                  Documentos
                 </ThemedText>
               </TouchableOpacity>
             )}

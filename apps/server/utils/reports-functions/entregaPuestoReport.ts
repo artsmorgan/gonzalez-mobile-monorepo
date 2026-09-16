@@ -8,6 +8,13 @@ import {
     hydratePreexistentRelations,
     splitIncludeByTableGroup,
 } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const ENTREGA_PUESTO_INCLUDE = {
     e_estructura_cliente: { select: { id: true, nombre: true, empresa_id: true } },
@@ -207,13 +214,7 @@ function isEmptyEntregaValue(v: unknown): boolean {
 }
 
 function fmtDate(d: unknown): string {
-    if (d == null || d === "") return "";
-    if (d instanceof Date) return d.toISOString().slice(0, 10);
-    const s = String(d).trim();
-    if (s.includes("T")) return s.split("T")[0];
-    const ymd = s.slice(0, 10);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return ymd;
-    return s;
+    return formatDateOnlyDMY(d);
 }
 
 function fmtTime(d: unknown): string {
@@ -260,6 +261,17 @@ function displayEntregaTurno(v: unknown): string {
     if (isEmptyEntregaValue(v)) return ENTREGA_NA;
     const formatted = fmtTipoTurno(v);
     return formatted === "" ? ENTREGA_NA : formatted;
+}
+
+/** Formatea un empleado como "código — Nombre Apellido1 Apellido2" (usado para "Creado por"). */
+function fmtCreadorEmpleado(
+    e: { codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null } | undefined,
+): string {
+    if (!e) return "";
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean);
+    const name = parts.join(" ").trim();
+    const c = e.codigo ? String(e.codigo).trim() : "";
+    return c ? `${c} — ${name}` : name;
 }
 
 function displayMarcaId(v: unknown): string {
@@ -515,7 +527,11 @@ function articuloTemplateRowCells(item: Record<string, unknown>): [string, strin
 }
 
 /** Excel consolidado: principal + hoja Detalles con hipervínculos y outline por bloque. */ // Consolidado
-export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildEntregaPuestoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const main = wb.addWorksheet("Entrega puesto");
     const details = wb.addWorksheet("Detalles");
@@ -529,6 +545,17 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
     /** Cuadrícula jerárquica: el registro (nivel 0) más sus artículos (nivel 1, de `articulos_puesto`). */
     main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
+    // "Creado por": `e_registro_entrega_puesto.created_by` no se renderizaba; se resuelve por batch de `c_empleado`.
+    // `e_registro_entrega_puesto` no tiene tracking en `c_cambios_apps_modules`: no hay ancla para auditoría.
+    const createdByIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = createdByIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: createdByIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
+
     const mainHeaders = [
         "ID de fila",
         "ID fila padre",
@@ -541,7 +568,9 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         "Contrato",
         "Sucursal",
         "Puesto",
-        "Creado",
+        "Creado (fecha)",
+        "Creado (hora)",
+        "Creado por",
         "Oficial entrega",
         "Fecha de entrada (entrega)",
         "Fecha de salida (entrega)",
@@ -565,19 +594,23 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         "Estado artículo",
         "Observaciones artículo",
     ];
-    const COL_LINK_ARTICULOS = 26;
-    const COL_LINK_FIRMA_ENTREGA = 27;
-    const COL_LINK_FIRMA_RECIBE = 28;
+    const COL_LINK_ARTICULOS = 28;
+    const COL_LINK_FIRMA_ENTREGA = 29;
+    const COL_LINK_FIRMA_RECIBE = 30;
 
-    const h = main.addRow(mainHeaders);
+    applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(main, mainHeaders);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    h.eachCell((c) => {
+    h.eachCell((c, colNumber) => {
+        if (colNumber === 1) return;
         c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
         c.border = borderThin;
     });
-    main.views = [{ state: "frozen", ySplit: 1 }];
+    main.views = [{ state: "frozen", ySplit: 12 }];
     main.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -589,7 +622,9 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
         { width: 28 },
         { width: 26 },
         { width: 26 },
-        { width: 20 },
+        { width: 14 },
+        { width: 12 },
+        { width: 16 },
         { width: 24 },
         { width: 22 },
         { width: 22 },
@@ -755,13 +790,14 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
@@ -776,7 +812,9 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
             r.contrato_nombre,
             r.corpo_nombre,
             r.puesto_nombre,
-            r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at ?? ""),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
+            fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
             displayEntregaText(r.oficial_entrega),
             displayEntregaDate(r.fecha_entrada_entrega),
             displayEntregaDate(r.fecha_salida_entrega),
@@ -792,7 +830,7 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
             displayMarcaId(r.marca_recibe_id),
         ];
 
-        const rootRow = main.addRow([
+        const rootRow = addMainRow(main, [
             String(r.id),
             "",
             0,
@@ -803,17 +841,17 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
             "Ver artículos / firmas",
             ...blank(6),
         ]);
-        rootRow.getCell(COL_LINK_ARTICULOS).value = { text: "Ver artículos / firmas", hyperlink: link };
-        rootRow.getCell(COL_LINK_FIRMA_ENTREGA).value = { text: "Ver artículos / firmas", hyperlink: link };
-        rootRow.getCell(COL_LINK_FIRMA_RECIBE).value = { text: "Ver artículos / firmas", hyperlink: link };
+        rootRow.getCell(COL_LINK_ARTICULOS + 1).value = { text: "Ver artículos / firmas", hyperlink: link };
+        rootRow.getCell(COL_LINK_FIRMA_ENTREGA + 1).value = { text: "Ver artículos / firmas", hyperlink: link };
+        rootRow.getCell(COL_LINK_FIRMA_RECIBE + 1).value = { text: "Ver artículos / firmas", hyperlink: link };
         [COL_LINK_ARTICULOS, COL_LINK_FIRMA_ENTREGA, COL_LINK_FIRMA_RECIBE].forEach((i) => {
-            rootRow.getCell(i).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(i + 1).font = { color: { argb: "FF0563C1" }, underline: true };
         });
         styleDataRow(rootRow, 0);
         totalDataRows += 1;
 
         parseArticulos(r.articulos_puesto).forEach((item, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.art${idx + 1}`,
                 String(r.id),
                 1,
@@ -833,8 +871,8 @@ export async function buildEntregaPuestoExcelConsolidado(rows: any[]): Promise<B
     }
 
     main.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: mainHeaders.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

@@ -5,6 +5,14 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { parseMarcaIdsArray, ymdFromFecha } from "../mutuosAcuerdosMarcas";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 /** Valores de `e_mutuos_acuerdos.estado` al filtrar (incl. «completado» agrupado con aprobado en consulta). */
 export type MutuoAcuerdoEstadoFiltro = "aprobado" | "rechazado" | "pendiente";
@@ -519,17 +527,34 @@ export async function queryMutuosAcuerdosRows(prisma: ReportDataAccess, filters:
     return [...enriched].sort(sortFn);
 }
 
-export async function buildMutuosAcuerdosExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildMutuosAcuerdosExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Mutuos acuerdos");
     const wsDet = wb.addWorksheet("Firmas ejecutivo");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
 
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_mutuos_acuerdos",
+        rows.map((r) => Number(r.id)),
+    );
+
+    // `maxCol` (sin la columna de margen) se usa también en la hoja "Firmas ejecutivo", que no se toca.
+    const detHeaderCount = 25;
+    const maxCol = detHeaderCount;
+
     const headers = [
         "ID",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Empresa",
         "Cliente",
         "División",
@@ -544,17 +569,18 @@ export async function buildMutuosAcuerdosExcelConsolidado(rows: any[]): Promise<
         "Marca ausente (fecha / rol)",
         "Marca reemplaza (fecha / rol)",
         "Ausente acepta",
-        "Fecha y hora aceptación (ausente)",
+        "Fecha aceptación (ausente)",
+        "Hora aceptación (ausente)",
         "Reemplaza acepta",
-        "Fecha y hora aceptación (reemplaza)",
+        "Fecha aceptación (reemplaza)",
+        "Hora aceptación (reemplaza)",
         "Motivo",
         "Estado",
         "Cambio guardia (ID)",
         "Firma digital ejecutivo (registrada)",
         "Firma ejecutivo (manual)",
     ];
-    const maxCol = headers.length;
-    const colFirmaManual = maxCol;
+    const colFirmaManual = headers.length;
 
     const anchorFirmaById = new Map<number, number>();
     const descRows = [...rows].sort((a, b) => Number(b.id) - Number(a.id));
@@ -582,27 +608,39 @@ export async function buildMutuosAcuerdosExcelConsolidado(rows: any[]): Promise<
         wsDet.addRow([]);
     }
 
-    const h = wsMain.addRow(headers);
-    h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    wsMain.columns = headers.map((label) => {
-        if (label.startsWith("Motivo")) return { width: 44, outlineLevel: 1 };
-        if (label.includes("Plaza") || label.includes("Oficial") || label.includes("Marca")) return { width: 28, outlineLevel: 1 };
-        if (label.includes("Fecha y hora")) return { width: 22, outlineLevel: 1 };
-        return { width: 20, outlineLevel: 1 };
-    });
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
 
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
+    h.font = { bold: true };
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    wsMain.columns = [
+        { width: 3 },
+        ...headers.map((label) => {
+            if (label.startsWith("Motivo")) return { width: 44, outlineLevel: 1 };
+            if (label.includes("Plaza") || label.includes("Oficial") || label.includes("Marca")) return { width: 28, outlineLevel: 1 };
+            if (label.startsWith("Fecha") || label.startsWith("Hora")) return { width: 14, outlineLevel: 1 };
+            return { width: 20, outlineLevel: 1 };
+        }),
+    ];
+
+    const mainColFirmaManual = colFirmaManual + 1;
     for (const r of rows) {
         const fiRow = anchorFirmaById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
+        const cambio = cambiosByRegistro.get(Number(r.id));
+        const row = addMainRow(wsMain, [
             r.id,
-            r.created_at_txt,
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             r.created_by_txt,
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -617,23 +655,29 @@ export async function buildMutuosAcuerdosExcelConsolidado(rows: any[]): Promise<
             r.marca_ausente_txt,
             r.marca_reemplaza_txt,
             r.ausente_acepta_txt,
-            r.ausente_acepta_at_txt,
+            formatDateOnlyDMY(r.ausente_acepta_at),
+            formatTimeOnlyHMS(r.ausente_acepta_at),
             r.reemplaza_acepta_txt,
-            r.reemplaza_acepta_at_txt,
+            formatDateOnlyDMY(r.reemplaza_acepta_at),
+            formatTimeOnlyHMS(r.reemplaza_acepta_at),
             r.motivo_txt ?? r.motivo ?? "",
             r.estado,
             r.cambio_guardia_txt,
             r.firma_digital_ejecutivo_txt,
             "",
         ]);
-        row.getCell(colFirmaManual).value = { text: "Ver firma", hyperlink: `#'Firmas ejecutivo'!A${fiRow}` };
-        row.getCell(colFirmaManual).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
+        row.getCell(mainColFirmaManual).value = { text: "Ver firma", hyperlink: `#'Firmas ejecutivo'!A${fiRow}` };
+        row.getCell(mainColFirmaManual).font = { color: { argb: "FF0563C1" }, underline: true };
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
+    };
     return Buffer.from(await wb.xlsx.writeBuffer());
 }
 

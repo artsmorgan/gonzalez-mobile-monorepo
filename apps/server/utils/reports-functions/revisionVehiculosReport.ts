@@ -8,6 +8,14 @@ import {
     normalizeActaEntregaFilters,
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type RevisionVehiculosModuleFilters = ActaEntregaModuleFilters & {
     vehiculoIds?: number[] | null;
@@ -456,6 +464,9 @@ export type RevisionVehiculoReportRow = {
     vehiculo_txt: string;
     observaciones: string;
     created_at_txt: string;
+    /** Valor crudo de `created_at` (sin formatear) — usado solo en la hoja principal para separar fecha/hora. */
+    created_at: Date;
+    created_by: number;
     informacion_general: string;
     informacion_revision: string;
     movimientos_vehiculos: string;
@@ -609,6 +620,8 @@ export async function queryRevisionVehiculosRows(
             vehiculo_txt: r.vehiculo_id ? vehMap.get(r.vehiculo_id) ?? String(r.vehiculo_id) : "—",
             observaciones: r.observaciones ?? "",
             created_at_txt: fmtDateTime(r.created_at),
+            created_at: r.created_at,
+            created_by: r.created_by,
             informacion_general: r.informacion_general,
             informacion_revision: r.informacion_revision,
             movimientos_vehiculos: r.movimientos_vehiculos,
@@ -661,7 +674,11 @@ export async function searchCorporateVehiclesForReport(prisma: ReportDataAccess,
     }));
 }
 
-export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehiculoReportRow[]): Promise<Buffer> {
+export async function buildRevisionVehiculosExcelConsolidado(
+    rows: RevisionVehiculoReportRow[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Revisiones");
     const wsDet = wb.addWorksheet("Detalles");
@@ -743,6 +760,10 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
         "Vehículo",
         "Observaciones",
         "Fecha de creación",
+        "Hora de creación",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver información general",
         "Ver información de revisión",
         "Ver movimientos",
@@ -755,30 +776,65 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
         "Realizado por (movimiento)",
         "Autorizado por (movimiento)",
     ];
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`).
     const colGen = mainHeaders.indexOf("Ver información general") + 1;
     const colRev = mainHeaders.indexOf("Ver información de revisión") + 1;
     const colMov = mainHeaders.indexOf("Ver movimientos") + 1;
     const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
-    const linkCols = new Set([colGen, colRev, colMov]);
-    wsMain.addRow(mainHeaders);
-    applyHeaderRow(wsMain.getRow(1), mainHeaders.length, GRP_HDR);
+    // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
+    const SHEET_COL_GEN = colGen + 1;
+    const SHEET_COL_REV = colRev + 1;
+    const SHEET_COL_MOV = colMov + 1;
+    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
+    const linkCols = new Set([SHEET_COL_GEN, SHEET_COL_REV, SHEET_COL_MOV]);
+
+    const creadorIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = creadorIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: creadorIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
+    const fmtCreador = (e: any): string => {
+        if (!e) return "";
+        const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+        return full ? `${e.codigo} - ${full}` : e.codigo;
+    };
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_bitacora_vehiculo_detenido",
+        rows.map((r) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+    const mh = addMainRow(wsMain, mainHeaders);
+    mh.font = { bold: true };
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = mh.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, col) => {
-            if (linkCols.has(col)) return;
+            if (col === 1 || linkCols.has(col)) return;
             cell.border = borderThin;
             cell.alignment = { wrapText: true, vertical: "top" };
         });
         for (const c of linkCols) row.getCell(c).border = borderThin;
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
     };
 
     for (const r of rows) {
         const linkGen = r.info_general_count > 0 ? `Ver información general (${r.info_general_count})` : "";
         const linkRev = r.info_revision_count > 0 ? `Ver revisión (${r.info_revision_count})` : "";
         const linkMov = r.movimientos_count > 0 ? `Ver movimientos (${r.movimientos_count})` : "";
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
             [mainHeaders.indexOf("ID Registro") + 1]: r.id,
             [mainHeaders.indexOf("Empresa") + 1]: r.empresa_txt,
@@ -790,7 +846,11 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
             [mainHeaders.indexOf("Tipo") + 1]: r.tipo,
             [mainHeaders.indexOf("Vehículo") + 1]: r.vehiculo_txt,
             [mainHeaders.indexOf("Observaciones") + 1]: excelCellString(r.observaciones).slice(0, 500),
-            [mainHeaders.indexOf("Fecha de creación") + 1]: r.created_at_txt,
+            [mainHeaders.indexOf("Fecha de creación") + 1]: formatDateOnlyDMY(r.created_at),
+            [mainHeaders.indexOf("Hora de creación") + 1]: formatTimeOnlyHMS(r.created_at),
+            [mainHeaders.indexOf("Creado por") + 1]: fmtCreador(creadorById.get(Number(r.created_by))),
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(mainHeaders.length).fill("");
@@ -801,23 +861,23 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
         rootValues[colGen - 1] = linkGen || "—";
         rootValues[colRev - 1] = linkRev || "—";
         rootValues[colMov - 1] = linkMov || "—";
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
 
         const aGen = anchorGen.get(r.id);
         if (aGen && linkGen) {
-            const cell = rootRow.getCell(colGen);
+            const cell = rootRow.getCell(SHEET_COL_GEN);
             cell.value = { text: linkGen, hyperlink: `#'Detalles'!A${aGen}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const aRev = anchorRev.get(r.id);
         if (aRev && linkRev) {
-            const cell = rootRow.getCell(colRev);
+            const cell = rootRow.getCell(SHEET_COL_REV);
             cell.value = { text: linkRev, hyperlink: `#'Detalles'!A${aRev}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         const aMov = anchorMov.get(r.id);
         if (aMov && linkMov) {
-            const cell = rootRow.getCell(colMov);
+            const cell = rootRow.getCell(SHEET_COL_MOV);
             cell.value = { text: linkMov, hyperlink: `#'Detalles'!A${aMov}` };
             cell.font = { color: { argb: "FF0563C1" }, underline: true };
         }
@@ -841,7 +901,7 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
                 }
                 values[mainHeaders.indexOf("Observación (ítem)")] = excelCellString(item?.observation ?? "");
             }
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         };
 
@@ -860,24 +920,28 @@ export async function buildRevisionVehiculosExcelConsolidado(rows: RevisionVehic
             values[mainHeaders.indexOf("Hora (movimiento)")] = excelCellString(mov?.hora ?? "");
             values[mainHeaders.indexOf("Realizado por (movimiento)")] = excelCellString(mov?.realizado_por ?? "");
             values[mainHeaders.indexOf("Autorizado por (movimiento)")] = excelCellString(mov?.autorizado_por ?? "");
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, wsMain.rowCount), column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, wsMain.rowCount), column: mainHeaders.length + 1 },
     };
 
     wsMain.columns = [
-        12, 14, 8, 20, 10,
-        28, 24, 22, 28, 24, 28,
-        14, 32, 36, 20,
-        20, 24, 18,
-        26, 30, 30,
-        22, 18, 14, 22, 22,
-    ].map((w) => ({ width: w }));
+        { width: 3 },
+        ...[
+            12, 14, 8, 20, 10,
+            28, 24, 22, 28, 24, 28,
+            14, 32, 36, 14, 12, 16, 16, 20,
+            20, 24, 18,
+            26, 30, 30,
+            22, 18, 14, 22, 22,
+        ].map((w) => ({ width: w })),
+    ];
     wsDet.columns = [32, 48].map((w) => ({ width: w }));
 
     return Buffer.from(await wb.xlsx.writeBuffer());
