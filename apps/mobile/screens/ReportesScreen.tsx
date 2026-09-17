@@ -1411,6 +1411,13 @@ export default function ReportesScreen() {
   const [modalMpClasificacionPick, setModalMpClasificacionPick] = useState('');
   const [modalMpClasificacionInput, setModalMpClasificacionInput] = useState('');
   const [modalMpClasificacionSelected, setModalMpClasificacionSelected] = useState<string[]>([]);
+  /** Empleados vinculados (manuales de puesto) — filtro de lista y del formulario de creación. */
+  const [listMpEmpleadoSearch, setListMpEmpleadoSearch] = useState('');
+  const [listMpEmpleadoResults, setListMpEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [listMpEmpleadoSelected, setListMpEmpleadoSelected] = useState<EmpleadoLite[]>([]);
+  const [modalMpEmpleadoSearch, setModalMpEmpleadoSearch] = useState('');
+  const [modalMpEmpleadoResults, setModalMpEmpleadoResults] = useState<EmpleadoLite[]>([]);
+  const [modalMpEmpleadoSelected, setModalMpEmpleadoSelected] = useState<EmpleadoLite[]>([]);
   const [listMaEstadoPick, setListMaEstadoPick] = useState<'todos' | 'Bueno' | 'Malo' | 'No está'>('todos');
   const [listMaEstadosSelected, setListMaEstadosSelected] = useState<string[]>([]);
   const [listMaAccionPick, setListMaAccionPick] = useState<
@@ -1718,6 +1725,8 @@ export default function ReportesScreen() {
     | 'modalSpEmpleado'
     | 'listRvdVehiculo'
     | 'modalRvdVehiculo'
+    | 'listMpEmpleado'
+    | 'modalMpEmpleado'
   >(null);
   const [submitReportLoading, setSubmitReportLoading] = useState(false);
 
@@ -2121,7 +2130,9 @@ export default function ReportesScreen() {
       | 'listTaEmpleado'
       | 'modalTaEmpleado'
       | 'listSpEmpleado'
-      | 'modalSpEmpleado',
+      | 'modalSpEmpleado'
+      | 'listMpEmpleado'
+      | 'modalMpEmpleado',
   ) => {
     const ok = await getOnline();
     if (!ok) {
@@ -2175,6 +2186,8 @@ export default function ReportesScreen() {
       if (mode === 'modalTaEmpleado') setModalTaEmpleadoResults(rows);
       if (mode === 'listSpEmpleado') setListSpEmpleadoResults(rows);
       if (mode === 'modalSpEmpleado') setModalSpEmpleadoResults(rows);
+      if (mode === 'listMpEmpleado') setListMpEmpleadoResults(rows);
+      if (mode === 'modalMpEmpleado') setModalMpEmpleadoResults(rows);
     } finally {
       setEmployeeSearchMode(null);
     }
@@ -2359,6 +2372,23 @@ export default function ReportesScreen() {
   };
   const removeModalAccEmpleado = (id: number) => {
     setModalAccEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  };
+
+  const pickListMpEmpleado = (e: EmpleadoLite) => {
+    setListMpEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setListMpEmpleadoResults([]);
+    setListMpEmpleadoSearch('');
+  };
+  const removeListMpEmpleado = (id: number) => {
+    setListMpEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
+  };
+  const pickModalMpEmpleado = (e: EmpleadoLite) => {
+    setModalMpEmpleadoSelected((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, e]));
+    setModalMpEmpleadoResults([]);
+    setModalMpEmpleadoSearch('');
+  };
+  const removeModalMpEmpleado = (id: number) => {
+    setModalMpEmpleadoSelected((prev) => prev.filter((x) => x.id !== id));
   };
 
   const pickListEncResponsable = (e: EmpleadoLite) => {
@@ -3045,6 +3075,7 @@ export default function ReportesScreen() {
         if (listCorpoSelected.length) q.listMpCorpoIds = listCorpoSelected.map((x) => String(x.id)).join(',');
         if (listPuestoSelected.length) q.listMpPuestoIds = listPuestoSelected.map((x) => String(x.id)).join(',');
         if (listMpClasificacionSelected.length) q.listMpClasificaciones = listMpClasificacionSelected.join(',');
+        if (listMpEmpleadoSelected.length) q.listMpEmpleadoIds = listMpEmpleadoSelected.map((e) => String(e.id)).join(',');
       } else if (modulo === MODULO_ARTICULOS_PUESTO) {
         if (listEmpresaSelected.length) q.listApEmpresaIds = listEmpresaSelected.map((x) => String(x.id)).join(',');
         if (listClienteSelected.length) q.listApClienteIds = listClienteSelected.map((x) => String(x.id)).join(',');
@@ -3671,8 +3702,9 @@ export default function ReportesScreen() {
           if (modalSpTipoSalario !== 'todos') mf.tipoSalario = modalSpTipoSalario;
           if (modalSpEstado !== 'todos') mf.estado = modalSpEstado;
         }
-        if (formModulo === MODULO_MANUALES_PUESTO && modalMpClasificacionSelected.length > 0) {
-          mf.classificaciones = [...modalMpClasificacionSelected];
+        if (formModulo === MODULO_MANUALES_PUESTO) {
+          if (modalMpClasificacionSelected.length > 0) mf.classificaciones = [...modalMpClasificacionSelected];
+          if (modalMpEmpleadoSelected.length > 0) mf.empleadoIds = modalMpEmpleadoSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_CAMBIOS_UBICACION_PUESTO && modalCupResponsableSelected.length > 0) {
           mf.responsableIds = modalCupResponsableSelected.map((e) => Number(e.id));
@@ -4137,8 +4169,9 @@ export default function ReportesScreen() {
           if (modalSpTipoSalario !== 'todos') moduleFilters.tipoSalario = modalSpTipoSalario;
           if (modalSpEstado !== 'todos') moduleFilters.estado = modalSpEstado;
         }
-        if (formModulo === MODULO_MANUALES_PUESTO && modalMpClasificacionSelected.length > 0) {
-          moduleFilters.classificaciones = [...modalMpClasificacionSelected];
+        if (formModulo === MODULO_MANUALES_PUESTO) {
+          if (modalMpClasificacionSelected.length > 0) moduleFilters.classificaciones = [...modalMpClasificacionSelected];
+          if (modalMpEmpleadoSelected.length > 0) moduleFilters.empleadoIds = modalMpEmpleadoSelected.map((e) => Number(e.id));
         }
         if (formModulo === MODULO_AGENDA_MINUTA) {
           moduleFilters.estadoMinuta = modalAgendaEstado;
@@ -5516,6 +5549,56 @@ export default function ReportesScreen() {
                               <ThemedView key={`list-mp-cls-sel-${val}`} style={styles.assignedUserItem}>
                                 <ThemedText style={styles.assignedUserTitle}>{val}</ThemedText>
                                 <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListMpClasificacion(val)}>
+                                  <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                                </TouchableOpacity>
+                              </ThemedView>
+                            ))
+                          )}
+                        </ThemedView>
+
+                        <ThemedText style={styles.label}>Empleados vinculados</ThemedText>
+                        <View style={styles.row}>
+                          <TextInput
+                            style={[styles.input, styles.inputFlex]}
+                            value={listMpEmpleadoSearch}
+                            onChangeText={setListMpEmpleadoSearch}
+                            placeholder="Código o nombre"
+                            placeholderTextColor="#999"
+                          />
+                          <TouchableOpacity
+                            style={styles.searchIconBtn}
+                            onPress={() => void runSearchEmployees(listMpEmpleadoSearch, 'listMpEmpleado')}
+                            activeOpacity={0.85}
+                            disabled={employeeSearchMode === 'listMpEmpleado'}
+                          >
+                            {employeeSearchMode === 'listMpEmpleado' ? (
+                              <ActivityIndicator size="small" color="#fff" />
+                            ) : (
+                              <Ionicons name="search" size={22} color="#fff" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                        {listMpEmpleadoResults.length ? (
+                          <ThemedView style={styles.resultList}>
+                            {listMpEmpleadoResults.map((e) => (
+                              <TouchableOpacity key={e.id} style={styles.resultItem} onPress={() => pickListMpEmpleado(e)}>
+                                <ThemedText>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                              </TouchableOpacity>
+                            ))}
+                          </ThemedView>
+                        ) : null}
+                        <ThemedView style={styles.assignedList}>
+                          {listMpEmpleadoSelected.length === 0 ? (
+                            <ThemedText style={styles.helperText}>Opcional: uno o más empleados vinculados al manual.</ThemedText>
+                          ) : (
+                            listMpEmpleadoSelected.map((e) => (
+                              <ThemedView key={`list-mp-emp-${e.id}`} style={styles.assignedUserItem}>
+                                <ThemedText style={styles.assignedUserTitle}>
+                                  {e.codigo} — {formatEmpleadoNombre(e)}
+                                </ThemedText>
+                                <TouchableOpacity style={styles.removeUserButton} onPress={() => removeListMpEmpleado(e.id)}>
                                   <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                                 </TouchableOpacity>
                               </ThemedView>
@@ -8560,6 +8643,56 @@ export default function ReportesScreen() {
                             <ThemedView key={`modal-mp-cls-sel-${val}`} style={styles.assignedUserItem}>
                               <ThemedText style={styles.assignedUserTitle}>{val}</ThemedText>
                               <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalMpClasificacion(val)}>
+                                <Ionicons name="trash-outline" size={18} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))
+                        )}
+                      </ThemedView>
+
+                      <ThemedText style={styles.label}>Empleados vinculados</ThemedText>
+                      <View style={styles.row}>
+                        <TextInput
+                          style={[styles.input, styles.inputFlex]}
+                          value={modalMpEmpleadoSearch}
+                          onChangeText={setModalMpEmpleadoSearch}
+                          placeholder="Código o nombre"
+                          placeholderTextColor="#999"
+                        />
+                        <TouchableOpacity
+                          style={styles.searchIconBtn}
+                          onPress={() => void runSearchEmployees(modalMpEmpleadoSearch, 'modalMpEmpleado')}
+                          activeOpacity={0.85}
+                          disabled={employeeSearchMode === 'modalMpEmpleado'}
+                        >
+                          {employeeSearchMode === 'modalMpEmpleado' ? (
+                            <ActivityIndicator size="small" color="#fff" />
+                          ) : (
+                            <Ionicons name="search" size={22} color="#fff" />
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      {modalMpEmpleadoResults.length ? (
+                        <ThemedView style={styles.resultList}>
+                          {modalMpEmpleadoResults.map((e) => (
+                            <TouchableOpacity key={e.id} style={styles.resultItem} onPress={() => pickModalMpEmpleado(e)}>
+                              <ThemedText>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                            </TouchableOpacity>
+                          ))}
+                        </ThemedView>
+                      ) : null}
+                      <ThemedView style={styles.assignedList}>
+                        {modalMpEmpleadoSelected.length === 0 ? (
+                          <ThemedText style={styles.helperText}>Opcional: uno o más empleados vinculados al manual.</ThemedText>
+                        ) : (
+                          modalMpEmpleadoSelected.map((e) => (
+                            <ThemedView key={`modal-mp-emp-${e.id}`} style={styles.assignedUserItem}>
+                              <ThemedText style={styles.assignedUserTitle}>
+                                {e.codigo} — {formatEmpleadoNombre(e)}
+                              </ThemedText>
+                              <TouchableOpacity style={styles.removeUserButton} onPress={() => removeModalMpEmpleado(e.id)}>
                                 <Ionicons name="trash-outline" size={18} color="#FF3B30" />
                               </TouchableOpacity>
                             </ThemedView>

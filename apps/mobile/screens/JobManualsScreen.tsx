@@ -20,13 +20,27 @@ import AppFooter from '../components/AppFooter';
 import SlideMenu from '../components/SlideMenu';
 import { eventBus } from '../hooks/eventBus';
 import { getManualClassification } from '../hooks/updateNomenclator';
-import { appendJobManualPuestos, createJobManual, listJobManualsByPuesto, deleteJobManual, signJobManual, putJobManualQuizResult } from '../hooks/jobManualsFunctions';
+import {
+  appendJobManualPuestos,
+  appendJobManualEmpleados,
+  createJobManual,
+  listJobManualsByPuesto,
+  listJobManualsByEmpleado,
+  deleteJobManual,
+  signJobManual,
+  putJobManualQuizResult,
+} from '../hooks/jobManualsFunctions';
 import {
   getManualPuestoId,
   manualIsVisibleForPuesto,
+  manualIsVisibleForEmpleado,
   mergeJobManualsCacheForPuesto,
+  mergeJobManualsCacheForEmpleado,
   patchJobManualPuestosVinculadosInCache,
+  patchJobManualEmpleadosVinculadosInCache,
 } from '../hooks/jobManualsCacheHelpers';
+import EmployeeSearchModal, { type EmployeeSearchHit } from '../components/EmployeeSearchModal';
+import SignatureScreen from 'react-native-signature-canvas';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
 import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '../hooks/fileStorage';
 import getHoraAccion from '../hooks/getHoraAccion';
@@ -152,6 +166,7 @@ interface JobManualRemote {
     manual_puesto_id: number;
     nombre_empleado: string;
     firma_empleado: string;
+    firma_empleado_manual?: string | null;
     quiz_answear?: string | null;
     approved?: boolean | null;
     created_at: string;
@@ -172,6 +187,8 @@ interface JobManualRemote {
   contrato_id?: number | null;
   /** Puestos vinculados (misma lógica que e_puestos_manual_puesto); offline y merge en caché. */
   puestos_vinculados_ids?: number[];
+  /** Empleados vinculados (e_empleados_manual_puesto); offline y merge en caché. */
+  empleados_vinculados_ids?: number[];
   classification?: string | null;
 }
 
@@ -211,14 +228,25 @@ export default function JobManualsScreen() {
   const [isLoadingManuals, setIsLoadingManuals] = useState(false);
   const [selectedManual, setSelectedManual] = useState<JobManualRemote | null>(null);
   const [isViewerVisible, setIsViewerVisible] = useState(false);
-  const [viewSignature, setViewSignature] = useState<string | null>(null);
-  const [viewFirmaData, setViewFirmaData] = useState<FirmaData | null>(null);
-  const [isGeneratingViewFirma, setIsGeneratingViewFirma] = useState(false);
   const [isSigningManual, setIsSigningManual] = useState(false);
   const [viewTextFiles, setViewTextFiles] = useState<ManualFileLocal[]>([]);
   const [viewImageFiles, setViewImageFiles] = useState<ManualFileLocal[]>([]);
   const [viewAudioFiles, setViewAudioFiles] = useState<ManualFileLocal[]>([]);
   const [viewVideoFiles, setViewVideoFiles] = useState<ManualFileLocal[]>([]);
+
+  // ----------------------
+  // Firma manual (dibujada) — la firma QR (`firma_empleado`) ya no se controla desde la UI, la
+  // genera `ensureAutoVisualizacion` en silencio.
+  // ----------------------
+  const [isManualSignatureDrawVisible, setIsManualSignatureDrawVisible] = useState(false);
+  const [manualSignatureKey, setManualSignatureKey] = useState(0);
+  const manualSignatureRef = useRef<any>(null);
+  /** Evita reintentar la visualización automática varias veces para el mismo manual en esta sesión. */
+  const autoVisualizacionAttemptedRef = useRef<Set<string>>(new Set());
+  /** Firma manual mostrada en la ventana flotante desde "Firmas registradas" (null = cerrada). */
+  const [manualSignatureViewUri, setManualSignatureViewUri] = useState<string | null>(null);
+  /** Firma manual recién dibujada, aún no guardada: se envía junto al quiz al pulsar "Confirmar". */
+  const [pendingManualSignature, setPendingManualSignature] = useState<string | null>(null);
 
   // ----------------------
   // Quiz (visualización / respuestas)
@@ -252,6 +280,11 @@ export default function JobManualsScreen() {
   const [hasConfirmedPuestos, setHasConfirmedPuestos] = useState(false);
   const [isSelectedPuestosExpanded, setIsSelectedPuestosExpanded] = useState(false);
 
+  /** Empleados vinculados directamente al manual (creación) — e_empleados_manual_puesto. */
+  const [selectedEmpleados, setSelectedEmpleados] = useState<{ id: number; nombre: string }[]>([]);
+  const [isSelectedEmpleadosExpanded, setIsSelectedEmpleadosExpanded] = useState(false);
+  const [isCreateEmpleadoSearchVisible, setIsCreateEmpleadoSearchVisible] = useState(false);
+
   /** Filtro de lista principal (solo no OPERATIVO) — precarga desde current_marca. */
   const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
   const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
@@ -259,6 +292,10 @@ export default function JobManualsScreen() {
   const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
   const [filterSucursalId, setFilterSucursalId] = useState<number | null>(null);
   const [filterPuestoId, setFilterPuestoId] = useState<number | null>(null);
+  /** "Tipo de documento" del filtro de lista (no OPERATIVO): busca por puesto o por empleado. */
+  const [documentTipo, setDocumentTipo] = useState<'puesto' | 'empleado'>('puesto');
+  const [filterEmpleado, setFilterEmpleado] = useState<{ id: number; nombre: string } | null>(null);
+  const [isFilterEmpleadoSearchVisible, setIsFilterEmpleadoSearchVisible] = useState(false);
   const listFiltersSyncedFromMarcaOnceRef = useRef(false);
   const filterSucursalIdRef = useRef<number | null>(null);
   /** puesto_id de la marca activa (lista OPERATIVO). */
@@ -289,6 +326,13 @@ export default function JobManualsScreen() {
   const [updSelectedPuestos, setUpdSelectedPuestos] = useState<number[]>([]);
   const [updHasConfirmedPuestos, setUpdHasConfirmedPuestos] = useState(false);
   const [updIsSelectedPuestosExpanded, setUpdIsSelectedPuestosExpanded] = useState(false);
+
+  /** Modal "Actualizar empleados" (autocomplete por nombre/código, igual que en creación) */
+  const [isUpdManualEmpleadosModalVisible, setIsUpdManualEmpleadosModalVisible] = useState(false);
+  const [updManualForEmpleados, setUpdManualForEmpleados] = useState<JobManualRemote | null>(null);
+  const [isSubmittingUpdManualEmpleados, setIsSubmittingUpdManualEmpleados] = useState(false);
+  const [updSelectedEmpleados, setUpdSelectedEmpleados] = useState<{ id: number; nombre: string }[]>([]);
+  const [isUpdEmpleadoSearchVisible, setIsUpdEmpleadoSearchVisible] = useState(false);
 
   const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
   const [cambiosTitle, setCambiosTitle] = useState('Cambios');
@@ -735,6 +779,69 @@ export default function JobManualsScreen() {
     [refreshAccessToken, logout]
   );
 
+  /** Igual que `fetchManuals`, pero busca (online y en caché offline) por empleado en vez de por puesto. */
+  const fetchManualsByEmpleado = useCallback(
+    async (empleadoId: number) => {
+      try {
+        setIsLoadingManuals(true);
+        if (!Number.isFinite(empleadoId) || empleadoId <= 0) {
+          setManuals([]);
+          return;
+        }
+
+        const manualsForListScope = (cacheArr: JobManualRemote[]) =>
+          cacheArr
+            .filter((m) => manualIsVisibleForEmpleado(m, empleadoId))
+            .sort((a, b) => {
+              const ta = new Date(String(a?.created_at ?? 0)).getTime();
+              const tb = new Date(String(b?.created_at ?? 0)).getTime();
+              const na = Number.isFinite(ta) ? ta : 0;
+              const nb = Number.isFinite(tb) ? tb : 0;
+              return nb - na;
+            });
+
+        const isConnected = await getConnectionStatus();
+
+        if (isConnected) {
+          const result = await listJobManualsByEmpleado({ empleadoId, refreshAccessToken, logout });
+          if (result.status && Array.isArray(result.manuals)) {
+            const list = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
+            const merged = mergeJobManualsCacheForEmpleado(existing, list, empleadoId);
+            await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(merged));
+            setManuals(manualsForListScope(merged));
+          } else {
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            const cache = cacheStr ? JSON.parse(cacheStr) : [];
+            setManuals(Array.isArray(cache) ? manualsForListScope(cache) : []);
+          }
+        } else {
+          const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+          const cache = cacheStr ? JSON.parse(cacheStr) : [];
+          setManuals(Array.isArray(cache) ? manualsForListScope(cache) : []);
+        }
+      } catch (error) {
+        console.error('Error fetching job manuals by empleado:', error);
+        try {
+          const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+          if (cacheStr) {
+            const cache = JSON.parse(cacheStr);
+            const filtered = Array.isArray(cache)
+              ? (cache as JobManualRemote[]).filter((m) => manualIsVisibleForEmpleado(m, empleadoId))
+              : [];
+            setManuals(filtered);
+          }
+        } catch (cacheErr) {
+          console.error('Error loading job manuals from cache (empleado):', cacheErr);
+        }
+      } finally {
+        setIsLoadingManuals(false);
+      }
+    },
+    [refreshAccessToken, logout]
+  );
+
   const resolveListPuestoId = useCallback((): number | null => {
     if (roleName === 'OPERATIVO') return marcaPuestoIdFromMarca;
     const fromFilter = filterPuestoId;
@@ -744,11 +851,31 @@ export default function JobManualsScreen() {
     return marcaPuestoIdFromMarca;
   }, [roleName, marcaPuestoIdFromMarca, filterPuestoId]);
 
+  /**
+   * Recarga la lista respetando "Tipo de documento". OPERATIVO no ve la jerarquía ni el autocomplete
+   * de empleado: en modo Empleado usa automáticamente su propio `employee.id`, igual que en modo
+   * Puesto usa automáticamente `marcaPuestoIdFromMarca` (ver `resolveListPuestoId`).
+   */
+  const refreshManualsList = useCallback(async () => {
+    if (documentTipo === 'empleado') {
+      const empleadoIdToUse =
+        roleName === 'OPERATIVO'
+          ? typeof employee?.id === 'number'
+            ? employee.id
+            : Number(employee?.id || 0)
+          : filterEmpleado?.id;
+      if (empleadoIdToUse) await fetchManualsByEmpleado(empleadoIdToUse);
+      else setManuals([]);
+      return;
+    }
+    await fetchManuals(marcaId ?? 0, resolveListPuestoId());
+  }, [documentTipo, roleName, employee, filterEmpleado, fetchManualsByEmpleado, fetchManuals, marcaId, resolveListPuestoId]);
+
   useEffect(() => {
-    const listPuestoId = resolveListPuestoId();
-    if (roleName === 'OPERATIVO' && (marcaPuestoIdFromMarca == null || !hasMarca)) return;
-    void fetchManuals(marcaId ?? 0, listPuestoId);
-  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, filterPuestoId, fetchManuals, resolveListPuestoId]);
+    if (roleName === 'OPERATIVO' && !hasMarca) return;
+    if (roleName === 'OPERATIVO' && documentTipo === 'puesto' && marcaPuestoIdFromMarca == null) return;
+    void refreshManualsList();
+  }, [hasMarca, marcaId, roleName, marcaPuestoIdFromMarca, filterPuestoId, documentTipo, filterEmpleado, refreshManualsList]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1625,7 +1752,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Listo', 'Se actualizaron los puestos en el borrador pendiente de sincronización.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload);
+        await refreshManualsList();
       } catch (e) {
         console.error('submitUpdManualPuestosModal local merge', e);
         Alert.alert('Error', 'No se pudo guardar.');
@@ -1660,7 +1787,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Modo offline', 'Se sincronizarán los nuevos puestos cuando haya conexión.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload);
+        await refreshManualsList();
       } catch (e) {
         console.error('submitUpdManualPuestosModal offline queue', e);
         Alert.alert('Error', 'No se pudo guardar la acción offline.');
@@ -1688,7 +1815,7 @@ export default function JobManualsScreen() {
         );
         Alert.alert('Éxito', res.message || 'Puestos actualizados.');
         closeUpdManualPuestosModal();
-        await fetchManuals(marcaId, listPuestoReload);
+        await refreshManualsList();
       } else {
         Alert.alert('Error', res.message || 'No se pudo actualizar.');
       }
@@ -1708,11 +1835,137 @@ export default function JobManualsScreen() {
     filterPuestoId,
     filterSucursalId,
     closeUpdManualPuestosModal,
-    fetchManuals,
+    refreshManualsList,
     refreshAccessToken,
     logout,
     getConnectionStatus,
     puestoNameById,
+  ]);
+
+  const closeUpdManualEmpleadosModal = useCallback(() => {
+    setIsUpdManualEmpleadosModalVisible(false);
+    setUpdManualForEmpleados(null);
+    setUpdSelectedEmpleados([]);
+  }, []);
+
+  const openUpdManualEmpleadosModal = useCallback((manual: JobManualRemote) => {
+    setUpdSelectedEmpleados([]);
+    setUpdManualForEmpleados(manual);
+    setIsUpdManualEmpleadosModalVisible(true);
+  }, []);
+
+  /** Igual que `submitUpdManualPuestosModal`, pero para empleados (e_empleados_manual_puesto). */
+  const submitUpdManualEmpleadosModal = useCallback(async () => {
+    if (!updManualForEmpleados || marcaId == null) return;
+    const ids = Array.from(new Set(updSelectedEmpleados.map((e) => Number(e.id)).filter((n) => Number.isFinite(n) && n > 0)));
+    if (ids.length === 0) {
+      Alert.alert('Validación', 'Selecciona al menos un empleado.');
+      return;
+    }
+    const manual = updManualForEmpleados;
+
+    const serverManualId = Number(manual.id);
+    const isLocalOnly = !Number.isFinite(serverManualId) || serverManualId <= 0;
+
+    if (isLocalOnly) {
+      const lid = manual.id_local;
+      if (!lid) {
+        Alert.alert('Error', 'Manual local sin identificador.');
+        return;
+      }
+      try {
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id) === String(lid));
+        if (idx === -1) {
+          Alert.alert('Error', 'No se encontró la creación pendiente de este manual.');
+          return;
+        }
+        const createAction = { ...actions[idx] };
+        let prev: number[] = [];
+        try {
+          const raw = createAction.requestData?.empleados;
+          prev = Array.isArray(JSON.parse(raw || '[]')) ? JSON.parse(raw || '[]') : [];
+        } catch {
+          prev = [];
+        }
+        const merged = Array.from(
+          new Set([...prev.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0), ...ids])
+        );
+        createAction.requestData = { ...createAction.requestData, empleados: JSON.stringify(merged) };
+        actions[idx] = createAction;
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        await patchJobManualEmpleadosVinculadosInCache({ idLocal: String(lid), replaceAll: true }, merged);
+        Alert.alert('Listo', 'Se actualizaron los empleados en el borrador pendiente de sincronización.');
+        closeUpdManualEmpleadosModal();
+        await refreshManualsList();
+      } catch (e) {
+        console.error('submitUpdManualEmpleadosModal local merge', e);
+        Alert.alert('Error', 'No se pudo guardar.');
+      }
+      return;
+    }
+
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      try {
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        let actions = actionsStr ? JSON.parse(actionsStr) : [];
+        const mid = Number(manual.id);
+        actions = actions.filter((a: any) => !(a.type === 'append_empleados' && Number(a.manualId) === mid));
+        const action_queue_id = `jm_append_emp_${mid}_${Date.now()}`;
+        actions.push({
+          id: action_queue_id,
+          action_queue_id,
+          type: 'append_empleados',
+          manualId: mid,
+          marcaId,
+          empleados_ids: ids,
+        });
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+        await patchJobManualEmpleadosVinculadosInCache({ manualServerId: serverManualId, replaceAll: false }, ids);
+        Alert.alert('Modo offline', 'Se sincronizarán los nuevos empleados cuando haya conexión.');
+        closeUpdManualEmpleadosModal();
+        await refreshManualsList();
+      } catch (e) {
+        console.error('submitUpdManualEmpleadosModal offline queue', e);
+        Alert.alert('Error', 'No se pudo guardar la acción offline.');
+      }
+      return;
+    }
+
+    setIsSubmittingUpdManualEmpleados(true);
+    try {
+      const res = await appendJobManualEmpleados({
+        manualId: serverManualId,
+        marcaId,
+        empleadosIds: ids,
+        refreshAccessToken,
+        logout,
+      });
+      if (res.status) {
+        await patchJobManualEmpleadosVinculadosInCache({ manualServerId: serverManualId, replaceAll: false }, ids);
+        Alert.alert('Éxito', res.message || 'Empleados actualizados.');
+        closeUpdManualEmpleadosModal();
+        await refreshManualsList();
+      } else {
+        Alert.alert('Error', res.message || 'No se pudo actualizar.');
+      }
+    } catch (err) {
+      console.error('submitUpdManualEmpleadosModal', err);
+      Alert.alert('Error', 'No se pudo completar la operación.');
+    } finally {
+      setIsSubmittingUpdManualEmpleados(false);
+    }
+  }, [
+    updManualForEmpleados,
+    updSelectedEmpleados,
+    marcaId,
+    closeUpdManualEmpleadosModal,
+    refreshManualsList,
+    refreshAccessToken,
+    logout,
+    getConnectionStatus,
   ]);
 
   /**
@@ -2069,54 +2322,411 @@ export default function JobManualsScreen() {
     setFirmaResponsable(data);
   };
 
+  /**
+   * Reinicia el estado transitorio de "Quiz y firma manual" al abrir/cerrar un manual. La firma QR
+   * (`firma_empleado`) ya no se genera desde la UI — la crea `ensureAutoVisualizacion` en silencio.
+   */
   const clearViewFirma = () => {
-    setViewSignature(null);
-    setViewFirmaData(null);
+    setPendingManualSignature(null);
   };
 
-  const applyViewFirmaFromHash = async (hash: string) => {
-    const data = await buildFirmaDataFromHash(hash);
-    if (!data) return;
-    setViewFirmaData(data);
-    setViewSignature(hash);
-  };
-
-  const generateViewSignature = async () => {
-    if (!employee) {
-      Alert.alert('Error', 'No se pudo obtener la información del empleado');
-      return;
-    }
-
-    setIsGeneratingViewFirma(true);
+  /**
+   * Crea automáticamente (sin avisar al usuario) la visualización del empleado actual al abrir un
+   * manual que aún no la tiene, reutilizando la misma firma QR silenciosa que ya usa el resto de la
+   * app (`getCurrentUserDigitalSignature(..., { silent: true })`). El endpoint `/sign` ahora hace
+   * upsert, así que esta llamada nunca destruye una visualización ya existente.
+   */
+  const ensureAutoVisualizacion = async (manual: JobManualRemote) => {
+    if (!employee || !manual || manual.currentEmployeeSigned) return;
+    const manualKey = manual.id > 0 ? `id:${manual.id}` : `local:${manual.id_local}`;
+    if (autoVisualizacionAttemptedRef.current.has(manualKey)) return;
+    autoVisualizacionAttemptedRef.current.add(manualKey);
 
     try {
-      const hash = await getCurrentUserDigitalSignature(employee);
-      if (!hash) return;
-      await applyViewFirmaFromHash(hash);
+      const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+      const actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+      const alreadyQueued = actions.some((a: any) => {
+        if (a.type !== 'sign' && a.type !== 'auto_visualizacion') return false;
+        if (manual.id > 0) return Number(a.id) === manual.id;
+        if (manual.id_local) return String(a.manualLocalId) === String(manual.id_local);
+        return false;
+      });
+      if (alreadyQueued) return;
+
+      const firma = await getCurrentUserDigitalSignature(employee, { silent: true });
+      if (!firma) return;
+
+      const isConnected = await getConnectionStatus();
+      let signResult: { status?: boolean; visualizacion_id?: number; id?: number } | null = null;
+
+      if (isConnected && manual.id > 0) {
+        signResult = await signJobManual({
+          id: manual.id,
+          firma,
+          quizAnswear: null,
+          files: null,
+          refreshAccessToken,
+          logout,
+          marcaId: marcaId as number,
+        });
+        if (!signResult?.status) return;
+      } else {
+        actions.push(
+          manual.id > 0
+            ? { id: manual.id, type: 'auto_visualizacion', firma, marcaId }
+            : { id: 0, manualLocalId: String(manual.id_local), type: 'auto_visualizacion', firma, marcaId }
+        );
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+      }
+
+      const horaAccionUse = await getHoraAccion();
+      const visServerId = signResult ? Number(signResult.visualizacion_id ?? signResult.id) || 0 : 0;
+      const newVisId = visServerId > 0 ? visServerId : Date.now() + Math.floor(Math.random() * 1000);
+
+      const matchManualInCache = (item: { id: number; id_local?: string }) => {
+        if (manual.id > 0) return item.id === manual.id;
+        if (manual.id_local) return String(item.id_local) === String(manual.id_local);
+        return item.id === manual.id;
+      };
+
+      const newVisualizacion = {
+        id: newVisId,
+        empleado_id: typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0),
+        manual_puesto_id: manual.id,
+        nombre_empleado: employee?.name || 'Empleado',
+        firma_empleado: firma,
+        quiz_answear: null,
+        approved: null,
+        created_at: new Date(horaAccionUse).toISOString(),
+        updated_at: new Date(horaAccionUse).toISOString(),
+        files: [],
+      };
+
+      setSelectedManual((prev) => {
+        if (!prev || !matchManualInCache(prev)) return prev;
+        const filtered = (prev.visualizaciones || []).filter((v) => v.empleado_id !== newVisualizacion.empleado_id);
+        return { ...prev, currentEmployeeSigned: true, visualizaciones: [...filtered, newVisualizacion] };
+      });
+
+      const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+      if (cacheStr) {
+        const cache = JSON.parse(cacheStr);
+        const updatedCache = cache.map((item: any) => {
+          if (!matchManualInCache(item)) return item;
+          const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
+          return { ...item, currentEmployeeSigned: true, visualizaciones: [...visualizaciones, newVisualizacion] };
+        });
+        await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+      }
     } catch (error) {
-      console.error('Error generating view signature for job manual:', error);
-      Alert.alert('Error', 'No se pudo generar la firma');
-    } finally {
-      setIsGeneratingViewFirma(false);
+      // Silencioso a propósito: la visualización automática nunca debe interrumpir al usuario.
+      console.error('Error creando visualización automática del manual:', error);
     }
   };
 
-  const handleScanViewQR = async () => {
+  /** Visualización del empleado actual dentro de un manual (para leer/guardar `firma_empleado_manual`). */
+  const getMyVisualizacion = (manual: JobManualRemote | null) => {
+    if (!manual || !employee) return null;
+    const eid = typeof employee.id === 'number' ? employee.id : Number(employee.id || 0);
+    return manual.visualizaciones?.find((v) => Number(v.empleado_id) === eid) ?? null;
+  };
+
+  const openManualSignatureDraw = () => {
+    setManualSignatureKey((prev) => prev + 1);
+    setIsManualSignatureDrawVisible(true);
+  };
+
+  /**
+   * El dibujo no se guarda de inmediato: queda pendiente (`pendingManualSignature`) hasta que el
+   * usuario pulse "Confirmar" (junto con el quiz, si aplica) — un solo botón guarda ambos a la vez.
+   */
+  const handleManualSignatureOK = (signature: string) => {
+    setPendingManualSignature(signature);
+    setIsManualSignatureDrawVisible(false);
+  };
+
+  /**
+   * Botón único de "Confirmar": este formulario (firma manual + quiz, si el manual tiene uno) se
+   * completa TODO JUNTO, en una sola operación — requisito del formulario, no de la base de datos.
+   * Una vez completado, no se puede volver a hacer para este mismo documento (sí para otros). La
+   * firma QR (`firma_empleado`) ya la generó `ensureAutoVisualizacion` en silencio; aquí solo se
+   * reutiliza (con respaldo silencioso si faltara).
+   */
+  const handleConfirmQuizAndSignature = async () => {
+    if (!selectedManual || !employee) return;
     try {
-      const qrData = await scanQR();
-      if (!qrData) {
+      if (!marcaId) {
+        Alert.alert('Error', 'No se encontró la marca actual');
         return;
       }
 
-      try {
-        await applyViewFirmaFromHash(qrData);
-      } catch (error) {
-        console.error('Error decoding view QR for job manual:', error);
-        Alert.alert('Error', 'El QR escaneado no es válido');
+      const quizCfgData = parseQuizFromManual(selectedManual.quiz);
+      const quizCfg = quizCfgData.questions;
+      const hasQuiz = quizCfg.length > 0;
+      const myVisNow = getMyVisualizacion(selectedManual);
+      const hasSavedManualSignature = !!myVisNow?.firma_empleado_manual;
+      const signatureToSave = pendingManualSignature;
+
+      /**
+       * Requisito del FORMULARIO (no de la base de datos, que sigue permitiendo ambos campos nulos):
+       * la firma manual y el quiz (si el manual tiene uno) se completan juntos, en un solo envío.
+       */
+      if (!hasSavedManualSignature && !signatureToSave) {
+        Alert.alert('Falta información', 'Debes firmar a mano antes de confirmar.');
+        return;
       }
+      if (hasQuiz) {
+        for (const q of quizCfg) {
+          const v = quizUserAnswers[q.id];
+          const isEmptyString = typeof v === 'string' && v.trim().length === 0;
+          const isEmptyArray = Array.isArray(v) && v.length === 0;
+          const missing = v === undefined || v === null || isEmptyString || isEmptyArray;
+          if (missing) {
+            Alert.alert('Falta información', 'Debes responder todas las preguntas del quiz antes de confirmar.');
+            return;
+          }
+        }
+      }
+
+      const quizAnswearStr = hasQuiz
+        ? JSON.stringify(
+            quizCfg.map((q) => {
+              const userV = quizUserAnswers[q.id];
+              return {
+                question_id: q.id,
+                type: q.type,
+                correct_answer: q.answer ?? null,
+                correct_answers: q.answers ?? null,
+                user_answer: typeof userV === 'string' ? userV : null,
+                user_answers: Array.isArray(userV) ? userV : null,
+              };
+            })
+          )
+        : null;
+
+      const isConnected = await getConnectionStatus();
+      const visualizationFilesStr = isConnected
+        ? await buildVisualizationFilesPayload()
+        : buildVisualizationSignQueuePayload();
+
+      const confirmParts: string[] = [];
+      if (hasQuiz) confirmParts.push('tus respuestas del quiz');
+      if (signatureToSave) confirmParts.push('tu firma manual');
+      const confirmSummary = confirmParts.length > 0 ? confirmParts.join(' y ') : 'este documento';
+
+      const confirmedSign = await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          'Confirmar',
+          isConnected
+            ? `Vas a enviar ${confirmSummary}. Una vez confirmado no podrás volver a completar este formulario para este documento. ¿Deseas continuar?`
+            : 'Se registrará localmente para sincronizarse cuando haya conexión. Una vez confirmado no podrás volver a completar este formulario para este documento. ¿Deseas continuar?',
+          [
+            { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+            { text: 'Aceptar', onPress: () => resolve(true) },
+          ]
+        );
+      });
+      if (!confirmedSign) return;
+
+      setIsSigningManual(true);
+
+      let manualRef: JobManualRemote = selectedManual;
+      if (!manualRef.id || manualRef.id === 0) {
+        if (!manualRef.id_local) {
+          throw new Error('No se puede confirmar: manual sin id de servidor ni referencia local.');
+        }
+        const canSync = await getConnectionStatus();
+        if (canSync) {
+          const { serverId } = await syncUnsyncedJobManualByLocalId({
+            idLocal: String(manualRef.id_local),
+            refreshAccessToken,
+            logout,
+          });
+          manualRef = { ...manualRef, id: serverId, id_local: undefined, synced: true };
+          setSelectedManual(manualRef);
+          if (marcaId) await refreshManualsList();
+        }
+      }
+
+      // Respaldo silencioso: la firma QR normalmente ya existe (la creó `ensureAutoVisualizacion`).
+      let firmaEmpleadoToUse = getMyVisualizacion(manualRef)?.firma_empleado || myVisNow?.firma_empleado || undefined;
+      if (!firmaEmpleadoToUse) {
+        firmaEmpleadoToUse = (await getCurrentUserDigitalSignature(employee, { silent: true })) ?? undefined;
+      }
+      if (!firmaEmpleadoToUse) {
+        throw new Error('No se pudo generar la firma automática. Verifica que la ubicación esté activada e intenta de nuevo.');
+      }
+
+      const isConnectedSign = await getConnectionStatus();
+      let signResult: { status?: boolean; message?: string; visualizacion_id?: number; id?: number } | null = null;
+      if (isConnectedSign) {
+        if (!manualRef.id || manualRef.id === 0) {
+          throw new Error('Conéctate a internet y espera a que el manual se sincronice, o reintenta en unos segundos.');
+        }
+        signResult = await signJobManual({
+          id: manualRef.id,
+          firma: firmaEmpleadoToUse,
+          quizAnswear: quizAnswearStr,
+          files: visualizationFilesStr,
+          firmaEmpleadoManual: signatureToSave ?? undefined,
+          refreshAccessToken,
+          logout,
+          marcaId,
+        });
+
+        if (!signResult?.status) {
+          throw new Error(signResult?.message || 'No se pudo confirmar el manual');
+        }
+        for (const f of [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles]) {
+          if (f.localFileName) {
+            try {
+              await deleteFile(f.localFileName);
+            } catch {
+              /* idempotente */
+            }
+          }
+        }
+      } else {
+        const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
+        let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+        const sameSign = (a: any) => {
+          if (a.type !== 'sign') return false;
+          if (manualRef.id > 0) return a.id === manualRef.id;
+          if (manualRef.id_local) {
+            return (
+              (a as any).manualLocalId != null &&
+              String((a as any).manualLocalId) === String(manualRef.id_local)
+            );
+          }
+          return a.id === manualRef.id;
+        };
+        actions = actions.filter((a: any) => !sameSign(a));
+        actions.push(
+          !manualRef.id || manualRef.id === 0
+            ? {
+                id: 0,
+                manualLocalId: String(manualRef.id_local),
+                type: 'sign',
+                firma: firmaEmpleadoToUse,
+                quizAnswear: quizAnswearStr,
+                files: visualizationFilesStr,
+                firmaEmpleadoManual: signatureToSave ?? undefined,
+                marcaId,
+              }
+            : {
+                id: manualRef.id,
+                type: 'sign',
+                firma: firmaEmpleadoToUse,
+                quizAnswear: quizAnswearStr,
+                files: visualizationFilesStr,
+                firmaEmpleadoManual: signatureToSave ?? undefined,
+                marcaId,
+              }
+        );
+        await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
+      }
+
+      const horaAccionUse = await getHoraAccion();
+
+      const visServerId =
+        isConnectedSign && signResult ? Number(signResult.visualizacion_id ?? signResult.id) || 0 : 0;
+      const newVisId = visServerId > 0 ? visServerId : Date.now() + Math.floor(Math.random() * 1000);
+
+      const matchManualInCache = (item: { id: number; id_local?: string }) => {
+        if (manualRef.id > 0) return item.id === manualRef.id;
+        if (manualRef.id_local) {
+          return String(item.id_local) === String(manualRef.id_local);
+        }
+        return item.id === manualRef.id;
+      };
+
+      // Actualizar estado local y cache
+      const newVisualizacion = {
+        id: newVisId,
+        empleado_id: typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0),
+        manual_puesto_id: manualRef.id,
+        nombre_empleado: employee?.name || 'Empleado',
+        firma_empleado: firmaEmpleadoToUse,
+        quiz_answear: quizAnswearStr,
+        approved: null,
+        firma_empleado_manual: signatureToSave ?? myVisNow?.firma_empleado_manual ?? null,
+        created_at: new Date(horaAccionUse).toISOString(),
+        updated_at: new Date(horaAccionUse).toISOString(),
+        files: [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles].map((f) => ({
+          id: Date.now() + Math.random(),
+          id_local: f.id,
+          type: f.type,
+          extension: f.extension,
+          name: f.name,
+          original_name: f.name,
+          base64: f.localFileName ? undefined : f.base64,
+          localFileName: f.localFileName,
+          mimeType: f.mimeType,
+          url: f.localFileName ? getLocalFileDisplayUri(f.localFileName) : '',
+        })),
+      };
+
+      setSelectedManual(prev => {
+        if (!prev) return prev;
+        if (!matchManualInCache(prev)) return prev;
+        const filtered = (prev.visualizaciones || []).filter(v => v.empleado_id !== newVisualizacion.empleado_id);
+        return {
+          ...prev,
+          currentEmployeeSigned: true,
+          visualizaciones: [...filtered, newVisualizacion],
+        };
+      });
+
+      const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+      if (cacheStr) {
+        const cache = JSON.parse(cacheStr);
+        const updatedCache = cache.map((item: any) => {
+          if (!matchManualInCache(item)) return item;
+          const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
+          return {
+            ...item,
+            currentEmployeeSigned: true,
+            visualizaciones: [...visualizaciones, newVisualizacion],
+          };
+        });
+        await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+      }
+
+      if (marcaId) {
+        await refreshManualsList();
+        const cacheAfter = await AsyncStorage.getItem('job_manuals_cache');
+        if (cacheAfter) {
+          try {
+            const parsed = JSON.parse(cacheAfter);
+            const m = Array.isArray(parsed)
+              ? parsed.find(
+                  (x: { id: number; id_local?: string }) =>
+                    (manualRef.id > 0 && x.id === manualRef.id) ||
+                    (manualRef.id_local != null && String(x.id_local) === String(manualRef.id_local))
+                )
+              : null;
+            if (m) setSelectedManual(m);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      if (signatureToSave) {
+        setPendingManualSignature(null);
+      }
+
+      Alert.alert('Éxito', isConnectedSign ? 'Confirmado correctamente' : 'Registrado en modo offline');
     } catch (error) {
-      console.error('Error scanning view QR for job manual:', error);
-      Alert.alert('Error', 'No se pudo escanear el código QR');
+      console.error('Error confirming manual quiz/signature:', error);
+      const msg = error instanceof Error ? error.message : 'No se pudo confirmar';
+      Alert.alert('Error', msg);
+    } finally {
+      setIsSigningManual(false);
+      setViewTextFiles([]);
+      setViewImageFiles([]);
+      setViewAudioFiles([]);
+      setViewVideoFiles([]);
     }
   };
 
@@ -2167,6 +2777,7 @@ export default function JobManualsScreen() {
       }
 
       const puestosArray = selectedPuestos.length > 0 ? selectedPuestos : [];
+      const empleadosArray = selectedEmpleados.map((e) => e.id);
       const filesPayload: ManualFileLocal[] = [
         ...textFiles,
         ...imageFiles,
@@ -2249,6 +2860,7 @@ export default function JobManualsScreen() {
           description: descripcionRef.current,
           firma_responsable: signatureHash,
           puestos: JSON.stringify(puestosArray),
+          empleados: JSON.stringify(empleadosArray),
           quiz: quizQuestions.length > 0 ? JSON.stringify({
             questions: quizQuestions,
             minApprovalPercentage: quizMinApprovalPercentage,
@@ -2280,6 +2892,7 @@ export default function JobManualsScreen() {
           descripcionRef.current = '';
           setFormClassification('');
           setSelectedPuestos([]);
+          setSelectedEmpleados([]);
           setTextFiles([]);
           setImageFiles([]);
           setAudioFiles([]);
@@ -2291,7 +2904,7 @@ export default function JobManualsScreen() {
           setIsCreating(false);
 
           if (marcaId) {
-            await fetchManuals(marcaId, listPuestoId);
+            await refreshManualsList();
           }
 
           Alert.alert('Éxito', result.message || 'Manual creado correctamente');
@@ -2304,6 +2917,7 @@ export default function JobManualsScreen() {
           description: descripcionRef.current,
           firma_responsable: signatureHash,
           puestos: JSON.stringify(puestosArray),
+          empleados: JSON.stringify(empleadosArray),
           quiz: quizQuestions.length > 0 ? JSON.stringify({
             questions: quizQuestions,
             minApprovalPercentage: quizMinApprovalPercentage,
@@ -2347,6 +2961,7 @@ export default function JobManualsScreen() {
           classification: formClassification || null,
           puesto: { id: primaryPuestoId ?? 0, nombre: primaryPuestoNombre },
           puestos_vinculados_ids: puestosVinculados.length > 0 ? puestosVinculados : undefined,
+          empleados_vinculados_ids: empleadosArray.length > 0 ? empleadosArray : undefined,
           puesto_id:
             primaryPuestoId != null && Number.isFinite(Number(primaryPuestoId)) && Number(primaryPuestoId) > 0
               ? Number(primaryPuestoId)
@@ -2382,6 +2997,7 @@ export default function JobManualsScreen() {
         descripcionRef.current = '';
         setFormClassification('');
         setSelectedPuestos([]);
+        setSelectedEmpleados([]);
         setTextFiles([]);
         setImageFiles([]);
         setAudioFiles([]);
@@ -2393,7 +3009,7 @@ export default function JobManualsScreen() {
         setIsCreating(false);
 
         if (marcaId) {
-          await fetchManuals(marcaId, listPuestoId);
+          await refreshManualsList();
         }
       }
     } catch (error) {
@@ -2561,7 +3177,19 @@ export default function JobManualsScreen() {
               </ThemedView>
               {isListFiltersExpanded && (
                 <ThemedView style={styles.filterContent}>
-                  {roleName !== 'OPERATIVO' && (
+                  <ThemedText style={styles.filterLabel}>Tipo de documento</ThemedText>
+                  <View style={styles.pickerWrapper}>
+                    <Picker
+                      selectedValue={documentTipo}
+                      onValueChange={(v) => setDocumentTipo(v as 'puesto' | 'empleado')}
+                      style={styles.picker}
+                    >
+                      <Picker.Item label="Puesto" value="puesto" color="#000000" />
+                      <Picker.Item label="Empleado" value="empleado" color="#000000" />
+                    </Picker>
+                  </View>
+
+                  {roleName !== 'OPERATIVO' && documentTipo === 'puesto' && (
                     isStructureLoading ? (
                       <ThemedView style={styles.loadingManualsContainer}>
                         <ActivityIndicator size="small" color="#007AFF" />
@@ -2593,6 +3221,27 @@ export default function JobManualsScreen() {
                         />
                       </>
                     )
+                  )}
+
+                  {roleName !== 'OPERATIVO' && documentTipo === 'empleado' && (
+                    <ThemedView style={styles.filterGroup}>
+                      <ThemedText style={styles.filterLabel}>Empleado</ThemedText>
+                      <TouchableOpacity style={styles.treeActionPrimary} onPress={() => setIsFilterEmpleadoSearchVisible(true)}>
+                        <Ionicons name="search" size={16} color="#FFFFFF" />
+                        <ThemedText style={styles.treeActionPrimaryText}>
+                          {filterEmpleado ? filterEmpleado.nombre : 'Buscar empleado'}
+                        </ThemedText>
+                      </TouchableOpacity>
+                      {filterEmpleado && (
+                        <TouchableOpacity
+                          style={[styles.treeActionSecondary, { marginTop: 8 }]}
+                          onPress={() => setFilterEmpleado(null)}
+                        >
+                          <Ionicons name="close" size={16} color="#007AFF" />
+                          <ThemedText style={styles.treeActionSecondaryText}>Quitar empleado</ThemedText>
+                        </TouchableOpacity>
+                      )}
+                    </ThemedView>
                   )}
 
                   <ThemedText style={styles.filterLabel}>Clasificación</ThemedText>
@@ -3143,6 +3792,49 @@ export default function JobManualsScreen() {
                 )}
               </ThemedView>
 
+              {/* Empleados vinculados directamente al manual (e_empleados_manual_puesto) */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Empleados vinculados (opcional):</ThemedText>
+                <TouchableOpacity style={styles.treeActionPrimary} onPress={() => setIsCreateEmpleadoSearchVisible(true)}>
+                  <Ionicons name="search" size={16} color="#FFFFFF" />
+                  <ThemedText style={styles.treeActionPrimaryText}>Buscar empleado</ThemedText>
+                </TouchableOpacity>
+
+                {selectedEmpleados.length > 0 && (
+                  <ThemedView style={styles.selectedPuestosBox}>
+                    <TouchableOpacity
+                      style={styles.selectedPuestosHeader}
+                      onPress={() => setIsSelectedEmpleadosExpanded((p) => !p)}
+                    >
+                      <ThemedText style={styles.selectedPuestosHeaderText}>
+                        Empleados seleccionados ({selectedEmpleados.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isSelectedEmpleadosExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isSelectedEmpleadosExpanded && (
+                      <ThemedView style={styles.puestosList}>
+                        {selectedEmpleados.map((emp) => (
+                          <TouchableOpacity
+                            key={emp.id}
+                            style={[styles.puestoItem, styles.puestoItemSelected]}
+                            onPress={() => setSelectedEmpleados((prev) => prev.filter((e) => e.id !== emp.id))}
+                          >
+                            <ThemedText style={[styles.puestoItemText, styles.puestoItemTextSelected]}>
+                              {emp.nombre}
+                            </ThemedText>
+                            <Ionicons name="close-circle" size={16} color="#FFFFFF" />
+                          </TouchableOpacity>
+                        ))}
+                      </ThemedView>
+                    )}
+                  </ThemedView>
+                )}
+              </ThemedView>
+
               {/* Archivos por tipo - placeholders */}
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Archivos de texto</ThemedText>
@@ -3452,6 +4144,7 @@ export default function JobManualsScreen() {
                     clearViewFirma();
                     setIsSigningManual(false);
                     setIsViewerVisible(true);
+                    void ensureAutoVisualizacion(manual);
                   }}
                 >
                   <ThemedText style={styles.manualTitle}>{manual.title}</ThemedText>
@@ -3484,7 +4177,14 @@ export default function JobManualsScreen() {
                         onPress={() => openUpdManualPuestosModal(manual)}
                       >
                         <Ionicons name="git-network-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Actualizar puestos</ThemedText>
+                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. puestos</ThemedText>
+                      </ScalePressButton>
+                      <ScalePressButton
+                        style={styles.manualUpdatePuestosButton}
+                        onPress={() => openUpdManualEmpleadosModal(manual)}
+                      >
+                        <Ionicons name="people-outline" size={18} color="#FFFFFF" />
+                        <ThemedText style={styles.manualUpdatePuestosButtonText}>Act. empleados</ThemedText>
                       </ScalePressButton>
                     </ThemedView>
                   )}
@@ -3707,6 +4407,75 @@ export default function JobManualsScreen() {
         </ThemedView>
       </Modal>
 
+      <Modal
+        visible={isUpdManualEmpleadosModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeUpdManualEmpleadosModal}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.updPuestosModalContainer}>
+            <ThemedText style={styles.modalTitle}>Actualizar empleados</ThemedText>
+            <ThemedText style={styles.updPuestosDisclaimer}>
+              Los empleados que ya tenía este manual no se eliminarán; solo se añadirán vínculos nuevos para los
+              empleados que agregues aquí.
+            </ThemedText>
+            {updManualForEmpleados && (
+              <ThemedText style={styles.updPuestosManualTitle} numberOfLines={2}>
+                {updManualForEmpleados.title}
+              </ThemedText>
+            )}
+            <ScrollView
+              style={styles.updPuestosScroll}
+              contentContainerStyle={styles.updPuestosScrollContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              <TouchableOpacity style={styles.treeActionPrimary} onPress={() => setIsUpdEmpleadoSearchVisible(true)}>
+                <Ionicons name="search" size={16} color="#FFFFFF" />
+                <ThemedText style={styles.treeActionPrimaryText}>Buscar empleado</ThemedText>
+              </TouchableOpacity>
+
+              {updSelectedEmpleados.length > 0 && (
+                <ThemedView style={[styles.puestosList, { marginTop: 8 }]}>
+                  {updSelectedEmpleados.map((emp) => (
+                    <TouchableOpacity
+                      key={emp.id}
+                      style={[styles.puestoItem, styles.puestoItemSelected]}
+                      onPress={() => setUpdSelectedEmpleados((prev) => prev.filter((e) => e.id !== emp.id))}
+                    >
+                      <ThemedText style={[styles.puestoItemText, styles.puestoItemTextSelected]}>
+                        {emp.nombre}
+                      </ThemedText>
+                      <Ionicons name="close-circle" size={16} color="#FFFFFF" />
+                    </TouchableOpacity>
+                  ))}
+                </ThemedView>
+              )}
+            </ScrollView>
+
+            <ThemedView style={styles.updPuestosModalActions}>
+              <ScalePressButton
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={closeUpdManualEmpleadosModal}
+              >
+                <ThemedText style={styles.modalCancelButtonText}>Cancelar</ThemedText>
+              </ScalePressButton>
+              <ScalePressButton
+                style={[styles.modalButton, styles.modalConfirmButton, isSubmittingUpdManualEmpleados && { opacity: 0.7 }]}
+                onPress={() => void submitUpdManualEmpleadosModal()}
+                disabled={isSubmittingUpdManualEmpleados}
+              >
+                {isSubmittingUpdManualEmpleados ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <ThemedText style={styles.modalConfirmButtonText}>Guardar</ThemedText>
+                )}
+              </ScalePressButton>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
       {/* QR Scanner (reutilizable) */}
       {QRScannerComponent}
 
@@ -3780,7 +4549,7 @@ export default function JobManualsScreen() {
                                     clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload);
+                                      await refreshManualsList();
                                     }
                                     return;
                                   }
@@ -3819,7 +4588,7 @@ export default function JobManualsScreen() {
                                       clearViewFirma();
                                       setIsSigningManual(false);
                                       if (marcaId) {
-                                        await fetchManuals(marcaId, listPuestoReload);
+                                        await refreshManualsList();
                                       }
                                     }
                                   } else {
@@ -3864,7 +4633,7 @@ export default function JobManualsScreen() {
                                     clearViewFirma();
                                     setIsSigningManual(false);
                                     if (marcaId) {
-                                      await fetchManuals(marcaId, listPuestoReload);
+                                      await refreshManualsList();
                                     }
                                   }
                                 } catch (error) {
@@ -3978,6 +4747,16 @@ export default function JobManualsScreen() {
                                 Estado del quiz: {statusLabel}
                               </ThemedText>
                             )}
+
+                            {(firma as any).firma_empleado_manual ? (
+                              <TouchableOpacity
+                                style={[styles.signatureButton, { marginTop: 8, alignSelf: 'flex-start', width: 100 }]}
+                                onPress={() => setManualSignatureViewUri((firma as any).firma_empleado_manual)}
+                              >
+                                <Ionicons name="eye-outline" size={16} color="#FFFFFF" />
+                                <ThemedText style={styles.signatureButtonText}>Ver firma</ThemedText>
+                              </TouchableOpacity>
+                            ) : null}
 
                             {/* Archivos adjuntos de la visualización */}
                             {visFiles.length > 0 && (
@@ -4402,30 +5181,36 @@ export default function JobManualsScreen() {
                 </ThemedView>
               )}
 
-              {/* Quiz (responder) */}
+              {/* Quiz + firma manual: un solo formulario obligatorio (requisito del formulario, no de la BD) */}
               {(() => {
                 if (!selectedManual) return null;
                 const quizCfgData = parseQuizFromManual(selectedManual.quiz);
                 const quizCfg = quizCfgData.questions;
-                if (!quizCfg || quizCfg.length === 0) return null;
+                const hasQuiz = quizCfg.length > 0;
+                const myVis = getMyVisualizacion(selectedManual);
+                const hasSavedManualSignature = !!myVis?.firma_empleado_manual;
+                const hasAnsweredQuiz = hasQuiz && myVis?.quiz_answear != null;
+                /** Firma manual + quiz (si existe) se completan juntos; una vez hecho, no se repite para ESTE documento. */
+                const isFormCompleted = hasSavedManualSignature && (!hasQuiz || hasAnsweredQuiz);
+                const canFillForm = !isFormCompleted || retakeAllowed;
 
-                // Regla: mostrar si no ha firmado o si puede reintentar por reprobación
-                const canAnswer = !selectedManual.currentEmployeeSigned || retakeAllowed;
-                if (!canAnswer) {
+                if (!canFillForm) {
                   return (
                     <ThemedView style={styles.viewerSection}>
-                      <ThemedText style={styles.viewerSectionTitle}>Quiz</ThemedText>
-                      <ThemedText style={styles.quizEmptyText}>
-                        Ya has firmado este manual.
-                      </ThemedText>
+                      <ThemedText style={styles.viewerSectionTitle}>Firma manual y quiz</ThemedText>
+                      <ThemedText style={styles.quizEmptyText}>Ya completaste este documento.</ThemedText>
                     </ThemedView>
                   );
                 }
 
+                const needsNewSignature = !hasSavedManualSignature;
+
                 return (
                   <ThemedView style={styles.viewerSection}>
-                    <ThemedText style={styles.viewerSectionTitle}>Quiz (Obligatorio)</ThemedText>
-                    {quizCfg.map((q) => {
+                    <ThemedText style={styles.viewerSectionTitle}>
+                      {hasQuiz ? 'Quiz y firma manual (obligatorio)' : 'Firma manual (obligatorio)'}
+                    </ThemedText>
+                    {hasQuiz && quizCfg.map((q) => {
                       const value = quizUserAnswers[q.id];
                       const options = q.options || [];
 
@@ -4546,441 +5331,203 @@ export default function JobManualsScreen() {
                         </ThemedView>
                       );
                     })}
+
+                    <ThemedView style={{ marginTop: hasQuiz ? 14 : 0 }}>
+                      <ThemedText style={styles.viewerSectionTitle}>Firma manual</ThemedText>
+                      {needsNewSignature ? (
+                        <>
+                          {pendingManualSignature ? (
+                            <Image
+                              source={{ uri: pendingManualSignature }}
+                              style={{ width: '100%', height: 140, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 8 }}
+                              resizeMode="contain"
+                            />
+                          ) : null}
+                          <TouchableOpacity style={styles.signatureButton} onPress={openManualSignatureDraw}>
+                            <Ionicons name="create-outline" size={18} color="#FFFFFF" />
+                            <ThemedText style={styles.signatureButtonText}>
+                              {pendingManualSignature ? 'Volver a firmar' : 'Firmar a mano'}
+                            </ThemedText>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <ThemedText style={styles.quizEmptyText}>Firma manual ya registrada.</ThemedText>
+                      )}
+                    </ThemedView>
+
+                    {/* Evidencias (archivos) para la visualización del quiz */}
+                    {hasQuiz && (
+                    <ThemedView style={{ width: '100%', marginTop: 14 }}>
+                      <ThemedText style={styles.signatureHintMuted}>
+                        Evidencias (opcional): puedes adjuntar imágenes, audios, videos o documentos.
+                      </ThemedText>
+
+                      <ThemedView style={styles.fileIconButtonsRow}>
+                        <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('image')}>
+                          <Ionicons name="image-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.fileIconButton}
+                          onPress={() => openManualCamera((asset) => void addPickedViewFileAsset('image', asset))}
+                        >
+                          <Ionicons name="camera-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('audio')}>
+                          <Ionicons name="mic-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('video')}>
+                          <Ionicons name="videocam-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('document')}>
+                          <Ionicons name="document-text-outline" size={20} color="#007AFF" />
+                        </TouchableOpacity>
+                      </ThemedView>
+
+                      {(viewTextFiles.length + viewImageFiles.length + viewAudioFiles.length + viewVideoFiles.length) > 0 && (
+                        <ThemedView style={styles.filesList}>
+                          {viewImageFiles.map(file => (
+                            <ThemedView key={file.id} style={styles.fileRow}>
+                              <Image
+                                source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
+                                style={styles.filePreviewImage}
+                                resizeMode="cover"
+                              />
+                              <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                              <TouchableOpacity onPress={() => removeViewLocalFile('image', file.id)}>
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))}
+
+                          {viewAudioFiles.map(file => (
+                            <ThemedView key={file.id} style={styles.fileRow}>
+                              <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
+                              <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                              <TouchableOpacity onPress={() => removeViewLocalFile('audio', file.id)}>
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))}
+
+                          {viewVideoFiles.map(file => (
+                            <ThemedView key={file.id} style={styles.fileRow}>
+                              <Ionicons name="videocam-outline" size={16} color="#007AFF" />
+                              <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                              <TouchableOpacity onPress={() => removeViewLocalFile('video', file.id)}>
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))}
+
+                          {viewTextFiles.map(file => (
+                            <ThemedView key={file.id} style={styles.fileRow}>
+                              <Ionicons name="document-text-outline" size={16} color="#007AFF" />
+                              <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
+                              <TouchableOpacity onPress={() => removeViewLocalFile('document', file.id)}>
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            </ThemedView>
+                          ))}
+                        </ThemedView>
+                      )}
+                    </ThemedView>
+                    )}
+
+                    <TouchableOpacity
+                      style={[styles.signatureActionButton, { marginTop: 14 }, isSigningManual && styles.formButtonDisabled]}
+                      onPress={() => void handleConfirmQuizAndSignature()}
+                      disabled={isSigningManual}
+                    >
+                      {isSigningManual ? (
+                        <ActivityIndicator size="small" color="#FFFFFF" />
+                      ) : (
+                        <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                      )}
+                      <ThemedText style={styles.signatureActionText}>
+                        {isSigningManual ? 'Guardando...' : 'Confirmar'}
+                      </ThemedText>
+                    </TouchableOpacity>
                   </ThemedView>
                 );
               })()}
-
-              {/* Firma de visualización - al final de la lista */}
-              {selectedManual && (!selectedManual.currentEmployeeSigned || retakeAllowed) && (
-                <ThemedView style={styles.viewerSection}>
-                  <ThemedText style={styles.viewerSectionTitle}>Confirmar visualización</ThemedText>
-                  {!viewSignature ? (
-                    <ThemedView style={styles.signatureButtons}>
-                      <TouchableOpacity
-                        style={styles.signatureButton}
-                        onPress={generateViewSignature}
-                        disabled={isGeneratingViewFirma}
-                      >
-                        {isGeneratingViewFirma ? (
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                        ) : (
-                          <>
-                            <Ionicons name="finger-print" size={18} color="#FFFFFF" />
-                            <ThemedText style={styles.signatureButtonText}>Generar</ThemedText>
-                          </>
-                        )}
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.signatureButton}
-                        onPress={handleScanViewQR}
-                      >
-                        <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
-                        <ThemedText style={styles.signatureButtonText}>Escanear QR</ThemedText>
-                      </TouchableOpacity>
-                    </ThemedView>
-                  ) : (
-                    <ThemedView style={styles.signatureRow}>
-                      {viewFirmaData && (
-                        <ThemedView style={styles.signatureInfo}>
-                          <ThemedText style={styles.signatureInfoTitle}>Información de la firma:</ThemedText>
-                          <ThemedText style={styles.signatureInfoText}>ID de sesión: {viewFirmaData.sessionId}</ThemedText>
-                          <ThemedText style={styles.signatureInfoText}>ID del empleado: {viewFirmaData.empleadoId}</ThemedText>
-                          {viewFirmaData.empleadoDetalle && (
-                            <ThemedView style={styles.signatureInfoDetail}>
-                              <ThemedText style={styles.signatureInfoDetailText}>
-                                {viewFirmaData.empleadoDetalle.nombre}{' '}
-                                {viewFirmaData.empleadoDetalle.primer_apellido}{' '}
-                                {viewFirmaData.empleadoDetalle.segundo_apellido}{' '}
-                                ({viewFirmaData.empleadoDetalle.cedula_empleado})
-                              </ThemedText>
-                            </ThemedView>
-                          )}
-                          <ThemedText style={styles.signatureInfoText}>Latitud: {viewFirmaData.latitud}</ThemedText>
-                          <ThemedText style={styles.signatureInfoText}>Longitud: {viewFirmaData.longitud}</ThemedText>
-                          <ThemedText style={styles.signatureInfoText}>
-                            Fecha y hora:{' '}
-                            {convertDateTimestampToLocalString(new Date(Number(viewFirmaData.timestamp)).toISOString())}
-                          </ThemedText>
-                          <TouchableOpacity
-                            style={styles.clearSignatureButton}
-                            onPress={clearViewFirma}
-                          >
-                            <ThemedText style={styles.clearSignatureText}>Limpiar</ThemedText>
-                          </TouchableOpacity>
-                        </ThemedView>
-                      )}
-
-                      {/* Evidencias (archivos) para la visualización */}
-                      <ThemedView style={{ width: '100%', marginTop: 10 }}>
-                        <ThemedText style={styles.signatureHintMuted}>
-                          Evidencias (opcional): puedes adjuntar imágenes, audios, videos o documentos.
-                        </ThemedText>
-
-                        <ThemedView style={styles.fileIconButtonsRow}>
-                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('image')}>
-                            <Ionicons name="image-outline" size={20} color="#007AFF" />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.fileIconButton}
-                            onPress={() => openManualCamera((asset) => void addPickedViewFileAsset('image', asset))}
-                          >
-                            <Ionicons name="camera-outline" size={20} color="#007AFF" />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('audio')}>
-                            <Ionicons name="mic-outline" size={20} color="#007AFF" />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('video')}>
-                            <Ionicons name="videocam-outline" size={20} color="#007AFF" />
-                          </TouchableOpacity>
-                          <TouchableOpacity style={styles.fileIconButton} onPress={() => handleAddViewFile('document')}>
-                            <Ionicons name="document-text-outline" size={20} color="#007AFF" />
-                          </TouchableOpacity>
-                        </ThemedView>
-
-                        {(viewTextFiles.length + viewImageFiles.length + viewAudioFiles.length + viewVideoFiles.length) > 0 && (
-                          <ThemedView style={styles.filesList}>
-                            {viewImageFiles.map(file => (
-                              <ThemedView key={file.id} style={styles.fileRow}>
-                                <Image
-                                  source={{ uri: `data:image/${file.extension || 'jpeg'};base64,${file.base64}` }}
-                                  style={styles.filePreviewImage}
-                                  resizeMode="cover"
-                                />
-                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                                <TouchableOpacity onPress={() => removeViewLocalFile('image', file.id)}>
-                                  <Ionicons name="trash" size={16} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </ThemedView>
-                            ))}
-
-                            {viewAudioFiles.map(file => (
-                              <ThemedView key={file.id} style={styles.fileRow}>
-                                <Ionicons name="musical-notes-outline" size={16} color="#007AFF" />
-                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                                <TouchableOpacity onPress={() => removeViewLocalFile('audio', file.id)}>
-                                  <Ionicons name="trash" size={16} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </ThemedView>
-                            ))}
-
-                            {viewVideoFiles.map(file => (
-                              <ThemedView key={file.id} style={styles.fileRow}>
-                                <Ionicons name="videocam-outline" size={16} color="#007AFF" />
-                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                                <TouchableOpacity onPress={() => removeViewLocalFile('video', file.id)}>
-                                  <Ionicons name="trash" size={16} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </ThemedView>
-                            ))}
-
-                            {viewTextFiles.map(file => (
-                              <ThemedView key={file.id} style={styles.fileRow}>
-                                <Ionicons name="document-text-outline" size={16} color="#007AFF" />
-                                <ThemedText numberOfLines={1} style={styles.fileName}>{file.name}</ThemedText>
-                                <TouchableOpacity onPress={() => removeViewLocalFile('document', file.id)}>
-                                  <Ionicons name="trash" size={16} color="#FF3B30" />
-                                </TouchableOpacity>
-                              </ThemedView>
-                            ))}
-                          </ThemedView>
-                        )}
-                      </ThemedView>
-
-                      <TouchableOpacity
-                        style={[styles.signatureActionButton, isSigningManual && styles.formButtonDisabled]}
-                        onPress={async () => {
-                          if (!selectedManual || !viewSignature) return;
-                          const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
-                          if (!apiUrl) {
-                            Alert.alert('Error', 'URL del servidor no configurada');
-                            return;
-                          }
-                          try {
-                            if (!marcaId) {
-                              Alert.alert('Error', 'No se encontró la marca actual');
-                              return;
-                            }
-
-                            const quizCfgData = parseQuizFromManual(selectedManual.quiz);
-                            const quizCfg = quizCfgData.questions;
-                            const hasQuiz = quizCfg.length > 0;
-
-                            // Validar quiz (obligatorio si existe)
-                            if (hasQuiz) {
-                              for (const q of quizCfg) {
-                                const v = quizUserAnswers[q.id];
-                                const isEmptyString = typeof v === 'string' && v.trim().length === 0;
-                                const isEmptyArray = Array.isArray(v) && v.length === 0;
-                                const missing = v === undefined || v === null || isEmptyString || isEmptyArray;
-                                if (missing) {
-                                  Alert.alert('Error', 'Debes responder todas las preguntas del quiz antes de firmar.');
-                                  return;
-                                }
-                              }
-                            }
-
-                            // Construir payload de respuestas (incluye respuestas correctas + del usuario)
-                            const quizAnswearStr = hasQuiz
-                              ? JSON.stringify(
-                                quizCfg.map((q) => {
-                                  const userV = quizUserAnswers[q.id];
-                                  return {
-                                    question_id: q.id,
-                                    type: q.type,
-                                    correct_answer: q.answer ?? null,
-                                    correct_answers: q.answers ?? null,
-                                    user_answer: typeof userV === 'string' ? userV : null,
-                                    user_answers: Array.isArray(userV) ? userV : null,
-                                  };
-                                })
-                              )
-                              : null;
-
-                            const isConnected = await getConnectionStatus();
-                            const visualizationFilesStr = isConnected
-                              ? await buildVisualizationFilesPayload()
-                              : buildVisualizationSignQueuePayload();
-
-                            const confirmedSign = await new Promise<boolean>((resolve) => {
-                                Alert.alert(
-                                  'Confirmar',
-                                isConnected
-                                  ? 'Vas a firmar el manual y enviar tus respuestas del quiz (si aplica). ¿Deseas continuar?'
-                                  : 'Se registrará tu firma y respuestas localmente para sincronizarse cuando haya conexión. ¿Deseas continuar?',
-                                  [
-                                    { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
-                                    { text: 'Aceptar', onPress: () => resolve(true) },
-                                  ]
-                                );
-                              });
-                            if (!confirmedSign) return;
-
-                            setIsSigningManual(true);
-
-                            let manualRef: JobManualRemote = selectedManual;
-                            if (!manualRef.id || manualRef.id === 0) {
-                              if (!manualRef.id_local) {
-                                throw new Error('No se puede firmar: manual sin id de servidor ni referencia local.');
-                              }
-                              const canSync = await getConnectionStatus();
-                              if (canSync) {
-                                const { serverId } = await syncUnsyncedJobManualByLocalId({
-                                  idLocal: String(manualRef.id_local),
-                                  refreshAccessToken,
-                                  logout,
-                                });
-                                manualRef = {
-                                  ...manualRef,
-                                  id: serverId,
-                                  id_local: undefined,
-                                  synced: true,
-                                };
-                                setSelectedManual(manualRef);
-                                if (marcaId) {
-                                  const listPuestoR =
-                                    roleName === 'OPERATIVO'
-                                      ? marcaPuestoIdFromMarca
-                                      : (filterPuestoId ?? marcaPuestoIdFromMarca);
-                                  await fetchManuals(marcaId, listPuestoR);
-                                }
-                              }
-                            }
-
-                            const isConnectedSign = await getConnectionStatus();
-                            let signResult: { status?: boolean; message?: string; visualizacion_id?: number; id?: number } | null =
-                              null;
-                            if (isConnectedSign) {
-                              if (!manualRef.id || manualRef.id === 0) {
-                                throw new Error(
-                                  'Conéctate a internet y espera a que el manual se sincronice, o reintenta en unos segundos.'
-                                );
-                              }
-                              signResult = await signJobManual({
-                                id: manualRef.id,
-                                firma: viewSignature,
-                                quizAnswear: quizAnswearStr,
-                                files: visualizationFilesStr,
-                                refreshAccessToken,
-                                logout,
-                                marcaId,
-                              });
-
-                              if (!signResult?.status) {
-                                throw new Error(signResult?.message || 'No se pudo firmar el manual');
-                              }
-                              for (const f of [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles]) {
-                                if (f.localFileName) {
-                                  try {
-                                    await deleteFile(f.localFileName);
-                                  } catch {
-                                    /* idempotente */
-                                  }
-                                }
-                              }
-                            } else {
-                              const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
-                              let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
-                              const sameSign = (a: any) => {
-                                if (a.type !== 'sign') return false;
-                                if (manualRef.id > 0) return a.id === manualRef.id;
-                                if (manualRef.id_local) {
-                                  return (
-                                    (a as any).manualLocalId != null &&
-                                    String((a as any).manualLocalId) === String(manualRef.id_local)
-                                  );
-                                }
-                                return a.id === manualRef.id;
-                              };
-                              actions = actions.filter((a: any) => !sameSign(a));
-                              actions.push(
-                                !manualRef.id || manualRef.id === 0
-                                  ? {
-                                      id: 0,
-                                      manualLocalId: String(manualRef.id_local),
-                                      type: 'sign',
-                                      firma: viewSignature,
-                                      quizAnswear: quizAnswearStr,
-                                      files: visualizationFilesStr,
-                                      marcaId,
-                                    }
-                                  : {
-                                      id: manualRef.id,
-                                      type: 'sign',
-                                      firma: viewSignature,
-                                      quizAnswear: quizAnswearStr,
-                                      files: visualizationFilesStr,
-                                      marcaId,
-                                    }
-                              );
-                              await AsyncStorage.setItem('job_manuals_actions', JSON.stringify(actions));
-                            }
-
-                            const horaAccionUse = await getHoraAccion();
-
-                            const visServerId =
-                              isConnectedSign && signResult
-                                ? Number(signResult.visualizacion_id ?? signResult.id) || 0
-                                : 0;
-                            const newVisId =
-                              visServerId > 0 ? visServerId : Date.now() + Math.floor(Math.random() * 1000);
-
-                            const matchManualInCache = (item: { id: number; id_local?: string }) => {
-                              if (manualRef.id > 0) return item.id === manualRef.id;
-                              if (manualRef.id_local) {
-                                return String(item.id_local) === String(manualRef.id_local);
-                              }
-                              return item.id === manualRef.id;
-                            };
-
-                            // Actualizar estado local y cache
-                            const newVisualizacion = {
-                              id: newVisId,
-                              empleado_id: typeof employee?.id === 'number' ? employee.id : Number(employee?.id || 0),
-                              manual_puesto_id: manualRef.id,
-                              nombre_empleado: employee?.name || 'Empleado',
-                              firma_empleado: viewSignature,
-                              quiz_answear: quizAnswearStr,
-                              approved: null,
-                              created_at: new Date(horaAccionUse).toISOString(),
-                              updated_at: new Date(horaAccionUse).toISOString(),
-                              files: [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles].map((f) => ({
-                                id: Date.now() + Math.random(),
-                                id_local: f.id,
-                                type: f.type,
-                                extension: f.extension,
-                                name: f.name,
-                                original_name: f.name,
-                                base64: f.localFileName ? undefined : f.base64,
-                                localFileName: f.localFileName,
-                                mimeType: f.mimeType,
-                                url: f.localFileName ? getLocalFileDisplayUri(f.localFileName) : '',
-                              })),
-                            };
-
-                            setSelectedManual(prev => {
-                              if (!prev) return prev;
-                              if (!matchManualInCache(prev)) return prev;
-                              const filtered = (prev.visualizaciones || []).filter(v => v.empleado_id !== newVisualizacion.empleado_id);
-                              return {
-                                ...prev,
-                                currentEmployeeSigned: true,
-                                visualizaciones: [...filtered, newVisualizacion],
-                              };
-                            });
-
-                            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
-                            if (cacheStr) {
-                              const cache = JSON.parse(cacheStr);
-                              const updatedCache = cache.map((item: any) => {
-                                if (!matchManualInCache(item)) return item;
-                                const visualizaciones = (item.visualizaciones || []).filter((v: any) => v.empleado_id !== newVisualizacion.empleado_id);
-                                return {
-                                  ...item,
-                                  currentEmployeeSigned: true,
-                                  visualizaciones: [...visualizaciones, newVisualizacion],
-                                };
-                              });
-                              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
-                            }
-
-                            const listPuestoReload =
-                              roleName === 'OPERATIVO'
-                                ? marcaPuestoIdFromMarca
-                                : (filterPuestoId ?? marcaPuestoIdFromMarca);
-                            if (marcaId) {
-                              await fetchManuals(marcaId, listPuestoReload);
-                              const cacheAfter = await AsyncStorage.getItem('job_manuals_cache');
-                              if (cacheAfter) {
-                                try {
-                                  const parsed = JSON.parse(cacheAfter);
-                                  const m = Array.isArray(parsed)
-                                    ? parsed.find(
-                                        (x: { id: number; id_local?: string }) =>
-                                          (manualRef.id > 0 && x.id === manualRef.id) ||
-                                          (manualRef.id_local != null &&
-                                            String(x.id_local) === String(manualRef.id_local))
-                                      )
-                                    : null;
-                                  if (m) setSelectedManual(m);
-                                } catch {
-                                  /* ignore */
-                                }
-                              }
-                            }
-
-                            Alert.alert(
-                              'Éxito',
-                              isConnectedSign ? 'Manual firmado correctamente' : 'Firma registrada en modo offline'
-                            );
-                          } catch (error) {
-                            console.error('Error signing manual:', error);
-                            const msg = error instanceof Error ? error.message : 'No se pudo firmar el manual';
-                            Alert.alert('Error', msg);
-                          } finally {
-                            setIsSigningManual(false);
-                            clearViewFirma();
-                            setViewTextFiles([]);
-                            setViewImageFiles([]);
-                            setViewAudioFiles([]);
-                            setViewVideoFiles([]);
-                          }
-                        }}
-                        disabled={isSigningManual}
-                      >
-                        {isSigningManual ? (
-                          <ActivityIndicator size="small" color="#FFFFFF" />
-                        ) : (
-                          <Ionicons name="checkmark" size={18} color="#FFFFFF" />
-                        )}
-                        <ThemedText style={styles.signatureActionText}>
-                          {isSigningManual ? 'Firmando...' : 'Confirmar visualización'}
-                        </ThemedText>
-                      </TouchableOpacity>
-                    </ThemedView>
-                  )}
-                </ThemedView>
-              )}
             </ScrollView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Dibujar firma manual */}
+      <Modal
+        visible={isManualSignatureDrawVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsManualSignatureDrawVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <ThemedView style={styles.updPuestosModalContainer}>
+            <ThemedView style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <ThemedText style={styles.modalTitle}>Firma manual</ThemedText>
+              <TouchableOpacity onPress={() => setIsManualSignatureDrawVisible(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            <ThemedText style={{ fontSize: 13, color: '#666', marginBottom: 8 }}>
+              Dibuja tu firma en el área blanca
+            </ThemedText>
+            <View style={{ height: 220, borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden' }}>
+              <SignatureScreen
+                key={manualSignatureKey}
+                ref={manualSignatureRef}
+                onOK={handleManualSignatureOK}
+                descriptionText=""
+                webStyle={`
+                  body, html { margin: 0; padding: 0; height: 100%; width: 100%; }
+                  .m-signature-pad { position: absolute; top: 0; left: 0; right: 0; bottom: 0; margin: 0; padding: 0; box-shadow: none; border: none; background-color: #FFFFFF; }
+                  .m-signature-pad--body { position: absolute; top: 0; left: 0; right: 0; bottom: 0; border: none; margin: 0; padding: 0; }
+                  .m-signature-pad--body canvas { width: 100% !important; height: 100% !important; }
+                  .m-signature-pad--footer { display: none; }
+                `}
+              />
+            </View>
+            <ThemedView style={{ flexDirection: 'row', justifyContent: 'center', gap: 12, marginTop: 12 }}>
+              <TouchableOpacity
+                style={[styles.signatureButton, { backgroundColor: '#8E8E93' }]}
+                onPress={() => setManualSignatureKey((prev) => prev + 1)}
+              >
+                <ThemedText style={styles.signatureButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.signatureButton}
+                onPress={() => manualSignatureRef.current?.readSignature()}
+              >
+                <ThemedText style={styles.signatureButtonText}>Usar esta firma</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </View>
+      </Modal>
+
+      {/* Ver firma manual (desde "Firmas registradas") */}
+      <Modal
+        visible={!!manualSignatureViewUri}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setManualSignatureViewUri(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <ThemedView style={styles.updPuestosModalContainer}>
+            <ThemedView style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <ThemedText style={styles.modalTitle}>Firma manual</ThemedText>
+              <TouchableOpacity onPress={() => setManualSignatureViewUri(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+            {manualSignatureViewUri ? (
+              <Image
+                source={{ uri: manualSignatureViewUri }}
+                style={{ width: '100%', height: 220, backgroundColor: '#FFFFFF', borderRadius: 8 }}
+                resizeMode="contain"
+              />
+            ) : null}
           </ThemedView>
         </View>
       </Modal>
@@ -5019,6 +5566,36 @@ export default function JobManualsScreen() {
           )}
         </View>
       </Modal>
+
+      <EmployeeSearchModal
+        visible={isCreateEmpleadoSearchVisible}
+        structure={structure}
+        onClose={() => setIsCreateEmpleadoSearchVisible(false)}
+        onSelect={(hit: EmployeeSearchHit) => {
+          setSelectedEmpleados((prev) =>
+            prev.some((e) => e.id === hit.empleadoId) ? prev : [...prev, { id: hit.empleadoId, nombre: hit.title }]
+          );
+          setIsSelectedEmpleadosExpanded(true);
+        }}
+      />
+
+      <EmployeeSearchModal
+        visible={isFilterEmpleadoSearchVisible}
+        structure={structure}
+        onClose={() => setIsFilterEmpleadoSearchVisible(false)}
+        onSelect={(hit: EmployeeSearchHit) => setFilterEmpleado({ id: hit.empleadoId, nombre: hit.title })}
+      />
+
+      <EmployeeSearchModal
+        visible={isUpdEmpleadoSearchVisible}
+        structure={structure}
+        onClose={() => setIsUpdEmpleadoSearchVisible(false)}
+        onSelect={(hit: EmployeeSearchHit) => {
+          setUpdSelectedEmpleados((prev) =>
+            prev.some((e) => e.id === hit.empleadoId) ? prev : [...prev, { id: hit.empleadoId, nombre: hit.title }]
+          );
+        }}
+      />
     </ThemedView>
   );
 }
@@ -6248,5 +6825,3 @@ function ManualVideoPlayer({ sourceUrl }: { sourceUrl: string }) {
     </View>
   );
 }
-
-

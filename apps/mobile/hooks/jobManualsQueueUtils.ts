@@ -98,10 +98,11 @@ function reassignQueuedActionsToServerId(
   serverId: number
 ): any[] {
   return actions.map((a) => {
-    if (a.type === 'sign' && a.manualLocalId != null && String(a.manualLocalId) === String(createId)) {
-      return { ...a, id: serverId, manualLocalId: undefined };
-    }
-    if (a.type === 'quiz_result' && a.manualLocalId != null && String(a.manualLocalId) === String(createId)) {
+    if (
+      (a.type === 'sign' || a.type === 'quiz_result' || a.type === 'auto_visualizacion' || a.type === 'visualizacion_field_update') &&
+      a.manualLocalId != null &&
+      String(a.manualLocalId) === String(createId)
+    ) {
       return { ...a, id: serverId, manualLocalId: undefined };
     }
     if (a.type === 'append_puestos' && a.pendingManualLocalId != null && String(a.pendingManualLocalId) === String(createId)) {

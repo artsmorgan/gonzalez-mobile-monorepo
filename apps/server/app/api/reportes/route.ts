@@ -611,6 +611,7 @@ function parseListModuleFilters(searchParams: URLSearchParams): any {
         ["listMpContratoIds", "contratoIds"],
         ["listMpCorpoIds", "corpoIds"],
         ["listMpPuestoIds", "puestoIds"],
+        ["listMpEmpleadoIds", "empleadoIds"],
     ];
     for (const [paramKey, outKey] of mapMpIds) {
         const raw = searchParams.get(paramKey);

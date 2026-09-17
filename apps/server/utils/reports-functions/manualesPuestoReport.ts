@@ -14,12 +14,33 @@ import {
 
 const MANUALES_PUESTO_INCLUDE = {
     e_puestos_manual_puesto: true,
+    e_empleados_manual_puesto: true,
     e_empleado_visualizacion_manual_puesto: true,
 };
 
+function normalizeSignatureDataUri(raw: unknown): string | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    if (s.startsWith("data:image/")) return s;
+    return `data:image/png;base64,${s}`;
+}
+
+function parseSignatureDataForExcel(dataUriOrBase64: unknown): { extension: "png" | "jpeg"; base64: string } | null {
+    const d = normalizeSignatureDataUri(dataUriOrBase64);
+    if (!d) return null;
+    const m = /^data:image\/(png|jpeg|jpg);base64,([\s\S]+)$/i.exec(d);
+    if (m) {
+        return { extension: m[1].toLowerCase() === "png" ? "png" : "jpeg", base64: String(m[2]).replace(/\s+/g, "") };
+    }
+    return { extension: "png", base64: d.replace(/^data:image\/\w+;base64,/, "").replace(/\s+/g, "") };
+}
+
 export type ManualesPuestoOrderKey = "title" | "created_at";
 
-export type ManualesPuestoModuleFilters = ActaEntregaModuleFilters & { classificaciones?: string[] | null };
+export type ManualesPuestoModuleFilters = ActaEntregaModuleFilters & {
+    classificaciones?: string[] | null;
+    empleadoIds?: number[] | null;
+};
 
 export function normalizeManualesPuestoFilters(raw: unknown): ManualesPuestoModuleFilters {
     const base = normalizeActaEntregaFilters(raw);
@@ -27,7 +48,14 @@ export function normalizeManualesPuestoFilters(raw: unknown): ManualesPuestoModu
     const classificaciones = Array.isArray(o.classificaciones)
         ? Array.from(new Set((o.classificaciones as unknown[]).map((x) => String(x ?? "").trim()).filter((x) => x !== "")))
         : [];
-    return classificaciones.length > 0 ? { ...base, classificaciones } : base;
+    const empleadoIds = Array.isArray(o.empleadoIds)
+        ? Array.from(new Set((o.empleadoIds as unknown[]).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)))
+        : [];
+    return {
+        ...base,
+        ...(classificaciones.length > 0 ? { classificaciones } : {}),
+        ...(empleadoIds.length > 0 ? { empleadoIds } : {}),
+    };
 }
 
 export function hasManualesPuestoListModuleFiltersContent(f: ManualesPuestoModuleFilters): boolean {
@@ -40,6 +68,7 @@ export function hasManualesPuestoListModuleFiltersContent(f: ManualesPuestoModul
     if (f.corpoIds?.length) return true;
     if (f.puestoIds?.length) return true;
     if (f.classificaciones?.length) return true;
+    if (f.empleadoIds?.length) return true;
     return false;
 }
 
@@ -66,6 +95,7 @@ export function filtersMatchManualesPuestoListQuery(parsedRowFilters: any, listM
     if (!overlaps(listModuleFilters.corpoIds ?? undefined, saved.corpoIds ?? undefined)) return false;
     if (!overlaps(listModuleFilters.puestoIds ?? undefined, saved.puestoIds ?? undefined)) return false;
     if (!overlapsStr(listModuleFilters.classificaciones ?? undefined, saved.classificaciones ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.empleadoIds ?? undefined, saved.empleadoIds ?? undefined)) return false;
     return true;
 }
 
@@ -328,9 +358,16 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         if (desde) where.created_at.gte = desde;
         if (hasta) where.created_at.lte = hasta;
     }
-    if (puestoSet !== undefined) {
-        const arr = [...puestoSet];
-        where.OR = [{ puesto_id: { in: arr } }, { e_puestos_manual_puesto: { some: { puesto_id: { in: arr } } } }];
+    if (puestoSet !== undefined || filters.empleadoIds?.length) {
+        const orClauses: any[] = [];
+        if (puestoSet !== undefined) {
+            const arr = [...puestoSet];
+            orClauses.push({ puesto_id: { in: arr } }, { e_puestos_manual_puesto: { some: { puesto_id: { in: arr } } } });
+        }
+        if (filters.empleadoIds?.length) {
+            orClauses.push({ e_empleados_manual_puesto: { some: { empleado_id: { in: filters.empleadoIds } } } });
+        }
+        where.OR = orClauses;
     }
     if (filters.classificaciones?.length) {
         const classOr = filters.classificaciones.map((c) => ({ classification: { contains: c } }));
@@ -358,6 +395,13 @@ export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters:
         },
     ]);
     await hydratePreexistentChildRelations(rows, "e_empleado_visualizacion_manual_puesto", [
+        {
+            relation: "c_empleado",
+            fkField: "empleado_id",
+            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+        },
+    ]);
+    await hydratePreexistentChildRelations(rows, "e_empleados_manual_puesto", [
         {
             relation: "c_empleado",
             fkField: "empleado_id",
@@ -438,7 +482,14 @@ export async function buildManualesPuestoExcelConsolidado(
     const wsMain = wb.addWorksheet("Manuales");
     const wsQuiz = wb.addWorksheet("Quices");
     const wsPuestos = wb.addWorksheet("Puestos del manual");
+    const wsEmpleadosVinc = wb.addWorksheet("Empleados del manual");
     const wsVis = wb.addWorksheet("Visualización");
+    const wsFirmasManuales = wb.addWorksheet("Firmas manuales");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente (no solo los del banner de la hoja principal).
+    for (const sheet of [wsMain, wsQuiz, wsPuestos, wsEmpleadosVinc, wsVis, wsFirmasManuales]) {
+        sheet.views = [{ showGridLines: false }];
+    }
 
     /** Cuadrícula jerárquica: Manual (nivel 0) → Pregunta plantilla / Puesto vinculado / Visualización, hermanos (nivel 1) → Respuesta (nivel 2, hija de Visualización). */
     const mainHeaders = [
@@ -463,6 +514,7 @@ export async function buildManualesPuestoExcelConsolidado(
         "Fecha y hora modifica",
         "Ver estructura",
         "Puestos vinculados",
+        "Empleados vinculados",
         "Visualización empleados",
         "Quices",
         "ID pregunta (plantilla)",
@@ -470,6 +522,7 @@ export async function buildManualesPuestoExcelConsolidado(
         "Tipo pregunta (plantilla)",
         "Puntos (plantilla)",
         "Puesto (vínculo)",
+        "Empleado (vínculo)",
         "Empleado (visualización)",
         "Estado (visualización)",
         "ID pregunta (respuesta)",
@@ -478,12 +531,14 @@ export async function buildManualesPuestoExcelConsolidado(
     // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`/`rootValues`.
     const COL_VER_ESTRUCTURA = mainHeaders.indexOf("Ver estructura") + 1;
     const COL_PUESTOS_VINC = mainHeaders.indexOf("Puestos vinculados") + 1;
+    const COL_EMPLEADOS_VINC = mainHeaders.indexOf("Empleados vinculados") + 1;
     const COL_VIS_EMPLEADOS = mainHeaders.indexOf("Visualización empleados") + 1;
     const COL_QUICES = mainHeaders.indexOf("Quices") + 1;
     const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
     // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
     const SHEET_COL_VER_ESTRUCTURA = COL_VER_ESTRUCTURA + 1;
     const SHEET_COL_PUESTOS_VINC = COL_PUESTOS_VINC + 1;
+    const SHEET_COL_EMPLEADOS_VINC = COL_EMPLEADOS_VINC + 1;
     const SHEET_COL_VIS_EMPLEADOS = COL_VIS_EMPLEADOS + 1;
     const SHEET_COL_QUICES = COL_QUICES + 1;
     const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
@@ -504,7 +559,6 @@ export async function buildManualesPuestoExcelConsolidado(
         cell.border = borderThin as ExcelJS.Borders;
         cell.alignment = { vertical: "middle", wrapText: true };
     }
-    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
@@ -544,6 +598,14 @@ export async function buildManualesPuestoExcelConsolidado(
         return puestosRow;
     };
 
+    let empleadosVincRow = 0;
+    const writeEmpleadosVincHeader = () => {
+        const hr = wsEmpleadosVinc.addRow(["Manual ID", "Título manual", "Empleado ID", "Empleado"]);
+        applyHeaderRow(hr, 4);
+        empleadosVincRow = hr.number;
+        return empleadosVincRow;
+    };
+
     let visRow = 0;
     const writeVisHeader = () => {
         const hr = wsVis.addRow([
@@ -553,20 +615,32 @@ export async function buildManualesPuestoExcelConsolidado(
             "Empleado",
             "Estado",
             "Quiz respuestas",
+            "Ver firma manual",
         ]);
-        applyHeaderRow(hr, 6);
+        applyHeaderRow(hr, 7);
         visRow = hr.number;
         return visRow;
     };
 
+    let firmasManualesRow = 0;
+    const writeFirmasManualesHeader = () => {
+        const hr = wsFirmasManuales.addRow(["Manual ID", "Título manual", "Visualización ID", "Empleado", "Firma manual"]);
+        applyHeaderRow(hr, 5);
+        firmasManualesRow = hr.number;
+        return firmasManualesRow;
+    };
+
     writePuestosHeader();
+    writeEmpleadosVincHeader();
     writeVisHeader();
+    writeFirmasManualesHeader();
 
     const anchorQuizStructure = new Map<number, number>();
     const anchorQuizAnswers = new Map<number, number>();
     /** Fila en «Quices» donde comienza el bloque de respuestas de una visualización (para hipervínculo desde «Visualización»). */
     const anchorQuizByVisualizationId = new Map<number, number>();
     const anchorPuestos = new Map<number, number>();
+    const anchorEmpleadosVinc = new Map<number, number>();
     const anchorVis = new Map<number, number>();
 
     for (const r of rows) {
@@ -727,15 +801,70 @@ export async function buildManualesPuestoExcelConsolidado(
             });
         }
 
+        anchorEmpleadosVinc.set(id, empleadosVincRow + 1);
+        const empleadoLinks = r.e_empleados_manual_puesto || [];
+        for (const link of empleadoLinks) {
+            const e = link.c_empleado;
+            const etxt = e
+                ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
+                : String(link.empleado_id);
+            const row = wsEmpleadosVinc.addRow([id, title, link.empleado_id, etxt]);
+            empleadosVincRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+                cell.alignment = { wrapText: true, vertical: "top" };
+            });
+        }
+        if (!empleadoLinks.length) {
+            const row = wsEmpleadosVinc.addRow([id, title, "", "(Sin vínculos adicionales)"]);
+            empleadosVincRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+            });
+        }
+
         anchorVis.set(id, visRow + 1);
         for (const v of vizList) {
             const emp = v.c_empleado;
             const empTxt = emp
                 ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
                 : excelCellString(v.nombre_empleado);
-            const row = wsVis.addRow([id, title, v.id, empTxt, approvedLabel(v.approved), "Ver respuestas"]);
+
+            // Se escribe primero (si aplica) para conocer su fila y poder enlazarla desde "Visualización".
+            const manualSig = parseSignatureDataForExcel((v as any).firma_empleado_manual);
+            let firmaManualAnchorRow: number | null = null;
+            if (manualSig) {
+                const fRow = wsFirmasManuales.addRow([id, title, v.id, empTxt, ""]);
+                fRow.eachCell((cell) => {
+                    cell.border = borderThin as ExcelJS.Borders;
+                    cell.alignment = { vertical: "top", wrapText: true };
+                });
+                fRow.height = 110;
+                firmasManualesRow = fRow.number;
+                firmaManualAnchorRow = firmasManualesRow;
+                try {
+                    const imgId = wb.addImage({ base64: manualSig.base64, extension: manualSig.extension });
+                    wsFirmasManuales.addImage(imgId, {
+                        tl: { col: 4 + 0.05, row: firmasManualesRow - 1 + 0.05 },
+                        ext: { width: 260, height: 110 },
+                        editAs: "oneCell",
+                    });
+                } catch {
+                    wsFirmasManuales.getCell(firmasManualesRow, 5).value = "(No se pudo recrear la firma)";
+                }
+            }
+
+            const row = wsVis.addRow([
+                id,
+                title,
+                v.id,
+                empTxt,
+                approvedLabel(v.approved),
+                "Ver respuestas",
+                firmaManualAnchorRow ? "Ver firma manual" : "—",
+            ]);
             visRow = row.number;
-            row.eachCell((cell, col) => {
+            row.eachCell((cell) => {
                 cell.border = borderThin as ExcelJS.Borders;
                 cell.alignment = { wrapText: true, vertical: "top" };
             });
@@ -743,9 +872,15 @@ export async function buildManualesPuestoExcelConsolidado(
             const tgt = anchorQuizByVisualizationId.get(Number(v.id)) ?? anchorQuizAnswers.get(id) ?? structureTitleRow;
             quizCell.value = { text: "Ver respuestas", hyperlink: `#'Quices'!A${tgt}` };
             quizCell.font = { color: { argb: "FF0563C1" }, underline: true };
+
+            if (firmaManualAnchorRow) {
+                const firmaManualCell = row.getCell(7);
+                firmaManualCell.value = { text: "Ver firma manual", hyperlink: `#'Firmas manuales'!A${firmaManualAnchorRow}` };
+                firmaManualCell.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
         }
         if (!vizList.length) {
-            const row = wsVis.addRow([id, title, "", "", "", ""]);
+            const row = wsVis.addRow([id, title, "", "", "", "", ""]);
             visRow = row.number;
             row.eachCell((cell) => {
                 cell.border = borderThin as ExcelJS.Borders;
@@ -763,7 +898,15 @@ export async function buildManualesPuestoExcelConsolidado(
         { width: 28 },
     ];
     wsPuestos.columns = [{ width: 10 }, { width: 40 }, { width: 10 }, { width: 40 }];
-    wsVis.columns = [{ width: 10 }, { width: 28 }, { width: 14 }, { width: 36 }, { width: 12 }, { width: 22 }];
+    wsEmpleadosVinc.columns = [{ width: 10 }, { width: 40 }, { width: 10 }, { width: 40 }];
+    wsVis.columns = [{ width: 10 }, { width: 28 }, { width: 14 }, { width: 36 }, { width: 12 }, { width: 22 }, { width: 22 }];
+    wsFirmasManuales.columns = [{ width: 10 }, { width: 28 }, { width: 14 }, { width: 36 }, { width: 40 }];
+    if (firmasManualesRow < 2) {
+        const emptyRow = wsFirmasManuales.addRow(["", "", "", "", "(Sin firmas manuales registradas)"]);
+        emptyRow.eachCell((cell) => {
+            cell.border = borderThin as ExcelJS.Borders;
+        });
+    }
 
     for (const r of rows) {
         const id = Number(r.id);
@@ -773,6 +916,7 @@ export async function buildManualesPuestoExcelConsolidado(
         const qStruct = anchorQuizStructure.get(id) ?? 2;
         const qAns = anchorQuizAnswers.get(id) ?? qStruct;
         const pA = anchorPuestos.get(id) ?? 2;
+        const eA = anchorEmpleadosVinc.get(id) ?? 2;
         const vA = anchorVis.get(id) ?? 2;
         const cambio = cambiosByRegistro.get(id);
 
@@ -801,6 +945,7 @@ export async function buildManualesPuestoExcelConsolidado(
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[COL_VER_ESTRUCTURA - 1] = "Ver estructura";
         rootValues[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
+        rootValues[COL_EMPLEADOS_VINC - 1] = "Empleados vinculados";
         rootValues[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
         rootValues[COL_QUICES - 1] = "Quices";
         const rootRow = addMainRow(wsMain, rootValues);
@@ -808,6 +953,8 @@ export async function buildManualesPuestoExcelConsolidado(
         rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(SHEET_COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
         rootRow.getCell(SHEET_COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).value = { text: "Empleados vinculados", hyperlink: `#'Empleados del manual'!A${eA}` };
+        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
         rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
         rootRow.getCell(SHEET_COL_QUICES).value = { text: "Quices", hyperlink: `#'Quices'!A${qAns}` };
@@ -843,6 +990,23 @@ export async function buildManualesPuestoExcelConsolidado(
             values[3] = "Puesto vinculado";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[mainHeaders.indexOf("Puesto (vínculo)")] = excelCellString(ptxt);
+            const row = addMainRow(wsMain, values);
+            styleDataRow(row, 1);
+        });
+
+        const empleadoLinksMain = r.e_empleados_manual_puesto || [];
+        empleadoLinksMain.forEach((link: any, idx: number) => {
+            const e = link.c_empleado;
+            const etxt = e
+                ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
+                : String(link.empleado_id);
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${id}.empleado${idx + 1}`;
+            values[1] = String(id);
+            values[2] = 1;
+            values[3] = "Empleado vinculado";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Empleado (vínculo)")] = excelCellString(etxt);
             const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
@@ -904,12 +1068,14 @@ export async function buildManualesPuestoExcelConsolidado(
         { width: 20 },
         { width: 16 },
         { width: 18 },
+        { width: 18 },
         { width: 22 },
         { width: 12 },
         { width: 16 },
         { width: 40 },
         { width: 18 },
         { width: 12 },
+        { width: 26 },
         { width: 26 },
         { width: 28 },
         { width: 16 },

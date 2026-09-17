@@ -64,6 +64,54 @@ export async function patchJobManualPuestosVinculadosInCache(
   await AsyncStorage.setItem(JOB_MANUALS_CACHE_KEY, JSON.stringify(next));
 }
 
+/**
+ * Actualiza en AsyncStorage los empleados vinculados del manual para listados y filtros offline.
+ * Mismo patrón que `patchJobManualPuestosVinculadosInCache`, sin noción de "principal" (los empleados
+ * vinculados no reemplazan ningún campo raíz del manual, solo `empleados_vinculados_ids`).
+ */
+export async function patchJobManualEmpleadosVinculadosInCache(
+  options: {
+    manualServerId?: number;
+    idLocal?: string;
+    replaceAll: boolean;
+  },
+  empleadoIds: number[]
+): Promise<void> {
+  const add = empleadoIds.map((n) => Number(n)).filter((n) => Number.isFinite(n) && n > 0);
+  if (add.length === 0) return;
+
+  const s = await AsyncStorage.getItem(JOB_MANUALS_CACHE_KEY);
+  if (!s) return;
+  let list: any[];
+  try {
+    list = JSON.parse(s);
+  } catch {
+    return;
+  }
+  if (!Array.isArray(list)) return;
+
+  const { manualServerId, idLocal, replaceAll } = options;
+
+  const next = list.map((m) => {
+    const byServer = manualServerId != null && m.id === manualServerId;
+    const byLocal = idLocal != null && String(m.id_local) === String(idLocal);
+    if (!byServer && !byLocal) return m;
+
+    const prev: number[] = Array.isArray(m.empleados_vinculados_ids)
+      ? m.empleados_vinculados_ids.map((x: unknown) => Number(x)).filter((n: number) => n > 0)
+      : [];
+
+    const merged = replaceAll ? Array.from(new Set(add)) : Array.from(new Set([...prev, ...add]));
+
+    return {
+      ...m,
+      empleados_vinculados_ids: merged,
+    };
+  });
+
+  await AsyncStorage.setItem(JOB_MANUALS_CACHE_KEY, JSON.stringify(next));
+}
+
 export function getManualPuestoId(m: any): number | null {
   // `puesto.id` puede ser 0 en borradores; `puesto_id` en raíz (caché offline) tiene prioridad.
   const fromRoot = m?.puesto_id;
@@ -87,6 +135,17 @@ export function manualIsVisibleForPuesto(m: any, puestoId: number): boolean {
   const linked = m?.puestos_vinculados_ids;
   if (Array.isArray(linked) && linked.length > 0) {
     return linked.some((x: unknown) => Number(x) === pid);
+  }
+  return false;
+}
+
+/** El manual debe listarse para `empleadoId` si está en `empleados_vinculados_ids` del registro. */
+export function manualIsVisibleForEmpleado(m: any, empleadoId: number): boolean {
+  const eid = Number(empleadoId);
+  if (!Number.isFinite(eid) || eid <= 0) return false;
+  const linked = m?.empleados_vinculados_ids;
+  if (Array.isArray(linked) && linked.length > 0) {
+    return linked.some((x: unknown) => Number(x) === eid);
   }
   return false;
 }
@@ -157,6 +216,68 @@ export function mergeJobManualsCacheForPuesto<T extends Record<string, any>>(
 
   const combined = [...keepOtherPuestos, ...pendingLocal, ...freshTagged] as T[];
   // Última aparición gana (p. ej. dato de servidor reciente; evita duplicar el mismo `id` en keep + fresh)
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+  for (let i = combined.length - 1; i >= 0; i--) {
+    const m = combined[i] as any;
+    let k: string;
+    if (m?.id != null && Number(m.id) > 0) {
+      k = `i:${Number(m.id)}`;
+    } else if (m?.id_local) {
+      k = `l:${String(m.id_local)}`;
+    } else {
+      k = `o:${i}`;
+    }
+    if (seen.has(k)) continue;
+    seen.add(k);
+    deduped.push(m);
+  }
+  return deduped.reverse() as T[];
+}
+
+/**
+ * Igual que `mergeJobManualsCacheForPuesto`, pero la "sección" a refrescar es la de un empleado
+ * (`empleados_vinculados_ids`). El GET por empleado no devuelve `puestos_vinculados_ids` (solo el
+ * puesto propio del manual en `puesto`), así que se preserva/extiende el que ya hubiera en caché.
+ */
+export function mergeJobManualsCacheForEmpleado<T extends Record<string, any>>(
+  existing: T[],
+  freshFromServer: T[],
+  empleadoId: number
+): T[] {
+  const eid = Number(empleadoId);
+  const pendingLocal = existing.filter((m: any) => {
+    if (!m.id_local || !(m.synced === false || m.id === 0)) return false;
+    return manualIsVisibleForEmpleado(m, eid);
+  });
+  const keepOtherEmpleados = existing.filter((m: any) => !manualIsVisibleForEmpleado(m, eid));
+
+  const existingById = new Map(
+    (Array.isArray(existing) ? existing : [])
+      .filter((e: any) => e?.id != null && Number(e.id) > 0)
+      .map((e: any) => [Number(e.id), e])
+  );
+  const freshTagged = (freshFromServer || [])
+    .filter((m: any) => m?.isActive !== false)
+    .map((m: any) => {
+      const ex = m?.id != null ? existingById.get(Number(m.id)) : null;
+      const prevP = ex?.puestos_vinculados_ids;
+      const ownPuestoId = getManualPuestoId(m);
+      const basePuestoIds = ownPuestoId ? [ownPuestoId] : [];
+      const puestosVinc =
+        Array.isArray(prevP) && prevP.length > 0
+          ? Array.from(
+              new Set([...basePuestoIds, ...prevP.map((x: unknown) => Number(x)).filter((n: number) => n > 0)])
+            )
+          : basePuestoIds;
+      return {
+        ...m,
+        synced: true as const,
+        puestos_vinculados_ids: puestosVinc,
+      };
+    });
+
+  const combined = [...keepOtherEmpleados, ...pendingLocal, ...freshTagged] as T[];
   const seen = new Set<string>();
   const deduped: T[] = [];
   for (let i = combined.length - 1; i >= 0; i--) {

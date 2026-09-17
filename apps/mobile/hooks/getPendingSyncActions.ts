@@ -85,6 +85,18 @@ export function pendingActionRowId(storageKey: string, action: any, index: numbe
         const idLocal = action.id_local != null && action.id_local !== '' ? String(action.id_local) : '';
         return `eval|${t}|${act}|${id}|${idLocal}|i${index}`;
     }
+    // Cola mixta: `sign`/`auto_visualizacion`/`visualizacion_field_update`/`quiz_result` pueden compartir
+    // el mismo `id` de manual (p. ej. varias acciones pendientes del manual 13).
+    if (storageKey === 'job_manuals_actions' && action && typeof action === 'object') {
+        const t = String(action.type ?? '');
+        const id = action.id != null && action.id !== '' ? String(action.id) : '';
+        const manualLocalId = action.manualLocalId != null ? String(action.manualLocalId) : '';
+        const manualId = action.manualId != null ? String(action.manualId) : '';
+        const actionQueueId = action.action_queue_id != null ? String(action.action_queue_id) : '';
+        const field = action.field != null ? String(action.field) : '';
+        const empleadoId = action.empleadoId != null ? String(action.empleadoId) : '';
+        return `jm|${t}|${id}|${manualLocalId}|${manualId}|${actionQueueId}|${field}|${empleadoId}`;
+    }
     if (action?.id != null && action.id !== '') return String(action.id);
     if (action?.id_local) return String(action.id_local);
     return `${storageKey}-${index}`;
@@ -121,6 +133,28 @@ function evaluationsActionMatchesIndexMarker(action: any, marker: string, index:
     );
 }
 
+function jobManualsActionMatchesMarker(action: any, marker: string): boolean {
+    if (!marker.startsWith('jm|')) return false;
+    const parts = marker.split('|');
+    if (parts.length < 8) return false;
+    const t = parts[1] ?? '';
+    const id = parts[2] ?? '';
+    const manualLocalId = parts[3] ?? '';
+    const manualId = parts[4] ?? '';
+    const actionQueueId = parts[5] ?? '';
+    const field = parts[6] ?? '';
+    const empleadoId = parts[7] ?? '';
+    return (
+        String(action?.type ?? '') === t &&
+        String(action?.id ?? '') === id &&
+        String(action?.manualLocalId ?? '') === manualLocalId &&
+        String(action?.manualId ?? '') === manualId &&
+        String(action?.action_queue_id ?? '') === actionQueueId &&
+        String(action?.field ?? '') === field &&
+        String(action?.empleadoId ?? '') === empleadoId
+    );
+}
+
 /**
  * Elimina una acción específica de su variable AsyncStorage
  */
@@ -141,6 +175,9 @@ export async function removePendingAction(
             }
             if (storageKey === 'evaluations_actions' && actionId.startsWith('eval|')) {
                 return !evaluationsActionMatchesIndexMarker(action, actionId, index);
+            }
+            if (storageKey === 'job_manuals_actions' && actionId.startsWith('jm|')) {
+                return !jobManualsActionMatchesMarker(action, actionId);
             }
             return String(action.id) !== String(actionId);
         });
