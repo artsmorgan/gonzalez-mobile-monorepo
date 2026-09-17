@@ -29,9 +29,12 @@ import {
 import {
   computeChangeAvailable,
   evaluateLocalMarcaRules,
+  getMarcaPuestoCoords,
   hasMarcaPuestoCoordinates,
+  isOutOfRangeLocationMessage,
   validateMarcaLocation,
 } from '@/hooks/attendanceLocalMarcaValidation';
+import OutOfRangeMap from '../components/OutOfRangeMap';
 import {
   getMonitoringPreviousMinutesFromStorage,
   setMonitoringPreviousMinutesStorage,
@@ -319,6 +322,17 @@ async function obtainEntradaCoordinates(opts?: { silent?: boolean }) {
   });
 }
 
+/**
+ * Versión corta del mensaje de `validateMarcaLocation` para cuando se muestra el botón del mapa:
+ * se queda solo con la oración de la regla (sin el encabezado "Ubicación no válida" ni las
+ * coordenadas numéricas), p. ej. "Debes estar dentro del radio de 50 metros del puesto para
+ * marcar ingreso."
+ */
+function simplifyOutOfRangeMessage(message: string): string {
+  const parts = message.split('\n\n');
+  return parts.length >= 2 ? parts[1].trim() : message;
+}
+
 export default function MarcarIngresoSalidaScreen() {
   const { isAuthenticated, isLoading, employee, refreshAccessToken, logout } = useAuth();
   const [isMenuVisible, setIsMenuVisible] = useState(false);
@@ -343,6 +357,15 @@ export default function MarcarIngresoSalidaScreen() {
   /** Aviso de ubicación para ingreso/salida: mostrar botón Reintentar comprobación GPS. */
   const [showLocationRetry, setShowLocationRetry] = useState(false);
   const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
+  /** Coordenadas para el mapa mostrado cuando el usuario está fuera del radio de 50 m del puesto. */
+  const [outOfRangeMapCoords, setOutOfRangeMapCoords] = useState<{
+    deviceLat: number;
+    deviceLng: number;
+    puestoLat: number;
+    puestoLng: number;
+  } | null>(null);
+  /** El mapa de "fuera de rango" solo se abre cuando el usuario pulsa el botón, nunca automáticamente. */
+  const [isOutOfRangeMapModalVisible, setIsOutOfRangeMapModalVisible] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const navigation = useNavigation<MarcarIngresoSalidaScreenNavigationProp>();
   const [horaAccion, setHoraAccion] = useState<number | null>(null);
@@ -524,6 +547,41 @@ export default function MarcarIngresoSalidaScreen() {
     setLocalCanMarkSalida(validation.canMarkSalida);
   };
 
+  /** Actualiza (o limpia) las coordenadas del mapa de "fuera de rango" según el resultado de la validación de ubicación. */
+  const updateOutOfRangeMapState = (
+    message: string | null | undefined,
+    marca: Record<string, unknown>,
+    deviceLat: number | null | undefined,
+    deviceLng: number | null | undefined,
+  ) => {
+    if (
+      isOutOfRangeLocationMessage(message) &&
+      deviceLat != null &&
+      deviceLng != null &&
+      Number.isFinite(deviceLat) &&
+      Number.isFinite(deviceLng)
+    ) {
+      const puestoCoords = getMarcaPuestoCoords(marca);
+      if (puestoCoords) {
+        setOutOfRangeMapCoords({
+          deviceLat,
+          deviceLng,
+          puestoLat: puestoCoords.lat,
+          puestoLng: puestoCoords.lng,
+        });
+        return;
+      }
+    }
+    setOutOfRangeMapCoords(null);
+  };
+
+  // Si la condición de "fuera de rango" se resuelve, cierra el mapa (por si había quedado abierto).
+  useEffect(() => {
+    if (!outOfRangeMapCoords) {
+      setIsOutOfRangeMapModalVisible(false);
+    }
+  }, [outOfRangeMapCoords]);
+
   const runLocalValidationForMarca = async (
     marca: Record<string, unknown>,
     nowMs: number,
@@ -601,6 +659,7 @@ export default function MarcarIngresoSalidaScreen() {
     if (estado === 'No ingresado') {
       if (!computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
         setShowLocationRetry(false);
+        setOutOfRangeMapCoords(null);
         return;
       }
 
@@ -615,6 +674,7 @@ export default function MarcarIngresoSalidaScreen() {
         !timeValidation.canMarkEntrada
       ) {
         setShowLocationRetry(false);
+        setOutOfRangeMapCoords(null);
         return;
       }
 
@@ -623,6 +683,7 @@ export default function MarcarIngresoSalidaScreen() {
         setLocalCanMarkEntrada(false);
         setErrorMessage(coords.message);
         setShowLocationRetry(true);
+        setOutOfRangeMapCoords(null);
         return;
       }
 
@@ -631,11 +692,13 @@ export default function MarcarIngresoSalidaScreen() {
         setLocalCanMarkEntrada(false);
         setErrorMessage(loc.message);
         setShowLocationRetry(true);
+        updateOutOfRangeMapState(loc.message, marca, coords.latitude, coords.longitude);
         return;
       }
 
       setLocalCanMarkEntrada(true);
       setShowLocationRetry(false);
+      setOutOfRangeMapCoords(null);
       if (!timeValidation.message) {
         setErrorMessage(null);
       }
@@ -645,6 +708,7 @@ export default function MarcarIngresoSalidaScreen() {
     // Salida: geocerca solo si validate_gps_salida está activo y el puesto tiene coordenadas.
     if (marca.hora_salida_digitada != null) {
       setShowLocationRetry(false);
+      setOutOfRangeMapCoords(null);
       return;
     }
 
@@ -652,11 +716,13 @@ export default function MarcarIngresoSalidaScreen() {
     if (!gpsSalidaEnabled || !hasMarcaPuestoCoordinates(marca)) {
       setShowLocationRetry(false);
       setLocalCanMarkSalida(true);
+      setOutOfRangeMapCoords(null);
       return;
     }
 
     if (!computeChangeAvailable(marca, nowMs, monitoringMinutes)) {
       setShowLocationRetry(false);
+      setOutOfRangeMapCoords(null);
       return;
     }
 
@@ -667,6 +733,7 @@ export default function MarcarIngresoSalidaScreen() {
 
     if (timeValidation.markingBlocked || !timeValidation.canMarkSalida) {
       setShowLocationRetry(false);
+      setOutOfRangeMapCoords(null);
       return;
     }
 
@@ -675,6 +742,7 @@ export default function MarcarIngresoSalidaScreen() {
       setLocalCanMarkSalida(false);
       setErrorMessage(coords.message);
       setShowLocationRetry(true);
+      setOutOfRangeMapCoords(null);
       return;
     }
 
@@ -683,11 +751,13 @@ export default function MarcarIngresoSalidaScreen() {
       setLocalCanMarkSalida(false);
       setErrorMessage(loc.message);
       setShowLocationRetry(true);
+      updateOutOfRangeMapState(loc.message, marca, coords.latitude, coords.longitude);
       return;
     }
 
     setLocalCanMarkSalida(true);
     setShowLocationRetry(false);
+    setOutOfRangeMapCoords(null);
     if (!timeValidation.message) {
       setErrorMessage(null);
     }
@@ -1323,6 +1393,7 @@ export default function MarcarIngresoSalidaScreen() {
       attendanceData.marca.id != null ? Number(attendanceData.marca.id) : null,
       attendanceData.marca as Record<string, unknown>,
     );
+    updateOutOfRangeMapState(validation.message, marcaRecord, lat, lng);
 
     if (validation.absent) {
       return {
@@ -1427,6 +1498,7 @@ export default function MarcarIngresoSalidaScreen() {
               setLocalCanMarkSalida(false);
               setErrorMessage(coords.message);
               setShowLocationRetry(true);
+              setOutOfRangeMapCoords(null);
               Alert.alert(
                 'Ubicación requerida',
                 coords.message || 'No se pudo obtener la ubicación para marcar salida.',
@@ -1438,11 +1510,13 @@ export default function MarcarIngresoSalidaScreen() {
               setLocalCanMarkSalida(false);
               setErrorMessage(loc.message);
               setShowLocationRetry(true);
+              updateOutOfRangeMapState(loc.message, marcaRecord, coords.latitude, coords.longitude);
               Alert.alert('Ubicación no válida', loc.message);
               return;
             }
             setLocalCanMarkSalida(true);
             setShowLocationRetry(false);
+            setOutOfRangeMapCoords(null);
           }
         }
 
@@ -2863,32 +2937,52 @@ const getActivities = async (marcaId: number) => {
                   {errorMessage ? (
                     <ThemedView style={styles.entradaLocationErrorBlock}>
                       <ThemedText style={styles.errorText}>
-                        {getActionIcon('warning')} {errorMessage}
+                        {getActionIcon('warning')}{' '}
+                        {outOfRangeMapCoords ? simplifyOutOfRangeMessage(errorMessage) : errorMessage}
                       </ThemedText>
-                      {showLocationRetry &&
-                        (attendanceData.estado === 'No ingresado' ||
-                          attendanceData.estado === 'Ingresado') && (
-                          <TouchableOpacity
-                            style={[
-                              styles.entradaLocationRetryButton,
-                              isRefreshingLocation && styles.actionButtonDisabled,
-                            ]}
-                            onPress={() => void handleRetryLocationCheck()}
-                            disabled={isRefreshingLocation}
-                            activeOpacity={0.85}
-                          >
-                            {isRefreshingLocation ? (
-                              <ActivityIndicator size="small" color="#007AFF" />
-                            ) : (
-                              <>
-                                <Ionicons name="refresh" size={18} color="#007AFF" />
-                                <ThemedText style={styles.entradaLocationRetryButtonText}>
-                                  Reintentar
-                                </ThemedText>
-                              </>
+                      {(outOfRangeMapCoords ||
+                        (showLocationRetry &&
+                          (attendanceData.estado === 'No ingresado' ||
+                            attendanceData.estado === 'Ingresado'))) && (
+                        <View style={styles.entradaLocationButtonsRow}>
+                          {outOfRangeMapCoords && (
+                            <TouchableOpacity
+                              style={styles.entradaLocationRetryButton}
+                              onPress={() => setIsOutOfRangeMapModalVisible(true)}
+                              activeOpacity={0.85}
+                            >
+                              <Ionicons name="map-outline" size={18} color="#007AFF" />
+                              <ThemedText style={styles.entradaLocationRetryButtonText}>
+                                Ver mapa
+                              </ThemedText>
+                            </TouchableOpacity>
+                          )}
+                          {showLocationRetry &&
+                            (attendanceData.estado === 'No ingresado' ||
+                              attendanceData.estado === 'Ingresado') && (
+                              <TouchableOpacity
+                                style={[
+                                  styles.entradaLocationRetryButton,
+                                  isRefreshingLocation && styles.actionButtonDisabled,
+                                ]}
+                                onPress={() => void handleRetryLocationCheck()}
+                                disabled={isRefreshingLocation}
+                                activeOpacity={0.85}
+                              >
+                                {isRefreshingLocation ? (
+                                  <ActivityIndicator size="small" color="#007AFF" />
+                                ) : (
+                                  <>
+                                    <Ionicons name="refresh" size={18} color="#007AFF" />
+                                    <ThemedText style={styles.entradaLocationRetryButtonText}>
+                                      Reintentar
+                                    </ThemedText>
+                                  </>
+                                )}
+                              </TouchableOpacity>
                             )}
-                          </TouchableOpacity>
-                        )}
+                        </View>
+                      )}
                     </ThemedView>
                   ) : null}
 
@@ -3056,6 +3150,48 @@ const getActivities = async (marcaId: number) => {
         </View>
       </Modal>
 
+      {/* Modal de mapa: ubicación fuera del radio de 50 m del puesto */}
+      <Modal
+        visible={isOutOfRangeMapModalVisible && outOfRangeMapCoords != null}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsOutOfRangeMapModalVisible(false)}
+      >
+        <View style={styles.marksModalOverlay}>
+          <ThemedView style={styles.outOfRangeMapModalContainer}>
+            <View style={styles.marksModalHeader}>
+              <ThemedText style={styles.marksModalTitle}>
+                Ubicación fuera de rango
+              </ThemedText>
+              <TouchableOpacity onPress={() => setIsOutOfRangeMapModalVisible(false)}>
+                <Ionicons name="close" size={24} color="#666666" />
+              </TouchableOpacity>
+            </View>
+
+            {outOfRangeMapCoords && (
+              <>
+                <OutOfRangeMap
+                  deviceLat={outOfRangeMapCoords.deviceLat}
+                  deviceLng={outOfRangeMapCoords.deviceLng}
+                  puestoLat={outOfRangeMapCoords.puestoLat}
+                  puestoLng={outOfRangeMapCoords.puestoLng}
+                />
+                <View style={styles.outOfRangeMapLegendRow}>
+                  <View style={styles.outOfRangeMapLegendItem}>
+                    <View style={[styles.outOfRangeMapLegendDot, { backgroundColor: '#007AFF' }]} />
+                    <ThemedText style={styles.outOfRangeMapLegendText}>Tu ubicación</ThemedText>
+                  </View>
+                  <View style={styles.outOfRangeMapLegendItem}>
+                    <View style={[styles.outOfRangeMapLegendDot, { backgroundColor: '#FF3B30' }]} />
+                    <ThemedText style={styles.outOfRangeMapLegendText}>Puesto</ThemedText>
+                  </View>
+                </View>
+              </>
+            )}
+          </ThemedView>
+        </View>
+      </Modal>
+
       <AppFooter />
     </ThemedView>
   );
@@ -3187,6 +3323,12 @@ const styles = StyleSheet.create({
   entradaLocationErrorBlock: {
     width: '100%',
     alignItems: 'center',
+    gap: 12,
+  },
+  entradaLocationButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
     gap: 12,
   },
   entradaLocationRetryButton: {
@@ -3656,6 +3798,35 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     flexDirection: 'column',
+  },
+  outOfRangeMapModalContainer: {
+    width: '100%',
+    maxWidth: 320,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    overflow: 'hidden',
+    alignItems: 'center',
+    paddingBottom: 16,
+  },
+  outOfRangeMapLegendRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
+    marginTop: 12,
+  },
+  outOfRangeMapLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  outOfRangeMapLegendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  outOfRangeMapLegendText: {
+    fontSize: 13,
+    color: '#333333',
   },
   marksModalHeader: {
     flexDirection: 'row',
