@@ -1,0 +1,420 @@
+{
+  "branch": "test-soft-001",
+  "baselineTag": "soft-001-baseline",
+  "variant": "lite",
+  "updated": "2026-07-31T18:11:43.983Z",
+  "phase": "5-adversarial-complete",
+  "modules": {
+    "platform-auth": "approved",
+    "platform-offline-sync": "approved",
+    "platform-lite-config": "approved",
+    "employee-profile": "approved",
+    "marcar-ingreso-salida": "approved",
+    "digital-signature": "approved",
+    "jerarquia": "approved",
+    "module-visibility": "approved",
+    "lunch-time": "approved",
+    "puesto-ubicacion": "approved",
+    "permit-request": "approved",
+    "mutuos-acuerdos": "approved",
+    "entrega-puestos": "approved",
+    "nomencladores": "approved",
+    "mantenimiento-equipo": "approved",
+    "checklist-supervision": "approved",
+    "activities": "approved",
+    "traslado-plazas": "approved",
+    "attendance-control": "approved",
+    "acta-entrega-productos": "approved",
+    "physical-minute-agenda": "approved",
+    "opening-closing-position": "approved",
+    "apreciacion-vulnerabilidad": "approved",
+    "notes": "approved",
+    "documentos-entregados": "approved",
+    "surveys": "approved",
+    "staffEvaluations": "approved",
+    "incidents": "approved",
+    "llaves": "approved",
+    "complaints-master": "approved",
+    "job-manuals": "approved",
+    "voice-notes": "approved",
+    "non-conforming-product": "approved",
+    "trainings": "approved",
+    "induction-tour-record": "approved",
+    "visitors": "approved",
+    "corporate-vehicles": "approved",
+    "general-induction-register": "approved",
+    "bitacora-vehiculos-detenidos": "approved",
+    "vehicles": "approved",
+    "reportes": "approved"
+  },
+  "findings_summary": {
+    "platform-auth": {
+      "critical": 0,
+      "high": 0,
+      "medium": 3,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 4
+    },
+    "platform-offline-sync": {
+      "critical": 0,
+      "high": 1,
+      "medium": 3,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 4
+    },
+    "platform-lite-config": {
+      "critical": 0,
+      "high": 1,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "employee-profile": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 1
+    },
+    "marcar-ingreso-salida": {
+      "critical": 1,
+      "high": 5,
+      "medium": 4,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 10
+    },
+    "digital-signature": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "jerarquia": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 0,
+      "open": 0,
+      "fixed": 0
+    },
+    "module-visibility": {
+      "critical": 0,
+      "high": 1,
+      "medium": 2,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 4
+    },
+    "lunch-time": {
+      "critical": 0,
+      "high": 4,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 5
+    },
+    "puesto-ubicacion": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 1
+    },
+    "permit-request": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "mutuos-acuerdos": {
+      "critical": 1,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "entrega-puestos": {
+      "critical": 1,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "nomencladores": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 1
+    },
+    "mantenimiento-equipo": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "checklist-supervision": {
+      "critical": 0,
+      "high": 1,
+      "medium": 3,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 4
+    },
+    "activities": {
+      "critical": 1,
+      "high": 2,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "traslado-plazas": {
+      "critical": 1,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "attendance-control": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 1,
+      "informational": 1,
+      "open": 0,
+      "fixed": 4
+    },
+    "acta-entrega-productos": {
+      "critical": 1,
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "physical-minute-agenda": {
+      "critical": 1,
+      "high": 0,
+      "medium": 0,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "opening-closing-position": {
+      "critical": 1,
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "apreciacion-vulnerabilidad": {
+      "critical": 1,
+      "high": 2,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "notes": {
+      "critical": 1,
+      "high": 2,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "documentos-entregados": {
+      "critical": 1,
+      "high": 1,
+      "medium": 0,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "surveys": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "staffEvaluations": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 0,
+      "informational": 1,
+      "open": 0,
+      "fixed": 3
+    },
+    "incidents": {
+      "critical": 0,
+      "high": 1,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "llaves": {
+      "critical": 1,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 1,
+      "open": 0,
+      "fixed": 3
+    },
+    "complaints-master": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 1,
+      "informational": 1,
+      "open": 0,
+      "fixed": 4
+    },
+    "job-manuals": {
+      "critical": 0,
+      "high": 0,
+      "medium": 2,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "voice-notes": {
+      "critical": 0,
+      "high": 1,
+      "medium": 1,
+      "low": 0,
+      "informational": 1,
+      "open": 0,
+      "fixed": 3
+    },
+    "non-conforming-product": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "trainings": {
+      "critical": 0,
+      "high": 1,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "induction-tour-record": {
+      "critical": 0,
+      "high": 1,
+      "medium": 0,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "visitors": {
+      "critical": 1,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "corporate-vehicles": {
+      "critical": 0,
+      "high": 1,
+      "medium": 1,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "general-induction-register": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "bitacora-vehiculos-detenidos": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 1,
+      "informational": 0,
+      "open": 0,
+      "fixed": 2
+    },
+    "vehicles": {
+      "critical": 1,
+      "high": 0,
+      "medium": 2,
+      "low": 0,
+      "informational": 0,
+      "open": 0,
+      "fixed": 3
+    },
+    "reportes": {
+      "critical": 0,
+      "high": 0,
+      "medium": 1,
+      "low": 0,
+      "informational": 1,
+      "open": 0,
+      "fixed": 2
+    }
+  }
+}

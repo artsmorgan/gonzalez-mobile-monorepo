@@ -1,19 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 
-const prisma = new PrismaClient();
+import { prisma } from "../../../utils/prismaClient";
+import { reportError } from "../../../utils/reportError";
 
 export async function GET(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
-
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
         return NextResponse.json([
             { id: 1, name: "ADMINISTRATIVO" },
@@ -22,26 +15,21 @@ export async function GET(req: NextRequest) {
         ], { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/roles", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
 
 export async function POST(req: NextRequest) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const data = await req.json();
-        const newRole = await prisma.roles_security.create({ data });
-        return NextResponse.json(newRole, { status: 201 });
+        return NextResponse.json({});
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/roles", "POST", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

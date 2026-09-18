@@ -1,70 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../../utils/verifyToken";
+import { verifyAccessTokenByApi } from "../../../../utils/verifyAccessTokenByApi";
 
-const prisma = new PrismaClient();
+import { prisma } from "../../../../utils/prismaClient";
+import { reportError } from "../../../../utils/reportError";
 
 export async function GET(request: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(request);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(request);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
-
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
-        const role = await prisma.roles_security.findUnique({ where: { id } });
-        if (!role) return NextResponse.json({ message: "Rol no encontrado" }, { status: 404 });
-        return NextResponse.json(role);
+        return NextResponse.json([]);
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(request, "api/roles/[id]", "GET", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
 
 export async function PUT(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
-
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
-        const data = await req.json();
-        const updatedRole = await prisma.roles_security.update({ where: { id }, data });
-        return NextResponse.json(updatedRole);
+        return NextResponse.json({});
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/roles/[id]", "PUT", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }
 
 export async function DELETE(req: NextRequest, context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
-
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
-        await prisma.roles_security.delete({ where: { id } });
         return NextResponse.json({ message: "Rol eliminado" });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/roles/[id]", "DELETE", 500, errorMessage);
         return NextResponse.json({ message: errorMessage }, { status: 500 });
     }
 }

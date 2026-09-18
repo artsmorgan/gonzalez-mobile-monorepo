@@ -6,6 +6,7 @@ import AppHeader from '@/components/AppHeader';
 import AppFooter from '@/components/AppFooter';
 import SlideMenu from '@/components/SlideMenu';
 import { useAuth } from '@/contexts/AuthContext';
+import authedFetch from '@/hooks/authedFetch';
 import Constants from 'expo-constants';
 import { router } from 'expo-router';
 
@@ -21,7 +22,7 @@ interface Rule {
 }
 
 export default function RulesScreen() {
-  const { accessToken, refreshAccessToken } = useAuth();
+  const { accessToken, refreshAccessToken, logout } = useAuth();
   const [rules, setRules] = useState<Rule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +38,7 @@ export default function RulesScreen() {
     if (!searchText.trim()) {
       return rules;
     }
-    return rules.filter(rule => 
+    return rules.filter(rule =>
       rule.nombre.toLowerCase().includes(searchText.toLowerCase()) ||
       rule.descripcion.toLowerCase().includes(searchText.toLowerCase())
     );
@@ -53,35 +54,20 @@ export default function RulesScreen() {
         throw new Error('Server URL not configured');
       }
 
-      let token = accessToken;
-      
-      // Try to refresh token if we don't have one
-      if (!token) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-          throw new Error('No valid authentication token');
-        }
-        token = accessToken;
-      }
-
-      const response = await fetch(`${apiUrl}/api/reglas`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
+      const response = await authedFetch({
+        url: `${apiUrl}/api/reglas`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
+        refreshAccessToken,
+        logout,
       });
 
-      if (response.status === 401) {
-        // Token might be expired, try to refresh
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-          // Retry the request with the new token
-          return fetchRules();
-        } else {
-          throw new Error('Session expired. Please login again.');
-        }
+      if (!response) {
+        return;
       }
 
       if (!response.ok) {
@@ -89,7 +75,7 @@ export default function RulesScreen() {
       }
 
       const data = await response.json();
-      
+
       if (Array.isArray(data)) {
         setRules(data);
       } else if (data.data && Array.isArray(data.data)) {
@@ -107,7 +93,7 @@ export default function RulesScreen() {
   };
 
   const showPermissions = (rule: Rule) => {
-    router.push({
+    router.navigate({
       pathname: '/permissions',
       params: {
         ruleName: rule.nombre,
@@ -122,13 +108,10 @@ export default function RulesScreen() {
   };
 
   // Handle profile navigation from slide menu
-  const handleProfilePress = () => {
-    router.push('/(tabs)');
-  };
 
   // Handle home navigation from slide menu
   const handleHomePress = () => {
-    router.push('/(tabs)');
+    router.navigate('/(tabs)');
   };
 
   // Handle closing slide menu
@@ -158,10 +141,9 @@ export default function RulesScreen() {
           <ThemedText style={styles.loadingText}>Cargando reglas...</ThemedText>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="rules"
         />
@@ -180,10 +162,9 @@ export default function RulesScreen() {
           </TouchableOpacity>
         </ThemedView>
         <AppFooter />
-        <SlideMenu 
-          isVisible={isMenuVisible} 
+        <SlideMenu
+          isVisible={isMenuVisible}
           onClose={handleMenuClose}
-          onProfilePress={handleProfilePress}
           onHomePress={handleHomePress}
           currentRoute="rules"
         />
@@ -219,8 +200,8 @@ export default function RulesScreen() {
         {filteredRules.length === 0 && !loading && (
           <ThemedView style={styles.emptyContainer}>
             <ThemedText style={styles.emptyText}>
-              {searchText.trim() 
-                ? `No se encontraron reglas que coincidan con "${searchText}"` 
+              {searchText.trim()
+                ? `No se encontraron reglas que coincidan con "${searchText}"`
                 : 'No se encontraron reglas'
               }
             </ThemedText>
@@ -230,10 +211,9 @@ export default function RulesScreen() {
 
       <AppFooter />
 
-      <SlideMenu 
-        isVisible={isMenuVisible} 
+      <SlideMenu
+        isVisible={isMenuVisible}
         onClose={handleMenuClose}
-        onProfilePress={handleProfilePress}
         onHomePress={handleHomePress}
       />
     </ThemedView>

@@ -1,0 +1,64 @@
+name: Build and Release Expo App
+
+on:
+  push:
+    branches:
+      - prod
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Clonar repo
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      # 2. Configurar Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      # 3. Instalar dependencias
+      - name: Install dependencies
+        run: npm install
+
+      # 4. Instalar EAS CLI
+      - name: Install EAS CLI
+        run: npm install -g eas-cli
+
+      # 5. Login en Expo
+      - name: Login to Expo
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: eas login --token $EXPO_TOKEN
+
+      # 6. Ejecutar build Android
+      - name: Build Android
+        id: build-android
+        run: |
+          eas build --platform android --profile production --non-interactive --output json > build.json
+          cat build.json
+
+      # 7. Descargar APK generado
+      - name: Download Android APK
+        run: |
+          BUILD_URL=$(jq -r '.artifacts.buildUrl' build.json)
+          curl -L $BUILD_URL -o app.apk
+
+      # 8. Crear Release en GitHub
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.sha }}
+          name: "Build for commit ${{ github.sha }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 9. Subir APK al Release
+      - name: Upload APK to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: app.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

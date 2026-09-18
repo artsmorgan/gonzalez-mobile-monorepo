@@ -9,19 +9,19 @@ interface ForgotPasswordProps {
 }
 
 export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
-  const [username, setUsername] = useState('');
+  const [cedula, setCedula] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const handleResetPassword = async () => {
-    if (!username.trim()) {
-      Alert.alert('Error', 'Por favor ingresa tu nombre de usuario');
+    if (!cedula.trim()) {
+      Alert.alert('Error', 'Por favor ingresa tu cédula');
       return;
     }
 
-    // Basic username validation (alphanumeric and reasonable length)
-    const usernameRegex = /^[a-zA-Z0-9._-]{3,20}$/;
-    if (!usernameRegex.test(username.trim())) {
-      Alert.alert('Error', 'Por favor ingresa un nombre de usuario válido (3-20 caracteres, solo letras, números, puntos, guiones y guiones bajos)');
+    // Basic cedula validation (numeric and reasonable length)
+    const cedulaRegex = /^[0-9]{7,12}$/;
+    if (!cedulaRegex.test(cedula.trim())) {
+      Alert.alert('Error', 'Por favor ingresa una cédula válida (7-12 dígitos numéricos)');
       return;
     }
 
@@ -41,7 +41,7 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
           'ngrok-skip-browser-warning': '69420'
         },
         body: JSON.stringify({
-          username: username.trim(),
+          cedula: cedula.trim(),
         }),
       });
 
@@ -55,8 +55,8 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
             text: 'OK',
             onPress: () => {
               if (responseData.status) {
-                // Clear the username field on success
-                setUsername('');
+                // Clear the cedula field on success
+                setCedula('');
               }
             },
           },
@@ -74,24 +74,25 @@ export default function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
     <ThemedView style={styles.container}>
       <ThemedView style={styles.contentContainer}>
         <ThemedText type="title" style={styles.title}>
-          ¿Olvidó su contraseña?
+          Cambiar contraseña
         </ThemedText>
         
         <ThemedText style={styles.description}>
-          Ingrese su nombre de usuario y le enviaremos un enlace para restablecer su contraseña.
+          Ingrese su cédula y le enviaremos un enlace para restablecer su contraseña.
         </ThemedText>
 
         <ThemedView style={styles.inputContainer}>
-          <ThemedText style={styles.label}>Nombre de usuario</ThemedText>
+          <ThemedText style={styles.label}>Cédula</ThemedText>
           <TextInput
             style={styles.input}
-            value={username}
-            onChangeText={setUsername}
-            placeholder="Ingrese su nombre de usuario"
+            value={cedula}
+            onChangeText={setCedula}
+            placeholder="Ingrese su cédula"
             autoCapitalize="none"
             autoCorrect={false}
             editable={!isLoading}
-            maxLength={20}
+            keyboardType="numeric"
+            maxLength={12}
           />
         </ThemedView>
 

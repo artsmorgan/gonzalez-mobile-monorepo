@@ -1,0 +1,3981 @@
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import {
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+  Platform,
+  Modal,
+  View,
+  Image,
+  Dimensions,
+} from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { CameraView, useCameraPermissions } from 'expo-camera';
+import { Picker } from '@react-native-picker/picker';
+import getCurrentUserDigitalSignature from '@/hooks/getCurrentUserDigitalSignature';
+import SignatureScreen from "react-native-signature-canvas";
+import { ThemedText } from '@/components/ThemedText';
+import { ThemedView } from '@/components/ThemedView';
+import { formatDateDMY } from '@/utils/formatDate';
+import { convertDateTimestampToLocalString } from '@/hooks/convertDateTimestampToLocalString';
+import { useAuth } from '@/contexts/AuthContext';
+import AppHeader from '@/components/AppHeader';
+import CambiosAppsModulesModal, { type CambiosAppsModulesRow } from '@/components/CambiosAppsModulesModal';
+import AppFooter from '@/components/AppFooter';
+import SlideMenu from '@/components/SlideMenu';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../App';
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/build/Ionicons';
+import * as Network from 'expo-network';
+import {
+  createOpeningClosingPosition,
+  updateOpeningClosingPosition,
+  deleteOpeningClosingPosition,
+  deleteOpeningClosingPositionImage,
+  listOpeningClosingPositionByCorpo,
+} from '@/hooks/evaluationFunctions';
+import {
+  dedupeOcpRows,
+  filterOcpFromEvaluationsCacheByCorpo,
+  mergeEvaluationsCacheOcpForCorpo,
+} from '@/hooks/openingClosingPositionCacheHelpers';
+import { eventBus } from '@/hooks/eventBus';
+import getHoraAccion from '@/hooks/getHoraAccion';
+import { useQRScanner } from '@/hooks/useQRScanner';
+import authedFetch from '@/hooks/authedFetch';
+import HierarchyPickerFields, { type HierarchyPickerValues } from '@/components/HierarchyPickerFields';
+import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
+import { getLocalFileDisplayUri, saveFile } from '@/hooks/fileStorage';
+import {
+  buildOpeningClosingImagenesJsonForUpload,
+  deleteOpeningClosingLocalFilesFromMeta,
+  stripOpeningClosingImagesForActionPayload,
+} from '@/hooks/openingClosingPositionFilesSync';
+import { loadPuestoArticulosForTable } from '@/hooks/puestoArticulosSync';
+
+type OpeningClosingPositionScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'OpeningClosingPosition'>;
+
+type MainStructurePlazaNode = { id: number; nombre: string };
+type MainStructurePuestoNode = { id: number; nombre: string; plazas: MainStructurePlazaNode[] };
+type MainStructureSucursalNode = { id: number; nombre: string; puestos: MainStructurePuestoNode[] };
+type MainStructureContratoNode = { id: number; nombre: string; sucursales: MainStructureSucursalNode[] };
+type MainStructureDivisionNode = { id: number; nombre: string; contratos: MainStructureContratoNode[] };
+type MainStructureClienteNode = { id: number; nombre: string; division: MainStructureDivisionNode[] };
+type MainStructureEmpresaNode = { id: number; nombre: string; clientes: MainStructureClienteNode[] };
+type MainStructureTree = MainStructureEmpresaNode[];
+type HierarchyPath = {
+  empresaId: number | null;
+  clienteId: number | null;
+  divisionId: number | null;
+  contratoId: number | null;
+  sucursalId: number | null;
+  puestoId: number | null;
+};
+
+type ArticuloCatalogItem = { id: number; nombre: string };
+
+type ActividadRespuesta = 'Ok' | 'N/A' | null;
+interface ActividadItem {
+  pregunta: string;
+  respuesta: ActividadRespuesta;
+  observaciones: string;
+}
+
+interface InventarioItem {
+  activos_equipos: string;
+  tipo_id: number | null;
+  tipo_nombre: string;
+  numero_activo: string;
+  numero_serie: string;
+  marca: string;
+  modelo: string;
+  descripcion: string;
+}
+
+function normalizeArticuloNomencladorId(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim());
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
+/** Mapeo desde filas guardadas en el fragmento `puesto_<id>_articulos` de la main-structure cache. */
+function mapFragmentArticuloToInventarioItem(art: any, catalog: ArticuloCatalogItem[]): InventarioItem {
+  const ultimo = art?.ultimo_mantenimiento ?? art?.ultimo_registro_mantenimiento ?? null;
+
+  const nombreEquipo = String(art?.articulo_nombre ?? art?.nombre ?? '').trim();
+
+  const nomId = normalizeArticuloNomencladorId(art?.articulo_nomenclador_id);
+
+  let tipo_id: number | null = null;
+  let tipo_nombre = '';
+
+  if (nomId != null) {
+    const hit = catalog.find((c) => c.id === nomId);
+    if (hit) {
+      tipo_id = nomId;
+      tipo_nombre = hit.nombre;
+    } else if (catalog.length === 0) {
+      tipo_id = nomId;
+    }
+  }
+
+  const topMarca = art?.marca != null ? String(art.marca).trim() : '';
+  let marca = '';
+  if (topMarca) {
+    marca = topMarca;
+  } else if (ultimo?.marca_nuevo != null && String(ultimo.marca_nuevo).trim() !== '') {
+    marca = String(ultimo.marca_nuevo).trim();
+  } else if (ultimo?.marca != null && String(ultimo.marca).trim() !== '') {
+    marca = String(ultimo.marca).trim();
+  }
+
+  let serieCandidate = '';
+  if (art?.serie != null && String(art.serie).trim() !== '') {
+    serieCandidate = String(art.serie).trim();
+  } else if (ultimo?.serie_placa_nuevo != null && String(ultimo.serie_placa_nuevo).trim() !== '') {
+    serieCandidate = String(ultimo.serie_placa_nuevo).trim();
+  } else if (ultimo?.serie_placa != null && String(ultimo.serie_placa).trim() !== '') {
+    serieCandidate = String(ultimo.serie_placa).trim();
+  }
+
+  const modeloPieces: string[] = [];
+  const m1 = ultimo?.modelo != null ? String(ultimo.modelo).trim() : '';
+  const m2 = ultimo?.modelo_nuevo != null ? String(ultimo.modelo_nuevo).trim() : '';
+  if (m1) modeloPieces.push(m1);
+  if (m2 && m2 !== m1) modeloPieces.push(m2);
+
+  const descRaw = ultimo?.observaciones != null ? String(ultimo.observaciones).trim() : '';
+
+  const numFc =
+    ultimo?.numero_fc != null && String(ultimo.numero_fc).trim() !== ''
+      ? String(ultimo.numero_fc).trim()
+      : '';
+  const boleta =
+    ultimo?.numero_boleta_proveeduria != null && String(ultimo.numero_boleta_proveeduria).trim() !== ''
+      ? String(ultimo.numero_boleta_proveeduria).trim()
+      : '';
+  let numero_activo = '';
+  if (numFc && boleta) numero_activo = `${numFc} (${boleta})`;
+  else if (numFc) numero_activo = numFc;
+  else numero_activo = boleta;
+
+  return {
+    activos_equipos: nombreEquipo,
+    tipo_id,
+    tipo_nombre,
+    numero_activo,
+    numero_serie: serieCandidate,
+    marca,
+    modelo: modeloPieces.join(' / '),
+    descripcion: descRaw,
+  };
+}
+
+type OcpImageLocal = {
+  id_local: string;
+  localFileName: string;
+  uri?: string;
+  extension: string;
+  original_name: string;
+};
+
+type OcpImageRemote = {
+  id: number;
+  name: string;
+  original_name: string;
+  url: string;
+};
+
+interface OpeningClosingPosition {
+  id: number | null;
+  id_local: string;
+  empresa_id?: number;
+  cliente_id: number;
+  corpo_id: number;
+  puesto_id: number;
+  division_id: number;
+  contrato_id?: number;
+  fecha: string; // ISO
+  tipo: string;
+  nombre_representante_cliente: string;
+  nombre_representante_empresa_entrante: string;
+  nombre_representante_empresa_saliente: string;
+  actividades: string;
+  inventario: string;
+  otras_observaciones: string | null;
+  // Firmas de representantes son opcionales en BD y UI
+  firma_representante_cliente?: string | null;
+  firma_representante_empresa_entrante?: string | null;
+  firma_representante_empresa_saliente?: string | null;
+  firma_responsable: string;
+  cliente_nombre?: string | null;
+  corpo_nombre?: string | null;
+  puesto_nombre?: string | null;
+  division_nombre?: string | null;
+  images?: OcpImageRemote[];
+  images_local?: OcpImageLocal[]; // solo UI offline (metadatos de archivo local)
+  created_at: string;
+  synced?: boolean;
+}
+
+interface EditingOpeningClosingPosition {
+  id: number | null;
+  id_local: string;
+}
+
+const ACTIVIDADES_ASEO_LIMPIEZA = [
+  "Presentese al lugar y presente al misceláneo que va a prestar el servicio.",
+  "Verifique ubicación de: Oficina de Aseo (si aplica), Cuartos de aseo, Comedor (lugar para toma de tiempos de alimentación trabajador).",
+  "Realice una revisión de las condiciones: Fuentes de electricidad (para uso de cepillo, aspiradoras, etc), Mobiliario.",
+  "Realice un recorrido del puesto.",
+  "Entrega/Retiro de equipos e insumos.",
+  "Entrega/Retiro de Papelería: AYL-F-002-Rol de Trabajo Mensual, AYL-F-013-Control de asistencia, AYL-M-001-Manual de Puestos Aseo y Limpieza, AYL-F-035-Guia de Funciones del puesto, AYL-F-028 Registro de Tareas de Limpieza, AYL-PO-001-Código de Vestimenta Aseo y Limpieza, AYL-F-018-Estándar de Dilución de Químicos, AYL-F-009-Solicitud de Permiso.",
+];
+
+const ACTIVIDADES_SEGURIDAD = [
+  "Presentese al lugar",
+  "Tome posesión de la(s) caseta(s) y realice una revisión de las condiciones y equipo con que cuenta la misma: Fuentes de electricidad, Mobiliario.",
+  "Realice un recorrido del puesto, revisando el estado de los siguientes aspectos: Accesos (puertas, ventanas, portones), Barreras perimetrales e instalaciones, Alarmas, Cámaras.",
+  "Revisión de activos y equipos del cliente",
+  "Revisión de papelería: Formularios, Controles de ingreso/salida, entre otros",
+  "Controles electrónicos: controles de mando, agujas",
+  "Llaves de acceso",
+  "Apertura o cierre de Libro de Novedades, donde se detallan las actividades de apertura de puesto.",
+];
+
+function mergeActividadesWithSaved(template: ActividadItem[], saved: ActividadItem[]): ActividadItem[] {
+  const byPregunta = new Map<string, ActividadItem>();
+  for (const s of saved || []) {
+    const k = String(s?.pregunta ?? '').trim();
+    if (k) byPregunta.set(k, s);
+  }
+  return template.map((row) => {
+    const k = String(row.pregunta ?? '').trim();
+    const prev = byPregunta.get(k);
+    if (!prev) return { ...row };
+    return {
+      pregunta: row.pregunta,
+      respuesta: prev.respuesta ?? null,
+      observaciones: prev.observaciones ?? '',
+    };
+  });
+}
+
+const getMarcaRoleDivisionId = (current: any): number | null => {
+  const raw = current?.roleDivision?.division?.id
+    ?? current?.role_division?.division?.id
+    ?? current?.division?.id
+    ?? current?.division_id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const numOrNull = (raw: unknown): number | null => {
+  if (raw == null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const resolveHierarchyByPuestoId = (tree: MainStructureTree, puestoId: number | null): HierarchyPath | null => {
+  if (!Array.isArray(tree) || tree.length === 0 || puestoId == null) return null;
+  for (const empresa of tree as any[]) {
+    for (const cliente of empresa?.clientes || []) {
+      for (const division of cliente?.division || []) {
+        for (const contrato of division?.contratos || []) {
+          for (const sucursal of contrato?.sucursales || []) {
+            const found = (sucursal?.puestos || []).find((p: any) => Number(p?.id) === Number(puestoId));
+            if (!found) continue;
+            return {
+              empresaId: Number(empresa?.id),
+              clienteId: Number(cliente?.id),
+              divisionId: Number(division?.id),
+              contratoId: Number(contrato?.id),
+              sucursalId: Number(sucursal?.id),
+              puestoId: Number(found?.id),
+            };
+          }
+        }
+      }
+    }
+  }
+  return null;
+};
+
+const OCP_EVAL_TYPE = 'opening_closing_position';
+
+/** Offline: ediciones de borrador fusionan en el pending `create`; quita `update` erróneos con id local. */
+async function mergeOrPushOpeningClosingCreateEvaluationsActions(
+  localId: string,
+  payload: any,
+  marcaIdFallback?: number
+) {
+  const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+  let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+  if (!Array.isArray(actions)) actions = [];
+  actions = actions.filter(
+    (a: any) =>
+      !(
+        a.type === OCP_EVAL_TYPE &&
+        a.action === 'update' &&
+        (String(a.id) === String(localId) || String(a.id_local) === String(localId))
+      )
+  );
+  const idx = actions.findIndex(
+    (a: any) => a.type === OCP_EVAL_TYPE && a.action === 'create' && String(a.id) === String(localId)
+  );
+  const marcaId =
+    (idx !== -1 && actions[idx].payload && actions[idx].payload.marca_id) ||
+    payload.marca_id ||
+    marcaIdFallback;
+  if (idx !== -1) {
+    const prev = actions[idx].payload || {};
+    actions[idx] = {
+      ...actions[idx],
+      id_local: localId,
+      payload: { ...prev, ...payload, marca_id: prev.marca_id ?? payload.marca_id ?? marcaId },
+      synced: false,
+    };
+  } else {
+    actions.push({
+      id: localId,
+      id_local: localId,
+      action: 'create',
+      type: OCP_EVAL_TYPE,
+      payload: { ...payload, marca_id: marcaId },
+      synced: false,
+    });
+  }
+  await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+}
+
+export default function OpeningClosingPositionScreen() {
+  const { employee, refreshAccessToken, logout } = useAuth();
+  const [isMenuVisible, setIsMenuVisible] = useState(false);
+  const navigation = useNavigation<OpeningClosingPositionScreenNavigationProp>();
+
+  // Data states
+  const [positions, setPositions] = useState<OpeningClosingPosition[]>([]);
+  const [isListLoading, setIsListLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listFetchGenRef = useRef(0);
+  const [hasCurrentMarca, setHasCurrentMarca] = useState<boolean>(false);
+
+  // Modal: ver cambios (auditoría)
+  const [isCambiosModalVisible, setIsCambiosModalVisible] = useState(false);
+  const [cambiosTitle, setCambiosTitle] = useState<string>('Cambios');
+  const [cambiosItems, setCambiosItems] = useState<CambiosAppsModulesRow[]>([]);
+  // UI: collapsables por item en lista
+  const [expandedActivitiesById, setExpandedActivitiesById] = useState<Record<string, boolean>>({});
+  const [expandedInventoryById, setExpandedInventoryById] = useState<Record<string, boolean>>({});
+  const [expandedImagesById, setExpandedImagesById] = useState<Record<string, boolean>>({});
+
+  // Editing state
+  const [editingRecord, setEditingRecord] = useState<EditingOpeningClosingPosition | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitResponse, setSubmitResponse] = useState<{ type: 'success' | 'error', message: string } | null>(null);
+
+  // Marca context (para division automática)
+  const [marcaId, setMarcaId] = useState<number | null>(null);
+  const [marcaDivisionId, setMarcaDivisionId] = useState<number | null>(null); // current_marca.roleDivision.division.id
+  const [roleName, setRoleName] = useState<string | null>(null);
+  /** `current_marca.puesto.id` (prioridad Inventario preload si rol OPERATIVO). */
+  const [marcaContextPuestoId, setMarcaContextPuestoId] = useState<number | null>(null);
+  // Estructura principal (árbol) + loading + selección
+  const [mainStructureFetched, setMainStructureFetched] = useState(false);
+  const [structure, setStructure] = useState<MainStructureTree>([]);
+  const structureRef = useRef<MainStructureTree>([]);
+  const [isStructureLoading, setIsStructureLoading] = useState(false);
+  const [selectedEmpresaId, setSelectedEmpresaId] = useState<number | null>(null);
+  const [selectedClienteId, setSelectedClienteId] = useState<number | null>(null);
+  const [selectedDivisionId, setSelectedDivisionId] = useState<number | null>(null);
+  const [selectedContratoId, setSelectedContratoId] = useState<number | null>(null);
+  const [selectedSucursalId, setSelectedSucursalId] = useState<number | null>(null);
+  const [selectedPuestoId, setSelectedPuestoId] = useState<number | null>(null); // solo 1 puesto
+  const isRestoringHierarchyRef = useRef(false);
+  const pendingFormHierarchyRef = useRef<HierarchyPath | null>(null);
+  const isApplyingFormHierarchyRef = useRef(false);
+  /** Snapshot del registro al abrir edición (respuestas guardadas en BD para fusionar con la plantilla). */
+  const ocpEditSnapshotRef = useRef<OpeningClosingPosition | null>(null);
+
+  // Filtros jerárquicos de la lista principal (Empresa -> Sucursal)
+  const [filterEmpresaId, setFilterEmpresaId] = useState<number | null>(null);
+  const [filterClienteId, setFilterClienteId] = useState<number | null>(null);
+  const [filterDivisionId, setFilterDivisionId] = useState<number | null>(null);
+  const [filterContratoId, setFilterContratoId] = useState<number | null>(null);
+  const [filterCorpoId, setFilterCorpoId] = useState<number | null>(null);
+  const filterCorpoIdRef = useRef<number | null>(null);
+  const listFiltersSyncedFromMarcaOnceRef = useRef(false);
+  const [isListFiltersExpanded, setIsListFiltersExpanded] = useState(false);
+
+  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [queryAccessToken, setQueryAccessToken] = useState<string>('');
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
+  const fetchPositionsListRef = useRef<(corpoId: number | null) => Promise<void>>(async () => {});
+  const refreshPositionsListAfterFormCloseRef = useRef<() => Promise<void>>(async () => {});
+
+  // Catálogo artículos (inventario: divisiones que no son Seguridad ni Aseo y limpieza)
+  const [articulosCatalog, setArticulosCatalog] = useState<ArticuloCatalogItem[]>([]);
+  const [isArticulosLoading, setIsArticulosLoading] = useState(false);
+  const articulosCatalogRef = useRef<ArticuloCatalogItem[]>([]);
+
+  useEffect(() => {
+    articulosCatalogRef.current = articulosCatalog;
+  }, [articulosCatalog]);
+
+  // Form states
+  const [fechaRealizado, setFechaRealizado] = useState<Date>(new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [tipo, setTipo] = useState<'Apertura' | 'Cierre'>('Apertura');
+
+  const [nombreRepresentanteCliente, setNombreRepresentanteCliente] = useState('');
+  const [nombreRepresentanteEmpresaEntrante, setNombreRepresentanteEmpresaEntrante] = useState('');
+  const [nombreRepresentanteEmpresaSaliente, setNombreRepresentanteEmpresaSaliente] = useState('');
+
+  const [actividades, setActividades] = useState<ActividadItem[]>([]);
+  const [inventario, setInventario] = useState<InventarioItem[]>([]);
+  const [expandedInventarioIndices, setExpandedInventarioIndices] = useState<number[]>([]);
+
+  const [imagenesLocal, setImagenesLocal] = useState<OcpImageLocal[]>([]);
+  const [imagenesRemote, setImagenesRemote] = useState<OcpImageRemote[]>([]);
+  const [deletedRemoteImageIds, setDeletedRemoteImageIds] = useState<number[]>([]);
+
+  const [otrasObservaciones, setOtrasObservaciones] = useState('');
+
+  // Firmas (3 dibujadas + 1 QR)
+  const [firmaRepresentanteCliente, setFirmaRepresentanteCliente] = useState<string | null>(null);
+  const [firmaRepresentanteEmpresaEntrante, setFirmaRepresentanteEmpresaEntrante] = useState<string | null>(null);
+  const [firmaRepresentanteEmpresaSaliente, setFirmaRepresentanteEmpresaSaliente] = useState<string | null>(null);
+
+  const [firmaResponsable, setFirmaResponsable] = useState<string>('');
+  const [isGeneratingFirma, setIsGeneratingFirma] = useState(false);
+  const { scanQR, QRScannerComponent } = useQRScanner();
+
+  // Camera states
+  const [isCameraVisible, setIsCameraVisible] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef<CameraView | null>(null);
+
+  // Signature modal states
+  const [isSignatureModalVisible, setIsSignatureModalVisible] = useState(false);
+  const [signatureTarget, setSignatureTarget] = useState<'cliente' | 'entrante' | 'saliente'>('cliente');
+  const signatureRef = useRef<any>(null);
+  const [signatureKey, setSignatureKey] = useState(0);
+
+  const signatureWebStyle = `
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+    }
+    .m-signature-pad {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      margin: 0;
+      padding: 0;
+      box-shadow: none;
+      border: none;
+      background-color: #FFFFFF;
+    }
+    .m-signature-pad--body {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      border: none;
+      margin: 0;
+      padding: 0;
+    }
+    .m-signature-pad--body canvas {
+      width: 100% !important;
+      height: 100% !important;
+      touch-action: none;
+    }
+    .m-signature-pad--footer {
+      display: none;
+    }
+  `;
+
+  const getConnectionStatus = async (): Promise<boolean> => {
+    //return false;
+    const networkState = await Network.getNetworkStateAsync();
+
+    return (
+      networkState.isConnected === true &&
+      networkState.isInternetReachable === true
+    );
+  };
+
+  const closeCambiosModal = () => {
+    setIsCambiosModalVisible(false);
+    setCambiosItems([]);
+  };
+
+  const fetchCambios = useCallback(async (tabla: string, registroId: number) => {
+    const isConnected = await getConnectionStatus();
+    if (!isConnected) {
+      Alert.alert('Sin conexión', 'Esta función solo está disponible con conexión a internet.');
+      return;
+    }
+    try {
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const resp = await authedFetch({
+        url: `${apiUrl}/api/cambios-apps-modules?tabla=${encodeURIComponent(tabla)}&registro_id=${registroId}`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!resp) return;
+
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.status) {
+        throw new Error(data.message || 'No se pudieron cargar los cambios');
+      }
+      setCambiosItems(Array.isArray(data.data) ? data.data : []);
+      setIsCambiosModalVisible(true);
+    } catch (e: any) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar los cambios');
+    }
+  }, [refreshAccessToken, logout]);
+
+  const generateRandomId = (): string => {
+    return `local-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  const formatDate = (date: Date): string => {
+    // yyyy-mm-dd (compatible con server new Date())
+    const dateString = date.toISOString().split('T')[0].split('-');
+    const year = dateString[0];
+    const month = dateString[1];
+    const day = dateString[2];
+    return `${year}-${month}-${day}`;
+  };
+
+  const formatDateForDisplay = (date: Date): string => {
+    console.log('date', date);
+    const [year, month, day] = formatDate(date).split('-');
+    const dateString = `${day}-${month}-${year}`;
+    console.log('dateString', dateString);
+    return dateString;
+  };
+
+  // Helper para extraer solo el base64 de las firmas
+  const getBase64Only = (signature: string | null): string | null => {
+    if (!signature) return null;
+    if (signature.startsWith('data:')) {
+      const parts = signature.split(',');
+      return parts.length > 1 ? parts[1] : signature;
+    }
+    return signature;
+  };
+
+  // Helper para formatear la firma para mostrar
+  const formatSignatureForDisplay = (signature: string | null): string | null => {
+    if (!signature) return null;
+    if (signature.startsWith('data:')) {
+      return signature;
+    }
+    return `data:image/png;base64,${signature}`;
+  };
+
+  const appendTokenToUrl = useCallback((url: string): string => {
+    if (!url) return '';
+    const token = String(queryAccessToken || '').trim();
+    if (!token) return url;
+    if (/[?&]token=/.test(url)) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}token=${encodeURIComponent(token)}`;
+  }, [queryAccessToken]);
+
+  const decodeFirmaHash = (hash?: string | null) => {
+    try {
+      if (!hash || String(hash).trim().length === 0) return null;
+      const decoded = atob(String(hash));
+      const parts = decoded.split(':');
+      if (parts.length !== 5) return null;
+      const [sessionId, empleadoId, latitud, longitud, timestamp] = parts;
+      return { sessionId, empleadoId, latitud, longitud, timestamp };
+    } catch {
+      return null;
+    }
+  };
+
+  const buildActividadesForDivision = (divId: number | null): ActividadItem[] => {
+    const base =
+      divId === 5 ? ACTIVIDADES_ASEO_LIMPIEZA
+        : divId === 4 ? ACTIVIDADES_SEGURIDAD
+          : [];
+
+    return base.map((q) => ({
+      pregunta: q,
+      respuesta: null,
+      observaciones: '',
+    }));
+  };
+
+  const handleDivisionPickerChange = useCallback(
+    (raw: number) => {
+      const next = Number(raw) || null;
+      setSelectedDivisionId(next);
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+
+      if (editingRecord && ocpEditSnapshotRef.current) {
+        const snap = ocpEditSnapshotRef.current;
+        const origDiv = Number(snap.division_id);
+        if (next === 4 || next === 5) {
+          const template = buildActividadesForDivision(next);
+          if (Number(next) === origDiv) {
+            let saved: ActividadItem[] = [];
+            try {
+              const parsed = JSON.parse(snap.actividades || '[]');
+              if (Array.isArray(parsed)) saved = parsed;
+            } catch {
+              saved = [];
+            }
+            setActividades(mergeActividadesWithSaved(template, saved));
+          } else {
+            setActividades(template);
+          }
+        } else {
+          setActividades([]);
+        }
+        return;
+      }
+
+      if (isCreating && !editingRecord) {
+        setActividades(buildActividadesForDivision(next));
+      }
+    },
+    [editingRecord, isCreating]
+  );
+
+  const handleGenerateFirmaResponsable = async () => {
+    if (isGeneratingFirma) return;
+    setIsGeneratingFirma(true);
+    try {
+      const hash = await getCurrentUserDigitalSignature(employee);
+      if (!hash) return;
+      setFirmaResponsable(hash);
+    } finally {
+      setIsGeneratingFirma(false);
+    }
+  };
+
+  const handleScanFirmaResponsable = async () => {
+    try {
+      const qrData = await scanQR();
+      if (!qrData) return;
+      const decoded = decodeFirmaHash(qrData);
+      if (!decoded) {
+        Alert.alert('Error', 'El QR escaneado no tiene el formato correcto');
+        return;
+      }
+      setFirmaResponsable(qrData);
+    } catch {
+      Alert.alert('Error', 'No se pudo escanear el QR');
+    }
+  };
+
+  useEffect(() => {
+    structureRef.current = structure;
+  }, [structure]);
+
+  const fetchMainStructure = useCallback(async (): Promise<MainStructureTree> => {
+    if (mainStructureFetched) {
+      return structureRef.current;
+    }
+    setIsStructureLoading(true);
+    try {
+      const mergedTree = await loadMainStructureTreeMerged();
+      const tree = Array.isArray(mergedTree) ? (mergedTree as MainStructureTree) : [];
+      structureRef.current = tree;
+      setStructure(tree);
+      setMainStructureFetched(true);
+      return tree;
+    } catch (e) {
+      console.error('Error fetching main structure for opening-closing-position:', e);
+      structureRef.current = [];
+      setStructure([]);
+      return [];
+    } finally {
+      setIsStructureLoading(false);
+    }
+  }, [mainStructureFetched]);
+
+  const buildHierarchyFromCurrentMarca = useCallback((currentMarcaData: any, tree: MainStructureTree): HierarchyPath => {
+    const marcaPuestoId = currentMarcaData?.puesto?.id != null ? Number(currentMarcaData.puesto.id) : null;
+    const pathByPuesto = resolveHierarchyByPuestoId(tree, marcaPuestoId);
+    if (pathByPuesto) return pathByPuesto;
+
+    const empresaId = currentMarcaData?.empresa?.id != null ? Number(currentMarcaData.empresa.id) : null;
+    const clienteId = currentMarcaData?.cliente?.id != null ? Number(currentMarcaData.cliente.id) : null;
+    const contratoId = currentMarcaData?.contrato?.id != null ? Number(currentMarcaData.contrato.id) : null;
+    const sucursalId = currentMarcaData?.corpo?.id != null ? Number(currentMarcaData.corpo.id) : null;
+    const divisionId = getMarcaRoleDivisionId(currentMarcaData);
+    return {
+      empresaId,
+      clienteId,
+      divisionId,
+      contratoId,
+      sucursalId,
+      puestoId: marcaPuestoId,
+    };
+  }, []);
+
+  const formHierarchyPreloadedRef = useRef(false);
+
+  const applyFormHierarchyPath = useCallback((path: HierarchyPath) => {
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = true;
+    setSelectedEmpresaId(path.empresaId);
+    setSelectedClienteId(path.clienteId);
+    setSelectedDivisionId(path.divisionId);
+    setSelectedContratoId(path.contratoId);
+    setSelectedSucursalId(path.sucursalId);
+    setSelectedPuestoId(path.puestoId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        isRestoringHierarchyRef.current = false;
+      });
+    });
+  }, []);
+
+  const syncMarcaFromStorage = useCallback(
+    async (opts?: { applyFiltersFromMarca?: boolean; structureTree?: MainStructureTree | null }) => {
+      const applyFiltersFromMarca = opts?.applyFiltersFromMarca !== false;
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) {
+        setHasCurrentMarca(false);
+        setMarcaId(null);
+        setMarcaDivisionId(null);
+        setMarcaContextPuestoId(null);
+        setRoleName(null);
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(null);
+          setFilterClienteId(null);
+          setFilterDivisionId(null);
+          setFilterContratoId(null);
+          setFilterCorpoId(null);
+          filterCorpoIdRef.current = null;
+        }
+        return null;
+      }
+      try {
+        const current = JSON.parse(currentMarcaStr);
+        if (!current?.id) {
+          setHasCurrentMarca(false);
+          return null;
+        }
+        setHasCurrentMarca(true);
+        setMarcaId(numOrNull(current.id));
+        const divIdRaw =
+          current?.roleDivision?.division?.id ?? current?.role_division?.division?.id;
+        setMarcaDivisionId(numOrNull(divIdRaw));
+        const marcaPuestoRaw = current?.puesto?.id ?? current?.puesto_id;
+        setMarcaContextPuestoId(numOrNull(marcaPuestoRaw));
+        const rnRaw =
+          current?.roleDivision?.role?.nombre ??
+          current?.role_division?.role?.nombre ??
+          null;
+        setRoleName(typeof rnRaw === 'string' ? rnRaw : null);
+
+        const tree =
+          opts?.structureTree ??
+          (structureRef.current.length > 0
+            ? structureRef.current
+            : await loadMainStructureTreeMerged());
+        const hierarchy = buildHierarchyFromCurrentMarca(current, Array.isArray(tree) ? tree : []);
+
+        if (applyFiltersFromMarca) {
+          setFilterEmpresaId(hierarchy.empresaId);
+          setFilterClienteId(hierarchy.clienteId);
+          setFilterDivisionId(hierarchy.divisionId);
+          setFilterContratoId(hierarchy.contratoId);
+          setFilterCorpoId(hierarchy.sucursalId);
+          filterCorpoIdRef.current = hierarchy.sucursalId;
+        }
+
+        return { current, hierarchy, roleName: typeof rnRaw === 'string' ? rnRaw : null };
+      } catch {
+        setHasCurrentMarca(false);
+        return null;
+      }
+    },
+    [buildHierarchyFromCurrentMarca]
+  );
+
+  const handleFilterHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      setFilterEmpresaId(v.empresaId);
+      setFilterClienteId(v.clienteId);
+      setFilterDivisionId(v.divisionId);
+      setFilterContratoId(v.contratoId);
+      filterCorpoIdRef.current = v.sucursalId;
+      setFilterCorpoId(v.sucursalId);
+    },
+    []
+  );
+
+  const resetListFiltersFromCurrentMarca = useCallback(async () => {
+    try {
+      const currentMarcaStr = await AsyncStorage.getItem('current_marca');
+      if (!currentMarcaStr) return;
+      const currentMarca = JSON.parse(currentMarcaStr);
+      if (currentMarca?.id == null) return;
+      const tree =
+        structureRef.current.length > 0
+          ? structureRef.current
+          : ((await loadMainStructureTreeMerged().catch(() => [])) as MainStructureTree);
+      const hierarchy = buildHierarchyFromCurrentMarca(
+        currentMarca,
+        Array.isArray(tree) ? tree : []
+      );
+      setFilterEmpresaId(hierarchy.empresaId);
+      setFilterClienteId(hierarchy.clienteId);
+      setFilterDivisionId(hierarchy.divisionId);
+      setFilterContratoId(hierarchy.contratoId);
+      setFilterCorpoId(hierarchy.sucursalId);
+      filterCorpoIdRef.current = hierarchy.sucursalId;
+    } catch (e) {
+      console.error('resetListFiltersFromCurrentMarca (OCP):', e);
+    }
+  }, [buildHierarchyFromCurrentMarca]);
+
+  const handleFormHierarchyChange = useCallback(
+    (v: HierarchyPickerValues) => {
+      if (isApplyingFormHierarchyRef.current) return;
+      const divisionChanged = v.divisionId !== selectedDivisionId;
+      setSelectedEmpresaId(v.empresaId);
+      setSelectedClienteId(v.clienteId);
+      setSelectedContratoId(v.contratoId);
+      setSelectedSucursalId(v.sucursalId);
+      setSelectedPuestoId(v.puestoId ?? null);
+      if (divisionChanged) {
+        handleDivisionPickerChange(v.divisionId ?? 0);
+        setSelectedContratoId(v.contratoId);
+        setSelectedSucursalId(v.sucursalId);
+        setSelectedPuestoId(v.puestoId ?? null);
+      } else {
+        setSelectedDivisionId(v.divisionId);
+      }
+    },
+    [selectedDivisionId, handleDivisionPickerChange]
+  );
+
+  const loadArticulosCatalog = useCallback(async () => {
+    setIsArticulosLoading(true);
+    try {
+      const cache = await AsyncStorage.getItem('articulos_cache');
+      if (cache) {
+        try {
+          const parsed = JSON.parse(cache);
+          if (Array.isArray(parsed)) setArticulosCatalog(parsed);
+        } catch {
+          // ignore
+        }
+      }
+
+      const isConnected = await getConnectionStatus();
+      if (!isConnected) return;
+
+      const apiUrl = Constants.expoConfig?.extra?.API_SERVER;
+      if (!apiUrl) throw new Error('Server URL not configured');
+
+      const response = await authedFetch({
+        url: `${apiUrl}/api/articulos`,
+        init: {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+        refreshAccessToken,
+        logout,
+      });
+
+      if (!response) return;
+
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      if (data.status && Array.isArray(data.articulos)) {
+        setArticulosCatalog(data.articulos);
+        await AsyncStorage.setItem('articulos_cache', JSON.stringify(data.articulos));
+      }
+    } catch (e) {
+      console.error('Error fetching articulos catalog:', e);
+    } finally {
+      setIsArticulosLoading(false);
+    }
+  }, [refreshAccessToken, logout]);
+
+  const readPositionsFromCache = useCallback(async (corpoIdNum: number | null): Promise<OpeningClosingPosition[]> => {
+    if (corpoIdNum == null || !Number.isFinite(corpoIdNum) || corpoIdNum <= 0) return [];
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    if (!cacheStr) return [];
+    try {
+      const parsed = JSON.parse(cacheStr);
+      if (!Array.isArray(parsed)) return [];
+      const forList = filterOcpFromEvaluationsCacheByCorpo(parsed, corpoIdNum).filter(
+        (it: any) => it?.isActive !== false
+      );
+      return dedupeOcpRows(forList) as OpeningClosingPosition[];
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const fetchPositionsList = useCallback(
+    async (corpoId: number | null) => {
+      const corpoIdNum =
+        corpoId != null && Number.isFinite(Number(corpoId)) && Number(corpoId) > 0 ? Number(corpoId) : null;
+
+      if (corpoIdNum == null) {
+        listFetchGenRef.current += 1;
+        setPositions([]);
+        setError(null);
+        setIsListLoading(false);
+        return;
+      }
+
+      const gen = ++listFetchGenRef.current;
+      const isStale = () => gen !== listFetchGenRef.current;
+
+      try {
+        setIsListLoading(true);
+        setError(null);
+
+        const cached = await readPositionsFromCache(corpoIdNum);
+        if (!isStale()) setPositions(cached);
+
+        const connected = await getConnectionStatus();
+        if (!isStale()) setIsConnected(connected);
+
+        if (!connected) {
+          if (!isStale()) setError(null);
+          return;
+        }
+
+        const result = await listOpeningClosingPositionByCorpo({
+          corpo_id: String(corpoIdNum),
+          refreshAccessToken,
+          logout,
+        });
+        if (isStale()) return;
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        let fullCache: any[] = [];
+        if (cacheStr) {
+          try {
+            const p = JSON.parse(cacheStr);
+            if (Array.isArray(p)) fullCache = p;
+          } catch {
+            /* ignore */
+          }
+        }
+
+        if (result.status && Array.isArray(result.data)) {
+          const merged = mergeEvaluationsCacheOcpForCorpo(fullCache, result.data, corpoIdNum);
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(merged));
+          const forList = filterOcpFromEvaluationsCacheByCorpo(merged, corpoIdNum);
+          setPositions(dedupeOcpRows(forList) as OpeningClosingPosition[]);
+        } else {
+          setPositions(cached);
+        }
+      } catch (err) {
+        console.error('Error fetching positions:', err);
+        if (!isStale()) {
+          setError('Error al cargar las aperturas-cierres de puesto');
+          const fallback = await readPositionsFromCache(corpoIdNum);
+          if (!isStale()) setPositions(fallback);
+        }
+      } finally {
+        if (!isStale()) setIsListLoading(false);
+      }
+    },
+    [readPositionsFromCache, refreshAccessToken, logout]
+  );
+
+  const refreshPositionsListAfterFormClose = useCallback(async () => {
+    await fetchPositionsList(filterCorpoIdRef.current);
+  }, [fetchPositionsList]);
+
+  useEffect(() => {
+    filterCorpoIdRef.current = filterCorpoId;
+  }, [filterCorpoId]);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const token = await AsyncStorage.getItem('access_token');
+        if (!mounted) return;
+        setQueryAccessToken(token ? String(token).trim() : '');
+      } catch {
+        if (!mounted) return;
+        setQueryAccessToken('');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    fetchPositionsListRef.current = fetchPositionsList;
+    refreshPositionsListAfterFormCloseRef.current = refreshPositionsListAfterFormClose;
+  }, [fetchPositionsList, refreshPositionsListAfterFormClose]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void (async () => {
+        const connected = await getConnectionStatus();
+        if (!cancelled) setIsConnected(connected);
+        await fetchMainStructure();
+        if (!listFiltersSyncedFromMarcaOnceRef.current) {
+          const marcaStr = await AsyncStorage.getItem('current_marca');
+          const currentMarca = marcaStr ? JSON.parse(marcaStr) : null;
+          const tree = structureRef.current.length > 0 ? structureRef.current : await fetchMainStructure();
+          if (currentMarca?.id != null) {
+            await syncMarcaFromStorage({
+              applyFiltersFromMarca: true,
+              structureTree: Array.isArray(tree) ? tree : [],
+            });
+          } else {
+            await syncMarcaFromStorage({ applyFiltersFromMarca: false });
+          }
+          if (!cancelled) listFiltersSyncedFromMarcaOnceRef.current = true;
+        }
+      })();
+      const onRestored = () => {
+        setIsConnected(true);
+        void fetchPositionsListRef.current(filterCorpoIdRef.current);
+      };
+      eventBus.on('connectionRestored', onRestored);
+      return () => {
+        cancelled = true;
+        eventBus.off('connectionRestored', onRestored);
+      };
+    }, [fetchMainStructure, syncMarcaFromStorage])
+  );
+
+  const selectedEmpresaNode = useMemo(() => {
+    if (selectedEmpresaId === null) return null;
+    return structure.find((e) => e.id === selectedEmpresaId) ?? null;
+  }, [structure, selectedEmpresaId]);
+
+  const selectedClienteNode = useMemo(() => {
+    if (!selectedEmpresaNode || selectedClienteId === null) return null;
+    return selectedEmpresaNode.clientes.find((c) => c.id === selectedClienteId) ?? null;
+  }, [selectedEmpresaNode, selectedClienteId]);
+
+  const selectedDivisionNode = useMemo(() => {
+    if (!selectedClienteNode || selectedDivisionId === null) return null;
+    return (selectedClienteNode.division || []).find((d) => d.id === selectedDivisionId) ?? null;
+  }, [selectedClienteNode, selectedDivisionId]);
+
+  const selectedContratoNode = useMemo(() => {
+    if (!selectedDivisionNode || selectedContratoId === null) return null;
+    return (selectedDivisionNode.contratos || []).find((c) => c.id === selectedContratoId) ?? null;
+  }, [selectedDivisionNode, selectedContratoId]);
+
+  const selectedSucursalNode = useMemo(() => {
+    if (!selectedContratoNode || selectedSucursalId === null) return null;
+    return (selectedContratoNode.sucursales || []).find((s) => s.id === selectedSucursalId) ?? null;
+  }, [selectedContratoNode, selectedSucursalId]);
+
+  // La división se selecciona manualmente; no se preselecciona desde la marca.
+
+  // Cuando la división cambia, validar/limpiar selecciones inferiores si ya no pertenecen
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    if (!selectedDivisionNode) {
+      setSelectedContratoId(null);
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedContratoId !== null) {
+      const exists = (selectedDivisionNode.contratos || []).some((c) => c.id === selectedContratoId);
+      if (!exists) setSelectedContratoId(null);
+    }
+  }, [selectedDivisionNode]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    if (!selectedContratoNode) {
+      setSelectedSucursalId(null);
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedSucursalId !== null) {
+      const exists = (selectedContratoNode.sucursales || []).some((s) => s.id === selectedSucursalId);
+      if (!exists) setSelectedSucursalId(null);
+    }
+  }, [selectedContratoNode]);
+
+  useEffect(() => {
+    if (isRestoringHierarchyRef.current) return;
+    if (!selectedSucursalNode) {
+      setSelectedPuestoId(null);
+      return;
+    }
+    if (selectedPuestoId !== null) {
+      const exists = (selectedSucursalNode.puestos || []).some((p) => p.id === selectedPuestoId);
+      if (!exists) setSelectedPuestoId(null);
+    }
+  }, [selectedSucursalNode]);
+
+  const filterEmpresaNode = useMemo(() => {
+    if (filterEmpresaId === null) return null;
+    return structure.find((e) => e.id === filterEmpresaId) ?? null;
+  }, [structure, filterEmpresaId]);
+
+  const filterClienteNode = useMemo(() => {
+    if (!filterEmpresaNode || filterClienteId === null) return null;
+    return filterEmpresaNode.clientes.find((c) => c.id === filterClienteId) ?? null;
+  }, [filterEmpresaNode, filterClienteId]);
+
+  const filterDivisionNode = useMemo(() => {
+    if (!filterClienteNode || filterDivisionId === null) return null;
+    return (filterClienteNode.division || []).find((d) => d.id === filterDivisionId) ?? null;
+  }, [filterClienteNode, filterDivisionId]);
+
+  const filterContratoNode = useMemo(() => {
+    if (!filterDivisionNode || filterContratoId === null) return null;
+    return (filterDivisionNode.contratos || []).find((c) => c.id === filterContratoId) ?? null;
+  }, [filterDivisionNode, filterContratoId]);
+
+  const filteredPositions = useMemo(() => {
+    return dedupeOcpRows((positions || []).filter((record) => {
+      const recordClienteId = Number(record.cliente_id);
+      const recordDivisionId = Number(record.division_id);
+      const recordCorpoId = Number(record.corpo_id);
+
+      if (filterEmpresaId !== null) {
+        const empresa = structure.find((e) => e.id === filterEmpresaId);
+        const clientesIds = new Set((empresa?.clientes || []).map((c) => Number(c.id)));
+        if (!clientesIds.has(recordClienteId)) return false;
+      }
+
+      if (filterClienteId !== null && recordClienteId !== Number(filterClienteId)) return false;
+      if (filterDivisionId !== null && recordDivisionId !== Number(filterDivisionId)) return false;
+
+      if (filterContratoId !== null) {
+        const contratoSucursales = new Set((filterContratoNode?.sucursales || []).map((s) => Number(s.id)));
+        if (!contratoSucursales.has(recordCorpoId)) return false;
+      }
+
+      if (filterCorpoId !== null && recordCorpoId !== Number(filterCorpoId)) return false;
+      return true;
+    }));
+  }, [
+    positions,
+    structure,
+    filterEmpresaId,
+    filterClienteId,
+    filterDivisionId,
+    filterContratoId,
+    filterCorpoId,
+    filterContratoNode,
+  ]);
+
+  /** Puesto efectivo para precargar inventario: selección manual o, si no hay, puesto de la marca. */
+  const inventarioSourcePuestoId = useMemo(() => {
+    const sp = selectedPuestoId;
+    if (sp !== null && Number.isFinite(sp) && sp > 0) return sp;
+    const m = marcaContextPuestoId;
+    return m !== null && Number.isFinite(m) && m > 0 ? m : null;
+  }, [marcaContextPuestoId, selectedPuestoId]);
+
+  useEffect(() => {
+    void fetchPositionsListRef.current(filterCorpoId);
+  }, [filterCorpoId]);
+
+  /** Inventario visible en formulario: no Seguridad (4) ni Aseo y limpieza (5). */
+  const showInventarioSection = useMemo(
+    () => selectedDivisionId != null && selectedDivisionId !== 4 && selectedDivisionId !== 5,
+    [selectedDivisionId]
+  );
+
+  /** Persistir JSON de inventario: divisiones con UI + registros legacy Seguridad (4) en edición. */
+  const shouldPersistInventario = useMemo(
+    () => showInventarioSection || (!!editingRecord && selectedDivisionId === 4),
+    [showInventarioSection, editingRecord, selectedDivisionId]
+  );
+
+  // Actividades: cargar predefinidas según división cuando se inicia la creación (o si cambia cliente/división durante creación)
+  useEffect(() => {
+    if (!isCreating || editingRecord) return;
+    setActividades(buildActividadesForDivision(selectedDivisionId));
+  }, [isCreating, editingRecord, selectedDivisionId]);
+
+  // Inventario: vaciar si no aplica la sección (solo en alta); en edición Seguridad conservar lo cargado desde BD
+  useEffect(() => {
+    if (!isCreating && !editingRecord) return;
+    if (!showInventarioSection) {
+      if (!editingRecord) {
+        setInventario([]);
+        setExpandedInventarioIndices([]);
+      }
+    } else {
+      loadArticulosCatalog();
+    }
+  }, [showInventarioSection, isCreating, editingRecord, loadArticulosCatalog]);
+
+  // Inventario (nuevo registro): precarga desde fragmento `puesto_<id>_articulos` / caché principal
+  useEffect(() => {
+    if (!isCreating || editingRecord) return;
+    if (!showInventarioSection) return;
+
+    const pid = inventarioSourcePuestoId;
+    if (pid === null) {
+      setInventario([]);
+      setExpandedInventarioIndices([]);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const raw = await loadPuestoArticulosForTable(pid);
+        if (cancelled) return;
+        const catalogAtMap = articulosCatalogRef.current;
+        const rows = Array.isArray(raw) ? raw : [];
+        const mapped =
+          rows.length === 0
+            ? []
+            : rows.map((a: unknown) =>
+                mapFragmentArticuloToInventarioItem(a as Record<string, unknown>, catalogAtMap)
+              );
+        if (cancelled) return;
+        setInventario(mapped);
+        setExpandedInventarioIndices([]);
+      } catch {
+        if (!cancelled) {
+          setInventario([]);
+          setExpandedInventarioIndices([]);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreating, editingRecord, showInventarioSection, inventarioSourcePuestoId, selectedDivisionId]);
+
+  // Completa tipo_nombre cuando llega el catálogo nomenclador tras el primer mapeo
+  useEffect(() => {
+    if (!isCreating || editingRecord || !showInventarioSection || articulosCatalog.length === 0) return;
+    setInventario((prev) => {
+      if (prev.length === 0) return prev;
+      let touched = false;
+      const next = prev.map((row) => {
+        if (row.tipo_id === null || (row.tipo_nombre ?? '').trim() !== '') return row;
+        const hit = articulosCatalog.find((c) => c.id === row.tipo_id);
+        if (!hit) return row;
+        touched = true;
+        return { ...row, tipo_nombre: hit.nombre };
+      });
+      return touched ? next : prev;
+    });
+  }, [articulosCatalog, isCreating, editingRecord, showInventarioSection]);
+
+  const resetForm = async () => {
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+    setFechaRealizado(new Date(horaAccion));
+    setTipo('Apertura');
+    setNombreRepresentanteCliente('');
+    setNombreRepresentanteEmpresaEntrante('');
+    setNombreRepresentanteEmpresaSaliente('');
+    setActividades(buildActividadesForDivision(selectedDivisionId));
+    setInventario([]);
+    setExpandedInventarioIndices([]);
+    setImagenesLocal([]);
+    setImagenesRemote([]);
+    setDeletedRemoteImageIds([]);
+    setOtrasObservaciones('');
+    setFirmaRepresentanteCliente(null);
+    setFirmaRepresentanteEmpresaEntrante(null);
+    setFirmaRepresentanteEmpresaSaliente(null);
+    setFirmaResponsable('');
+  };
+
+  const startCreating = async () => {
+    ocpEditSnapshotRef.current = null;
+    setEditingRecord(null);
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
+    await resetForm();
+    setIsCreating(true);
+    const tree = await fetchMainStructure();
+    if (formHierarchyPreloadedRef.current) return;
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    if (currentMarca) {
+      try {
+        const currentMarcaData = JSON.parse(currentMarca);
+        if (currentMarcaData?.id != null) {
+          const hierarchy = buildHierarchyFromCurrentMarca(currentMarcaData, tree);
+          applyFormHierarchyPath(hierarchy);
+          formHierarchyPreloadedRef.current = true;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+
+  const cancelCreating = async () => {
+    ocpEditSnapshotRef.current = null;
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
+    setIsCreating(false);
+    await resetForm();
+    await refreshPositionsListAfterFormCloseRef.current();
+  };
+
+  const startEditing = async (record: OpeningClosingPosition) => {
+    ocpEditSnapshotRef.current = record;
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
+    setIsCreating(false);
+    let actividadesArray: ActividadItem[] = [];
+    let inventarioArray: InventarioItem[] = [];
+
+    try {
+      const parsed = JSON.parse(record.actividades || '[]');
+      if (Array.isArray(parsed)) actividadesArray = parsed;
+    } catch {
+      actividadesArray = [];
+    }
+
+    try {
+      const parsed = JSON.parse(record.inventario || '[]');
+      if (Array.isArray(parsed)) inventarioArray = parsed;
+    } catch {
+      inventarioArray = [];
+    }
+
+    setEditingRecord({ id: record.id, id_local: record.id_local });
+
+    const tree = await fetchMainStructure();
+    if (!formHierarchyPreloadedRef.current) {
+      const pathByPuesto = resolveHierarchyByPuestoId(tree, Number(record.puesto_id));
+      if (pathByPuesto) {
+        applyFormHierarchyPath(pathByPuesto);
+      } else {
+        applyFormHierarchyPath({
+          empresaId:
+            record.empresa_id != null && Number(record.empresa_id) > 0 ? Number(record.empresa_id) : null,
+          clienteId: Number(record.cliente_id),
+          divisionId: Number(record.division_id),
+          contratoId:
+            record.contrato_id != null && Number(record.contrato_id) > 0 ? Number(record.contrato_id) : null,
+          sucursalId: Number(record.corpo_id),
+          puestoId: Number(record.puesto_id),
+        });
+      }
+      formHierarchyPreloadedRef.current = true;
+    }
+
+    const horaAccion = await getHoraAccion();
+    if (!horaAccion) {
+      Alert.alert('Error', 'No se pudo obtener la hora');
+      return;
+    }
+
+    setFechaRealizado(record.fecha ? new Date(record.fecha) : new Date(horaAccion));
+    setTipo((record.tipo === 'Cierre' ? 'Cierre' : 'Apertura'));
+    setNombreRepresentanteCliente(record.nombre_representante_cliente || '');
+    setNombreRepresentanteEmpresaEntrante(record.nombre_representante_empresa_entrante || '');
+    setNombreRepresentanteEmpresaSaliente(record.nombre_representante_empresa_saliente || '');
+    const divIdNum = Number(record.division_id);
+    const template = buildActividadesForDivision(
+      Number.isFinite(divIdNum) && divIdNum > 0 ? divIdNum : null
+    );
+    setActividades(mergeActividadesWithSaved(template, actividadesArray));
+    setInventario(inventarioArray);
+    setExpandedInventarioIndices(inventarioArray.map((_, i) => i));
+
+    setImagenesRemote([]);
+    setImagenesLocal(record.images_local || []);
+    setDeletedRemoteImageIds([]);
+
+    setOtrasObservaciones(record.otras_observaciones || '');
+    setFirmaRepresentanteCliente(formatSignatureForDisplay(record.firma_representante_cliente ?? null));
+    setFirmaRepresentanteEmpresaEntrante(formatSignatureForDisplay(record.firma_representante_empresa_entrante ?? null));
+    setFirmaRepresentanteEmpresaSaliente(formatSignatureForDisplay(record.firma_representante_empresa_saliente ?? null));
+    setFirmaResponsable(record.firma_responsable || '');
+  };
+
+  const cancelEditing = async () => {
+    ocpEditSnapshotRef.current = null;
+    pendingFormHierarchyRef.current = null;
+    isApplyingFormHierarchyRef.current = false;
+    isRestoringHierarchyRef.current = false;
+    formHierarchyPreloadedRef.current = false;
+    setEditingRecord(null);
+    await resetForm();
+    await refreshPositionsListAfterFormCloseRef.current();
+  };
+
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+    if (selectedDate) {
+      setFechaRealizado(selectedDate);
+    }
+  };
+
+  const setActividadRespuesta = (index: number, value: ActividadRespuesta) => {
+    setActividades((prev) => prev.map((a, i) => (i === index ? { ...a, respuesta: value } : a)));
+  };
+
+  const setActividadObservaciones = (index: number, text: string) => {
+    setActividades((prev) => prev.map((a, i) => (i === index ? { ...a, observaciones: text } : a)));
+  };
+
+  const addInventario = () => {
+    const newInventario: InventarioItem = {
+      activos_equipos: '',
+      tipo_id: null,
+      tipo_nombre: '',
+      numero_activo: '',
+      numero_serie: '',
+      marca: '',
+      modelo: '',
+      descripcion: '',
+    };
+    setInventario([...inventario, newInventario]);
+    setExpandedInventarioIndices([...expandedInventarioIndices, inventario.length]);
+  };
+
+  const updateInventarioText = (
+    index: number,
+    field: 'activos_equipos' | 'numero_activo' | 'numero_serie' | 'marca' | 'modelo' | 'descripcion',
+    value: string
+  ) => {
+    const next = [...inventario];
+    next[index] = { ...next[index], [field]: value };
+    setInventario(next);
+  };
+
+  const updateInventarioTipo = (index: number, tipoId: number | null) => {
+    const selected = tipoId ? (articulosCatalog.find((a) => a.id === tipoId) ?? null) : null;
+    const next = [...inventario];
+    next[index] = {
+      ...next[index],
+      tipo_id: tipoId,
+      tipo_nombre: selected?.nombre || '',
+    };
+    setInventario(next);
+  };
+
+  const removeInventario = (index: number) => {
+    Alert.alert(
+      'Confirmar',
+      '¿Estás seguro de que deseas eliminar este item del inventario?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () => {
+            setInventario(inventario.filter((_, i) => i !== index));
+            setExpandedInventarioIndices(expandedInventarioIndices.filter(i => i !== index).map(i => i > index ? i - 1 : i));
+          },
+        },
+      ]
+    );
+  };
+
+  const toggleInventarioExpansion = (index: number) => {
+    setExpandedInventarioIndices(prev =>
+      prev.includes(index) ? prev.filter(i => i !== index) : [...prev, index]
+    );
+  };
+
+  const openCamera = async () => {
+    try {
+      if (!permission?.granted) {
+        const result = await requestPermission();
+        if (!result.granted) {
+          Alert.alert('Permiso denegado', 'Se necesita permiso para usar la cámara');
+          return;
+        }
+      }
+      setIsCameraVisible(true);
+    } catch (error) {
+      console.error('Error al abrir la cámara:', error);
+      Alert.alert('Error', 'No se pudo abrir la cámara. Por favor intente nuevamente.');
+    }
+  };
+
+  const capturePhoto = async () => {
+    if (!cameraRef.current) {
+      Alert.alert('Error', 'La cámara no está lista. Por favor intente nuevamente.');
+      return;
+    }
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({
+        quality: 0.7,
+        skipProcessing: false
+      });
+
+      if (!photo?.uri) {
+        Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
+        setIsCameraVisible(false);
+        return;
+      }
+      const localFileName = await saveFile({
+        uri: String(photo.uri),
+        originalName: `foto_${Date.now()}`,
+        extension: 'jpg',
+        type: 'image',
+        prefix: 'opening_closing_position',
+      });
+      setIsCameraVisible(false);
+
+      setTimeout(() => {
+        setImagenesLocal((prev) => [
+          ...prev,
+          {
+            id_local: generateRandomId(),
+            localFileName,
+            uri: getLocalFileDisplayUri(localFileName),
+            extension: 'jpg',
+            original_name: `foto_${Date.now()}.jpg`,
+          },
+        ]);
+      }, 100);
+    } catch (error) {
+      console.error('Error al capturar foto:', error);
+      Alert.alert('Error', 'No se pudo capturar la foto. Por favor intente nuevamente.');
+      setIsCameraVisible(false);
+    }
+  };
+
+  const removeLocalImage = (idLocal: string) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: async () => {
+          const image = imagenesLocal.find((x) => x.id_local === idLocal);
+          if (image) await deleteOpeningClosingLocalFilesFromMeta([image]);
+          setImagenesLocal((prev) => prev.filter((x) => x.id_local !== idLocal));
+        },
+      },
+    ]);
+  };
+
+  const removeRemoteImage = (id: number) => {
+    Alert.alert('Confirmar', '¿Eliminar esta foto?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          setImagenesRemote((prev) => prev.filter((x) => x.id !== id));
+          setDeletedRemoteImageIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+        },
+      },
+    ]);
+  };
+
+  const openSignatureModal = (target: 'cliente' | 'entrante' | 'saliente') => {
+    setSignatureTarget(target);
+    setIsSignatureModalVisible(true);
+    setSignatureKey((prev) => prev + 1);
+  };
+
+  const closeSignatureModal = () => {
+    setIsSignatureModalVisible(false);
+  };
+
+  const clearSignatureInModal = () => {
+    setSignatureKey(prev => prev + 1);
+    if (signatureRef.current) {
+      signatureRef.current.clearSignature();
+    }
+  };
+
+  const handleSignatureRead = (signature: string) => {
+    if (signature) {
+      let formattedSignature = signature;
+      if (!signature.startsWith('data:')) {
+        formattedSignature = `data:image/png;base64,${signature}`;
+      }
+      if (signatureTarget === 'cliente') setFirmaRepresentanteCliente(formattedSignature);
+      if (signatureTarget === 'entrante') setFirmaRepresentanteEmpresaEntrante(formattedSignature);
+      if (signatureTarget === 'saliente') setFirmaRepresentanteEmpresaSaliente(formattedSignature);
+      setIsSignatureModalVisible(false);
+    } else {
+      Alert.alert('Error', 'No se pudo obtener la firma. Por favor, intente nuevamente.');
+    }
+  };
+
+  const acceptSignature = () => {
+    if (signatureRef.current) {
+      signatureRef.current.readSignature();
+    } else {
+      Alert.alert('Error', 'Debe dibujar una firma antes de aceptar');
+    }
+  };
+
+  const savePositionHandler = async () => {
+    const currentMarca = await AsyncStorage.getItem('current_marca');
+    if (!currentMarca) {
+      Alert.alert('Error', 'No se encontró la marca actual');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
+    try {
+      const currentMarcaData = JSON.parse(currentMarca);
+
+      if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+        Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
+        setIsSubmitting(false);
+        return;
+      }
+      if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+        Alert.alert('Error', 'Debes completar los nombres de representantes');
+        setIsSubmitting(false);
+        return;
+      }
+      const fCliente = getBase64Only(firmaRepresentanteCliente);
+      const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+      const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+      
+      if (!firmaResponsable) {
+        Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const actividadesStr = JSON.stringify(actividades || []);
+      const inventarioStr = JSON.stringify(shouldPersistInventario ? (inventario || []) : []);
+
+      const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
+
+      const requestData: any = {
+        marca_id: currentMarcaData.id,
+        empresa_id: selectedEmpresaId || 0,
+        cliente_id: selectedClienteId,
+        contrato_id: selectedContratoId || 0,
+        corpo_id: selectedSucursalId,
+        puesto_id: selectedPuestoId,
+        division_id: selectedDivisionId,
+        fecha: formatDate(fechaRealizado),
+        tipo,
+        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+        actividades: actividadesStr,
+        inventario: inventarioStr,
+        otras_observaciones: otrasObservaciones.trim() || null,
+        firma_representante_cliente: fCliente,
+        firma_representante_empresa_entrante: fEntrante,
+        firma_representante_empresa_saliente: fSaliente,
+        firma_responsable: firmaResponsable,
+        imagenes_meta: stripOpeningClosingImagesForActionPayload(imagenesLocal),
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+      };
+
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        const result = await createOpeningClosingPosition({
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
+          Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto guardado correctamente');
+          setTimeout(() => {
+            void cancelCreating();
+          }, 2000);
+        } else {
+          Alert.alert('Error', result.message || 'Error al guardar la apertura-cierre de puesto');
+        }
+      } else {
+        const localId = generateRandomId();
+
+        await mergeOrPushOpeningClosingCreateEvaluationsActions(localId, requestData, currentMarcaData.id);
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        const cache = cacheStr ? JSON.parse(cacheStr) : [];
+
+        const horaAccion = await getHoraAccion();
+        if (!horaAccion) {
+          Alert.alert('Error', 'No se pudo obtener la hora');
+          return;
+        }
+
+        const newRecordCache: OpeningClosingPosition = {
+          id: null,
+          id_local: localId,
+          cliente_id: selectedClienteId,
+          empresa_id: selectedEmpresaId || 0,
+          corpo_id: selectedSucursalId,
+          puesto_id: selectedPuestoId,
+          division_id: selectedDivisionId,
+          contrato_id: selectedContratoId || 0,
+          fecha: formatDate(fechaRealizado),
+          tipo,
+          nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+          nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+          nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+          actividades: actividadesStr,
+          inventario: inventarioStr,
+          otras_observaciones: otrasObservaciones.trim() || null,
+          firma_representante_cliente: fCliente,
+          firma_representante_empresa_entrante: fEntrante,
+          firma_representante_empresa_saliente: fSaliente,
+          firma_responsable: firmaResponsable,
+          cliente_nombre: selectedClienteNode?.nombre || null,
+          corpo_nombre: selectedSucursalNode?.nombre || null,
+          puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || null,
+          division_nombre: selectedDivisionNode?.nombre || null,
+          images_local: imagenesLocal,
+          created_at: new Date(horaAccion).toISOString(),
+          synced: false,
+        };
+
+        cache.push({ ...newRecordCache, type: 'opening_closing_position' });
+        await AsyncStorage.setItem('evaluations_cache', JSON.stringify(cache));
+
+        Alert.alert('Éxito', 'Apertura-Cierre de Puesto registrado localmente. Se sincronizará cuando haya conexión.');
+        setTimeout(() => {
+          void cancelCreating();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error saving position:', err);
+      Alert.alert('Error', 'No se pudo guardar la apertura-cierre de puesto');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const updatePositionHandler = async () => {
+    if (!editingRecord) return;
+
+    setIsSubmitting(true);
+    setSubmitResponse(null);
+
+    try {
+      const recordId = editingRecord.id || editingRecord.id_local;
+      if (!recordId) {
+        Alert.alert('Error', 'ID de registro no encontrado para actualizar');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
+
+      if (!selectedClienteId || !selectedSucursalId || !selectedPuestoId || !selectedDivisionId) {
+        Alert.alert('Error', 'Debes seleccionar Cliente / División / Contrato / Sucursal / Puesto');
+        setIsSubmitting(false);
+        return;
+      }
+      if (!nombreRepresentanteCliente.trim() || !nombreRepresentanteEmpresaEntrante.trim() || !nombreRepresentanteEmpresaSaliente.trim()) {
+        Alert.alert('Error', 'Debes completar los nombres de representantes');
+        setIsSubmitting(false);
+        return;
+      }
+      const fCliente = getBase64Only(firmaRepresentanteCliente);
+      const fEntrante = getBase64Only(firmaRepresentanteEmpresaEntrante);
+      const fSaliente = getBase64Only(firmaRepresentanteEmpresaSaliente);
+      
+      if (!firmaResponsable) {
+        Alert.alert('Error', 'Debes registrar la firma del responsable (QR)');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const actividadesStr = JSON.stringify(actividades || []);
+      const inventarioStr = JSON.stringify(shouldPersistInventario ? (inventario || []) : []);
+
+      const imagenesStr = await buildOpeningClosingImagenesJsonForUpload({ meta: imagenesLocal });
+
+      const requestData: any = {
+        empresa_id: selectedEmpresaId || 0,
+        cliente_id: selectedClienteId,
+        corpo_id: selectedSucursalId,
+        puesto_id: selectedPuestoId,
+        division_id: selectedDivisionId,
+        contrato_id: selectedContratoId || 0,
+        fecha: formatDate(fechaRealizado),
+        tipo,
+        nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+        nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+        nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+        actividades: actividadesStr,
+        inventario: inventarioStr,
+        otras_observaciones: otrasObservaciones.trim() || null,
+        firma_representante_cliente: fCliente,
+        firma_representante_empresa_entrante: fEntrante,
+        firma_representante_empresa_saliente: fSaliente,
+        firma_responsable: firmaResponsable,
+        imagenes_meta: stripOpeningClosingImagesForActionPayload(imagenesLocal),
+        ...(imagenesStr ? { imagenes: imagenesStr } : {}),
+        ...(deletedRemoteImageIds.length > 0 ? { delete_imagenes: JSON.stringify(deletedRemoteImageIds) } : {}),
+      };
+
+      const isConnected = await getConnectionStatus();
+
+      if (isConnected) {
+        const result = await updateOpeningClosingPosition({
+          id: recordIdStr,
+          requestData,
+          refreshAccessToken,
+          logout,
+        });
+
+        if (result.status) {
+          await deleteOpeningClosingLocalFilesFromMeta(imagenesLocal);
+          Alert.alert('Éxito', result.message || 'Apertura-Cierre de Puesto actualizado correctamente');
+          setTimeout(() => {
+            void cancelEditing();
+          }, 2000);
+        } else {
+          Alert.alert('Error', result.message || 'Error al actualizar la apertura-cierre de puesto');
+        }
+      } else {
+        const currentMarcaRaw = await AsyncStorage.getItem('current_marca');
+        const currentMarcaParsed = currentMarcaRaw ? JSON.parse(currentMarcaRaw) : null;
+        const marcaFallback = currentMarcaParsed?.id;
+
+        const isLocalDraft = editingRecord.id == null;
+
+        if (isLocalDraft) {
+          const localKey = String(editingRecord.id_local || recordIdStr);
+          await mergeOrPushOpeningClosingCreateEvaluationsActions(localKey, requestData, marcaFallback);
+        } else {
+          const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+          let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+          if (!Array.isArray(actions)) actions = [];
+          actions = actions.filter(
+            (a: any) =>
+              !(
+                a.type === OCP_EVAL_TYPE &&
+                a.action === 'update' &&
+                (String(a.id) === String(recordIdStr) || Number(a.id) === Number(editingRecord.id))
+              )
+          );
+          actions.push({
+            id: recordIdStr,
+            action: 'update',
+            type: OCP_EVAL_TYPE,
+            payload: requestData,
+            synced: false,
+          });
+          await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+        }
+
+        const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+        if (cacheStr) {
+          const cache = JSON.parse(cacheStr);
+          const updatedCache = cache.map((item: any) => {
+            if ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position') {
+              return {
+                ...item,
+                cliente_id: selectedClienteId,
+                empresa_id: selectedEmpresaId || 0,
+                corpo_id: selectedSucursalId,
+                puesto_id: selectedPuestoId,
+                division_id: selectedDivisionId,
+                contrato_id: selectedContratoId || 0,
+                fecha: formatDate(fechaRealizado),
+                tipo,
+                nombre_representante_cliente: nombreRepresentanteCliente.trim(),
+                nombre_representante_empresa_entrante: nombreRepresentanteEmpresaEntrante.trim(),
+                nombre_representante_empresa_saliente: nombreRepresentanteEmpresaSaliente.trim(),
+                actividades: JSON.stringify(actividades || []),
+                inventario: JSON.stringify(shouldPersistInventario ? (inventario || []) : []),
+                otras_observaciones: otrasObservaciones.trim() || null,
+                firma_representante_cliente: getBase64Only(firmaRepresentanteCliente),
+                firma_representante_empresa_entrante: getBase64Only(firmaRepresentanteEmpresaEntrante),
+                firma_representante_empresa_saliente: getBase64Only(firmaRepresentanteEmpresaSaliente),
+                firma_responsable: firmaResponsable,
+                cliente_nombre: selectedClienteNode?.nombre || item.cliente_nombre || null,
+                corpo_nombre: selectedSucursalNode?.nombre || item.corpo_nombre || null,
+                puesto_nombre: (selectedSucursalNode?.puestos || []).find((p) => p.id === selectedPuestoId)?.nombre || item.puesto_nombre || null,
+                division_nombre: selectedDivisionNode?.nombre || item.division_nombre || null,
+                images_local: imagenesLocal,
+                images: imagenesRemote,
+                synced: false,
+              };
+            }
+            return item;
+          });
+          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+        }
+
+        Alert.alert('Éxito', 'Apertura-Cierre de Puesto actualizado localmente. Se sincronizará cuando haya conexión.');
+        setTimeout(() => {
+          void cancelEditing();
+        }, 2000);
+      }
+    } catch (err) {
+      console.error('Error updating position:', err);
+      Alert.alert('Error', 'No se pudo actualizar la apertura-cierre de puesto');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleConfirmSubmit = () => {
+    if (isSubmitting) return;
+    Alert.alert(
+      'Confirmar',
+      editingRecord
+        ? '¿Deseas actualizar esta apertura-cierre de puesto?'
+        : '¿Deseas crear esta apertura-cierre de puesto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Aceptar', onPress: editingRecord ? updatePositionHandler : savePositionHandler },
+      ],
+      { cancelable: false }
+    );
+  };
+
+  const deletePositionHandler = async (record: OpeningClosingPosition) => {
+    const recordId = record.id || record.id_local;
+    if (!recordId) {
+      Alert.alert('Error', 'ID de registro no encontrado para eliminar');
+      return;
+    }
+
+    const recordIdStr = typeof recordId === 'number' ? String(recordId) : recordId;
+
+    Alert.alert(
+      'Confirmar',
+      '¿Estás seguro de que deseas eliminar esta apertura-cierre de puesto?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Confirmar',
+          onPress: async () => {
+            try {
+              setDeletingRecordId(recordIdStr);
+              const isConnected = await getConnectionStatus();
+
+              if (isConnected) {
+                const result = await deleteOpeningClosingPosition({
+                  id: recordIdStr,
+                  refreshAccessToken,
+                  logout,
+                });
+
+                if (result.status) {
+                  const corpoIdNum = filterCorpoIdRef.current;
+                  if (corpoIdNum != null) {
+                    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                    if (cacheStr) {
+                      try {
+                        const cache = JSON.parse(cacheStr);
+                        if (Array.isArray(cache)) {
+                          const updatedCache = cache.filter(
+                            (item: any) =>
+                              !(
+                                (item.id === recordIdStr ||
+                                  String(item.id) === recordIdStr ||
+                                  item.id_local === recordIdStr) &&
+                                item.type === 'opening_closing_position'
+                              )
+                          );
+                          await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                        }
+                      } catch {
+                        /* ignore */
+                      }
+                    }
+                    const cached = await readPositionsFromCache(corpoIdNum);
+                    setPositions(cached);
+                  }
+                  Alert.alert('Éxito', 'Apertura-Cierre de Puesto eliminado correctamente');
+                } else {
+                  Alert.alert('Error', result.message || 'Error al eliminar la apertura-cierre de puesto');
+                }
+              } else {
+                const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+                let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+                if (!Array.isArray(actions)) actions = [];
+                const isLocalDraft = record.id == null && !!record.id_local;
+
+                if (isLocalDraft) {
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        (a.action === 'create' || a.action === 'update' || a.action === 'delete_file') &&
+                        (String(a.id) === String(record.id_local) || String(a.id_local) === String(record.id_local))
+                      )
+                  );
+                } else {
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'update' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'delete_file' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions = actions.filter(
+                    (a: any) =>
+                      !(
+                        a.type === OCP_EVAL_TYPE &&
+                        a.action === 'delete' &&
+                        (String(a.id) === String(recordIdStr) || Number(a.id) === Number(record.id))
+                      )
+                  );
+                  actions.push({
+                    id: recordIdStr,
+                    action: 'delete',
+                    type: OCP_EVAL_TYPE,
+                    payload: {},
+                    synced: false,
+                  });
+                }
+
+                await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+
+                const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+                if (cacheStr) {
+                  const cache = JSON.parse(cacheStr);
+                  const toDelete = cache.find((item: any) => ((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position'));
+                  if (toDelete?.images_local) {
+                    await deleteOpeningClosingLocalFilesFromMeta(toDelete.images_local);
+                  }
+                  const updatedCache = cache.filter((item: any) => !((item.id === recordIdStr || String(item.id) === recordIdStr || item.id_local === recordIdStr) && item.type === 'opening_closing_position'));
+                  await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+                }
+
+                Alert.alert('Modo Offline', 'Apertura-Cierre de Puesto marcado para eliminación localmente. Se sincronizará cuando haya conexión.');
+                const corpoIdNum = filterCorpoIdRef.current;
+                if (corpoIdNum != null) {
+                  const cached = await readPositionsFromCache(corpoIdNum);
+                  setPositions(cached);
+                }
+              }
+            } catch (err) {
+              console.error('Error deleting position:', err);
+              Alert.alert('Error', 'No se pudo eliminar la apertura-cierre de puesto');
+            } finally {
+              setDeletingRecordId((prev) => (prev === recordIdStr ? null : prev));
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const removeImageFromSavedRecord = async (
+    record: OpeningClosingPosition,
+    opts: { imageId?: number; idLocal?: string }
+  ) => {
+    const { imageId, idLocal } = opts;
+    const recordId = record.id || record.id_local;
+    if (!recordId || (!imageId && !idLocal)) return;
+    const recordIdStr = String(recordId);
+    const isConnected = await getConnectionStatus();
+    const isLocalDraft = record.id == null && !!record.id_local;
+
+    if (isConnected && !isLocalDraft && imageId) {
+      const result = await deleteOpeningClosingPositionImage({
+        id: recordIdStr,
+        imageId,
+        refreshAccessToken,
+        logout,
+      });
+      if (!result.status) {
+        Alert.alert('Error', result.message || 'No se pudo eliminar la imagen');
+        return;
+      }
+    } else {
+      const actionsStr = await AsyncStorage.getItem('evaluations_actions');
+      let actions: any[] = actionsStr ? JSON.parse(actionsStr) : [];
+      if (!Array.isArray(actions)) actions = [];
+
+      if (isLocalDraft && idLocal) {
+        const idx = actions.findIndex(
+          (a: any) =>
+            a.type === OCP_EVAL_TYPE &&
+            a.action === 'create' &&
+            (String(a.id) === String(record.id_local) || String(a.id_local) === String(record.id_local))
+        );
+        if (idx >= 0) {
+          const prevPayload = actions[idx].payload || {};
+          const prevMeta = Array.isArray(prevPayload.imagenes_meta) ? prevPayload.imagenes_meta : [];
+          const nextMeta = prevMeta.filter((m: any) => String(m?.id_local || '') !== String(idLocal));
+          actions[idx] = {
+            ...actions[idx],
+            payload: {
+              ...prevPayload,
+              imagenes_meta: nextMeta,
+            },
+          };
+        }
+      } else if (imageId) {
+        actions = actions.filter(
+          (a: any) =>
+            !(
+              a.type === OCP_EVAL_TYPE &&
+              a.action === 'delete_file' &&
+              String(a.id) === recordIdStr &&
+              Number(a?.payload?.imageId) === Number(imageId)
+            )
+        );
+        actions.push({
+          id: recordIdStr,
+          action: 'delete_file',
+          type: OCP_EVAL_TYPE,
+          payload: { imageId },
+          synced: false,
+        });
+      }
+      await AsyncStorage.setItem('evaluations_actions', JSON.stringify(actions));
+    }
+
+    const cacheStr = await AsyncStorage.getItem('evaluations_cache');
+    if (cacheStr) {
+      const cache = JSON.parse(cacheStr);
+      const updatedCache = cache.map((item: any) => {
+        if (item.type !== OCP_EVAL_TYPE) return item;
+        if (!(String(item.id) === recordIdStr || String(item.id_local) === recordIdStr)) return item;
+        let nextImages = Array.isArray(item.images) ? item.images : [];
+        let nextLocal = Array.isArray(item.images_local) ? item.images_local : [];
+        if (imageId) {
+          nextImages = nextImages.filter((img: any) => Number(img?.id) !== Number(imageId));
+        }
+        if (idLocal) {
+          const removed = nextLocal.find((im: any) => String(im?.id_local) === String(idLocal));
+          if (removed) {
+            void deleteOpeningClosingLocalFilesFromMeta([removed]);
+          }
+          nextLocal = nextLocal.filter((im: any) => String(im?.id_local) !== String(idLocal));
+        }
+        return {
+          ...item,
+          images: nextImages,
+          images_local: nextLocal,
+          synced: false,
+        };
+      });
+      await AsyncStorage.setItem('evaluations_cache', JSON.stringify(updatedCache));
+      const corpoIdNum = filterCorpoIdRef.current;
+      if (corpoIdNum != null) {
+        const cached = await readPositionsFromCache(corpoIdNum);
+        setPositions(cached);
+      }
+    }
+  };
+
+  const handleMenuPress = () => {
+    setIsMenuVisible(true);
+  };
+
+  const handleMenuClose = () => {
+    setIsMenuVisible(false);
+  };
+
+  const handleHomePress = () => {
+    navigation.navigate('Home');
+  };
+
+  const getActionIcon = (action: string) => {
+    switch (action.toLowerCase()) {
+      case 'position': return <Ionicons name="business" size={24} color='#000000' />;
+      case 'add': return <Ionicons name="add" size={24} color='#FFFFFF' />;
+      case 'cancel': return <Ionicons name="close" size={24} color='#FFFFFF' />;
+      case 'confirm': return <Ionicons name="checkmark" size={24} color='#FFFFFF' />;
+      case 'delete': return <Ionicons name="trash" size={24} color='#FFFFFF' />;
+      case 'edit': return <Ionicons name="pencil" size={20} color="#FFFFFF" />;
+      default: return <Ionicons name="business" size={24} color='#000000' />;
+    }
+  };
+
+  const renderListFilters = () => (
+    <ThemedView style={styles.listFilterCard}>
+      <ThemedView style={styles.listFilterHeaderRow}>
+        <TouchableOpacity
+          style={styles.filterToggleButton}
+          onPress={() => setIsListFiltersExpanded((e) => !e)}
+          activeOpacity={0.85}
+        >
+          <ThemedText style={styles.filterToggleText}>Filtros</ThemedText>
+          <Ionicons name={isListFiltersExpanded ? 'chevron-up' : 'chevron-down'} size={20} color="#007AFF" />
+        </TouchableOpacity>
+        {isListFiltersExpanded ? (
+          <TouchableOpacity
+            style={styles.resetFiltersButton}
+            onPress={() => {
+              void resetListFiltersFromCurrentMarca();
+            }}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="refresh" size={16} color="#FF3B30" />
+            <ThemedText style={styles.resetFiltersText}>Reiniciar</ThemedText>
+          </TouchableOpacity>
+        ) : null}
+      </ThemedView>
+      {isListFiltersExpanded ? (
+        <ThemedView style={styles.filterContent}>
+          {structure.length === 0 ? (
+            <ThemedText style={styles.emptyText}>Sin estructura en caché.</ThemedText>
+          ) : (
+            <HierarchyPickerFields
+              structure={structure}
+              levels={['cliente', 'contrato', 'sucursal']}
+              isLoading={false}
+              emptyPickerValue={0}
+              values={{
+                empresaId: filterEmpresaId,
+                clienteId: filterClienteId,
+                divisionId: filterDivisionId,
+                contratoId: filterContratoId,
+                sucursalId: filterCorpoId,
+              }}
+              onChange={handleFilterHierarchyChange}
+              labels={{ sucursal: 'Sucursal (corpo)' }}
+              renderLabel={(text) => <ThemedText style={styles.filterLabel}>{text}</ThemedText>}
+              pickerStyle={styles.picker}
+              fieldGroupStyle={styles.filterGroup}
+            />
+          )}
+        </ThemedView>
+      ) : null}
+    </ThemedView>
+  );
+
+  const renderPositionList = () => {
+    if (isListLoading && positions.length === 0) {
+      return (
+        <ThemedView style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <ThemedText style={styles.loadingText}>Cargando aperturas-cierres de puesto...</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    if (error && positions.length === 0) {
+      return (
+        <ThemedView style={styles.errorContainer}>
+          <ThemedText style={styles.errorText}>{error}</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    if (filteredPositions.length === 0 && !isListLoading) {
+      return (
+        <ThemedView style={styles.emptyContainer}>
+          <ThemedText style={styles.emptyText}>No hay aperturas-cierres de puesto para los filtros seleccionados.</ThemedText>
+        </ThemedView>
+      );
+    }
+
+    return (
+      <ThemedView style={styles.listContainer}>
+        {filteredPositions.map((record, recordIdx) => {
+          const itemKey = String((record.id ?? record.id_local) || '');
+          let actividadesArr: any[] = [];
+          let inventarioArr: any[] = [];
+          const imagesRemoteArr = Array.isArray((record as any).images) ? ((record as any).images as any[]) : [];
+          const imagesLocalArr = Array.isArray((record as any).images_local) ? ((record as any).images_local as any[]) : [];
+          try {
+            const parsed = JSON.parse(record.actividades || '[]');
+            if (Array.isArray(parsed)) actividadesArr = parsed;
+          } catch {
+            actividadesArr = [];
+          }
+          try {
+            const parsed = JSON.parse(record.inventario || '[]');
+            if (Array.isArray(parsed)) inventarioArr = parsed;
+          } catch {
+            inventarioArr = [];
+          }
+
+          const isActivitiesOpen = !!expandedActivitiesById[itemKey];
+          const isImagesOpen = !!expandedImagesById[itemKey];
+          const isInventoryOpen = !!expandedInventoryById[itemKey];
+
+          return (
+            <ThemedView key={`ocp-${record.id ?? 'local'}-${record.id_local || 'none'}-${recordIdx}`} style={styles.listItem}>
+              <ThemedView style={styles.listItemHeader}>
+                <ThemedView style={styles.listItemContent}>
+                  <ThemedText style={styles.listItemTitle}>
+                    {record.puesto_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Tipo: {record.tipo || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    División: {record.division_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Cliente: {record.cliente_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Corpo: {record.corpo_nombre || 'N/A'}
+                  </ThemedText>
+                  <ThemedText style={styles.listItemSubtitle}>
+                    Fecha: {convertDateTimestampToLocalString(new Date(record.fecha).toISOString(), false)}
+                  </ThemedText>
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.listItemDetails}>
+                {!!itemKey && actividadesArr.length > 0 && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedActivitiesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Actividades ({actividadesArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isActivitiesOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isActivitiesOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {actividadesArr.map((a: any, idx: number) => (
+                          <ThemedView key={`${itemKey}-act-${idx}`} style={styles.detailBlock}>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>{idx + 1}. </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(a?.pregunta || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Respuesta: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(a?.respuesta || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            {String(a?.observaciones || '').trim().length > 0 && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Obs: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(a?.observaciones).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                {!!itemKey && (imagesRemoteArr.length > 0 || imagesLocalArr.length > 0) && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedImagesById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Imágenes ({imagesRemoteArr.length + imagesLocalArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isImagesOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isImagesOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {imagesRemoteArr.map((img: any) => (
+                          <ThemedView key={`${itemKey}-img-r-${img?.id ?? img?.name ?? Math.random()}`} style={styles.photoItemMini}>
+                            <Image
+                              source={{ uri: appendTokenToUrl(String(img?.url || '')) }}
+                              style={styles.photoPreviewMini}
+                              resizeMode="contain"
+                            />
+                            {!!img?.id && (
+                              <TouchableOpacity
+                                style={styles.removePhotoButton}
+                                onPress={(e: any) => {
+                                  e?.stopPropagation?.();
+                                  Alert.alert('Confirmar', '¿Eliminar esta imagen?', [
+                                    { text: 'Cancelar', style: 'cancel' },
+                                    {
+                                      text: 'Eliminar',
+                                      style: 'destructive',
+                                      onPress: () => removeImageFromSavedRecord(record, { imageId: Number(img.id) }),
+                                    },
+                                  ]);
+                                }}
+                              >
+                                <Ionicons name="trash" size={16} color="#FF3B30" />
+                              </TouchableOpacity>
+                            )}
+                            {!!String(img?.original_name || '').trim() && (
+                              <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                        {imagesLocalArr.map((img: any) => {
+                          const uri = img?.uri || getLocalFileDisplayUri(String(img?.localFileName || ''));
+                          const localKey = String(img?.id_local || '');
+                          return (
+                            <ThemedView key={`${itemKey}-img-l-${img?.id_local ?? img?.original_name ?? Math.random()}`} style={styles.photoItemMini}>
+                              <Image source={{ uri }} style={styles.photoPreviewMini} resizeMode="contain" />
+                              {!!localKey && (
+                                <TouchableOpacity
+                                  style={styles.removePhotoButton}
+                                  onPress={(e: any) => {
+                                    e?.stopPropagation?.();
+                                    Alert.alert('Confirmar', '¿Eliminar esta imagen?', [
+                                      { text: 'Cancelar', style: 'cancel' },
+                                      {
+                                        text: 'Eliminar',
+                                        style: 'destructive',
+                                        onPress: () => removeImageFromSavedRecord(record, { idLocal: localKey }),
+                                      },
+                                    ]);
+                                  }}
+                                >
+                                  <Ionicons name="trash" size={16} color="#FF3B30" />
+                                </TouchableOpacity>
+                              )}
+                              {!!String(img?.original_name || '').trim() && (
+                                <ThemedText style={styles.photoCaption}>{String(img.original_name).trim()}</ThemedText>
+                              )}
+                            </ThemedView>
+                          );
+                        })}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                {!!itemKey && inventarioArr.length > 0 && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.collapseButton}
+                      onPress={() =>
+                        setExpandedInventoryById((prev) => ({ ...prev, [itemKey]: !prev[itemKey] }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <ThemedText style={styles.collapseButtonText}>
+                        Inventario ({inventarioArr.length})
+                      </ThemedText>
+                      <Ionicons
+                        name={isInventoryOpen ? 'chevron-up' : 'chevron-down'}
+                        size={18}
+                        color="#007AFF"
+                      />
+                    </TouchableOpacity>
+                    {isInventoryOpen && (
+                      <ThemedView style={styles.collapsableContent}>
+                        {inventarioArr.map((inv: any, idx: number) => (
+                          <ThemedView key={`${itemKey}-inv-${idx}`} style={styles.detailBlock}>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Item {idx + 1}: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(inv?.activos_equipos || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            <ThemedText style={styles.detailLine}>
+                              <ThemedText style={styles.detailLabel}>Tipo: </ThemedText>
+                              <ThemedText style={styles.detailValue}>{String(inv?.tipo_nombre || '').trim() || '—'}</ThemedText>
+                            </ThemedText>
+                            {!!String(inv?.numero_activo || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}># Activo: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.numero_activo).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.numero_serie || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Serie: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.numero_serie).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.marca || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Marca: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.marca).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.modelo || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Modelo: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.modelo).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                            {!!String(inv?.descripcion || '').trim() && (
+                              <ThemedText style={styles.detailLine}>
+                                <ThemedText style={styles.detailLabel}>Desc: </ThemedText>
+                                <ThemedText style={styles.detailValue}>{String(inv?.descripcion).trim()}</ThemedText>
+                              </ThemedText>
+                            )}
+                          </ThemedView>
+                        ))}
+                      </ThemedView>
+                    )}
+                  </>
+                )}
+
+                <ThemedView style={styles.listItemButtons}>
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.editButton]}
+                    onPress={() => startEditing(record)}
+                  >
+                    {getActionIcon('edit')}
+                    <ThemedText style={styles.listItemButtonText}>Editar</ThemedText>
+                  </TouchableOpacity>
+                  {!(record.id_local || String(record.id).startsWith('local-') || String(record.id) === '0') && (
+                    <TouchableOpacity
+                      style={[styles.listItemButton, styles.changesButton]}
+                      onPress={() => {
+                        setCambiosTitle(`Cambios - ${record.tipo} #${record.id}`);
+                        fetchCambios('c_apertura_cierre_puesto', Number(record.id));
+                      }}
+                    >
+                      <Ionicons name="list-outline" size={20} color="#FFFFFF" />
+                      <ThemedText style={styles.listItemButtonText}>Cambios</ThemedText>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    style={[styles.listItemButton, styles.deleteButton, deletingRecordId === itemKey && styles.buttonDisabled]}
+                    onPress={() => deletePositionHandler(record)}
+                    disabled={deletingRecordId === itemKey}
+                  >
+                    {deletingRecordId === itemKey ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        {getActionIcon('delete')}
+                        <ThemedText style={styles.listItemButtonText}>Eliminar</ThemedText>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </ThemedView>
+              </ThemedView>
+            </ThemedView>
+          );
+        })}
+      </ThemedView>
+    );
+  };
+
+  const renderActividad = (actividad: ActividadItem, index: number) => {
+    const selected = actividad.respuesta;
+
+    const Radio = ({ label, value }: { label: string; value: ActividadRespuesta }) => {
+      const isOn = selected === value;
+      return (
+        <TouchableOpacity
+          style={styles.radioOption}
+          onPress={() => setActividadRespuesta(index, value)}
+        >
+          <Ionicons
+            name={isOn ? 'radio-button-on' : 'radio-button-off'}
+            size={18}
+            color={isOn ? '#007AFF' : '#999'}
+          />
+          <ThemedText style={styles.radioLabel}>{label}</ThemedText>
+        </TouchableOpacity>
+      );
+    };
+
+    return (
+      <ThemedView key={index} style={styles.actividadItem}>
+        <ThemedText style={styles.actividadHeaderText}>
+          {index + 1}. {actividad.pregunta}
+        </ThemedText>
+
+        <ThemedView style={styles.radioRow}>
+          <Radio label="Ok" value="Ok" />
+          <Radio label="N/A" value="N/A" />
+        </ThemedView>
+
+        <ThemedView style={styles.formGroup}>
+          <ThemedText style={styles.formLabel}>Observaciones (opcional)</ThemedText>
+          <TextInput
+            style={[styles.formInput, styles.textArea]}
+            placeholder="Observaciones"
+            placeholderTextColor="#999"
+            multiline
+            numberOfLines={3}
+            textAlignVertical="top"
+            value={actividad.observaciones}
+            onChangeText={(t) => setActividadObservaciones(index, t)}
+          />
+        </ThemedView>
+      </ThemedView>
+    );
+  };
+
+  const renderInventario = (item: InventarioItem, index: number) => {
+    const isExpanded = expandedInventarioIndices.includes(index);
+
+    return (
+      <ThemedView key={index} style={styles.inventarioItem}>
+        <TouchableOpacity
+          style={styles.inventarioHeader}
+          onPress={() => toggleInventarioExpansion(index)}
+        >
+          <ThemedView style={styles.inventarioHeaderContent}>
+            <ThemedText style={styles.inventarioHeaderText}>
+              Item {index + 1}: {item.activos_equipos || 'Sin nombre'}
+            </ThemedText>
+          </ThemedView>
+          <ThemedView style={styles.inventarioHeaderActions}>
+            <TouchableOpacity
+              onPress={(e) => {
+                e.stopPropagation();
+                removeInventario(index);
+              }}
+              style={styles.removeInventarioButton}
+            >
+              <Ionicons name="trash" size={20} color="#FF3B30" />
+            </TouchableOpacity>
+            <Ionicons
+              name={isExpanded ? 'chevron-up' : 'chevron-down'}
+              size={24}
+              color="#000000"
+            />
+          </ThemedView>
+        </TouchableOpacity>
+
+        {isExpanded && (
+          <ThemedView style={styles.inventarioContent}>
+            {/* Activos o equipos */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Activos o equipos</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Activos o equipos"
+                placeholderTextColor="#999"
+                value={item.activos_equipos}
+                onChangeText={(text) => updateInventarioText(index, 'activos_equipos', text)}
+              />
+            </ThemedView>
+
+            {/* Tipo */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Tipo</ThemedText>
+              <ThemedView style={styles.pickerWrapper}>
+                <Picker
+                  selectedValue={item.tipo_id ?? 0}
+                  onValueChange={(val) => updateInventarioTipo(index, val === 0 ? null : Number(val))}
+                  enabled={!isArticulosLoading && articulosCatalog.length > 0}
+                  style={styles.picker}
+                >
+                  <Picker.Item
+                    label={isArticulosLoading ? 'Cargando tipos...' : 'Seleccione tipo...'}
+                    value={0}
+                    color="#000000"
+                  />
+                  {articulosCatalog.map((a) => (
+                    <Picker.Item key={a.id} label={a.nombre} value={a.id} color="#000000" />
+                  ))}
+                </Picker>
+              </ThemedView>
+            </ThemedView>
+
+            {/* # de Activo */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}># de Activo</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                placeholder="# de Activo"
+                placeholderTextColor="#999"
+                value={item.numero_activo}
+                onChangeText={(text) => updateInventarioText(index, 'numero_activo', text)}
+              />
+            </ThemedView>
+
+            {/* Número de Serie */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Número de Serie</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Número de Serie"
+                placeholderTextColor="#999"
+                value={item.numero_serie}
+                onChangeText={(text) => updateInventarioText(index, 'numero_serie', text)}
+              />
+            </ThemedView>
+
+            {/* Marca */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Marca</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Marca"
+                placeholderTextColor="#999"
+                value={item.marca}
+                onChangeText={(text) => updateInventarioText(index, 'marca', text)}
+              />
+            </ThemedView>
+
+            {/* Modelo */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Modelo</ThemedText>
+              <TextInput
+                style={styles.formInput}
+                placeholder="Modelo"
+                placeholderTextColor="#999"
+                value={item.modelo}
+                onChangeText={(text) => updateInventarioText(index, 'modelo', text)}
+              />
+            </ThemedView>
+
+            {/* Descripción */}
+            <ThemedView style={styles.formGroup}>
+              <ThemedText style={styles.formLabel}>Descripción</ThemedText>
+              <TextInput
+                style={[styles.formInput, styles.textArea]}
+                placeholder="Descripción"
+                placeholderTextColor="#999"
+                multiline
+                numberOfLines={3}
+                textAlignVertical="top"
+                value={item.descripcion}
+                onChangeText={(text) => updateInventarioText(index, 'descripcion', text)}
+              />
+            </ThemedView>
+          </ThemedView>
+        )}
+      </ThemedView>
+    );
+  };
+
+  return (
+    <ThemedView style={styles.container}>
+      <AppHeader onMenuPress={handleMenuPress} title="Apertura-Cierre de Puesto" />
+
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <ThemedView style={styles.contentContainer}>
+          <ThemedView style={styles.titleContainer}>
+            <ThemedText type="title" style={styles.title}>
+              {getActionIcon('position')} Apertura-Cierre de Puesto
+            </ThemedText>
+            <ThemedText style={styles.subtitle}>
+              Registra la apertura o cierre de un puesto, actividades, inventario y evidencias.
+            </ThemedText>
+          </ThemedView>
+
+          {!hasCurrentMarca && !isCreating && !editingRecord && (
+            <ThemedView style={styles.noMarcaContainer}>
+              <ThemedText style={styles.noMarcaTitle}>Marca no seleccionada</ThemedText>
+              <ThemedText style={styles.noMarcaMessage}>
+                Puede filtrar y registrar manualmente la jerarquía, o seleccionar una marca desde el menú para precargar los campos.
+              </ThemedText>
+            </ThemedView>
+          )}
+
+          {isCreating || editingRecord ? (
+            <ThemedView style={styles.formContainer}>
+              {/* Estructura principal (árbol) */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Estructura</ThemedText>
+                </ThemedView>
+
+                <ThemedView style={styles.sectionBody}>
+                  {structure.length === 0 ? (
+                    <ThemedText style={[styles.hintText, { opacity: 0.85, marginBottom: 8 }]}>
+                      Sin estructura en caché.
+                    </ThemedText>
+                  ) : null}
+                  <HierarchyPickerFields
+                    structure={structure}
+                    levels={['cliente', 'contrato', 'sucursal', 'puesto']}
+                    isLoading={false}
+                    emptyPickerValue={0}
+                    values={{
+                      empresaId: selectedEmpresaId,
+                      clienteId: selectedClienteId,
+                      divisionId: selectedDivisionId,
+                      contratoId: selectedContratoId,
+                      sucursalId: selectedSucursalId,
+                      puestoId: selectedPuestoId,
+                    }}
+                    onChange={handleFormHierarchyChange}
+                    labels={{
+                      division: 'División *',
+                      puesto: 'Puesto (1 por registro) *',
+                    }}
+                    renderLabel={(text) => <ThemedText style={styles.formLabel}>{text}</ThemedText>}
+                    pickerStyle={styles.picker}
+                    fieldGroupStyle={styles.formGroup}
+                  />
+                </ThemedView>
+              </ThemedView>
+
+              {/* Fecha en que se realizó */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Fecha en que se realizó</ThemedText>
+                <TouchableOpacity
+                  style={styles.dateButton}
+                  onPress={() => setShowDatePicker(true)}
+                >
+                  <ThemedText style={styles.dateButtonText}>
+                    {convertDateTimestampToLocalString(new Date(fechaRealizado).toISOString(), false)}
+                  </ThemedText>
+                  <Ionicons name="calendar" size={20} color="#007AFF" />
+                </TouchableOpacity>
+                {showDatePicker && (
+                  <DateTimePicker
+                    value={fechaRealizado}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    onChange={handleDateChange}
+                  />
+                )}
+              </ThemedView>
+
+              {/* Tipo */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Tipo</ThemedText>
+                <ThemedView style={styles.pickerWrapper}>
+                  <Picker selectedValue={tipo} onValueChange={(v) => setTipo(v)} style={styles.picker}>
+                    <Picker.Item label="Apertura" value="Apertura" color="#000000" />
+                    <Picker.Item label="Cierre" value="Cierre" color="#000000" />
+                  </Picker>
+                </ThemedView>
+              </ThemedView>
+
+              {/* Lista de actividades */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Actividades</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  {actividades.map((actividad, index) => renderActividad(actividad, index))}
+                  {selectedDivisionId !== 4 && selectedDivisionId !== 5 && (
+                    <ThemedText style={styles.hintText}>No hay actividades configuradas para esta división.</ThemedText>
+                  )}
+                </ThemedView>
+              </ThemedView>
+
+              {/* Lista de inventario */}
+              {showInventarioSection && (
+                <ThemedView style={styles.sectionContainer}>
+                  <ThemedView style={styles.sectionHeader}>
+                    <ThemedText style={styles.sectionTitle}>Inventario de activos y/o equipos</ThemedText>
+                  </ThemedView>
+                  <ThemedView style={styles.sectionBody}>
+                    {inventario.map((item, index) => renderInventario(item, index))}
+                    <TouchableOpacity style={styles.addButton} onPress={addInventario}>
+                      <Ionicons name="add-circle" size={24} color="#4CAF50" />
+                      <ThemedText style={styles.addButtonText}>Agregar Item de Inventario</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                </ThemedView>
+              )}
+
+              {/* Fotografías */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Fotografías</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  <ThemedText style={styles.sectionSubtitle}>
+                    Tome fotografías de las instalaciones estado de recibido/entrega
+                  </ThemedText>
+                  <TouchableOpacity style={styles.cameraButton} onPress={openCamera}>
+                    <Ionicons name="camera" size={24} color="#FFFFFF" />
+                    <ThemedText style={styles.cameraButtonText}>Tomar Foto</ThemedText>
+                  </TouchableOpacity>
+                  {(imagenesRemote.length > 0 || imagenesLocal.length > 0) && (
+                    <ThemedView style={styles.photosContainer}>
+                      {imagenesRemote.map((img) => (
+                        <ThemedView key={`r-${img.id}`} style={styles.photoItem}>
+                          <Image source={{ uri: appendTokenToUrl(String(img.url || '')) }} style={styles.photoPreview} resizeMode="contain" />
+                          <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeRemoteImage(img.id)}>
+                            <Ionicons name="trash" size={20} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))}
+                      {imagenesLocal.map((img) => (
+                        <ThemedView key={`l-${img.id_local}`} style={styles.photoItem}>
+                          <Image source={{ uri: img.uri || getLocalFileDisplayUri(img.localFileName) }} style={styles.photoPreview} resizeMode="contain" />
+                          <TouchableOpacity style={styles.removePhotoButton} onPress={() => removeLocalImage(img.id_local)}>
+                            <Ionicons name="trash" size={20} color="#FF3B30" />
+                          </TouchableOpacity>
+                        </ThemedView>
+                      ))}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </ThemedView>
+
+              {/* Otras Observaciones */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Otras Observaciones</ThemedText>
+                <TextInput
+                  style={[styles.formInput, styles.textArea]}
+                  placeholder="Otras Observaciones"
+                  placeholderTextColor="#999"
+                  multiline
+                  numberOfLines={6}
+                  textAlignVertical="top"
+                  value={otrasObservaciones}
+                  onChangeText={setOtrasObservaciones}
+                />
+              </ThemedView>
+
+              {/* Nombres de representantes */}
+              <ThemedText style={styles.formSectionTitle}>Representantes</ThemedText>
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre representante del cliente</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre representante del cliente"
+                  placeholderTextColor="#999"
+                  value={nombreRepresentanteCliente}
+                  onChangeText={setNombreRepresentanteCliente}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre representante empresa entrante</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre representante empresa entrante"
+                  placeholderTextColor="#999"
+                  value={nombreRepresentanteEmpresaEntrante}
+                  onChangeText={setNombreRepresentanteEmpresaEntrante}
+                />
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formLabel}>Nombre representante empresa saliente</ThemedText>
+                <TextInput
+                  style={styles.formInput}
+                  placeholder="Nombre representante empresa saliente"
+                  placeholderTextColor="#999"
+                  value={nombreRepresentanteEmpresaSaliente}
+                  onChangeText={setNombreRepresentanteEmpresaSaliente}
+                />
+              </ThemedView>
+
+              {/* Firmas dibujadas */}
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante cliente</ThemedText>
+                {!firmaRepresentanteCliente ? (
+                  <TouchableOpacity
+                    style={styles.signatureButton}
+                    onPress={() => openSignatureModal('cliente')}
+                  >
+                    <Ionicons name="create-outline" size={24} color="#007AFF" />
+                    <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image
+                      source={{ uri: formatSignatureForDisplay(firmaRepresentanteCliente) || '' }}
+                      style={styles.signaturePreview}
+                    />
+                    <TouchableOpacity
+                      style={styles.clearSignatureButton}
+                      onPress={() => setFirmaRepresentanteCliente(null)}
+                    >
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante empresa entrante</ThemedText>
+                {!firmaRepresentanteEmpresaEntrante ? (
+                  <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('entrante')}>
+                    <Ionicons name="create-outline" size={24} color="#007AFF" />
+                    <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaRepresentanteEmpresaEntrante) || '' }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaRepresentanteEmpresaEntrante(null)}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              <ThemedView style={styles.formGroup}>
+                <ThemedText style={styles.formSectionTitle}>Firma representante empresa saliente</ThemedText>
+                {!firmaRepresentanteEmpresaSaliente ? (
+                  <TouchableOpacity style={styles.signatureButton} onPress={() => openSignatureModal('saliente')}>
+                    <Ionicons name="create-outline" size={24} color="#007AFF" />
+                    <ThemedText style={styles.signatureButtonText}>Toca para dibujar la firma</ThemedText>
+                  </TouchableOpacity>
+                ) : (
+                  <ThemedView style={styles.signaturePreviewContainer}>
+                    <Image source={{ uri: formatSignatureForDisplay(firmaRepresentanteEmpresaSaliente) || '' }} style={styles.signaturePreview} />
+                    <TouchableOpacity style={styles.clearSignatureButton} onPress={() => setFirmaRepresentanteEmpresaSaliente(null)}>
+                      <Ionicons name="trash" size={16} color="#FF3B30" />
+                      <ThemedText style={styles.clearSignatureButtonText}>Eliminar Firma</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                )}
+              </ThemedView>
+
+              {/* Firma responsable (QR) */}
+              <ThemedView style={styles.sectionContainer}>
+                <ThemedView style={styles.sectionHeader}>
+                  <ThemedText style={styles.sectionTitle}>Firma responsable</ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.sectionBody}>
+                  <ThemedView style={styles.firmaButtonsRow}>
+                    <TouchableOpacity style={styles.firmaBlueButton} onPress={handleGenerateFirmaResponsable} disabled={isGeneratingFirma}>
+                      <Ionicons name="qr-code-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.firmaBlueButtonText}>{isGeneratingFirma ? 'Generando...' : 'Generar'}</ThemedText>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.firmaBlueButton} onPress={handleScanFirmaResponsable}>
+                      <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
+                      <ThemedText style={styles.firmaBlueButtonText}>Escanear QR</ThemedText>
+                    </TouchableOpacity>
+                  </ThemedView>
+                  {!firmaResponsable ? (
+                    <ThemedText style={styles.hintText}>Debes generar o escanear una firma.</ThemedText>
+                  ) : (
+                    <ThemedView style={styles.firmaInfoBox}>
+                      <ThemedView style={styles.firmaInfoHeader}>
+                        <ThemedText style={styles.firmaInfoTitle}>Firma registrada</ThemedText>
+                        <TouchableOpacity onPress={() => setFirmaResponsable('')} style={styles.firmaTinyTrash}>
+                          <Ionicons name="trash" size={14} color="#FF3B30" />
+                        </TouchableOpacity>
+                      </ThemedView>
+                      {(() => {
+                        const info = decodeFirmaHash(firmaResponsable);
+                        if (!info) return <ThemedText style={styles.hintText}>QR sin información decodificable.</ThemedText>;
+                        return (
+                          <>
+                            <ThemedText style={styles.firmaInfoText}>Sesión: {info.sessionId}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Empleado: {info.empleadoId}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Lat/Lng: {info.latitud}, {info.longitud}</ThemedText>
+                            <ThemedText style={styles.firmaInfoText}>Hora: {convertDateTimestampToLocalString(new Date(Number(info.timestamp)).toISOString())}</ThemedText>
+                          </>
+                        );
+                      })()}
+                    </ThemedView>
+                  )}
+                </ThemedView>
+              </ThemedView>
+
+              <ThemedView style={styles.actionButtons}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.cancelButton]}
+                  onPress={editingRecord ? cancelEditing : cancelCreating}
+                >
+                  {getActionIcon('cancel')}
+                  <ThemedText style={[styles.actionButtonText, styles.actionButtonTextDark]}>Cancelar</ThemedText>
+                </TouchableOpacity>
+                {submitResponse && (
+                  <ThemedView style={[styles.responseContainer, submitResponse.type === 'success' ? styles.responseSuccess : styles.responseError]}>
+                    <ThemedText style={styles.responseText}>
+                      {submitResponse.type === 'success' ? '✓ ' : '✗ '}
+                      {submitResponse.message}
+                    </ThemedText>
+                  </ThemedView>
+                )}
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.saveButton, isSubmitting && styles.buttonDisabled]}
+                  onPress={handleConfirmSubmit}
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      {getActionIcon('confirm')}
+                      <ThemedText style={[styles.actionButtonText, styles.actionButtonTextLight]}>
+                        Aceptar
+                      </ThemedText>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </ThemedView>
+            </ThemedView>
+          ) : (
+            <ThemedView style={styles.listSection}>
+              {renderListFilters()}
+
+              <TouchableOpacity style={styles.createButton} onPress={startCreating}>
+                <Ionicons name="add" size={24} color="#FFFFFF" />
+              </TouchableOpacity>
+              {renderPositionList()}
+            </ThemedView>
+          )}
+        </ThemedView>
+      </ScrollView>
+
+      {/* Camera Modal */}
+      <Modal
+        visible={isCameraVisible}
+        animationType="slide"
+        onRequestClose={() => setIsCameraVisible(false)}
+      >
+        <View style={styles.cameraContainer}>
+          <CameraView
+            ref={cameraRef}
+            style={styles.camera}
+            facing="back"
+          />
+          <View style={styles.cameraControls}>
+            <TouchableOpacity
+              style={styles.cameraCancelButton}
+              onPress={() => setIsCameraVisible(false)}
+            >
+              <Ionicons name="close" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.cameraCaptureButton}
+              onPress={capturePhoto}
+            >
+              <View style={styles.cameraCaptureButtonInner} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Signature Modal */}
+      <Modal
+        visible={isSignatureModalVisible}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={closeSignatureModal}
+      >
+        <ThemedView style={styles.modalOverlay}>
+          <ThemedView style={styles.modalContainer}>
+            <ThemedView style={styles.modalHeader}>
+              <ThemedText style={styles.modalTitle}>
+                {signatureTarget === 'cliente'
+                  ? 'Firma representante cliente'
+                  : signatureTarget === 'entrante'
+                    ? 'Firma representante empresa entrante'
+                    : 'Firma representante empresa saliente'}
+              </ThemedText>
+              <TouchableOpacity onPress={closeSignatureModal}>
+                <Ionicons name="close" size={24} color="#333" />
+              </TouchableOpacity>
+            </ThemedView>
+
+            <View style={styles.modalSignatureContainer}>
+              <SignatureScreen
+                ref={signatureRef}
+                onOK={handleSignatureRead}
+                descriptionText="Dibuja la firma en el área blanca"
+                clearText=""
+                confirmText=""
+                webStyle={signatureWebStyle}
+                key={signatureKey}
+              />
+            </View>
+
+            <ThemedView style={styles.modalActions}>
+              <TouchableOpacity style={styles.modalClearButton} onPress={clearSignatureInModal}>
+                <Ionicons name="trash" size={20} color="#000000" />
+                <ThemedText style={styles.modalClearButtonText}>Limpiar</ThemedText>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.modalAcceptButton} onPress={acceptSignature}>
+                <Ionicons name="checkmark" size={20} color="#000000" />
+                <ThemedText style={styles.modalAcceptButtonText}>Aceptar</ThemedText>
+              </TouchableOpacity>
+            </ThemedView>
+          </ThemedView>
+        </ThemedView>
+      </Modal>
+
+      {/* QR Scanner */}
+      <CambiosAppsModulesModal
+        visible={isCambiosModalVisible}
+        title={cambiosTitle}
+        items={cambiosItems}
+        onClose={closeCambiosModal}
+      />
+
+      {QRScannerComponent}
+
+      <AppFooter />
+      <SlideMenu
+        isVisible={isMenuVisible}
+        onClose={handleMenuClose}
+        onHomePress={handleHomePress}
+        currentRoute="OpeningClosingPosition"
+      />
+    </ThemedView>
+  );
+}
+
+const styles = StyleSheet.create({
+  // Layout (mismo patrón que LlavesScreen)
+  container: { flex: 1 },
+  scrollView: { flex: 1 },
+  scrollContent: { padding: 16 },
+  contentContainer: { width: '100%', maxWidth: 800, alignSelf: 'center' },
+  // Header principal (como LlavesScreen: título + subtítulo + línea)
+  titleContainer: {
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  title: { fontSize: 22, fontWeight: 'bold', textAlign: 'center', marginBottom: 8, color: '#000000' },
+  subtitle: { fontSize: 14, opacity: 0.7, textAlign: 'center', color: '#000000' },
+  noMarcaContainer: {
+    padding: 20,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#EF5350',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  noMarcaTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#D32F2F',
+    marginBottom: 10,
+  },
+  noMarcaMessage: {
+    fontSize: 14,
+    color: '#D32F2F',
+    textAlign: 'center',
+  },
+  createButton: { backgroundColor: '#007AFF', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 16, flexDirection: 'row', justifyContent: 'center', gap: 10 },
+  createButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
+  // Form card (similar a LlavesScreen.formCard)
+  formContainer: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E0E0E0' },
+  formGroup: {
+    marginBottom: 15,
+  },
+  formLabel: { fontSize: 13, fontWeight: '700', marginBottom: 6, color: '#333' },
+  formInput: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 10, fontSize: 14, color: '#000000', backgroundColor: '#FFFFFF' },
+  pickerWrapper: { borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, overflow: 'hidden', backgroundColor: '#FFFFFF', justifyContent: 'center' },
+  picker: { height: 54, width: '100%', color: '#000000', fontSize: 16 },
+  pickerItem: { fontSize: 16, height: 54 },
+  hintText: {
+    marginTop: 6,
+    fontSize: 12,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  loadingInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  loadingInlineText: {
+    fontSize: 14,
+    color: '#000000',
+  },
+  textArea: {
+    minHeight: 100,
+    paddingTop: 12,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#F9F9F9',
+  },
+  dateButtonText: {
+    fontSize: 16,
+    color: '#000000',
+  },
+  tipoContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  tipoOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#F9F9F9',
+    gap: 8,
+  },
+  tipoOptionSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#007AFF',
+  },
+  tipoCheckbox: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: '#E0E0E0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  tipoOptionText: {
+    fontSize: 14,
+    color: '#000000',
+  },
+  tipoOptionTextSelected: {
+    color: '#FFFFFF',
+  },
+  sectionContainer: {
+    width: '100%',
+    marginTop: 14,
+    marginBottom: 14,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+    flex: 1,
+  },
+  sectionBody: {
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#EAEAEA',
+  },
+  sectionSubtitle: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 10,
+    fontStyle: 'italic',
+  },
+  actividadItem: {
+    marginBottom: 15,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    padding: 12,
+  },
+  actividadHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#F5F5F5',
+  },
+  actividadHeaderContent: {
+    flex: 1,
+    marginRight: 10,
+  },
+  actividadHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  radioRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  radioOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
+  },
+  radioLabel: {
+    fontSize: 14,
+    color: '#000000',
+  },
+  actividadHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  removeActividadButton: {
+    padding: 4,
+  },
+  actividadContent: {
+    padding: 15,
+  },
+  inventarioItem: {
+    marginBottom: 15,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+  },
+  inventarioHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 15,
+    backgroundColor: '#F5F5F5',
+  },
+  inventarioHeaderContent: {
+    flex: 1,
+    marginRight: 10,
+  },
+  inventarioHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#000000',
+  },
+  inventarioHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  removeInventarioButton: {
+    padding: 4,
+  },
+  inventarioContent: {
+    padding: 15,
+  },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderWidth: 2,
+    borderColor: '#FF9500',
+    borderRadius: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  checkboxLabel: {
+    fontSize: 14,
+    color: '#000000',
+  },
+  addButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 8,
+    marginTop: 10,
+    gap: 8,
+  },
+  addButtonText: {
+    color: '#4CAF50',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  cameraButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    padding: 15,
+    borderRadius: 8,
+    gap: 10,
+    marginBottom: 15,
+  },
+  firmaButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  firmaBlueButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  firmaBlueButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  firmaInfoBox: {
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  firmaInfoHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  firmaInfoTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  firmaInfoText: {
+    fontSize: 12,
+    color: '#333',
+    marginTop: 2,
+  },
+  firmaTinyTrash: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  cameraButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  photosContainer: {
+    marginTop: 10,
+  },
+  photoItem: {
+    width: '100%',
+    position: 'relative',
+    marginBottom: 15,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 8,
+    padding: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  photoPreview: {
+    width: '100%',
+    height: 300,
+    borderRadius: 8,
+  },
+  removePhotoButton: {
+    position: 'absolute',
+    top: 5,
+    right: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    borderRadius: 15,
+    padding: 5,
+  },
+  signatureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 15,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#2196F3',
+    gap: 8,
+    minHeight: 100,
+  },
+  signatureButtonText: {
+    fontSize: 14,
+    color: '#2196F3',
+    fontWeight: '600',
+  },
+  signaturePreviewContainer: {
+    padding: 10,
+    backgroundColor: '#F9F9F9',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  signaturePreview: {
+    width: '100%',
+    height: 150,
+    resizeMode: 'contain',
+    marginBottom: 10,
+  },
+  clearSignatureButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 8,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 6,
+    gap: 6,
+  },
+  clearSignatureButtonText: {
+    fontSize: 12,
+    color: '#FF3B30',
+    fontWeight: '600',
+  },
+  actionButtons: { marginTop: 16, flexDirection: 'row', gap: 10, justifyContent: 'space-between' },
+  actionButton: { flex: 1, flexDirection: 'row', gap: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 12 },
+  cancelButton: { backgroundColor: '#EDEDED' },
+  saveButton: { backgroundColor: '#007AFF' },
+  actionButtonText: { fontSize: 16, fontWeight: '800' },
+  actionButtonTextDark: { color: '#000000' },
+  actionButtonTextLight: { color: '#FFFFFF' },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  responseContainer: {
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 12,
+  },
+  responseSuccess: {
+    backgroundColor: '#D4EDDA',
+    borderWidth: 1,
+    borderColor: '#C3E6CB',
+  },
+  responseError: {
+    backgroundColor: '#F8D7DA',
+    borderWidth: 1,
+    borderColor: '#F5C6CB',
+  },
+  responseText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  listSection: {
+    width: '100%',
+  },
+  listFilterCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  listFilterHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  filterToggleButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  filterToggleText: { color: '#007AFF', fontWeight: '700', fontSize: 15 },
+  resetFiltersButton: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  resetFiltersText: { color: '#FF3B30', fontWeight: '600', fontSize: 13 },
+  filterContent: { gap: 4 },
+  filterGroup: { marginBottom: 10 },
+  filterLabel: { fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 4 },
+  listContainer: {
+    width: '100%',
+    marginTop: 10,
+  },
+  // Cards (similar a LlavesScreen.bitacoraCard)
+  listItem: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 0,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  listItemHeader: { padding: 16 },
+  listItemContent: {
+    flex: 1,
+  },
+  listItemTitle: { fontSize: 16, fontWeight: '800', color: '#000000' },
+  listItemSubtitle: { marginTop: 4, fontSize: 13, color: '#000000', opacity: 0.7 },
+  listItemActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  offlineBadge: {
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  offlineBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  listItemDetails: {
+    borderTopWidth: 1,
+    borderTopColor: '#EEE',
+    padding: 16,
+  },
+  // Collapsables en items (mismo patrón que LlavesScreen)
+  collapseButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginTop: 8,
+    backgroundColor: '#FAFAFA',
+  },
+  collapseButtonText: { fontSize: 13, fontWeight: '600', color: '#007AFF' },
+  collapsableContent: { marginTop: 8, padding: 10, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  detailBlock: { marginBottom: 10, backgroundColor: '#F8F9FA' },
+  detailLine: { marginBottom: 4, color: '#000', backgroundColor: '#F8F9FA' },
+  detailLabel: { fontWeight: '700', color: '#333' },
+  detailValue: { color: '#000' },
+  photoItemMini: {
+    width: '100%',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 8,
+    padding: 8,
+    backgroundColor: '#FFFFFF',
+  },
+  photoPreviewMini: { width: '100%', height: 200, borderRadius: 8, backgroundColor: '#F8F9FA' },
+  photoCaption: { marginTop: 8, fontSize: 12, color: '#000', opacity: 0.7 },
+  // Títulos del formulario como en módulos previos (azul)
+  formSectionTitle: { marginTop: 14, fontSize: 15, fontWeight: '800', color: '#007AFF' },
+  listItemButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 10,
+  },
+  listItemButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    borderRadius: 8,
+    gap: 8,
+  },
+  editButton: {
+    backgroundColor: '#007AFF',
+  },
+  changesButton: { backgroundColor: '#5856D6', flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 8, gap: 8 },
+  deleteButton: {
+    backgroundColor: '#FF3B30',
+  },
+  listItemButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 10,
+    fontSize: 16,
+    color: '#000000',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#FFEBEE',
+    borderRadius: 8,
+    marginTop: 20,
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#D32F2F',
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
+  },
+  cameraControls: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  cameraCancelButton: {
+    padding: 10,
+  },
+  cameraCaptureButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#fff',
+    padding: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cameraCaptureButtonInner: {
+    flex: 1,
+    borderRadius: 30,
+    backgroundColor: '#007AFF',
+    width: '100%',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '90%',
+    maxWidth: 500,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  modalSignatureContainer: {
+    height: 300,
+    width: '100%',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+    gap: 12,
+  },
+  modalClearButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    gap: 8,
+  },
+  modalClearButtonText: {
+    fontSize: 16,
+    color: '#000000',
+    fontWeight: '600',
+  },
+  modalAcceptButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    backgroundColor: '#4CAF50',
+    borderRadius: 8,
+    gap: 8,
+  },
+  modalAcceptButtonText: {
+    fontSize: 16,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  floatModalCardMovimientos: { backgroundColor: '#FFFFFF', borderRadius: 12, width: '100%', maxWidth: 500, maxHeight: '80%', borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  floatModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#E0E0E0' },
+  modalTitle: { fontSize: 16, fontWeight: '800', color: '#000' },
+  cambioCollapsableMain: { width: '100%', marginBottom: 10, backgroundColor: '#fff', borderRadius: 6, borderWidth: 1, borderColor: '#E0E0E0', overflow: 'hidden' },
+  cambioCollapsableHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10, backgroundColor: '#F8F9FA' },
+  cambioCollapsableTitle: { fontSize: 14, fontWeight: '600', color: '#007AFF', flex: 1 },
+  cambioCollapsableContent: { padding: 12, gap: 8, backgroundColor: '#F8F9FA' },
+  changeDescription: { fontSize: 14, lineHeight: 20, color: '#666', marginBottom: 8 },
+  changeDescriptionContainer: { marginBottom: 8 },
+  cambioSignatureImage: { marginTop: 6, height: 80, width: 160, backgroundColor: '#f0f0f0', borderRadius: 4 },
+  filterGroupSearch: { marginBottom: 12 }
+});
+

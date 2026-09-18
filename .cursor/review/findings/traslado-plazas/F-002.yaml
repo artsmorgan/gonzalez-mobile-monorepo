@@ -1,0 +1,15 @@
+id: F-002
+module_id: traslado-plazas
+severity: medium
+status: fixed
+file: apps/mobile/screens/TrasladoPlazasScreen.tsx
+lines: "377-383,440-448"
+category: storage
+title: Cola offline almacena file_base64 completo
+description: |
+  Payload con base64 en AsyncStorage.
+reproduction: |
+  1. PDF grande offline.
+impact: Límite AsyncStorage / OOM.
+suggested_fix: |
+  Guardar archivos en filesystem; cola solo referencias.

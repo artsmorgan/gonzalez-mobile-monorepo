@@ -1,0 +1,15 @@
+id: F-002
+module_id: bitacora-vehiculos-detenidos
+severity: low
+status: fixed
+file: apps/mobile/App.tsx
+lines: "574-575"
+category: offline
+title: Clave legacy aún en ACTION_STORAGE_KEYS
+description: |
+  bitacora_vehiculo_detenido_actions contada como pendiente post-migración.
+reproduction: |
+  1. Cola legacy vacía residual.
+impact: Indicador sync engañoso.
+suggested_fix: |
+  Remover key tras migración completa.

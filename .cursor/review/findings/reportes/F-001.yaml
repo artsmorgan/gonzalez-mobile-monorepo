@@ -1,0 +1,15 @@
+id: F-001
+module_id: reportes
+severity: medium
+status: fixed
+file: apps/mobile/screens/ReportesScreen.tsx
+lines: "1940-1948"
+category: side-effect
+title: Apertura online dispara purge global de reportes
+description: |
+  useEffect llama purgeOldMobileReports al montar online.
+reproduction: |
+  1. Usuario abre Reportes con red.
+impact: Borrado global server-side >6 meses no scoped por usuario.
+suggested_fix: |
+  Purge manual o scoped; no auto en mount.

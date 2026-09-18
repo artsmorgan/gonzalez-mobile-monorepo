@@ -1,0 +1,1087 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import type { ReportDataAccess } from "../reportDynamicPrisma";
+import ExcelJS from "exceljs";
+import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import { hydratePreexistentChildRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
+
+const MANUALES_PUESTO_INCLUDE = {
+    e_puestos_manual_puesto: true,
+    e_empleados_manual_puesto: true,
+    e_empleado_visualizacion_manual_puesto: true,
+};
+
+function normalizeSignatureDataUri(raw: unknown): string | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    if (s.startsWith("data:image/")) return s;
+    return `data:image/png;base64,${s}`;
+}
+
+function parseSignatureDataForExcel(dataUriOrBase64: unknown): { extension: "png" | "jpeg"; base64: string } | null {
+    const d = normalizeSignatureDataUri(dataUriOrBase64);
+    if (!d) return null;
+    const m = /^data:image\/(png|jpeg|jpg);base64,([\s\S]+)$/i.exec(d);
+    if (m) {
+        return { extension: m[1].toLowerCase() === "png" ? "png" : "jpeg", base64: String(m[2]).replace(/\s+/g, "") };
+    }
+    return { extension: "png", base64: d.replace(/^data:image\/\w+;base64,/, "").replace(/\s+/g, "") };
+}
+
+export type ManualesPuestoOrderKey = "title" | "created_at";
+
+export type ManualesPuestoModuleFilters = ActaEntregaModuleFilters & {
+    classificaciones?: string[] | null;
+    empleadoIds?: number[] | null;
+};
+
+export function normalizeManualesPuestoFilters(raw: unknown): ManualesPuestoModuleFilters {
+    const base = normalizeActaEntregaFilters(raw);
+    const o = raw != null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    const classificaciones = Array.isArray(o.classificaciones)
+        ? Array.from(new Set((o.classificaciones as unknown[]).map((x) => String(x ?? "").trim()).filter((x) => x !== "")))
+        : [];
+    const empleadoIds = Array.isArray(o.empleadoIds)
+        ? Array.from(new Set((o.empleadoIds as unknown[]).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)))
+        : [];
+    return {
+        ...base,
+        ...(classificaciones.length > 0 ? { classificaciones } : {}),
+        ...(empleadoIds.length > 0 ? { empleadoIds } : {}),
+    };
+}
+
+export function hasManualesPuestoListModuleFiltersContent(f: ManualesPuestoModuleFilters): boolean {
+    if (f.creadoDesde) return true;
+    if (f.creadoHasta) return true;
+    if (f.empresaIds?.length) return true;
+    if (f.clienteIds?.length) return true;
+    if (f.divisionIds?.length) return true;
+    if (f.contratoIds?.length) return true;
+    if (f.corpoIds?.length) return true;
+    if (f.puestoIds?.length) return true;
+    if (f.classificaciones?.length) return true;
+    if (f.empleadoIds?.length) return true;
+    return false;
+}
+
+export function filtersMatchManualesPuestoListQuery(parsedRowFilters: any, listModuleFilters?: ManualesPuestoModuleFilters): boolean {
+    if (!listModuleFilters) return true;
+    const mf = (parsedRowFilters?.moduleFilters || {}) as Record<string, unknown>;
+    const saved = normalizeManualesPuestoFilters(mf);
+    const overlaps = (left?: number[] | null, right?: number[] | null) => {
+        if (!left || left.length === 0) return true;
+        if (!right || right.length === 0) return false;
+        return left.some((x) => right.includes(x));
+    };
+    const overlapsStr = (left?: string[] | null, right?: string[] | null) => {
+        if (!left || left.length === 0) return true;
+        if (!right || right.length === 0) return false;
+        return left.some((x) => right.includes(x));
+    };
+    if (listModuleFilters.creadoDesde && String(saved.creadoDesde || "") !== String(listModuleFilters.creadoDesde)) return false;
+    if (listModuleFilters.creadoHasta && String(saved.creadoHasta || "") !== String(listModuleFilters.creadoHasta)) return false;
+    if (!overlaps(listModuleFilters.empresaIds ?? undefined, saved.empresaIds ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.clienteIds ?? undefined, saved.clienteIds ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.divisionIds ?? undefined, saved.divisionIds ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.contratoIds ?? undefined, saved.contratoIds ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.corpoIds ?? undefined, saved.corpoIds ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.puestoIds ?? undefined, saved.puestoIds ?? undefined)) return false;
+    if (!overlapsStr(listModuleFilters.classificaciones ?? undefined, saved.classificaciones ?? undefined)) return false;
+    if (!overlaps(listModuleFilters.empleadoIds ?? undefined, saved.empleadoIds ?? undefined)) return false;
+    return true;
+}
+
+const now = () => new Date();
+const activeOrNoInactiveDate = [{ fecha_inactivacion: null }, { fecha_inactivacion: { gte: now() } }];
+
+function parseBoundaryDateTime(s: string | undefined | null): Date | null {
+    if (!s || String(s).trim() === "") return null;
+    const t = String(s).trim();
+    const d = new Date(t.includes("T") ? t : t.replace(" ", "T"));
+    return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function excelCellString(v: unknown): string {
+    const s = String(v ?? "");
+    return s.length > 32767 ? s.slice(0, 32767) : s;
+}
+
+/** `e_manual_puesto.created_by` almacena el id de `c_empleado` como texto (API móvil). */
+function parseEmpleadoIdFromCreatedBy(raw: unknown): number | null {
+    const s = String(raw ?? "").trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
+function empleadoDisplayName(e: {
+    codigo: string;
+    nombre: string | null;
+    primer_apellido: string | null;
+    segundo_apellido: string | null;
+}): string {
+    const full = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ").trim();
+    return full ? `${e.codigo} - ${full}` : e.codigo;
+}
+
+function safeJsonParse(raw: string | null | undefined): any {
+    if (!raw || String(raw).trim() === "") return null;
+    try {
+        return JSON.parse(String(raw));
+    } catch {
+        return null;
+    }
+}
+
+/** Columnas usadas en las cuadrículas de la hoja «Quices». */
+const QUIZ_SHEET_COLS = 7;
+
+const GRP_HDR = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+const borderThin: Partial<ExcelJS.Borders> = {
+    top: { style: "thin", color: { argb: "FF000000" } },
+    left: { style: "thin", color: { argb: "FF000000" } },
+    bottom: { style: "thin", color: { argb: "FF000000" } },
+    right: { style: "thin", color: { argb: "FF000000" } },
+};
+
+/** Misma nomenclatura que `getQuizTypeLabel` en `JobManualsScreen.tsx`. */
+function quizTypeKeyToSpanishLabel(typeKey: string | undefined | null): string {
+    const k = String(typeKey ?? "")
+        .trim()
+        .toLowerCase();
+    const map: Record<string, string> = {
+        short: "Respuesta corta",
+        paragraph: "Párrafo",
+        multiple_choice: "Selección única",
+        multiple_select: "Selección múltiple",
+        list: "Lista",
+    };
+    if (k && map[k]) return map[k];
+    const raw = String(typeKey ?? "").trim();
+    return raw !== "" ? raw : "—";
+}
+
+function extractQuizQuestionArray(quizStr: string | null | undefined): any[] {
+    const parsed = safeJsonParse(quizStr ?? undefined);
+    if (!parsed) return [];
+    return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.questions) ? parsed.questions : [];
+}
+
+function formatCorrectAnswerForGrid(q: any): string {
+    if (Array.isArray(q?.answers) && q.answers.length) {
+        return excelCellString(q.answers.map((o: any) => String(o)).join(", "));
+    }
+    if (typeof q?.answer === "string" && q.answer.trim() !== "") return excelCellString(q.answer);
+    return "—";
+}
+
+function optionsCellText(q: any): string {
+    if (!Array.isArray(q?.options) || !q.options.length) return "—";
+    return excelCellString(q.options.map((o: any) => String(o)).join(" | "));
+}
+
+function parseQuizAnswersPayload(raw: string | null | undefined): any[] {
+    const arr = safeJsonParse(raw ?? undefined);
+    return Array.isArray(arr) ? arr : [];
+}
+
+function answersByQuestionId(items: any[]): Map<string, any> {
+    const m = new Map<string, any>();
+    for (const x of items) {
+        const id = String(x?.question_id ?? "").trim();
+        if (id) m.set(id, x);
+    }
+    return m;
+}
+
+function displayUserAnswerCell(ans: any): string {
+    if (!ans) return "—";
+    if (ans.user_answer != null && String(ans.user_answer).trim() !== "") return excelCellString(ans.user_answer);
+    if (Array.isArray(ans.user_answers) && ans.user_answers.length) {
+        return excelCellString(ans.user_answers.map((o: any) => String(o)).join(", "));
+    }
+    return "—";
+}
+
+function applyQuizDataRow(row: ExcelJS.Row, cols: number) {
+    for (let c = 1; c <= cols; c++) {
+        const cell = row.getCell(c);
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { wrapText: true, vertical: "top" };
+    }
+}
+
+function applyQuizSubheaderRow(row: ExcelJS.Row, cols: number) {
+    row.font = { bold: true, size: 11 };
+    for (let c = 1; c <= cols; c++) {
+        const cell = row.getCell(c);
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE7E6E6" } } as ExcelJS.Fill;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
+}
+
+function approvedLabel(v: boolean | null | undefined): string {
+    if (v === true) return "Aprobado";
+    if (v === false) return "Reprobado";
+    return "Pendiente";
+}
+
+async function puestoIdsFromSucursalIds(prisma: ReportDataAccess, sucursalIds: number[]): Promise<number[]> {
+    if (!sucursalIds.length) return [];
+    const rows = await prisma.e_estructura_puesto.findMany({
+        where: {
+            deleted: null,
+            AND: [{ OR: activeOrNoInactiveDate }],
+            sucursal_id: { in: sucursalIds },
+        },
+        select: { id: true },
+    });
+    return rows.map((r) => r.id);
+}
+
+async function sucursalIdsFromContratoIds(prisma: ReportDataAccess, contratoIds: number[]): Promise<number[]> {
+    if (!contratoIds.length) return [];
+    const rows = await prisma.e_estructura_sucursal.findMany({
+        where: {
+            deleted: null,
+            AND: [{ OR: activeOrNoInactiveDate }],
+            contrato_id: { in: contratoIds },
+        },
+        select: { id: true },
+    });
+    return rows.map((r) => r.id);
+}
+
+async function traceEmpresaToPuestoIds(prisma: ReportDataAccess, empresaIds: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    const clientes = await prisma.e_estructura_cliente.findMany({
+        where: { empresa_id: { in: empresaIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
+        select: { id: true },
+    });
+    if (!clientes.length) return out;
+    const cliIds = clientes.map((c) => c.id);
+    const contratos = await prisma.e_estructura_contrato.findMany({
+        where: { cliente_id: { in: cliIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
+        select: { id: true },
+    });
+    const corIds = contratos.map((c) => c.id);
+    const sids = await sucursalIdsFromContratoIds(prisma, corIds);
+    const pids = await puestoIdsFromSucursalIds(prisma, sids);
+    pids.forEach((id) => out.add(id));
+    return out;
+}
+
+async function traceClienteToPuestoIds(prisma: ReportDataAccess, clienteIds: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    const contratos = await prisma.e_estructura_contrato.findMany({
+        where: { cliente_id: { in: clienteIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
+        select: { id: true },
+    });
+    if (!contratos.length) return out;
+    const sids = await sucursalIdsFromContratoIds(prisma, contratos.map((c) => c.id));
+    const pids = await puestoIdsFromSucursalIds(prisma, sids);
+    pids.forEach((id) => out.add(id));
+    return out;
+}
+
+async function traceDivisionToPuestoIds(prisma: ReportDataAccess, divisionIds: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    const contratos = await prisma.e_estructura_contrato.findMany({
+        where: { division_id: { in: divisionIds }, deleted: null, AND: [{ OR: activeOrNoInactiveDate }] },
+        select: { id: true },
+    });
+    if (!contratos.length) return out;
+    const sids = await sucursalIdsFromContratoIds(prisma, contratos.map((c) => c.id));
+    const pids = await puestoIdsFromSucursalIds(prisma, sids);
+    pids.forEach((id) => out.add(id));
+    return out;
+}
+
+async function traceContratoToPuestoIds(prisma: ReportDataAccess, contratoIds: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    const sids = await sucursalIdsFromContratoIds(prisma, contratoIds);
+    const pids = await puestoIdsFromSucursalIds(prisma, sids);
+    pids.forEach((id) => out.add(id));
+    return out;
+}
+
+async function traceCorpoToPuestoIds(prisma: ReportDataAccess, corpoIds: number[]): Promise<Set<number>> {
+    const out = new Set<number>();
+    const pids = await puestoIdsFromSucursalIds(prisma, corpoIds);
+    pids.forEach((id) => out.add(id));
+    return out;
+}
+
+/**
+ * Intersección de conjuntos de puestos derivados de cada filtro estructural aplicado.
+ * Si no hay ningún filtro estructural, devuelve `undefined` (no restringir por puesto).
+ */
+export async function resolveManualReportPuestoIds(prisma: ReportDataAccess, f: ManualesPuestoModuleFilters): Promise<Set<number> | undefined> {
+    const sets: Set<number>[] = [];
+    if (f.empresaIds?.length) sets.push(await traceEmpresaToPuestoIds(prisma, f.empresaIds));
+    if (f.clienteIds?.length) sets.push(await traceClienteToPuestoIds(prisma, f.clienteIds));
+    if (f.divisionIds?.length) sets.push(await traceDivisionToPuestoIds(prisma, f.divisionIds));
+    if (f.contratoIds?.length) sets.push(await traceContratoToPuestoIds(prisma, f.contratoIds));
+    if (f.corpoIds?.length) sets.push(await traceCorpoToPuestoIds(prisma, f.corpoIds));
+    if (f.puestoIds?.length) sets.push(new Set(f.puestoIds));
+    if (sets.length === 0) return undefined;
+    let acc = new Set(sets[0]);
+    for (let i = 1; i < sets.length; i++) {
+        const next = new Set<number>();
+        for (const id of acc) {
+            if (sets[i].has(id)) next.add(id);
+        }
+        acc = next;
+    }
+    return acc;
+}
+
+export async function queryManualesPuestoRows(prisma: ReportDataAccess, filters: ManualesPuestoModuleFilters, orderKey: ManualesPuestoOrderKey) {
+    const puestoSet = await resolveManualReportPuestoIds(prisma, filters);
+    if (puestoSet !== undefined && puestoSet.size === 0) return [];
+
+    const desde = parseBoundaryDateTime(filters.creadoDesde ?? undefined);
+    const hasta = parseBoundaryDateTime(filters.creadoHasta ?? undefined);
+
+    const where: any = { isActive: true };
+    if (desde || hasta) {
+        where.created_at = {};
+        if (desde) where.created_at.gte = desde;
+        if (hasta) where.created_at.lte = hasta;
+    }
+    if (puestoSet !== undefined || filters.empleadoIds?.length) {
+        const orClauses: any[] = [];
+        if (puestoSet !== undefined) {
+            const arr = [...puestoSet];
+            orClauses.push({ puesto_id: { in: arr } }, { e_puestos_manual_puesto: { some: { puesto_id: { in: arr } } } });
+        }
+        if (filters.empleadoIds?.length) {
+            orClauses.push({ e_empleados_manual_puesto: { some: { empleado_id: { in: filters.empleadoIds } } } });
+        }
+        where.OR = orClauses;
+    }
+    if (filters.classificaciones?.length) {
+        const classOr = filters.classificaciones.map((c) => ({ classification: { contains: c } }));
+        where.AND = [...(where.AND ?? []), { OR: classOr }];
+    }
+
+    const orderBy =
+        orderKey === "created_at"
+            ? { created_at: "desc" as const }
+            : { title: "asc" as const };
+
+    const { sameGroupInclude } = splitIncludeByTableGroup(MANUALES_PUESTO_INCLUDE);
+
+    const rows = await prisma.e_manual_puesto.findMany({
+        where,
+        orderBy,
+        take: 10_000,
+        ...(sameGroupInclude ? { include: sameGroupInclude } : {}),
+    });
+    await hydratePreexistentChildRelations(rows, "e_puestos_manual_puesto", [
+        {
+            relation: "e_estructura_puesto",
+            fkField: "puesto_id",
+            select: { id: true, nombre: true, codigo: true },
+        },
+    ]);
+    await hydratePreexistentChildRelations(rows, "e_empleado_visualizacion_manual_puesto", [
+        {
+            relation: "c_empleado",
+            fkField: "empleado_id",
+            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+        },
+    ]);
+    await hydratePreexistentChildRelations(rows, "e_empleados_manual_puesto", [
+        {
+            relation: "c_empleado",
+            fkField: "empleado_id",
+            select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+        },
+    ]);
+
+    const empresaIds = [...new Set(rows.map((r) => r.empresa_id).filter((n) => n > 0))];
+    const clienteIds = [...new Set(rows.map((r) => r.cliente_id).filter((n) => n > 0))];
+    const divisionIds = [...new Set(rows.map((r) => r.division_id).filter((n) => n > 0))];
+    const contratoIds = [...new Set(rows.map((r) => r.contrato_id).filter((n) => n > 0))];
+    const corpoIds = [...new Set(rows.map((r) => r.corpo_id).filter((n) => n > 0))];
+    const puestoIds = [...new Set(rows.map((r) => r.puesto_id).filter((n) => n > 0))];
+    const creadorIds = [...new Set(rows.map((r: any) => parseEmpleadoIdFromCreatedBy(r.created_by)).filter((n): n is number => n != null))];
+
+    const [empresas, clientes, divisiones, contratos, corpos, puestos, creadores] = await Promise.all([
+        empresaIds.length ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empresaIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
+        clienteIds.length ? prisma.e_estructura_cliente.findMany({ where: { id: { in: clienteIds } }, select: { id: true, nombre: true } }) : [],
+        divisionIds.length ? prisma.n_division.findMany({ where: { id: { in: divisionIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
+        contratoIds.length
+            ? prisma.e_estructura_contrato.findMany({ where: { id: { in: contratoIds } }, select: { id: true, nombre: true, nro_contrato: true } })
+            : [],
+        corpoIds.length ? prisma.e_estructura_sucursal.findMany({ where: { id: { in: corpoIds } }, select: { id: true, nombre: true, nro_sucursal: true } }) : [],
+        puestoIds.length ? prisma.e_estructura_puesto.findMany({ where: { id: { in: puestoIds } }, select: { id: true, nombre: true, codigo: true } }) : [],
+        creadorIds.length
+            ? prisma.c_empleado.findMany({
+                  where: { id: { in: creadorIds } },
+                  select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+              })
+            : [],
+    ]);
+    const empresaById = new Map(empresas.map((e) => [e.id, e]));
+    const clienteById = new Map(clientes.map((c) => [c.id, c]));
+    const divisionById = new Map(divisiones.map((d) => [d.id, d]));
+    const contratoById = new Map(contratos.map((c) => [c.id, c]));
+    const corpoById = new Map(corpos.map((c) => [c.id, c]));
+    const puestoById = new Map(puestos.map((p) => [p.id, p]));
+    const creadorById = new Map(creadores.map((e) => [e.id, e]));
+
+    return rows.map((r: any) => {
+        const emp = empresaById.get(r.empresa_id);
+        const cli = clienteById.get(r.cliente_id);
+        const div = divisionById.get(r.division_id);
+        const con = contratoById.get(r.contrato_id);
+        const cor = corpoById.get(r.corpo_id);
+        const pto = puestoById.get(r.puesto_id);
+        const empCreadorId = parseEmpleadoIdFromCreatedBy(r.created_by);
+        const creador = empCreadorId != null ? creadorById.get(empCreadorId) : undefined;
+        return {
+            ...r,
+            empresa_txt: emp ? `${emp.codigo ? `${emp.codigo} - ` : ""}${emp.nombre}` : String(r.empresa_id),
+            cliente_txt: cli?.nombre ?? String(r.cliente_id),
+            division_txt: div ? `${div.codigo ? `${div.codigo} - ` : ""}${div.nombre}` : String(r.division_id ?? ""),
+            contrato_txt: con ? `${con.nro_contrato ? `${con.nro_contrato} - ` : ""}${con.nombre}` : String(r.contrato_id),
+            corpo_txt: cor ? `${cor.nro_sucursal ? `${cor.nro_sucursal} - ` : ""}${cor.nombre}` : String(r.corpo_id),
+            puesto_principal_txt: pto ? `${pto.codigo ? `${pto.codigo} - ` : ""}${pto.nombre}` : String(r.puesto_id),
+            created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
+        };
+    });
+}
+
+function applyHeaderRow(row: ExcelJS.Row, cols: number) {
+    row.font = { bold: true };
+    for (let c = 1; c <= cols; c++) {
+        const cell = row.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
+}
+
+export async function buildManualesPuestoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
+    const wb = new ExcelJS.Workbook();
+    const wsMain = wb.addWorksheet("Manuales");
+    const wsQuiz = wb.addWorksheet("Quices");
+    const wsPuestos = wb.addWorksheet("Puestos del manual");
+    const wsEmpleadosVinc = wb.addWorksheet("Empleados del manual");
+    const wsVis = wb.addWorksheet("Visualización");
+    const wsFirmasManuales = wb.addWorksheet("Firmas manuales");
+    // Fondo blanco en todo el documento: se oculta la cuadrícula de Excel en todas las hojas, así solo
+    // se ven los bordes que dibujamos manualmente (no solo los del banner de la hoja principal).
+    for (const sheet of [wsMain, wsQuiz, wsPuestos, wsEmpleadosVinc, wsVis, wsFirmasManuales]) {
+        sheet.views = [{ showGridLines: false }];
+    }
+
+    /** Cuadrícula jerárquica: Manual (nivel 0) → Pregunta plantilla / Puesto vinculado / Visualización, hermanos (nivel 1) → Respuesta (nivel 2, hija de Visualización). */
+    const mainHeaders = [
+        "ID de fila",
+        "ID fila padre",
+        "Nivel",
+        "Tipo de fila",
+        "ID Manual",
+        "Título",
+        "Descripción",
+        "Empresa",
+        "Cliente",
+        "División",
+        "Contrato",
+        "Corpo",
+        "Puesto principal",
+        "Clasificación",
+        "Creado en (fecha)",
+        "Creado en (hora)",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
+        "Ver estructura",
+        "Puestos vinculados",
+        "Empleados vinculados",
+        "Visualización empleados",
+        "Quices",
+        "ID pregunta (plantilla)",
+        "Enunciado (plantilla)",
+        "Tipo pregunta (plantilla)",
+        "Puntos (plantilla)",
+        "Puesto (vínculo)",
+        "Empleado (vínculo)",
+        "Empleado (visualización)",
+        "Estado (visualización)",
+        "ID pregunta (respuesta)",
+        "Respuesta empleado",
+    ];
+    // Posiciones dentro de `mainHeaders` (sin la columna de margen que agrega `addMainRow`); se usan para escribir en los arreglos `values`/`rootValues`.
+    const COL_VER_ESTRUCTURA = mainHeaders.indexOf("Ver estructura") + 1;
+    const COL_PUESTOS_VINC = mainHeaders.indexOf("Puestos vinculados") + 1;
+    const COL_EMPLEADOS_VINC = mainHeaders.indexOf("Empleados vinculados") + 1;
+    const COL_VIS_EMPLEADOS = mainHeaders.indexOf("Visualización empleados") + 1;
+    const COL_QUICES = mainHeaders.indexOf("Quices") + 1;
+    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    // +1 más: columna real en la hoja tras el margen que agrega `addMainRow`.
+    const SHEET_COL_VER_ESTRUCTURA = COL_VER_ESTRUCTURA + 1;
+    const SHEET_COL_PUESTOS_VINC = COL_PUESTOS_VINC + 1;
+    const SHEET_COL_EMPLEADOS_VINC = COL_EMPLEADOS_VINC + 1;
+    const SHEET_COL_VIS_EMPLEADOS = COL_VIS_EMPLEADOS + 1;
+    const SHEET_COL_QUICES = COL_QUICES + 1;
+    const SHEET_COL_TIPO_FILA = COL_TIPO_FILA + 1;
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_manual_puesto",
+        rows.map((r: any) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(wsMain, mainHeaders);
+    h.font = { bold: true };
+    for (let c = 2; c <= mainHeaders.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin as ExcelJS.Borders;
+        cell.alignment = { vertical: "middle", wrapText: true };
+    }
+    wsMain.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
+
+    const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
+            cell.border = borderThin as ExcelJS.Borders;
+            cell.alignment = { wrapText: true, vertical: "top" };
+        });
+        row.getCell(SHEET_COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.outlineLevel = nivel;
+        if (nivel === 0) row.getCell(SHEET_COL_TIPO_FILA).font = { bold: true };
+    };
+
+    let quizRow = 0;
+    const writeQuizSectionTitle = (text: string) => {
+        quizRow += 1;
+        wsQuiz.mergeCells(quizRow, 1, quizRow, QUIZ_SHEET_COLS);
+        wsQuiz.getCell(quizRow, 1).value = text;
+        wsQuiz.getCell(quizRow, 1).font = { bold: true, size: 12 };
+        wsQuiz.getCell(quizRow, 1).alignment = { vertical: "middle", wrapText: true };
+        return quizRow;
+    };
+
+    const writeQuizMergedNote = (text: string) => {
+        quizRow += 1;
+        wsQuiz.mergeCells(quizRow, 1, quizRow, QUIZ_SHEET_COLS);
+        wsQuiz.getCell(quizRow, 1).value = text;
+        wsQuiz.getCell(quizRow, 1).alignment = { wrapText: true, vertical: "top" };
+        applyQuizDataRow(wsQuiz.getRow(quizRow), QUIZ_SHEET_COLS);
+    };
+
+    let puestosRow = 0;
+    const writePuestosHeader = () => {
+        const hr = wsPuestos.addRow(["Manual ID", "Título manual", "Puesto ID", "Puesto"]);
+        applyHeaderRow(hr, 4);
+        puestosRow = hr.number;
+        return puestosRow;
+    };
+
+    let empleadosVincRow = 0;
+    const writeEmpleadosVincHeader = () => {
+        const hr = wsEmpleadosVinc.addRow(["Manual ID", "Título manual", "Empleado ID", "Empleado"]);
+        applyHeaderRow(hr, 4);
+        empleadosVincRow = hr.number;
+        return empleadosVincRow;
+    };
+
+    let visRow = 0;
+    const writeVisHeader = () => {
+        const hr = wsVis.addRow([
+            "Manual ID",
+            "Título manual",
+            "Visualización ID",
+            "Empleado",
+            "Estado",
+            "Quiz respuestas",
+            "Ver firma manual",
+        ]);
+        applyHeaderRow(hr, 7);
+        visRow = hr.number;
+        return visRow;
+    };
+
+    let firmasManualesRow = 0;
+    const writeFirmasManualesHeader = () => {
+        const hr = wsFirmasManuales.addRow(["Manual ID", "Título manual", "Visualización ID", "Empleado", "Firma manual"]);
+        applyHeaderRow(hr, 5);
+        firmasManualesRow = hr.number;
+        return firmasManualesRow;
+    };
+
+    writePuestosHeader();
+    writeEmpleadosVincHeader();
+    writeVisHeader();
+    writeFirmasManualesHeader();
+
+    const anchorQuizStructure = new Map<number, number>();
+    const anchorQuizAnswers = new Map<number, number>();
+    /** Fila en «Quices» donde comienza el bloque de respuestas de una visualización (para hipervínculo desde «Visualización»). */
+    const anchorQuizByVisualizationId = new Map<number, number>();
+    const anchorPuestos = new Map<number, number>();
+    const anchorEmpleadosVinc = new Map<number, number>();
+    const anchorVis = new Map<number, number>();
+
+    for (const r of rows) {
+        const id = Number(r.id);
+        const title = excelCellString(r.title);
+
+        const structureTitleRow = writeQuizSectionTitle(`Manual #${id} — ${title}`);
+        anchorQuizStructure.set(id, structureTitleRow);
+
+        const parsedRoot = safeJsonParse(r.quiz ?? undefined);
+        const questionObjs = extractQuizQuestionArray(r.quiz);
+
+        quizRow += 1;
+        wsQuiz.mergeCells(quizRow, 1, quizRow, QUIZ_SHEET_COLS);
+        wsQuiz.getCell(quizRow, 1).value = "Estructura del cuestionario (plantilla)";
+        applyQuizSubheaderRow(wsQuiz.getRow(quizRow), QUIZ_SHEET_COLS);
+
+        quizRow += 1;
+        const structHdr = wsQuiz.addRow([
+            "Nº",
+            "ID pregunta",
+            "Enunciado",
+            "Tipo de pregunta",
+            "Puntos",
+            "Opciones",
+            "Respuesta esperada / modelo",
+        ]);
+        quizRow = structHdr.number;
+        applyHeaderRow(structHdr, QUIZ_SHEET_COLS);
+
+        if (typeof parsedRoot === "object" && parsedRoot !== null && typeof (parsedRoot as any).minApprovalPercentage === "number") {
+            quizRow += 1;
+            wsQuiz.mergeCells(quizRow, 1, quizRow, QUIZ_SHEET_COLS);
+            wsQuiz.getCell(quizRow, 1).value = `Porcentaje mínimo para aprobar: ${(parsedRoot as any).minApprovalPercentage}%`;
+            wsQuiz.getCell(quizRow, 1).font = { italic: true };
+            applyQuizDataRow(wsQuiz.getRow(quizRow), QUIZ_SHEET_COLS);
+        }
+
+        if (!questionObjs.length) {
+            quizRow += 1;
+            const emptyR = wsQuiz.addRow(["—", "—", "(Sin preguntas en el quiz)", "—", "—", "—", "—"]);
+            quizRow = emptyR.number;
+            applyQuizDataRow(emptyR, QUIZ_SHEET_COLS);
+        } else {
+            for (let i = 0; i < questionObjs.length; i++) {
+                const q = questionObjs[i] || {};
+                const qid = String(q?.id ?? "").trim();
+                const qtitle = excelCellString(q?.title ?? q?.titulo ?? "");
+                const typeLabel = quizTypeKeyToSpanishLabel(q?.type);
+                const ptsRaw = q?.points;
+                const ptsNum = typeof ptsRaw === "number" ? ptsRaw : Number(ptsRaw);
+                const ptsStr = Number.isFinite(ptsNum) ? String(ptsNum) : "—";
+                const rnum = wsQuiz.addRow([
+                    String(i + 1),
+                    qid || "—",
+                    qtitle || "—",
+                    typeLabel,
+                    ptsStr,
+                    optionsCellText(q),
+                    formatCorrectAnswerForGrid(q),
+                ]);
+                quizRow = rnum.number;
+                applyQuizDataRow(rnum, QUIZ_SHEET_COLS);
+            }
+        }
+
+        const answerTitleRow = writeQuizSectionTitle(`Respuestas por empleado — Manual #${id}`);
+        anchorQuizAnswers.set(id, answerTitleRow);
+
+        const vizList = r.e_empleado_visualizacion_manual_puesto || [];
+        if (!vizList.length) {
+            writeQuizMergedNote("(Sin visualizaciones ni respuestas registradas)");
+        }
+        for (const v of vizList) {
+            const emp = v.c_empleado;
+            const empTxt = emp
+                ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
+                : excelCellString(v.nombre_empleado);
+            const vid = Number(v.id);
+            quizRow += 1;
+            wsQuiz.mergeCells(quizRow, 1, quizRow, QUIZ_SHEET_COLS);
+            wsQuiz.getCell(quizRow, 1).value = `Visualización ID ${vid} — Empleado: ${empTxt} — Estado: ${approvedLabel(v.approved)}`;
+            applyQuizSubheaderRow(wsQuiz.getRow(quizRow), QUIZ_SHEET_COLS);
+            if (Number.isFinite(vid)) anchorQuizByVisualizationId.set(vid, quizRow);
+
+            quizRow += 1;
+            const ansHdr = wsQuiz.addRow([
+                "Nº",
+                "ID pregunta",
+                "Enunciado",
+                "Tipo de pregunta",
+                "Respuesta del empleado",
+                "Respuesta esperada (plantilla)",
+                "Notas",
+            ]);
+            quizRow = ansHdr.number;
+            applyHeaderRow(ansHdr, QUIZ_SHEET_COLS);
+
+            const ansItems = parseQuizAnswersPayload(v.quiz_answear);
+            const byQid = answersByQuestionId(ansItems);
+
+            if (!questionObjs.length) {
+                const r0 = wsQuiz.addRow(["—", "—", "(Sin plantilla de preguntas)", "—", "—", "—", "—"]);
+                quizRow = r0.number;
+                applyQuizDataRow(r0, QUIZ_SHEET_COLS);
+            } else {
+                for (let i = 0; i < questionObjs.length; i++) {
+                    const q = questionObjs[i] || {};
+                    const qid = String(q?.id ?? "").trim();
+                    const qtitle = excelCellString(q?.title ?? q?.titulo ?? "");
+                    const ans = qid ? byQid.get(qid) : undefined;
+                    const typeLabel = quizTypeKeyToSpanishLabel(ans?.type ?? q?.type);
+                    const userDisp = displayUserAnswerCell(ans);
+                    const model = formatCorrectAnswerForGrid(q);
+                    const notesRaw =
+                        ans && (ans.correct_answer != null || (Array.isArray(ans.correct_answers) && ans.correct_answers.length))
+                            ? excelCellString(
+                                  typeof ans.correct_answer === "string" && ans.correct_answer.trim() !== ""
+                                      ? `Ref. calificación: ${ans.correct_answer}`
+                                      : Array.isArray(ans.correct_answers) && ans.correct_answers.length
+                                        ? `Ref. calificación: ${ans.correct_answers.join(", ")}`
+                                        : "",
+                              )
+                            : "";
+                    const notes = notesRaw && notesRaw.trim() !== "" ? notesRaw : "—";
+                    const rnum = wsQuiz.addRow([
+                        String(i + 1),
+                        qid || "—",
+                        qtitle || "—",
+                        typeLabel,
+                        userDisp,
+                        model,
+                        notes,
+                    ]);
+                    quizRow = rnum.number;
+                    applyQuizDataRow(rnum, QUIZ_SHEET_COLS);
+                }
+            }
+        }
+
+        anchorPuestos.set(id, puestosRow + 1);
+        const links = r.e_puestos_manual_puesto || [];
+        for (const link of links) {
+            const p = link.e_estructura_puesto;
+            const ptxt = p ? `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}` : String(link.puesto_id);
+            const row = wsPuestos.addRow([id, title, link.puesto_id, ptxt]);
+            puestosRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+                cell.alignment = { wrapText: true, vertical: "top" };
+            });
+        }
+        if (!links.length) {
+            const row = wsPuestos.addRow([id, title, "", "(Sin vínculos adicionales)"]);
+            puestosRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+            });
+        }
+
+        anchorEmpleadosVinc.set(id, empleadosVincRow + 1);
+        const empleadoLinks = r.e_empleados_manual_puesto || [];
+        for (const link of empleadoLinks) {
+            const e = link.c_empleado;
+            const etxt = e
+                ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
+                : String(link.empleado_id);
+            const row = wsEmpleadosVinc.addRow([id, title, link.empleado_id, etxt]);
+            empleadosVincRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+                cell.alignment = { wrapText: true, vertical: "top" };
+            });
+        }
+        if (!empleadoLinks.length) {
+            const row = wsEmpleadosVinc.addRow([id, title, "", "(Sin vínculos adicionales)"]);
+            empleadosVincRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+            });
+        }
+
+        anchorVis.set(id, visRow + 1);
+        for (const v of vizList) {
+            const emp = v.c_empleado;
+            const empTxt = emp
+                ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
+                : excelCellString(v.nombre_empleado);
+
+            // Se escribe primero (si aplica) para conocer su fila y poder enlazarla desde "Visualización".
+            const manualSig = parseSignatureDataForExcel((v as any).firma_empleado_manual);
+            let firmaManualAnchorRow: number | null = null;
+            if (manualSig) {
+                const fRow = wsFirmasManuales.addRow([id, title, v.id, empTxt, ""]);
+                fRow.eachCell((cell) => {
+                    cell.border = borderThin as ExcelJS.Borders;
+                    cell.alignment = { vertical: "top", wrapText: true };
+                });
+                fRow.height = 110;
+                firmasManualesRow = fRow.number;
+                firmaManualAnchorRow = firmasManualesRow;
+                try {
+                    const imgId = wb.addImage({ base64: manualSig.base64, extension: manualSig.extension });
+                    wsFirmasManuales.addImage(imgId, {
+                        tl: { col: 4 + 0.05, row: firmasManualesRow - 1 + 0.05 },
+                        ext: { width: 260, height: 110 },
+                        editAs: "oneCell",
+                    });
+                } catch {
+                    wsFirmasManuales.getCell(firmasManualesRow, 5).value = "(No se pudo recrear la firma)";
+                }
+            }
+
+            const row = wsVis.addRow([
+                id,
+                title,
+                v.id,
+                empTxt,
+                approvedLabel(v.approved),
+                "Ver respuestas",
+                firmaManualAnchorRow ? "Ver firma manual" : "—",
+            ]);
+            visRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+                cell.alignment = { wrapText: true, vertical: "top" };
+            });
+            const quizCell = row.getCell(6);
+            const tgt = anchorQuizByVisualizationId.get(Number(v.id)) ?? anchorQuizAnswers.get(id) ?? structureTitleRow;
+            quizCell.value = { text: "Ver respuestas", hyperlink: `#'Quices'!A${tgt}` };
+            quizCell.font = { color: { argb: "FF0563C1" }, underline: true };
+
+            if (firmaManualAnchorRow) {
+                const firmaManualCell = row.getCell(7);
+                firmaManualCell.value = { text: "Ver firma manual", hyperlink: `#'Firmas manuales'!A${firmaManualAnchorRow}` };
+                firmaManualCell.font = { color: { argb: "FF0563C1" }, underline: true };
+            }
+        }
+        if (!vizList.length) {
+            const row = wsVis.addRow([id, title, "", "", "", "", ""]);
+            visRow = row.number;
+            row.eachCell((cell) => {
+                cell.border = borderThin as ExcelJS.Borders;
+            });
+        }
+    }
+
+    wsQuiz.columns = [
+        { width: 6 },
+        { width: 14 },
+        { width: 42 },
+        { width: 22 },
+        { width: 36 },
+        { width: 28 },
+        { width: 28 },
+    ];
+    wsPuestos.columns = [{ width: 10 }, { width: 40 }, { width: 10 }, { width: 40 }];
+    wsEmpleadosVinc.columns = [{ width: 10 }, { width: 40 }, { width: 10 }, { width: 40 }];
+    wsVis.columns = [{ width: 10 }, { width: 28 }, { width: 14 }, { width: 36 }, { width: 12 }, { width: 22 }, { width: 22 }];
+    wsFirmasManuales.columns = [{ width: 10 }, { width: 28 }, { width: 14 }, { width: 36 }, { width: 40 }];
+    if (firmasManualesRow < 2) {
+        const emptyRow = wsFirmasManuales.addRow(["", "", "", "", "(Sin firmas manuales registradas)"]);
+        emptyRow.eachCell((cell) => {
+            cell.border = borderThin as ExcelJS.Borders;
+        });
+    }
+
+    for (const r of rows) {
+        const id = Number(r.id);
+        const title = excelCellString(r.title);
+        const desc = excelCellString(r.description);
+        const descShort = desc.length > 500 ? `${desc.slice(0, 497)}...` : desc;
+        const qStruct = anchorQuizStructure.get(id) ?? 2;
+        const qAns = anchorQuizAnswers.get(id) ?? qStruct;
+        const pA = anchorPuestos.get(id) ?? 2;
+        const eA = anchorEmpleadosVinc.get(id) ?? 2;
+        const vA = anchorVis.get(id) ?? 2;
+        const cambio = cambiosByRegistro.get(id);
+
+        const general: Record<number, unknown> = {
+            [mainHeaders.indexOf("ID Manual") + 1]: id,
+            [mainHeaders.indexOf("Título") + 1]: title,
+            [mainHeaders.indexOf("Descripción") + 1]: descShort,
+            [mainHeaders.indexOf("Empresa") + 1]: r.empresa_txt,
+            [mainHeaders.indexOf("Cliente") + 1]: r.cliente_txt,
+            [mainHeaders.indexOf("División") + 1]: r.division_txt,
+            [mainHeaders.indexOf("Contrato") + 1]: r.contrato_txt,
+            [mainHeaders.indexOf("Corpo") + 1]: r.corpo_txt,
+            [mainHeaders.indexOf("Puesto principal") + 1]: r.puesto_principal_txt,
+            [mainHeaders.indexOf("Clasificación") + 1]: excelCellString(r.classification ?? ""),
+            [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [mainHeaders.indexOf("Creado por") + 1]: r.created_by_nombre,
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
+        };
+
+        const rootValues = new Array(mainHeaders.length).fill("");
+        rootValues[0] = String(id);
+        rootValues[2] = 0;
+        rootValues[3] = "Manual";
+        for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
+        rootValues[COL_VER_ESTRUCTURA - 1] = "Ver estructura";
+        rootValues[COL_PUESTOS_VINC - 1] = "Puestos vinculados";
+        rootValues[COL_EMPLEADOS_VINC - 1] = "Empleados vinculados";
+        rootValues[COL_VIS_EMPLEADOS - 1] = "Visualización empleados";
+        rootValues[COL_QUICES - 1] = "Quices";
+        const rootRow = addMainRow(wsMain, rootValues);
+        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).value = { text: "Ver estructura", hyperlink: `#'Quices'!A${qStruct}` };
+        rootRow.getCell(SHEET_COL_VER_ESTRUCTURA).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_PUESTOS_VINC).value = { text: "Puestos vinculados", hyperlink: `#'Puestos del manual'!A${pA}` };
+        rootRow.getCell(SHEET_COL_PUESTOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).value = { text: "Empleados vinculados", hyperlink: `#'Empleados del manual'!A${eA}` };
+        rootRow.getCell(SHEET_COL_EMPLEADOS_VINC).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).value = { text: "Visualización empleados", hyperlink: `#'Visualización'!A${vA}` };
+        rootRow.getCell(SHEET_COL_VIS_EMPLEADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(SHEET_COL_QUICES).value = { text: "Quices", hyperlink: `#'Quices'!A${qAns}` };
+        rootRow.getCell(SHEET_COL_QUICES).font = { color: { argb: "FF0563C1" }, underline: true };
+        styleDataRow(rootRow, 0);
+
+        const questionObjs = extractQuizQuestionArray(r.quiz);
+        questionObjs.forEach((q: any, idx: number) => {
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${id}.preg${idx + 1}`;
+            values[1] = String(id);
+            values[2] = 1;
+            values[3] = "Pregunta (plantilla)";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("ID pregunta (plantilla)")] = String(q?.id ?? "").trim() || "—";
+            values[mainHeaders.indexOf("Enunciado (plantilla)")] = excelCellString(q?.title ?? q?.titulo ?? "");
+            values[mainHeaders.indexOf("Tipo pregunta (plantilla)")] = quizTypeKeyToSpanishLabel(q?.type);
+            const ptsRaw = q?.points;
+            const ptsNum = typeof ptsRaw === "number" ? ptsRaw : Number(ptsRaw);
+            values[mainHeaders.indexOf("Puntos (plantilla)")] = Number.isFinite(ptsNum) ? String(ptsNum) : "—";
+            const row = addMainRow(wsMain, values);
+            styleDataRow(row, 1);
+        });
+
+        const links = r.e_puestos_manual_puesto || [];
+        links.forEach((link: any, idx: number) => {
+            const p = link.e_estructura_puesto;
+            const ptxt = p ? `${p.codigo ? `${p.codigo} - ` : ""}${p.nombre}` : String(link.puesto_id);
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${id}.puesto${idx + 1}`;
+            values[1] = String(id);
+            values[2] = 1;
+            values[3] = "Puesto vinculado";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Puesto (vínculo)")] = excelCellString(ptxt);
+            const row = addMainRow(wsMain, values);
+            styleDataRow(row, 1);
+        });
+
+        const empleadoLinksMain = r.e_empleados_manual_puesto || [];
+        empleadoLinksMain.forEach((link: any, idx: number) => {
+            const e = link.c_empleado;
+            const etxt = e
+                ? [e.codigo, e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean).join(" ")
+                : String(link.empleado_id);
+            const values = new Array(mainHeaders.length).fill("");
+            values[0] = `${id}.empleado${idx + 1}`;
+            values[1] = String(id);
+            values[2] = 1;
+            values[3] = "Empleado vinculado";
+            for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+            values[mainHeaders.indexOf("Empleado (vínculo)")] = excelCellString(etxt);
+            const row = addMainRow(wsMain, values);
+            styleDataRow(row, 1);
+        });
+
+        const vizList = r.e_empleado_visualizacion_manual_puesto || [];
+        vizList.forEach((v: any, idx: number) => {
+            const emp = v.c_empleado;
+            const empTxt = emp
+                ? [emp.codigo, emp.nombre, emp.primer_apellido, emp.segundo_apellido].filter(Boolean).join(" ")
+                : excelCellString(v.nombre_empleado);
+            const visId = `${id}.vis${idx + 1}`;
+            const visValues = new Array(mainHeaders.length).fill("");
+            visValues[0] = visId;
+            visValues[1] = String(id);
+            visValues[2] = 1;
+            visValues[3] = "Visualización";
+            for (const [col, val] of Object.entries(general)) visValues[Number(col) - 1] = val;
+            visValues[mainHeaders.indexOf("Empleado (visualización)")] = excelCellString(empTxt);
+            visValues[mainHeaders.indexOf("Estado (visualización)")] = approvedLabel(v.approved);
+            const visRow = addMainRow(wsMain, visValues);
+            styleDataRow(visRow, 1);
+
+            const ansItems = parseQuizAnswersPayload(v.quiz_answear);
+            ansItems.forEach((ans: any, ansIdx: number) => {
+                const values = new Array(mainHeaders.length).fill("");
+                values[0] = `${visId}.resp${ansIdx + 1}`;
+                values[1] = visId;
+                values[2] = 2;
+                values[3] = "Respuesta";
+                for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
+                values[mainHeaders.indexOf("ID pregunta (respuesta)")] = String(ans?.question_id ?? "").trim() || "—";
+                values[mainHeaders.indexOf("Respuesta empleado")] = displayUserAnswerCell(ans);
+                const row = addMainRow(wsMain, values);
+                styleDataRow(row, 2);
+            });
+        });
+    }
+
+    wsMain.columns = [
+        { width: 3 },
+        { width: 12 },
+        { width: 14 },
+        { width: 8 },
+        { width: 20 },
+        { width: 10 },
+        { width: 32 },
+        { width: 40 },
+        { width: 22 },
+        { width: 22 },
+        { width: 20 },
+        { width: 24 },
+        { width: 22 },
+        { width: 24 },
+        { width: 20 },
+        { width: 14 },
+        { width: 12 },
+        { width: 16 },
+        { width: 16 },
+        { width: 20 },
+        { width: 16 },
+        { width: 18 },
+        { width: 18 },
+        { width: 22 },
+        { width: 12 },
+        { width: 16 },
+        { width: 40 },
+        { width: 18 },
+        { width: 12 },
+        { width: 26 },
+        { width: 26 },
+        { width: 28 },
+        { width: 16 },
+        { width: 16 },
+        { width: 32 },
+    ];
+
+    return Buffer.from(await wb.xlsx.writeBuffer());
+}

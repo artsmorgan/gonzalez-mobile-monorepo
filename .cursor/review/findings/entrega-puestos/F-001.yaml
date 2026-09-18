@@ -1,0 +1,18 @@
+id: F-001
+module_id: entrega-puestos
+severity: critical
+status: fixed
+file: apps/mobile/screens/EntregaPuestosScreen.tsx
+lines: "1052-1068"
+category: offline
+title: Cola entrega_puestos_actions encolada pero nunca sincronizada
+description: |
+  Modo offline push a entrega_puestos_actions y alerta 'Se sincronizará cuando haya conexión', pero no existe
+  checkEntregaPuestosActionsCache ni lectura de esa key en App.tsx, getPendingSyncActions ni ACTION_STORAGE_KEYS.
+reproduction: |
+  1. Cargar EntregaPuestos online (loadData exige conexión).
+  2. Perder conexión antes de Guardar.
+  3. Confirmar guardado → entrega_puestos_actions recibe type:create.
+  4. Recuperar conexión y disparar sync global → ningún handler procesa la cola.
+impact: Entrega de puesto nunca llega al servidor; usuario recibió mensaje de éxito local falso.
+suggested_fix: Implementar sync en App.tsx (platform-offline-sync) o eliminar rama offline y bloquear guardado sin red.

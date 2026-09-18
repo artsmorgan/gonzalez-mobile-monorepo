@@ -1,96 +1,327 @@
 import { NextRequest, NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
-import { verifyAccessToken } from "../../../../../utils/verifyToken";
-import { toZonedTime, format } from "date-fns-tz";
+import { toZonedTime } from "date-fns-tz";
+import { sendNotificationByPlaza } from "../../../../../utils/sendNotification";
+import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
+import { prisma } from "../../../../../utils/prismaClient";
+import { verifyAccessTokenByApi } from "../../../../../utils/verifyAccessTokenByApi";
+import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
+import { reportError } from "../../../../../utils/reportError";
 
-const prisma = new PrismaClient();
-
-export async function GET(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
+
+        const puestoIdParam = req.nextUrl.searchParams.get("puesto_id");
+        const puestoIdToUse = puestoIdParam ? parseInt(String(puestoIdParam), 10) : NaN;
+
+        if (!Number.isFinite(puestoIdToUse) || puestoIdToUse <= 0) {
+            await reportError(req, "api/puestos/[id]/notas", "GET", 400, "puesto_id es requerido y debe ser válido");
             return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
+                { status: false, message: "puesto_id es requerido y debe ser válido" },
+                { status: 400 }
             );
         }
 
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
-
-        if (!id) {
-            return NextResponse.json({ status: false, message: "Puesto no especificado" }, { status: 200 });
-        }
-
-        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id } });
+        const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puestoIdToUse } });
         if (!puesto) {
-            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 200 });
+            await reportError(req, "api/puestos/[id]/notas", "GET", 404, "Puesto no encontrado");
+            return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
         }
 
-        const notas = await prisma.c_puesto_notas.findMany({ where: { puesto_id: id } });
-
-        const notas_return: { id: number, titulo: string, description: string, categoria_id: number | null, puesto_id: number, empleado: string, created_at: Date, updated_at: Date }[] = [];
+        const notas = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "c_puesto_notas",
+                operation: "findMany",
+                where: { puesto_id: puesto.id, isActive: true },
+                orderBy: { updated_at: "desc" }
+            }
+        });
+        const baseUrl = req.nextUrl.origin;
+        const notas_return: {
+            id: number,
+            titulo: string,
+            description: string,
+            categoria_id: number | null,
+            relevancia: string | null,
+            puesto_id: number,
+            empleado: string,
+            creador: string,
+            is_modified: boolean,
+            firma_responsable: string,
+            firma_manual_responsable: string | null,
+            images: Array<{ id: number; name: string; url: string }>,
+            empresa_id?: number | null,
+            cliente_id?: number | null,
+            division_id?: number | null,
+            contrato_id?: number | null,
+            corpo_id?: number | null,
+            created_at: Date,
+            updated_at: Date,
+            id_local: string
+        }[] = [];
 
         for (const nota of notas) {
 
             let empleado_name = "-";
-            const lastChange = await prisma.c_puesto_notas_bitacora_cambios.findFirst({ where: { nota_id: nota.id }, orderBy: { created_at: "desc" } });
+            let creador_name = "-";
+
+            const lastChange = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_cambios_apps_modules",
+                    operation: "findFirst",
+                    where: { nombre_tabla: "c_puesto_notas", registro_id: nota.id },
+                    orderBy: { id: "desc" }
+                }
+            });
+
+            const firstChange = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_cambios_apps_modules",
+                    operation: "findFirst",
+                    where: { nombre_tabla: "c_puesto_notas", registro_id: nota.id },
+                    orderBy: { id: "asc" }
+                }
+            });
+
+
             if (lastChange) {
-                const empleado = await prisma.c_empleado.findUnique({ where: { id: lastChange.empleado_id } });
+                const empleado = await prisma.c_empleado.findUnique({ where: { id: lastChange.created_by } });
                 if (empleado) {
                     empleado_name = empleado.nombre + " " + empleado.primer_apellido + " " + empleado.segundo_apellido;
                 }
             }
+            if (firstChange) {
+                const empleadoCreador = await prisma.c_empleado.findUnique({ where: { id: firstChange.created_by } });
+                if (empleadoCreador) {
+                    creador_name = empleadoCreador.nombre + " " + empleadoCreador.primer_apellido + " " + empleadoCreador.segundo_apellido;
+                }
+            }
+
+            const notaImages = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "c_imagenes_puesto_notas",
+                    operation: "findMany",
+                    where: { nota_id: nota.id }
+                }
+            });
 
             notas_return.push({
                 id: nota.id,
                 titulo: nota.titulo,
                 description: nota.description,
                 categoria_id: nota.categoria_id ?? null,
+                relevancia: nota.relevancia ?? null,
                 empleado: empleado_name,
+                creador: creador_name,
+                is_modified: Boolean(nota.is_modified),
+                firma_responsable: nota.firma_responsable || "",
+                firma_manual_responsable: nota.firma_manual_responsable || null,
+                images: (Array.isArray(notaImages) ? notaImages : []).map((img: any) => ({
+                    id: Number(img.id),
+                    name: String(img.name || ""),
+                    url: baseUrl ? `${baseUrl}/api/puestos/${nota.puesto_id}/notas/${nota.id}/get-image/${encodeURIComponent(String(img.name || ""))}` : "",
+                })),
                 puesto_id: nota.puesto_id,
+                empresa_id: nota.empresa_id ?? null,
+                cliente_id: nota.cliente_id ?? null,
+                division_id: nota.division_id ?? null,
+                contrato_id: nota.contrato_id ?? null,
+                corpo_id: nota.corpo_id ?? null,
                 created_at: nota.created_at,
                 updated_at: nota.updated_at,
+                id_local: "",
             });
         }
-        return NextResponse.json({ status: true, notas: notas_return, puesto: { id: puesto.id, nombre: puesto.nombre } }, { status: 200 });
+        return NextResponse.json({ status: true, notas: notas_return }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+        await reportError(req, "api/puestos/[id]/notas", "GET", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
 
-export async function POST(req: NextRequest, context: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, _context: { params: Promise<{ id: string }> }) {
     try {
-        const { valid, payload, message } = verifyAccessToken(req);
+        const { valid, expired, payload, message } = await verifyAccessTokenByApi(req);
 
-        if (!valid) {
-            return NextResponse.json(
-                { status: false, message: message },
-                { status: 401 }
-            );
-        }
+        if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
-        const resolvedParams = await context.params;
-        const id = parseInt(resolvedParams.id);
-
-        const { empleado_id, titulo, description, categoria, puesto_id } = await req.json();
+        const {
+            marca_id,
+            empleado_id,
+            titulo,
+            description,
+            categoria_id,
+            relevancia,
+            puestos,
+            empresa_id,
+            cliente_id,
+            division_id,
+            contrato_id,
+            corpo_id,
+            firma_responsable,
+            firma_manual_responsable,
+            imagenes
+        } = await req.json();
 
         const created_at = toZonedTime(new Date(), "America/Costa_Rica");
         const updated_at = toZonedTime(new Date(), "America/Costa_Rica");
 
-        const categoriaData = await prisma.n_novedades_categoria.findUnique({ where: { id: categoria } });
-        if (!categoriaData) return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 200 });
+        const categoriaData = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "n_novedades_categoria",
+                operation: "findUnique",
+                where: { id: categoria_id }
+            }
+        });
+        if (!categoriaData) {
+            await reportError(req, "api/puestos/[id]/notas", "POST", 400, "Categoría no encontrada");
+            return NextResponse.json({ status: false, message: "Categoría no encontrada" }, { status: 400 });
+        }
 
-        const newNote = await prisma.c_puesto_notas.create({ data: { titulo, description, categoria_id: categoria, puesto_id, created_at, updated_at } });
+        if (!firma_responsable || String(firma_responsable).trim().length === 0) {
+            await reportError(req, "api/puestos/[id]/notas", "POST", 400, "Firma responsable requerida");
+            return NextResponse.json({ status: false, message: "Firma responsable requerida" }, { status: 400 });
+        }
 
-        await prisma.c_puesto_notas_bitacora_cambios.create({ data: { nota_id: newNote.id, titulo, description, created_at, empleado_id, categoria: categoriaData.nombre } });
+        const puestos_parse: number[] = JSON.parse(puestos);
 
-        return NextResponse.json({ status: true, message: "Nota creada con éxito" }, { status: 200 });
+        // Si relevancia no viene o es null, usar "Baja" por defecto
+        const relevanciaValue = relevancia || 'Baja';
+
+        const createdNotes: any[] = [];
+        for (const puesto_id of puestos_parse) {
+            const puesto = await prisma.e_estructura_puesto.findUnique({ where: { id: puesto_id } });
+            if (!puesto) {
+                await reportError(req, "api/puestos/[id]/notas", "POST", 404, "Puesto no encontrado");
+                return NextResponse.json({ status: false, message: "Puesto no encontrado" }, { status: 404 });
+            }
+
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: empleado_id } });
+            if (!empleado) {
+                await reportError(req, "api/puestos/[id]/notas", "POST", 404, "Empleado no encontrado");
+                return NextResponse.json({ status: false, message: "Empleado no encontrado" }, { status: 404 });
+            }
+
+            const newNote = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_puesto_notas",
+                    data: {
+                        titulo,
+                        description,
+                        categoria_id: categoria_id,
+                        relevancia: relevanciaValue,
+                        empresa_id: empresa_id ?? null,
+                        cliente_id: cliente_id ?? null,
+                        division_id: division_id ?? null,
+                        contrato_id: contrato_id ?? null,
+                        corpo_id: corpo_id ?? null,
+                        puesto_id,
+                        firma_responsable: String(firma_responsable),
+                        firma_manual_responsable: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null,
+                        is_modified: false,
+                        isActive: true,
+                        created_at: created_at.toISOString(),
+                        updated_at: updated_at.toISOString()
+                    }
+                }
+            });
+
+            let imagesParsed: Array<{ file_base64: string; extension?: string; original_name?: string }> = [];
+            if (imagenes) {
+                try {
+                    imagesParsed = typeof imagenes === "string" ? JSON.parse(imagenes) : imagenes;
+                } catch {
+                    imagesParsed = [];
+                }
+            }
+            if (Array.isArray(imagesParsed) && imagesParsed.length > 0) {
+                const uploadResp = await uploadDynamicFiles({
+                    req,
+                    folderPath: `puesto-notas/${newNote.id}`,
+                    files: imagesParsed
+                        .filter((img) => img?.file_base64)
+                        .map((img) => ({
+                            type: "image",
+                            extension: String(img.extension || "jpg").replace(".", "").trim() || "jpg",
+                            original_name: img.original_name,
+                            file_base64: img.file_base64,
+                        })),
+                });
+
+                const uploadedFiles = Array.isArray(uploadResp?.files) ? uploadResp.files : [];
+                for (const uploaded of uploadedFiles) {
+                    await callDynamicPrisma({
+                        req,
+                        data: {
+                            action: "POST",
+                            table: "c_imagenes_puesto_notas",
+                            operation: "create",
+                            data: {
+                                name: uploaded.name,
+                                nota_id: newNote.id,
+                            },
+                        },
+                    });
+                }
+            }
+
+            // Registro de cambios (nueva modalidad) - create
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "c_cambios_apps_modules",
+                    data: {
+                        nombre_tabla: "c_puesto_notas",
+                        registro_id: newNote.id,
+                        cambios: JSON.stringify([
+                            { prop: "__created__", before: null, after: true },
+                            { prop: "titulo", before: null, after: titulo },
+                            { prop: "description", before: null, after: description },
+                            { prop: "categoria_id", before: null, after: categoria_id ?? null },
+                            { prop: "relevancia", before: null, after: relevanciaValue ?? null },
+                            { prop: "puesto_id", before: null, after: puesto_id },
+                            { prop: "firma_responsable", before: null, after: String(firma_responsable) },
+                            { prop: "firma_manual_responsable", before: null, after: (firma_manual_responsable && String(firma_manual_responsable).trim().length > 0) ? String(firma_manual_responsable) : null },
+                            { prop: "is_modified", before: null, after: false },
+                        ]),
+                        created_at: created_at.toISOString(),
+                        created_by: empleado_id,
+                    },
+                    returning: false
+                },
+            });
+
+            const plazaIds = await prisma.e_estructura_plazas.findMany({ where: { puesto_id: puesto.id } });
+            await sendNotificationByPlaza(req, marca_id, "Bitácora creada", `${empleado.nombre} ${empleado.primer_apellido} ha creado una nota llamada ${newNote.titulo} de tipo ${categoriaData.nombre}`, plazaIds.map((plaza: { id: number }) => plaza.id));
+            createdNotes.push(newNote);
+        }
+        const first = createdNotes[0] ?? null;
+        return NextResponse.json({
+            status: true,
+            message: "Nota creada con éxito",
+            id: first?.id ?? 0,
+            data: first
+        }, { status: 200 });
     } catch (error: unknown) {
         const errorMessage = error instanceof Error ? error.message : "Error desconocido";
         console.log(errorMessage);
+        await reportError(req, "api/puestos/[id]/notas", "POST", 500, errorMessage);
         return NextResponse.json({ status: false, message: errorMessage }, { status: 500 });
     }
 }
