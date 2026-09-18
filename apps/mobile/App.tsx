@@ -220,6 +220,8 @@ import {
   deleteJobManualLocalFileRefsFromJson,
   hydrateJobManualCreateRequestData,
   hydrateJobManualSignFiles,
+  hydrateJobManualSignatureRef,
+  deleteJobManualSignatureLocalRef,
 } from './hooks/jobManualsQueueUtils';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
@@ -1248,9 +1250,12 @@ function AppContent() {
           // Si hay una firma manual pendiente para el mismo manual, se fusiona aquí para que todo
           // se sincronice en una sola petición (igual que `checkStaffEvaluationsActionsCache`).
           const pendingManualFirmaForSign = takePendingVisualizacionFieldUpdate({ id: signManualId });
-          const firmaEmpleadoManualForSign =
+          // Referencia local (expo-files) de la firma manual pendiente de subir; se hidrata a base64
+          // justo antes de enviarla y se borra del disco solo si la petición tiene éxito.
+          const firmaEmpleadoManualRefForSign =
             action.firmaEmpleadoManual ??
             (pendingManualFirmaForSign?.field === 'firma_empleado_manual' ? pendingManualFirmaForSign.value : undefined);
+          const firmaEmpleadoManualForSign = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForSign);
           const result = await signJobManual({
             id: signManualId,
             firma: action.firma,
@@ -1267,6 +1272,7 @@ function AppContent() {
             const visId =
               Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
             await deleteJobManualLocalFileRefsFromJson(action.files);
+            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForSign);
             await removeJobManualActionsFromStorage(
               (a: any) =>
                 (a.type === 'sign' && String(a.id) === signId) ||
@@ -1316,7 +1322,9 @@ function AppContent() {
                     created_at: new Date(horaAccion).toISOString(),
                     updated_at: new Date(horaAccion).toISOString(),
                     files: filesForVis,
-                    ...(firmaEmpleadoManualForSign ? { firma_empleado_manual: firmaEmpleadoManualForSign } : {}),
+                    // El archivo local ya se borró tras subir con éxito: se deja en null hasta que el
+                    // próximo refresco lo traiga del servidor y lo vuelva a guardar en expo-files.
+                    ...(firmaEmpleadoManualRefForSign ? { firma_empleado_manual: null } : {}),
                   };
                   return {
                     ...item,
@@ -1341,13 +1349,15 @@ function AppContent() {
           }
           console.log('Sincronizando visualización automática del manual:', action.id);
           const pendingManualFirmaForAuto = takePendingVisualizacionFieldUpdate({ id: autoManualId });
+          const firmaEmpleadoManualRefForAuto =
+            pendingManualFirmaForAuto?.field === 'firma_empleado_manual' ? pendingManualFirmaForAuto.value : undefined;
+          const firmaEmpleadoManualForAuto = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForAuto);
           const result = await signJobManual({
             id: autoManualId,
             firma: action.firma,
             quizAnswear: null,
             files: null,
-            firmaEmpleadoManual:
-              pendingManualFirmaForAuto?.field === 'firma_empleado_manual' ? pendingManualFirmaForAuto.value : undefined,
+            firmaEmpleadoManual: firmaEmpleadoManualForAuto,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -1356,6 +1366,7 @@ function AppContent() {
           if (result.status) {
             const autoId = String(action.id);
             const visId = Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
+            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForAuto);
             await removeJobManualActionsFromStorage(
               (a: any) =>
                 (a.type === 'auto_visualizacion' && String(a.id) === autoId) ||
@@ -1385,9 +1396,8 @@ function AppContent() {
                   created_at: new Date(horaAccion).toISOString(),
                   updated_at: new Date(horaAccion).toISOString(),
                   files: [],
-                  ...(pendingManualFirmaForAuto?.field === 'firma_empleado_manual'
-                    ? { firma_empleado_manual: pendingManualFirmaForAuto.value }
-                    : {}),
+                  // El archivo local ya se borró tras subir con éxito (ver `deleteJobManualSignatureLocalRef`).
+                  ...(firmaEmpleadoManualRefForAuto ? { firma_empleado_manual: null } : {}),
                 };
                 return { ...item, currentEmployeeSigned: true, visualizaciones: [...visualizaciones, newVis] };
               });

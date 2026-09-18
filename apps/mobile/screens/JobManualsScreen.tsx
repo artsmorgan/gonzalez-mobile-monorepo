@@ -42,7 +42,7 @@ import {
 import EmployeeSearchModal, { type EmployeeSearchHit } from '../components/EmployeeSearchModal';
 import SignatureScreen from 'react-native-signature-canvas';
 import { loadMainStructureTreeMerged } from '@/hooks/bitacoraMainStructureCache';
-import { saveFile, getFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '../hooks/fileStorage';
+import { saveFile, saveBase64File, getFile, deleteFile, getLocalFileDisplayUri, type StoredFileType } from '../hooks/fileStorage';
 import getHoraAccion from '../hooks/getHoraAccion';
 import { syncUnsyncedJobManualByLocalId } from '../hooks/jobManualsQueueUtils';
 import { useQRScanner } from '../hooks/useQRScanner';
@@ -725,7 +725,8 @@ export default function JobManualsScreen() {
           });
 
           if (result.status && Array.isArray(result.manuals)) {
-            const list = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
+            const rawList = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
+            const list = await localizeManualSignaturesInList(rawList);
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
             const merged = mergeJobManualsCacheForPuesto(existing, list, puestoIdNum);
@@ -805,7 +806,8 @@ export default function JobManualsScreen() {
         if (isConnected) {
           const result = await listJobManualsByEmpleado({ empleadoId, refreshAccessToken, logout });
           if (result.status && Array.isArray(result.manuals)) {
-            const list = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
+            const rawList = (result.manuals as JobManualRemote[]).filter((m) => m?.isActive !== false);
+            const list = await localizeManualSignaturesInList(rawList);
             const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
             const existing: JobManualRemote[] = cacheStr ? JSON.parse(cacheStr) : [];
             const merged = mergeJobManualsCacheForEmpleado(existing, list, empleadoId);
@@ -2439,10 +2441,67 @@ export default function JobManualsScreen() {
   /**
    * El dibujo no se guarda de inmediato: queda pendiente (`pendingManualSignature`) hasta que el
    * usuario pulse "Confirmar" (junto con el quiz, si aplica) — un solo botón guarda ambos a la vez.
+   * Se guarda ya mismo en expo-files (igual que las evidencias adjuntas) y solo se conserva la
+   * referencia local en memoria/estado, nunca el base64 completo.
    */
-  const handleManualSignatureOK = (signature: string) => {
-    setPendingManualSignature(signature);
-    setIsManualSignatureDrawVisible(false);
+  const handleManualSignatureOK = async (signature: string) => {
+    try {
+      const fileName = await saveBase64File({
+        base64: signature,
+        extension: 'png',
+        type: 'image',
+        prefix: 'job_manuals_firma',
+      });
+      setPendingManualSignature(fileName);
+    } catch (error) {
+      console.error('Error guardando la firma manual dibujada en expo-files:', error);
+      Alert.alert('Error', 'No se pudo guardar la firma dibujada. Intenta de nuevo.');
+    } finally {
+      setIsManualSignatureDrawVisible(false);
+    }
+  };
+
+  /**
+   * Firmas manuales descargadas del servidor (base64/data URI) se guardan en expo-files antes de
+   * cachear, igual que las evidencias adjuntas — así `job_manuals_cache` solo guarda referencias.
+   * Si por algún motivo no se puede guardar el archivo, se descarta el base64 (nunca se deja en el
+   * objeto que se escribe en AsyncStorage) para no volver a llenar el almacenamiento.
+   */
+  const localizeManualSignaturesInList = async (list: JobManualRemote[]): Promise<JobManualRemote[]> => {
+    return Promise.all(
+      list.map(async (manual) => {
+        const visualizaciones = manual.visualizaciones;
+        if (!Array.isArray(visualizaciones) || visualizaciones.length === 0) return manual;
+        let changed = false;
+        const nextVis = await Promise.all(
+          visualizaciones.map(async (v) => {
+            const raw = (v as any).firma_empleado_manual;
+            if (typeof raw !== 'string' || !raw.startsWith('data:')) return v;
+            changed = true;
+            try {
+              const fileName = await saveBase64File({
+                base64: raw,
+                extension: 'png',
+                type: 'image',
+                prefix: 'job_manuals_firma',
+              });
+              return { ...v, firma_empleado_manual: fileName };
+            } catch (error) {
+              console.error('Error guardando firma manual descargada en expo-files:', error);
+              return { ...v, firma_empleado_manual: null };
+            }
+          })
+        );
+        return changed ? { ...manual, visualizaciones: nextVis } : manual;
+      })
+    );
+  };
+
+  /** Referencia local (o, por compatibilidad, data URI viejo) -> URI mostrable en `<Image />`. */
+  const resolveManualSignatureDisplayUri = (value: string | null | undefined): string => {
+    if (!value) return '';
+    if (value.startsWith('data:')) return value;
+    return getLocalFileDisplayUri(value);
   };
 
   /**
@@ -2559,16 +2618,32 @@ export default function JobManualsScreen() {
 
       const isConnectedSign = await getConnectionStatus();
       let signResult: { status?: boolean; message?: string; visualizacion_id?: number; id?: number } | null = null;
+      /** Referencia local de la firma manual una vez subida con éxito (se borra de expo-files; ver más abajo). */
+      let manualSignatureUploaded = false;
       if (isConnectedSign) {
         if (!manualRef.id || manualRef.id === 0) {
           throw new Error('Conéctate a internet y espera a que el manual se sincronice, o reintenta en unos segundos.');
         }
+
+        // La firma manual se guarda en expo-files (referencia); al subir se recupera de disco y se
+        // adjunta en base64 — no se envía la referencia al servidor.
+        let firmaEmpleadoManualBase64: string | undefined;
+        if (signatureToSave) {
+          try {
+            const g = await getFile(signatureToSave);
+            firmaEmpleadoManualBase64 = `data:image/png;base64,${g.base64}`;
+          } catch (error) {
+            console.error('Error leyendo la firma manual de expo-files para subirla:', error);
+            throw new Error('No se pudo recuperar la firma manual guardada. Vuelve a firmarla e intenta de nuevo.');
+          }
+        }
+
         signResult = await signJobManual({
           id: manualRef.id,
           firma: firmaEmpleadoToUse,
           quizAnswear: quizAnswearStr,
           files: visualizationFilesStr,
-          firmaEmpleadoManual: signatureToSave ?? undefined,
+          firmaEmpleadoManual: firmaEmpleadoManualBase64,
           refreshAccessToken,
           logout,
           marcaId,
@@ -2585,6 +2660,14 @@ export default function JobManualsScreen() {
               /* idempotente */
             }
           }
+        }
+        if (signatureToSave) {
+          try {
+            await deleteFile(signatureToSave);
+          } catch {
+            /* idempotente */
+          }
+          manualSignatureUploaded = true;
         }
       } else {
         const actionsStr = await AsyncStorage.getItem('job_manuals_actions');
@@ -2649,7 +2732,11 @@ export default function JobManualsScreen() {
         firma_empleado: firmaEmpleadoToUse,
         quiz_answear: quizAnswearStr,
         approved: null,
-        firma_empleado_manual: signatureToSave ?? myVisNow?.firma_empleado_manual ?? null,
+        // Si se acaba de subir online, el archivo local ya se borró: se deja en null hasta que el
+        // siguiente refresco lo traiga del servidor y lo vuelva a guardar en expo-files.
+        firma_empleado_manual: manualSignatureUploaded
+          ? null
+          : signatureToSave ?? myVisNow?.firma_empleado_manual ?? null,
         created_at: new Date(horaAccionUse).toISOString(),
         updated_at: new Date(horaAccionUse).toISOString(),
         files: [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles].map((f) => ({
@@ -5338,7 +5425,7 @@ export default function JobManualsScreen() {
                         <>
                           {pendingManualSignature ? (
                             <Image
-                              source={{ uri: pendingManualSignature }}
+                              source={{ uri: resolveManualSignatureDisplayUri(pendingManualSignature) }}
                               style={{ width: '100%', height: 140, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E0E0E0', marginBottom: 8 }}
                               resizeMode="contain"
                             />
@@ -5477,7 +5564,7 @@ export default function JobManualsScreen() {
               <SignatureScreen
                 key={manualSignatureKey}
                 ref={manualSignatureRef}
-                onOK={handleManualSignatureOK}
+                onOK={(sig: string) => void handleManualSignatureOK(sig)}
                 descriptionText=""
                 webStyle={`
                   body, html { margin: 0; padding: 0; height: 100%; width: 100%; }
@@ -5523,7 +5610,7 @@ export default function JobManualsScreen() {
             </ThemedView>
             {manualSignatureViewUri ? (
               <Image
-                source={{ uri: manualSignatureViewUri }}
+                source={{ uri: resolveManualSignatureDisplayUri(manualSignatureViewUri) }}
                 style={{ width: '100%', height: 220, backgroundColor: '#FFFFFF', borderRadius: 8 }}
                 resizeMode="contain"
               />
