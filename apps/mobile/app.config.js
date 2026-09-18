@@ -131,7 +131,7 @@ module.exports = ({ config }) => {
           "id": "a7e2c41f-6b8d-4f19-9e53-2c0d8f1a5b67",
           "name": "MonitoreApp",
           "created_at": "2026-07-30T00:00:00Z",
-          "title": "Planillas, permisos, mutuos y sincronización",
+          "title": "Planillas, permisos, mutuos acuerdos y sincronización",
           "description": "Integración con Planillas para turnos y marcas, validación de conflictos en permisos y mutuos acuerdos, mejoras en actividades, entrega de puestos y archivos de acciones.",
           "notas": [
             {
