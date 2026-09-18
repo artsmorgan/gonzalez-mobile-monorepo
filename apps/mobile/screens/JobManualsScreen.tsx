@@ -1713,7 +1713,7 @@ export default function JobManualsScreen() {
     if (isLocalOnly) {
       const lid = manual.id_local;
       if (!lid) {
-        Alert.alert('Error', 'Manual local sin identificador.');
+        Alert.alert('Error', 'Documento local sin identificador.');
         return;
       }
       try {
@@ -1721,7 +1721,7 @@ export default function JobManualsScreen() {
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
         const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id) === String(lid));
         if (idx === -1) {
-          Alert.alert('Error', 'No se encontró la creación pendiente de este manual.');
+          Alert.alert('Error', 'No se encontró la creación pendiente de este documento.');
           return;
         }
         const createAction = { ...actions[idx] };
@@ -1872,7 +1872,7 @@ export default function JobManualsScreen() {
     if (isLocalOnly) {
       const lid = manual.id_local;
       if (!lid) {
-        Alert.alert('Error', 'Manual local sin identificador.');
+        Alert.alert('Error', 'Documento local sin identificador.');
         return;
       }
       try {
@@ -1880,7 +1880,7 @@ export default function JobManualsScreen() {
         let actions = actionsStr ? JSON.parse(actionsStr) : [];
         const idx = actions.findIndex((a: any) => a.type === 'create' && String(a.id) === String(lid));
         if (idx === -1) {
-          Alert.alert('Error', 'No se encontró la creación pendiente de este manual.');
+          Alert.alert('Error', 'No se encontró la creación pendiente de este documento.');
           return;
         }
         const createAction = { ...actions[idx] };
@@ -2592,7 +2592,7 @@ export default function JobManualsScreen() {
       let manualRef: JobManualRemote = selectedManual;
       if (!manualRef.id || manualRef.id === 0) {
         if (!manualRef.id_local) {
-          throw new Error('No se puede confirmar: manual sin id de servidor ni referencia local.');
+          throw new Error('No se puede confirmar: documento sin id de servidor ni referencia local.');
         }
         const canSync = await getConnectionStatus();
         if (canSync) {
@@ -2622,7 +2622,7 @@ export default function JobManualsScreen() {
       let manualSignatureUploaded = false;
       if (isConnectedSign) {
         if (!manualRef.id || manualRef.id === 0) {
-          throw new Error('Conéctate a internet y espera a que el manual se sincronice, o reintenta en unos segundos.');
+          throw new Error('Conéctate a internet y espera a que el documento se sincronice, o reintenta en unos segundos.');
         }
 
         // La firma manual se guarda en expo-files (referencia); al subir se recupera de disco y se
@@ -2650,7 +2650,7 @@ export default function JobManualsScreen() {
         });
 
         if (!signResult?.status) {
-          throw new Error(signResult?.message || 'No se pudo confirmar el manual');
+          throw new Error(signResult?.message || 'No se pudo confirmar el documento');
         }
         for (const f of [...viewTextFiles, ...viewImageFiles, ...viewAudioFiles, ...viewVideoFiles]) {
           if (f.localFileName) {
@@ -2881,7 +2881,7 @@ export default function JobManualsScreen() {
 
       const currentMarcaStrForCreate = await AsyncStorage.getItem('current_marca');
       if (!currentMarcaStrForCreate) {
-        Alert.alert('Error', 'No se encontró current_marca. No se puede vincular el manual a la jerarquía de la sesión.');
+        Alert.alert('Error', 'No se encontró current_marca. No se puede vincular el documento a la jerarquía de la sesión.');
         return;
       }
       let currentMarcaForCreate: any;
@@ -2994,9 +2994,9 @@ export default function JobManualsScreen() {
             await refreshManualsList();
           }
 
-          Alert.alert('Éxito', result.message || 'Manual creado correctamente');
+          Alert.alert('Éxito', result.message || 'Documento creado correctamente');
         } else {
-          Alert.alert('Error', result.message || 'No se pudo crear el manual');
+          Alert.alert('Error', result.message || 'No se pudo crear el documento');
         }
       } else {
         const requestBody = {
@@ -3078,7 +3078,7 @@ export default function JobManualsScreen() {
         });
         await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(cache));
 
-        Alert.alert('Modo Offline', 'Manual registrado localmente. Se sincronizará cuando haya conexión.');
+        Alert.alert('Modo Offline', 'Documento registrado localmente. Se sincronizará cuando haya conexión.');
 
         tituloRef.current = '';
         descripcionRef.current = '';
@@ -3101,7 +3101,7 @@ export default function JobManualsScreen() {
       }
     } catch (error) {
       console.error('Error creating job manual:', error);
-      Alert.alert('Error', 'No se pudo crear el manual');
+      Alert.alert('Error', 'No se pudo crear el documento');
       throw error;
     }
   };
@@ -3130,14 +3130,14 @@ export default function JobManualsScreen() {
         return;
       }
 
-      if (selectedPuestos.length === 0) {
-        Alert.alert('Error', 'Debe seleccionar al menos un puesto');
+      if (selectedPuestos.length === 0 && selectedEmpleados.length === 0) {
+        Alert.alert('Error', 'Debe seleccionar al menos un puesto o un empleado');
         return;
       }
 
       const cmStr = await AsyncStorage.getItem('current_marca');
       if (!cmStr || String(cmStr).trim() === '') {
-        Alert.alert('Error', 'No hay current_marca. No se puede vincular el manual a la jerarquía de la sesión.');
+        Alert.alert('Error', 'No hay current_marca. No se puede vincular el documento a la jerarquía de la sesión.');
         return;
       }
 
@@ -3158,7 +3158,7 @@ export default function JobManualsScreen() {
       await proceedWithManualCreation();
     } catch (error) {
       console.error('Error creating job manual:', error);
-      Alert.alert('Error', 'No se pudo crear el manual');
+      Alert.alert('Error', 'No se pudo crear el documento');
     } finally {
       setIsCreatingManual(false);
     }
@@ -3166,7 +3166,7 @@ export default function JobManualsScreen() {
 
   const handleCreateManual = () => {
     if (isCreatingManual) return;
-    Alert.alert('Confirmar', '¿Desea registrar este manual?', [
+    Alert.alert('Confirmar', '¿Desea registrar este documento?', [
       { text: 'Cancelar', style: 'cancel' },
       { text: 'Aceptar', onPress: () => void runCreateManualConfirmed() },
     ]);
@@ -3383,13 +3383,13 @@ export default function JobManualsScreen() {
           {!isCreating && canCreate && (
             <TouchableOpacity style={styles.createButton} onPress={startCreating}>
               <Ionicons name="add-circle" size={20} color="#FFFFFF" />
-              <ThemedText style={styles.createButtonText}>Crear nuevo manual</ThemedText>
+              <ThemedText style={styles.createButtonText}>Crear nuevo documento</ThemedText>
             </TouchableOpacity>
           )}
 
           {isCreating && (
             <ThemedView style={styles.formCard}>
-              <ThemedText style={styles.formTitle}>Nuevo manual de puesto</ThemedText>
+              <ThemedText style={styles.formTitle}>Nuevo documento</ThemedText>
 
               <ThemedView style={styles.formGroup}>
                 <ThemedText style={styles.formLabel}>Título *</ThemedText>
@@ -3399,7 +3399,7 @@ export default function JobManualsScreen() {
                   onChangeText={(text) => {
                     tituloRef.current = text;
                   }}
-                  placeholder="Título del manual"
+                  placeholder="Título del documento"
                   placeholderTextColor="#999"
                 />
               </ThemedView>
@@ -3412,7 +3412,7 @@ export default function JobManualsScreen() {
                   onChangeText={(text) => {
                     descripcionRef.current = text;
                   }}
-                  placeholder="Descripción del manual"
+                  placeholder="Descripción del documento"
                   placeholderTextColor="#999"
                   multiline
                   numberOfLines={4}
@@ -3662,7 +3662,7 @@ export default function JobManualsScreen() {
 
               {/* Selección de puestos */}
               <ThemedView style={styles.formGroup}>
-                <ThemedText style={styles.formLabel}>Puestos que recibirán el manual:</ThemedText>
+                <ThemedText style={styles.formLabel}>Puestos que recibirán el documento:</ThemedText>
 
                 {isStructureLoading ? (
                   <ThemedView style={styles.loadingManualsContainer}>
@@ -4212,11 +4212,11 @@ export default function JobManualsScreen() {
             {isLoadingManuals ? (
               <ThemedView style={styles.loadingManualsContainer}>
                 <ActivityIndicator size="small" color="#007AFF" />
-                <ThemedText style={styles.loadingText}>Cargando manuales...</ThemedText>
+                <ThemedText style={styles.loadingText}>Cargando documentos...</ThemedText>
               </ThemedView>
             ) : visibleManuals.length === 0 ? (
               <ThemedText style={styles.emptyText}>
-                No hay manuales registrados para este puesto.
+                No hay documentos registrados.
               </ThemedText>
             ) : (
               visibleManuals.map((manual) => (
@@ -4308,7 +4308,7 @@ export default function JobManualsScreen() {
           <ThemedView style={styles.updPuestosModalContainer}>
             <ThemedText style={styles.modalTitle}>Actualizar puestos</ThemedText>
             <ThemedText style={styles.updPuestosDisclaimer}>
-              Las asignaciones de puestos que ya tenía este manual no se eliminarán; solo se añadirán vínculos
+              Las asignaciones de puestos que ya tenía este documento no se eliminarán; solo se añadirán vínculos
               nuevos para los puestos que confirmes aquí.
             </ThemedText>
             {updManualForPuestos && (
@@ -4504,7 +4504,7 @@ export default function JobManualsScreen() {
           <ThemedView style={styles.updPuestosModalContainer}>
             <ThemedText style={styles.modalTitle}>Actualizar empleados</ThemedText>
             <ThemedText style={styles.updPuestosDisclaimer}>
-              Los empleados que ya tenía este manual no se eliminarán; solo se añadirán vínculos nuevos para los
+              Los empleados que ya tenía este documento no se eliminarán; solo se añadirán vínculos nuevos para los
               empleados que agregues aquí.
             </ThemedText>
             {updManualForEmpleados && (
@@ -4582,7 +4582,7 @@ export default function JobManualsScreen() {
           <ThemedView style={styles.viewerModalContainer}>
             <View style={styles.modalHeader}>
               <ThemedText style={styles.modalTitle} numberOfLines={2}>
-                {selectedManual?.title || 'Manual de puesto'}
+                {selectedManual?.title || 'Documento'}
               </ThemedText>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 {selectedManual &&
@@ -4592,8 +4592,8 @@ export default function JobManualsScreen() {
                       onPress={() => {
                         if (!selectedManual) return;
                         Alert.alert(
-                          'Eliminar manual',
-                          '¿Estás seguro de eliminar este manual?',
+                          'Eliminar documento',
+                          '¿Estás seguro de eliminar este documento?',
                           [
                             { text: 'Cancelar', style: 'cancel' },
                             {
@@ -4630,7 +4630,7 @@ export default function JobManualsScreen() {
                                       await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
                                     }
 
-                                    Alert.alert('Modo Offline', 'Manual local eliminado.');
+                                    Alert.alert('Modo Offline', 'Documento local eliminado.');
                                     setIsViewerVisible(false);
                                     setSelectedManual(null);
                                     clearViewFirma();
@@ -4648,7 +4648,7 @@ export default function JobManualsScreen() {
                                       logout,
                                     });
                                     if (!result.status) {
-                                      Alert.alert('Error', result.message || 'No se pudo eliminar el manual');
+                                      Alert.alert('Error', result.message || 'No se pudo eliminar el documento');
                                     } else {
                                       try {
                                         const as = await AsyncStorage.getItem('job_manuals_actions');
@@ -4669,7 +4669,7 @@ export default function JobManualsScreen() {
                                       } catch {
                                         /* ignore */
                                       }
-                                      Alert.alert('Éxito', result.message || 'Manual eliminado');
+                                      Alert.alert('Éxito', result.message || 'Documento eliminado');
                                       setIsViewerVisible(false);
                                       setSelectedManual(null);
                                       clearViewFirma();
@@ -4714,7 +4714,7 @@ export default function JobManualsScreen() {
                                       await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
                                     }
 
-                                    Alert.alert('Modo Offline', 'Manual marcado para eliminación cuando haya conexión.');
+                                    Alert.alert('Modo Offline', 'Documento marcado para eliminación cuando haya conexión.');
                                     setIsViewerVisible(false);
                                     setSelectedManual(null);
                                     clearViewFirma();
@@ -4725,7 +4725,7 @@ export default function JobManualsScreen() {
                                   }
                                 } catch (error) {
                                   console.error('Error deleting manual:', error);
-                                  Alert.alert('Error', 'No se pudo eliminar el manual');
+                                  Alert.alert('Error', 'No se pudo eliminar el documento');
                                 } finally {
                                   setIsDeletingManual(false);
                                 }

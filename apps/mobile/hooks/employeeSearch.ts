@@ -35,10 +35,11 @@ function formatStructureEmpleadoNombre(emp: any): string {
 function empleadoMatchesQuery(emp: any, query: string): boolean {
   const q = normalizeQuery(query);
   if (!q) return false;
+  const nombreCompleto = [emp?.nombre, emp?.primer_apellido, emp?.segundo_apellido]
+    .filter(Boolean)
+    .join(' ');
   const values = [
-    emp?.nombre,
-    emp?.primer_apellido,
-    emp?.segundo_apellido,
+    nombreCompleto,
     emp?.cedula,
     emp?.codigo,
     emp?.codigo_empleado,

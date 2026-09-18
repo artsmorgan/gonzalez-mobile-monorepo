@@ -1,5 +1,5 @@
 {
-  "created_at": 1789691090333,
+  "created_at": 1789745657954,
   "fragmentsVersion": 2,
   "fragments": {
     "divisiones": [
@@ -5855,29 +5855,6 @@
       }
     ],
     "plaza_4391_empleados": [
-      {
-        "id": 9225,
-        "codigo": "AD-028",
-        "cedula": "702750632",
-        "nombre": "JERRY ALBERTO",
-        "primer_apellido": "SANDOVAL",
-        "segundo_apellido": "RAMIREZ",
-        "Email": "sandovalsrjer10@gmail.com",
-        "telefono": null,
-        "tipoCedula": "Nacional",
-        "fecha_contratacion": "2023-12-27T00:00:00.000Z",
-        "estado": "CO",
-        "supervisor_id": null,
-        "firma_manual": null,
-        "documentos": [
-          {
-            "nombre": "Contrato de Trabajo",
-            "tipo": "carn",
-            "identificador": 6,
-            "fecha_vencimiento": "2023-12-27T00:00:00.000Z"
-          }
-        ]
-      },
       {
         "id": 9870,
         "codigo": "AD031",
@@ -24744,8 +24721,8 @@
         "nombre": "094-P1 - 094-P1 LICENCIAS SAN CARLOS",
         "codigo": "094-P1",
         "ubicacion": {
-          "lat": null,
-          "lng": null
+          "lat": "9.9182285",
+          "lng": "-84.1479432"
         }
       }
     ],
@@ -29751,81 +29728,9 @@
         "documentos": []
       }
     ],
-    "plaza_10513_empleados": [
-      {
-        "id": 12569,
-        "codigo": "6535",
-        "cedula": "604340595",
-        "nombre": "STEVE EUSEBIO",
-        "primer_apellido": "ORTIZ",
-        "segundo_apellido": "ARCE",
-        "Email": "stevenortiz550@gmail.com",
-        "telefono": "60655360",
-        "tipoCedula": "Nacional",
-        "fecha_contratacion": "2025-11-17T00:00:00.000Z",
-        "estado": "CO",
-        "supervisor_id": null,
-        "firma_manual": null,
-        "documentos": [
-          {
-            "nombre": "Carnet de Portación de Armas",
-            "tipo": "carn",
-            "identificador": 5,
-            "fecha_vencimiento": "2025-12-17T00:00:00.000Z"
-          },
-          {
-            "nombre": "Carnet de Portación de Armas",
-            "tipo": "carn",
-            "identificador": 5,
-            "fecha_vencimiento": "2025-12-17T00:00:00.000Z"
-          },
-          {
-            "nombre": "Currículo (título, cartas de referencia)",
-            "tipo": "carn",
-            "identificador": 11,
-            "fecha_vencimiento": "2026-01-16T00:00:00.000Z"
-          }
-        ]
-      }
-    ],
+    "plaza_10513_empleados": [],
     "plaza_10622_empleados": [],
-    "plaza_10901_empleados": [
-      {
-        "id": 11667,
-        "codigo": "5749",
-        "cedula": "604900766",
-        "nombre": "JORSHUA JAVIER",
-        "primer_apellido": "PORTUGUEZ",
-        "segundo_apellido": "RODRIGUEZ",
-        "Email": "jorshuaportuguez@gmail.com",
-        "telefono": "87100289",
-        "tipoCedula": "Nacional",
-        "fecha_contratacion": "2025-04-29T00:00:00.000Z",
-        "estado": "CO",
-        "supervisor_id": null,
-        "firma_manual": null,
-        "documentos": [
-          {
-            "nombre": "Currículo (título, cartas de referencia)",
-            "tipo": "carn",
-            "identificador": 11,
-            "fecha_vencimiento": "2025-04-28T00:00:00.000Z"
-          },
-          {
-            "nombre": "Carnet de Portación de Armas",
-            "tipo": "carn",
-            "identificador": 5,
-            "fecha_vencimiento": "2026-01-26T00:00:00.000Z"
-          },
-          {
-            "nombre": "Carnet de Portación de Armas",
-            "tipo": "carn",
-            "identificador": 5,
-            "fecha_vencimiento": "2026-01-26T00:00:00.000Z"
-          }
-        ]
-      }
-    ],
+    "plaza_10901_empleados": [],
     "sucursal_1291_vehiculos_corporativos": [],
     "sucursal_1291_bitacora_vehiculos_detenidos": [],
     "sucursal_1291_llaves": [],
@@ -72065,6 +71970,16 @@
         "id": 9997,
         "nombre": "1000-CNFL-P1-5 - SUPERVISOR DE SEGURIDAD",
         "codigo_plaza": "1000-CNFL-P1-5"
+      },
+      {
+        "id": 11944,
+        "nombre": "1000-CNFL-P1-1-1 - SUPERVISOR DE SEGURIDAD",
+        "codigo_plaza": "1000-CNFL-P1-1-1"
+      },
+      {
+        "id": 11945,
+        "nombre": "1000-CNFL-P1-1-2 - SUPERVISOR DE SEGURIDAD",
+        "codigo_plaza": "1000-CNFL-P1-1-2"
       }
     ],
     "plaza_307_empleados": [
@@ -80035,9 +79950,128 @@
         "estructura_id": 81,
         "articulo_nombre": "Coffee Maker",
         "cantidad_plan": 3,
-        "mantenimientos": [],
-        "ultimo_mantenimiento": null,
-        "ultimo_registro_mantenimiento": null,
+        "mantenimientos": [
+          {
+            "id": 15,
+            "articulo_plan_id": 81,
+            "articulo_asignado_id": null,
+            "estado": "Bueno",
+            "cantidad_necesaria": 3,
+            "cantidad_real": 3,
+            "observaciones": "",
+            "fecha_solucion": null,
+            "accion": null,
+            "fecha_inicio": null,
+            "numero_boleta_proveeduria": null,
+            "tipo": null,
+            "marca": "Samsung",
+            "modelo": "2022",
+            "serie_placa": "GTD",
+            "marca_nuevo": null,
+            "modelo_nuevo": null,
+            "serie_placa_nuevo": null,
+            "categoria": null,
+            "tipo_mantenimiento_art": null,
+            "fecha_salida": null,
+            "fecha_entrada": null,
+            "kilometraje": null,
+            "mant_armas_form": null,
+            "categoria_mantinimiento": null,
+            "detalle": null,
+            "numero_fc": null,
+            "proveedor": null,
+            "costo_mo": null,
+            "costo_i": null,
+            "iva": null,
+            "costo_total": null,
+            "fecha_fin": null,
+            "reincidencia_treinta_dias": null,
+            "tipo_mant_art_reincid": null,
+            "created_at": "2026-09-10T12:39:55.000Z",
+            "updated_at": "2026-09-10T12:39:55.000Z",
+            "c_archivos_adjuntos_articulo_mantenimiento": []
+          }
+        ],
+        "ultimo_mantenimiento": {
+          "id": 15,
+          "articulo_plan_id": 81,
+          "articulo_asignado_id": null,
+          "estado": "Bueno",
+          "cantidad_necesaria": 3,
+          "cantidad_real": 3,
+          "observaciones": "",
+          "fecha_solucion": null,
+          "accion": null,
+          "fecha_inicio": null,
+          "numero_boleta_proveeduria": null,
+          "tipo": null,
+          "marca": "Samsung",
+          "modelo": "2022",
+          "serie_placa": "GTD",
+          "marca_nuevo": null,
+          "modelo_nuevo": null,
+          "serie_placa_nuevo": null,
+          "categoria": null,
+          "tipo_mantenimiento_art": null,
+          "fecha_salida": null,
+          "fecha_entrada": null,
+          "kilometraje": null,
+          "mant_armas_form": null,
+          "categoria_mantinimiento": null,
+          "detalle": null,
+          "numero_fc": null,
+          "proveedor": null,
+          "costo_mo": null,
+          "costo_i": null,
+          "iva": null,
+          "costo_total": null,
+          "fecha_fin": null,
+          "reincidencia_treinta_dias": null,
+          "tipo_mant_art_reincid": null,
+          "created_at": "2026-09-10T12:39:55.000Z",
+          "updated_at": "2026-09-10T12:39:55.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": []
+        },
+        "ultimo_registro_mantenimiento": {
+          "id": 15,
+          "articulo_plan_id": 81,
+          "articulo_asignado_id": null,
+          "estado": "Bueno",
+          "cantidad_necesaria": 3,
+          "cantidad_real": 3,
+          "observaciones": "",
+          "fecha_solucion": null,
+          "accion": null,
+          "fecha_inicio": null,
+          "numero_boleta_proveeduria": null,
+          "tipo": null,
+          "marca": "Samsung",
+          "modelo": "2022",
+          "serie_placa": "GTD",
+          "marca_nuevo": null,
+          "modelo_nuevo": null,
+          "serie_placa_nuevo": null,
+          "categoria": null,
+          "tipo_mantenimiento_art": null,
+          "fecha_salida": null,
+          "fecha_entrada": null,
+          "kilometraje": null,
+          "mant_armas_form": null,
+          "categoria_mantinimiento": null,
+          "detalle": null,
+          "numero_fc": null,
+          "proveedor": null,
+          "costo_mo": null,
+          "costo_i": null,
+          "iva": null,
+          "costo_total": null,
+          "fecha_fin": null,
+          "reincidencia_treinta_dias": null,
+          "tipo_mant_art_reincid": null,
+          "created_at": "2026-09-10T12:39:55.000Z",
+          "updated_at": "2026-09-10T12:39:55.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": []
+        },
         "movimientos": []
       },
       {
@@ -90640,6 +90674,11 @@
         "id": 574,
         "nombre": "0-CH-MARCAS - CORPO 0 MARCAS",
         "nro_sucursal": "0-CH-MARCAS"
+      },
+      {
+        "id": 1451,
+        "nombre": "0-CH-1 - CORPO 0_copia1",
+        "nro_sucursal": "0-CH-1"
       }
     ],
     "sucursal_187_vehiculos_corporativos": [
@@ -90771,7 +90810,7 @@
         "nombre": "STEPHANIE",
         "primer_apellido": "GONZALEZ",
         "segundo_apellido": "RODRIGUEZ",
-        "Email": "tepha25@gmail.com",
+        "Email": "amoreworldchange@gmail.com",
         "telefono": "22901023",
         "tipoCedula": "Nacional",
         "fecha_contratacion": "2013-05-16T00:00:00.000Z",
@@ -167722,6 +167761,153 @@
         "firma_manual": null,
         "documentos": []
       }
-    ]
+    ],
+    "puesto_2574_articulos": [
+      {
+        "id": 1,
+        "nombre": "Trampabalas",
+        "tipo": "Asignado",
+        "marca": "Colt",
+        "serie": "1110",
+        "modelo": "2026",
+        "cantidad": 1,
+        "articulo_nomenclador_id": 45,
+        "tipos_mantenimiento": [],
+        "key": "asignado-1",
+        "source": "asignado",
+        "estructura_id": 1,
+        "articulo_nombre": "Trampabalas",
+        "cantidad_plan": null,
+        "mantenimientos": [
+          {
+            "id": 7,
+            "articulo_plan_id": null,
+            "articulo_asignado_id": 1,
+            "estado": "Bueno",
+            "cantidad_necesaria": 1,
+            "cantidad_real": 1,
+            "observaciones": "",
+            "fecha_solucion": null,
+            "accion": null,
+            "fecha_inicio": null,
+            "numero_boleta_proveeduria": null,
+            "tipo": null,
+            "marca": "Colt",
+            "modelo": null,
+            "serie_placa": "1110",
+            "marca_nuevo": null,
+            "modelo_nuevo": null,
+            "serie_placa_nuevo": null,
+            "categoria": null,
+            "tipo_mantenimiento_art": null,
+            "fecha_salida": null,
+            "fecha_entrada": null,
+            "kilometraje": null,
+            "mant_armas_form": null,
+            "categoria_mantinimiento": null,
+            "detalle": null,
+            "numero_fc": null,
+            "proveedor": null,
+            "costo_mo": null,
+            "costo_i": null,
+            "iva": null,
+            "costo_total": null,
+            "fecha_fin": null,
+            "reincidencia_treinta_dias": null,
+            "tipo_mant_art_reincid": null,
+            "created_at": "2026-07-20T12:02:42.000Z",
+            "updated_at": "2026-07-20T12:02:42.000Z",
+            "c_archivos_adjuntos_articulo_mantenimiento": []
+          }
+        ],
+        "ultimo_mantenimiento": {
+          "id": 7,
+          "articulo_plan_id": null,
+          "articulo_asignado_id": 1,
+          "estado": "Bueno",
+          "cantidad_necesaria": 1,
+          "cantidad_real": 1,
+          "observaciones": "",
+          "fecha_solucion": null,
+          "accion": null,
+          "fecha_inicio": null,
+          "numero_boleta_proveeduria": null,
+          "tipo": null,
+          "marca": "Colt",
+          "modelo": null,
+          "serie_placa": "1110",
+          "marca_nuevo": null,
+          "modelo_nuevo": null,
+          "serie_placa_nuevo": null,
+          "categoria": null,
+          "tipo_mantenimiento_art": null,
+          "fecha_salida": null,
+          "fecha_entrada": null,
+          "kilometraje": null,
+          "mant_armas_form": null,
+          "categoria_mantinimiento": null,
+          "detalle": null,
+          "numero_fc": null,
+          "proveedor": null,
+          "costo_mo": null,
+          "costo_i": null,
+          "iva": null,
+          "costo_total": null,
+          "fecha_fin": null,
+          "reincidencia_treinta_dias": null,
+          "tipo_mant_art_reincid": null,
+          "created_at": "2026-07-20T12:02:42.000Z",
+          "updated_at": "2026-07-20T12:02:42.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": []
+        },
+        "ultimo_registro_mantenimiento": {
+          "id": 7,
+          "articulo_plan_id": null,
+          "articulo_asignado_id": 1,
+          "estado": "Bueno",
+          "cantidad_necesaria": 1,
+          "cantidad_real": 1,
+          "observaciones": "",
+          "fecha_solucion": null,
+          "accion": null,
+          "fecha_inicio": null,
+          "numero_boleta_proveeduria": null,
+          "tipo": null,
+          "marca": "Colt",
+          "modelo": null,
+          "serie_placa": "1110",
+          "marca_nuevo": null,
+          "modelo_nuevo": null,
+          "serie_placa_nuevo": null,
+          "categoria": null,
+          "tipo_mantenimiento_art": null,
+          "fecha_salida": null,
+          "fecha_entrada": null,
+          "kilometraje": null,
+          "mant_armas_form": null,
+          "categoria_mantinimiento": null,
+          "detalle": null,
+          "numero_fc": null,
+          "proveedor": null,
+          "costo_mo": null,
+          "costo_i": null,
+          "iva": null,
+          "costo_total": null,
+          "fecha_fin": null,
+          "reincidencia_treinta_dias": null,
+          "tipo_mant_art_reincid": null,
+          "created_at": "2026-07-20T12:02:42.000Z",
+          "updated_at": "2026-07-20T12:02:42.000Z",
+          "c_archivos_adjuntos_articulo_mantenimiento": []
+        },
+        "movimientos": []
+      }
+    ],
+    "plaza_11944_empleados": [],
+    "plaza_11945_empleados": [],
+    "sucursal_1451_vehiculos_corporativos": [],
+    "sucursal_1451_bitacora_vehiculos_detenidos": [],
+    "sucursal_1451_llaves": [],
+    "sucursal_1451_llaveros": []
   }
 }
