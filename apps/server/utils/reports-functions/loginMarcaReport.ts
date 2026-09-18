@@ -1,6 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type LoginMarcaModuleFilters = {
     /** Combinación fecha+hora sin conversión de zona (filtro sobre `fecha_hora`). */
@@ -131,12 +138,6 @@ export async function queryLoginMarcaRows(
             ...r,
             puesto_nombre: puestoNombre,
             fecha_hora_txt: fmtDateTimeCol(r.fecha_hora),
-            marca_entrada_teorica_txt: fmtDateTimeCol(r.marca_entrada_teorica),
-            marca_entrada_real_txt: fmtDateTimeCol(r.marca_entrada_real),
-            marca_salida_teorica_txt: fmtDateTimeCol(r.marca_salida_teorica),
-            marca_salida_real_txt: fmtDateTimeCol(r.marca_salida_real),
-            hora_inicio_almuerzo_txt: fmtDateTimeCol(r.hora_inicio_almuerzo),
-            hora_fin_almuerzo_txt: fmtDateTimeCol(r.hora_fin_almuerzo),
         };
     });
 
@@ -163,73 +164,121 @@ const borderThin: Partial<ExcelJS.Borders> = {
     right: { style: "thin" },
 };
 
-export async function buildLoginMarcaExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildLoginMarcaExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Login de marca", {
         properties: { outlineProperties: { summaryBelow: false, summaryRight: false } },
-        views: [{ state: "frozen", ySplit: 1 }],
     });
 
     const headers = [
         "ID",
         "Cédula empleado",
         "Nombre empleado",
-        "Fecha y hora",
+        "Fecha",
+        "Hora",
         "Puesto",
         "Dispositivo",
         "Latitud",
         "Longitud",
         "Marca ID",
         "Marca entrada teórica",
+        "Marca entrada teórica (hora)",
         "Marca entrada real",
+        "Marca entrada real (hora)",
         "Marca salida teórica",
+        "Marca salida teórica (hora)",
         "Marca salida real",
+        "Marca salida real (hora)",
         "Hora inicio almuerzo",
+        "Hora inicio almuerzo (hora)",
         "Hora fin almuerzo",
+        "Hora fin almuerzo (hora)",
         "Id de sesión",
     ];
 
-    const h = ws.addRow(headers);
+    applyConsolidadoReportBanner(ws, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(ws, headers);
+    const h = ws.getRow(12);
     h.font = { bold: true };
-    h.eachCell((cell) => {
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
         cell.fill = GRP_HDR;
         cell.border = borderThin;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
+    }
+    ws.views = [{ state: "frozen", ySplit: 12 }];
 
-    ws.columns = headers.map((_, i) => ({
-        width: i === 5 ? 28 : i === 0 ? 8 : 20,
-        outlineLevel: 1,
-    }));
+    const widthByHeader: Record<string, number> = {
+        ID: 8,
+        "Cédula empleado": 20,
+        "Nombre empleado": 20,
+        Fecha: 14,
+        Hora: 12,
+        Puesto: 20,
+        Dispositivo: 28,
+        Latitud: 20,
+        Longitud: 20,
+        "Marca ID": 20,
+        "Marca entrada teórica": 14,
+        "Marca entrada teórica (hora)": 12,
+        "Marca entrada real": 14,
+        "Marca entrada real (hora)": 12,
+        "Marca salida teórica": 14,
+        "Marca salida teórica (hora)": 12,
+        "Marca salida real": 14,
+        "Marca salida real (hora)": 12,
+        "Hora inicio almuerzo": 14,
+        "Hora inicio almuerzo (hora)": 12,
+        "Hora fin almuerzo": 14,
+        "Hora fin almuerzo (hora)": 12,
+        "Id de sesión": 20,
+    };
+    ws.columns = [
+        { width: 3 },
+        ...headers.map((label) => ({ width: widthByHeader[label] ?? 20, outlineLevel: 1 })),
+    ];
 
     for (const r of rows) {
-        const row = ws.addRow([
+        const row = addMainRow(ws, [
             r.id,
             String(r.cedula_empleado ?? ""),
             String(r.nombre_empleado ?? ""),
-            r.fecha_hora_txt,
+            formatDateOnlyDMY(r.fecha_hora),
+            formatTimeOnlyHMS(r.fecha_hora),
             String(r.puesto_nombre ?? ""),
             String(r.device ?? ""),
             String(r.lat ?? ""),
             String(r.lng ?? ""),
             r.marca_id ?? "",
-            r.marca_entrada_teorica_txt,
-            r.marca_entrada_real_txt,
-            r.marca_salida_teorica_txt,
-            r.marca_salida_real_txt,
-            r.hora_inicio_almuerzo_txt,
-            r.hora_fin_almuerzo_txt,
+            formatDateOnlyDMY(r.marca_entrada_teorica),
+            formatTimeOnlyHMS(r.marca_entrada_teorica),
+            formatDateOnlyDMY(r.marca_entrada_real),
+            formatTimeOnlyHMS(r.marca_entrada_real),
+            formatDateOnlyDMY(r.marca_salida_teorica),
+            formatTimeOnlyHMS(r.marca_salida_teorica),
+            formatDateOnlyDMY(r.marca_salida_real),
+            formatTimeOnlyHMS(r.marca_salida_real),
+            formatDateOnlyDMY(r.hora_inicio_almuerzo),
+            formatTimeOnlyHMS(r.hora_inicio_almuerzo),
+            formatDateOnlyDMY(r.hora_fin_almuerzo),
+            formatTimeOnlyHMS(r.hora_fin_almuerzo),
             String(r.session_id ?? ""),
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = borderThin;
             cell.alignment = { vertical: "top", wrapText: true };
         });
     }
 
     ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

@@ -6,6 +6,13 @@ import {
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
 import { resolvePuestoIdsForActividades } from "./actividadesReport";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type CambiosUbicacionPuestoModuleFilters = ActaEntregaModuleFilters & {
     responsableIds?: number[] | null;
@@ -35,12 +42,6 @@ function parseNaiveDateTime(s: string | undefined | null): Date | null {
     }
     const d = new Date(t.includes("T") ? t : t.replace(" ", "T"));
     return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function fmtDateTime(d: Date | null | undefined): string {
-    if (!d || Number.isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 function excelCellString(v: unknown): string {
@@ -241,7 +242,6 @@ export async function queryCambiosUbicacionPuestoRows(
         const corpo = chain ? corpoById.get(chain.corpo_id) : undefined;
         const puesto = puestoById.get(r.puesto_id);
         const emp = empleadoById.get(r.created_by);
-        const createdAt = r.created_at instanceof Date ? r.created_at : new Date(String(r.created_at));
         return {
             ...r,
             empresa_id: chain?.empresa_id ?? 0,
@@ -256,7 +256,6 @@ export async function queryCambiosUbicacionPuestoRows(
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : "—",
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : String(r.puesto_id),
             responsable_nombre: emp ? empleadoDisplayName(emp) : String(r.created_by),
-            fecha_txt: fmtDateTime(createdAt),
             latitud_anterior_txt: excelCellString(r.latitud_anterior ?? ""),
             longitud_anterior_txt: excelCellString(r.longitud_anterior ?? ""),
             latitud_nueva_txt: excelCellString(r.latitud_nueva ?? ""),
@@ -285,7 +284,11 @@ export async function queryCambiosUbicacionPuestoRows(
     });
 }
 
-export async function buildCambiosUbicacionPuestoExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildCambiosUbicacionPuestoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Cambios ubicación puesto");
     const border: Partial<ExcelJS.Borders> = {
@@ -299,6 +302,7 @@ export async function buildCambiosUbicacionPuestoExcelConsolidado(rows: any[]): 
     const headers = [
         "ID",
         "Fecha",
+        "Hora",
         "Empresa",
         "Cliente",
         "División",
@@ -311,17 +315,24 @@ export async function buildCambiosUbicacionPuestoExcelConsolidado(rows: any[]): 
         "Longitud nueva",
         "Responsable",
     ];
-    const h = ws.addRow(headers);
+
+    applyConsolidadoReportBanner(ws, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(ws, headers);
+    const h = ws.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    ws.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    ws.views = [{ state: "frozen", ySplit: 12 }];
     ws.columns = [
+        { width: 3 },
         { width: 8 },
-        { width: 20 },
+        { width: 14 },
+        { width: 12 },
         { width: 26 },
         { width: 24 },
         { width: 20 },
@@ -336,9 +347,10 @@ export async function buildCambiosUbicacionPuestoExcelConsolidado(rows: any[]): 
     ];
 
     for (const r of rows) {
-        const row = ws.addRow([
+        const row = addMainRow(ws, [
             r.id,
-            r.fecha_txt,
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -351,15 +363,16 @@ export async function buildCambiosUbicacionPuestoExcelConsolidado(rows: any[]): 
             r.longitud_nueva_txt,
             r.responsable_nombre,
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
     }
 
     ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

@@ -6,6 +6,12 @@ import {
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
 import { hydratePreexistentChildRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const REGISTRO_CAPACITACIONES_INCLUDE = {
     e_capacitacion_empleado: true,
@@ -47,12 +53,6 @@ function parseNaiveDateTime(s: string | undefined | null): Date | null {
 
 function toDateOnly(d: Date): Date {
     return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
-}
-
-function fmtDate(d: Date | null | undefined): string {
-    if (!d || Number.isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function excelCellString(v: unknown): string {
@@ -272,7 +272,7 @@ export async function queryRegistroCapacitacionesRows(
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : String(r.corpo_id),
             puesto_nombre: puesto ? puestoDisplayName(puesto) : r.puesto_id > 0 ? String(r.puesto_id) : "—",
             responsable_nombre: resp ? empleadoDisplayName(resp) : excelCellString(r.nombre_responsable),
-            fecha_txt: fmtDate(fecha),
+            fecha_txt: formatDateOnlyDMY(fecha),
             empleados_cap_txt: empleadosCap.map((x: { label: string }) => x.label).join("; "),
             puestos_cap_txt: puestosCap.map((x: { label: string }) => x.label).join("; "),
             empleados_cap: empleadosCap,
@@ -385,7 +385,11 @@ function appendDetalleCapacitacionBlocks(
     return { rowEmpleados: rowEmpTitle, rowPuestos: rowPtoTitle };
 }
 
-export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildRegistroCapacitacionesExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Registro capacitaciones");
     const wsDet = wb.addWorksheet("Detalles");
@@ -427,17 +431,23 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
     const colEmpLink = headers.indexOf("Ver empleados") + 1;
     const colPtoLink = headers.indexOf("Ver puestos") + 1;
     const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
-    const linkCols = new Set([colEmpLink, colPtoLink]);
+    // +1 adicional: columnas reales en la hoja (con margen de `addMainRow` en A).
+    const linkCols = new Set([colEmpLink + 1, colPtoLink + 1]);
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = GRP_HDR;
-        c.border = borderThin;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -463,12 +473,13 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, col) => {
+            if (col === 1) return;
             cell.border = borderThin;
             if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
     };
 
     for (const r of rows) {
@@ -494,11 +505,11 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
         rootValues[2] = 0;
         rootValues[3] = "Capacitación";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        const rootRow = wsMain.addRow(rootValues);
-        rootRow.getCell(colEmpLink).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
-        rootRow.getCell(colEmpLink).font = { color: { argb: "FF0563C1" }, underline: true };
-        rootRow.getCell(colPtoLink).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
-        rootRow.getCell(colPtoLink).font = { color: { argb: "FF0563C1" }, underline: true };
+        const rootRow = addMainRow(wsMain, rootValues);
+        rootRow.getCell(colEmpLink + 1).value = { text: "Ver empleados", hyperlink: `#'Detalles'!A${re}` };
+        rootRow.getCell(colEmpLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(colPtoLink + 1).value = { text: "Ver puestos", hyperlink: `#'Detalles'!A${rp}` };
+        rootRow.getCell(colPtoLink + 1).font = { color: { argb: "FF0563C1" }, underline: true };
         styleDataRow(rootRow, 0);
 
         (r.empleados_cap || []).forEach((e: { id: number; label: string; cedula?: string }, idx: number) => {
@@ -510,7 +521,7 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Empleado (código / nombre)")] = e.label;
             values[headers.indexOf("Cédula (empleado)")] = e.cedula ?? "";
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
 
@@ -522,14 +533,14 @@ export async function buildRegistroCapacitacionesExcelConsolidado(rows: any[]): 
             values[3] = "Puesto vinculado";
             for (const [col, val] of Object.entries(general)) values[Number(col) - 1] = val;
             values[headers.indexOf("Puesto (código / nombre)")] = p.label;
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, wsMain.rowCount), column: headers.length + 1 },
     };
 
     wsDet.columns = [{ width: 14 }, { width: 14 }, { width: 42 }, { width: 18 }];

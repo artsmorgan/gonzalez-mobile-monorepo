@@ -145,6 +145,24 @@ export function hasMarcaPuestoCoordinates(marca: Record<string, unknown>): boole
   return Number.isFinite(pLat) && Number.isFinite(pLng) && pLat !== 0 && pLng !== 0;
 }
 
+/** Lat/lng del puesto de una marca, si están definidas (mismo criterio que `hasMarcaPuestoCoordinates`). */
+export function getMarcaPuestoCoords(marca: Record<string, unknown>): { lat: number; lng: number } | null {
+  const puesto = marca.puesto as Record<string, unknown> | undefined;
+  const ubicacion = puesto?.ubicacion as { lat?: unknown; lng?: unknown } | undefined;
+  const lat = ubicacion?.lat != null ? Number(ubicacion.lat) : NaN;
+  const lng = ubicacion?.lng != null ? Number(ubicacion.lng) : NaN;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) return null;
+  return { lat, lng };
+}
+
+/** Prefijo fijo del mensaje que arma `validateMarcaLocation` cuando el usuario está fuera del radio permitido. */
+export const OUT_OF_RANGE_MESSAGE_PREFIX = 'Ubicación no válida';
+
+/** True si el mensaje de validación corresponde al caso "fuera de rango" (no a otros bloqueos como ausencia/turno). */
+export function isOutOfRangeLocationMessage(message: string | null | undefined): boolean {
+  return typeof message === 'string' && message.startsWith(OUT_OF_RANGE_MESSAGE_PREFIX);
+}
+
 export function validateMarcaLocation(
   marca: Record<string, unknown>,
   lat: number,
@@ -171,7 +189,7 @@ export function validateMarcaLocation(
   return {
     ok: false,
     message:
-      'Ubicación no válida \n\nDebes estar dentro del radio de 50 metros del puesto para marcar '+tipoAccion+'. \n\nPuesto: ' +
+      `${OUT_OF_RANGE_MESSAGE_PREFIX} \n\nDebes estar dentro del radio de 50 metros del puesto para marcar `+tipoAccion+'. \n\nPuesto: ' +
       marcaUbicacion +
       '\nTu ubicación: ' +
       ubicacionActual,

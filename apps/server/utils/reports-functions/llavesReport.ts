@@ -6,6 +6,14 @@ import { PassThrough } from "stream";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type LlavesModuleFilters = ActaEntregaModuleFilters & {
     entregadoPorContains?: string | null;
@@ -47,6 +55,17 @@ function parseSignatureDataForExcel(dataUriOrBase64: unknown): { extension: "png
         return { extension: m[1].toLowerCase() === "png" ? "png" : "jpeg", base64: String(m[2]).replace(/\s+/g, "") };
     }
     return { extension: "png", base64: d.replace(/^data:image\/\w+;base64,/, "").replace(/\s+/g, "") };
+}
+
+/** Formatea un empleado como "código — Nombre Apellido1 Apellido2" (usado para "Creado por"). */
+function fmtCreadorEmpleado(
+    e: { codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null } | undefined,
+): string {
+    if (!e) return "";
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean);
+    const name = parts.join(" ").trim();
+    const c = e.codigo ? String(e.codigo).trim() : "";
+    return c ? `${c} — ${name}` : name;
 }
 
 function fmtDate(v: unknown): string {
@@ -290,12 +309,32 @@ export async function queryLlavesRows(prisma: ReportDataAccess, filters: LlavesM
     });
 }
 
-export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildLlavesExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Llaves");
     const wsMov = wb.addWorksheet("Movimientos");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+
+    // "Creado por": `e_llave.created_by` no se renderizaba; se resuelve por batch de `c_empleado`.
+    const createdByIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = createdByIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: createdByIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_llave",
+        rows.map((r) => Number(r.id)),
+    );
 
     const movAnchorByKey = new Map<number, number>();
     for (const r of [...rows].sort((a, b) => Number(b.id) - Number(a.id))) {
@@ -384,7 +423,11 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
         "Lugar abre",
         "Cantidad copias",
         "Observaciones",
-        "Creado",
+        "Creado (fecha)",
+        "Creado (hora)",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver movimientos",
         "Entrega (movimiento)",
         "Recibe (movimiento)",
@@ -399,43 +442,49 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
     const COL_VER_MOV = headers.indexOf("Ver movimientos") + 1;
     const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
 
-    const hr = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const hr = addMainRow(wsMain, headers);
     hr.font = { bold: true };
-    hr.eachCell((cell) => {
+    hr.eachCell((cell, colNumber) => {
+        if (colNumber === 1) return;
         cell.fill = hdrFill;
         cell.border = border;
         cell.alignment = { vertical: "middle", wrapText: true };
     });
-    wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: 1, column: headers.length },
-    };
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_TIPO_FILA + 1).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(COL_TIPO_FILA + 1).font = { bold: true };
     };
 
+    let totalDataRows = 0;
     for (const r of rows) {
         const detRow = movAnchorByKey.get(Number(r.id));
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
-            5: String(r.id),
-            6: excelCellString(r.numero_llave),
-            7: excelCellString(r.empresa_nombre),
-            8: excelCellString(r.cliente_nombre),
-            9: excelCellString(r.division_nombre),
-            10: excelCellString(r.contrato_nombre),
-            11: excelCellString(r.corpo_nombre),
-            12: excelCellString(r.puesto_nombre),
-            13: excelCellString(r.lugar_abre),
-            14: String(r.cantidad_copias ?? ""),
-            15: excelCellString(r.observaciones),
-            16: fmtDate(r.created_at),
+            [headers.indexOf("ID Llave") + 1]: String(r.id),
+            [headers.indexOf("N° llave") + 1]: excelCellString(r.numero_llave),
+            [headers.indexOf("Empresa") + 1]: excelCellString(r.empresa_nombre),
+            [headers.indexOf("Cliente") + 1]: excelCellString(r.cliente_nombre),
+            [headers.indexOf("División") + 1]: excelCellString(r.division_nombre),
+            [headers.indexOf("Contrato") + 1]: excelCellString(r.contrato_nombre),
+            [headers.indexOf("Sucursal") + 1]: excelCellString(r.corpo_nombre),
+            [headers.indexOf("Puesto") + 1]: excelCellString(r.puesto_nombre),
+            [headers.indexOf("Lugar abre") + 1]: excelCellString(r.lugar_abre),
+            [headers.indexOf("Cantidad copias") + 1]: String(r.cantidad_copias ?? ""),
+            [headers.indexOf("Observaciones") + 1]: excelCellString(r.observaciones),
+            [headers.indexOf("Creado (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [headers.indexOf("Creado (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [headers.indexOf("Creado por") + 1]: fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
         };
 
         const rootValues = new Array(headers.length).fill("");
@@ -444,13 +493,14 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
         rootValues[3] = "Llave";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
         rootValues[COL_VER_MOV - 1] = "Ver movimientos";
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
         if (detRow) {
-            const c = rootRow.getCell(COL_VER_MOV);
+            const c = rootRow.getCell(COL_VER_MOV + 1);
             c.value = { text: "Ver movimientos", hyperlink: `#'Movimientos'!A${detRow}` };
             c.font = { color: { argb: "FF0563C1" }, underline: true };
         }
         styleDataRow(rootRow, 0);
+        totalDataRows += 1;
 
         const movs = Array.isArray(r.e_movimiento_llave) ? r.e_movimiento_llave : [];
         movs.forEach((m: any, idx: number) => {
@@ -464,17 +514,28 @@ export async function buildLlavesExcelConsolidado(rows: any[]): Promise<Buffer> 
             values[headers.indexOf("Recibe (movimiento)")] = excelCellString(m.nombre_persona_recibe);
             values[headers.indexOf("Departamento (movimiento)")] = excelCellString(m.departamento);
             values[headers.indexOf("Teléfono (movimiento)")] = excelCellString(m.telefono);
-            values[headers.indexOf("Fecha (movimiento)")] = fmtDate(m.fecha);
-            values[headers.indexOf("Hora (movimiento)")] = fmtTime(m.hora);
+            values[headers.indexOf("Fecha (movimiento)")] = formatDateOnlyDMY(m.fecha);
+            values[headers.indexOf("Hora (movimiento)")] = formatTimeOnlyHMS(m.hora);
             values[headers.indexOf("Tiene firma entrega (movimiento)")] = m.firma_entrega ? "Sí" : "No";
             values[headers.indexOf("Tiene firma recibe (movimiento)")] = m.firma_recibe ? "Sí" : "No";
             values[headers.indexOf("Firma responsable (movimiento)")] = excelCellString(m.firma_responsable ?? "");
-            const movRow = wsMain.addRow(values);
+            const movRow = addMainRow(wsMain, values);
             styleDataRow(movRow, 1);
+            totalDataRows += 1;
         });
     }
 
-    wsMain.columns = [12, 14, 8, 20, 10, 12, 26, 22, 18, 22, 22, 22, 20, 14, 28, 14, 18, 22, 22, 20, 16, 14, 12, 18, 18, 30].map((w) => ({ width: w }));
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
+    };
+
+    wsMain.columns = [
+        { width: 3 },
+        ...[
+            12, 14, 8, 20, 10, 12, 26, 22, 18, 22, 22, 22, 20, 14, 28, 14, 12, 20, 16, 20, 18, 22, 22, 20, 16, 14, 12, 18, 18, 30,
+        ].map((w) => ({ width: w })),
+    ];
     wsMov.columns = [12, 22, 22, 20, 16, 14, 12, 18, 18, 18, 10].map((w) => ({ width: w }));
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

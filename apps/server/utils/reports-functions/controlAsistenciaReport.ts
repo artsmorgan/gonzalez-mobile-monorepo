@@ -4,6 +4,14 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type ControlAsistenciaModuleFilters = ActaEntregaModuleFilters & {
     tipoTurno?: "D" | "M" | "N" | null;
@@ -60,6 +68,15 @@ function normalizeTurno(v: unknown): "D" | "M" | "N" | null {
     if (s === "M" || s === "MIXTO") return "M";
     if (s === "N" || s === "NOCTURNO") return "N";
     return null;
+}
+
+/** Formatea un empleado como "código — Nombre Apellido1 Apellido2" (usado para "Creado por"). */
+function fmtEmpleado(e: any): string {
+    if (!e) return "";
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean);
+    const name = parts.join(" ").trim();
+    const c = e.codigo ? String(e.codigo).trim() : "";
+    return c ? `${c} — ${name}` : name;
 }
 
 function parseColaboradores(raw: string | null | undefined): any[] {
@@ -230,12 +247,30 @@ export async function queryControlAsistenciaRows(prisma: ReportDataAccess, filte
     });
 }
 
-export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildControlAsistenciaExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Control asistencia");
     const wsDetails = wb.addWorksheet("Detalles");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_control_asistencia",
+        rows.map((r: any) => Number(r.id)),
+    );
+    const creadoPorIds = [...new Set(rows.map((r: any) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const empleadosCreador = creadoPorIds.length
+        ? ((await reportDb.c_empleado.findMany({
+              where: { id: { in: creadoPorIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })) as any[])
+        : [];
+    const empById = new Map(empleadosCreador.map((e) => [e.id, e]));
 
     const detailsAnchorByControl = new Map<number, number>();
     const descRows = [...rows].sort((a, b) => Number(b.id) - Number(a.id));
@@ -283,6 +318,9 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
         "Nivel",
         "Tipo de fila",
         "ID Control",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Empresa",
         "Cliente",
         "División",
@@ -290,6 +328,7 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
         "Sucursal",
         "Puesto",
         "Fecha",
+        "Hora",
         "Turno",
         "Presentes",
         "Total turno",
@@ -306,19 +345,27 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
         "Hora fin (colaborador)",
         "Tiene firma (colaborador)",
     ];
-    const COL_VER_DETALLES = 18;
-    const h = wsMain.addRow(headers);
+    // Posición dentro de la hoja (incluye la columna de margen A que agrega `addMainRow`).
+    const COL_VER_DETALLES = 23;
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 12 }, { width: 14 }, { width: 8 }, { width: 20 }, { width: 10 },
+        { width: 16 }, { width: 16 }, { width: 20 },
         { width: 28 }, { width: 24 }, { width: 20 },
-        { width: 28 }, { width: 28 }, { width: 24 }, { width: 13 },
+        { width: 28 }, { width: 28 }, { width: 24 }, { width: 14 }, { width: 12 },
         { width: 12 }, { width: 12 }, { width: 14 }, { width: 24 },
         { width: 36 }, { width: 16 },
         { width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 12 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 16 },
@@ -327,27 +374,33 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
     for (const r of rows) {
         const anchor = detailsAnchorByControl.get(Number(r.id)) ?? 1;
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general = [
             String(r.id),
+            fmtEmpleado(empById.get(Number(r.created_by))) || String(r.created_by ?? ""),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
             r.contrato_nombre,
             r.corpo_nombre,
             r.puesto_nombre,
-            r.fecha_txt,
+            formatDateOnlyDMY(r.fecha),
+            formatTimeOnlyHMS(r.fecha),
             r.turno_label,
             r.total_presentes,
             r.total_empleados_turno,
@@ -355,7 +408,7 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
             r.comentarios ?? "",
         ];
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(r.id),
             "",
             0,
@@ -372,7 +425,7 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
         const cols = Array.isArray(r.colaboradores_preview) ? r.colaboradores_preview : parseColaboradores(r.colaboradores);
         cols.forEach((c: any, idx: number) => {
             const hasFirma = !!(c?.firma_manual_colaborador_data_uri || c?.firma_manual_original_data_uri || c?.firma_manual_reemplazo_data_uri);
-            const row = wsMain.addRow([
+            const row = addMainRow(wsMain, [
                 `${r.id}.col${idx + 1}`,
                 String(r.id),
                 1,
@@ -393,7 +446,10 @@ export async function buildControlAsistenciaExcelConsolidado(rows: any[]): Promi
             totalDataRows += 1;
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
+    };
     wsDetails.columns = [{ width: 24 }, { width: 14 }, { width: 24 }, { width: 16 }, { width: 10 }, { width: 24 }, { width: 12 }, { width: 12 }, { width: 10 }];
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

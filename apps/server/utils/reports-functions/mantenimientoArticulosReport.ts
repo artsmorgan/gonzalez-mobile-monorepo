@@ -11,6 +11,14 @@ import {
     loadArticulosDataByPuesto,
     type ArticuloLink,
 } from "./articulosPuestoBatchData";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type MantenimientoArticulosModuleFilters = ActaEntregaModuleFilters & {
     estados?: string[] | null;
@@ -129,14 +137,6 @@ function excelCellString(v: unknown): string {
     return s.length > 32767 ? s.slice(0, 32767) : s;
 }
 
-function fmtDateTime(v: unknown): string {
-    if (!v) return "";
-    const d = v instanceof Date ? v : new Date(String(v));
-    if (Number.isNaN(d.getTime())) return "";
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 function fmtBool(v: boolean | null | undefined): string {
     if (v === true) return "Sí";
     if (v === false) return "No";
@@ -148,9 +148,9 @@ function fmtInt(v: number | null | undefined): string | number {
     return v;
 }
 
-function applyHeaderRow(row: ExcelJS.Row, cols: number, fill: ExcelJS.Fill) {
+function applyHeaderRow(row: ExcelJS.Row, cols: number, fill: ExcelJS.Fill, startCol = 1) {
     row.font = { bold: true };
-    for (let c = 1; c <= cols; c++) {
+    for (let c = startCol; c < startCol + cols; c++) {
         const cell = row.getCell(c);
         cell.fill = fill;
         cell.border = borderThin as ExcelJS.Borders;
@@ -181,9 +181,9 @@ export type MantenimientoArticuloReportRow = {
     cantidad_necesaria: number;
     cantidad_real: number;
     observaciones: string;
-    fecha_solucion_txt: string;
+    fecha_solucion: Date | null;
     accion: string;
-    fecha_inicio_txt: string;
+    fecha_inicio: Date | null;
     numero_boleta_proveeduria: string;
     tipo: string;
     marca: string;
@@ -194,8 +194,8 @@ export type MantenimientoArticuloReportRow = {
     serie_placa_nuevo: string;
     categoria: string;
     tipo_mantenimiento_art: string;
-    fecha_salida_txt: string;
-    fecha_entrada_txt: string;
+    fecha_salida: Date | null;
+    fecha_entrada: Date | null;
     kilometraje: number | null;
     mant_armas_form: string;
     categoria_mantinimiento: string;
@@ -206,11 +206,11 @@ export type MantenimientoArticuloReportRow = {
     costo_i: number | null;
     iva: number | null;
     costo_total: number | null;
-    fecha_fin_txt: string;
+    fecha_fin: Date | null;
     reincidencia_treinta_dias_txt: string;
     tipo_mant_art_reincid: string;
-    created_at_txt: string;
-    updated_at_txt: string;
+    created_at: Date | null;
+    updated_at: Date | null;
     archivos_adjuntos_count: number;
 };
 
@@ -233,9 +233,11 @@ const MANTENIMIENTO_EXCEL_COLUMNS: ExcelColumnDef[] = [
     { header: "Cantidad necesaria", width: 12, value: (r) => r.cantidad_necesaria },
     { header: "Cantidad real", width: 12, value: (r) => r.cantidad_real },
     { header: "Observaciones", width: 36, value: (r) => excelCellString(r.observaciones) },
-    { header: "Fecha de solución", width: 20, value: (r) => r.fecha_solucion_txt },
+    { header: "Fecha de solución", width: 14, value: (r) => formatDateOnlyDMY(r.fecha_solucion) },
+    { header: "Hora de solución", width: 12, value: (r) => formatTimeOnlyHMS(r.fecha_solucion) },
     { header: "Tipo de acción", width: 18, value: (r) => r.accion },
-    { header: "Fecha de inicio", width: 20, value: (r) => r.fecha_inicio_txt },
+    { header: "Fecha de inicio", width: 14, value: (r) => formatDateOnlyDMY(r.fecha_inicio) },
+    { header: "Hora de inicio", width: 12, value: (r) => formatTimeOnlyHMS(r.fecha_inicio) },
     { header: "Número boleta proveeduría", width: 22, value: (r) => excelCellString(r.numero_boleta_proveeduria) },
     { header: "Tipo", width: 16, value: (r) => excelCellString(r.tipo) },
     { header: "Marca", width: 16, value: (r) => excelCellString(r.marca) },
@@ -246,8 +248,10 @@ const MANTENIMIENTO_EXCEL_COLUMNS: ExcelColumnDef[] = [
     { header: "Serie o placa (equipo nuevo)", width: 18, value: (r) => excelCellString(r.serie_placa_nuevo) },
     { header: "Categoría", width: 16, value: (r) => excelCellString(r.categoria) },
     { header: "Tipo de mantenimiento del artículo", width: 24, value: (r) => excelCellString(r.tipo_mantenimiento_art) },
-    { header: "Fecha de salida", width: 20, value: (r) => r.fecha_salida_txt },
-    { header: "Fecha de entrada", width: 20, value: (r) => r.fecha_entrada_txt },
+    { header: "Fecha de salida", width: 14, value: (r) => formatDateOnlyDMY(r.fecha_salida) },
+    { header: "Hora de salida", width: 12, value: (r) => formatTimeOnlyHMS(r.fecha_salida) },
+    { header: "Fecha de entrada", width: 14, value: (r) => formatDateOnlyDMY(r.fecha_entrada) },
+    { header: "Hora de entrada", width: 12, value: (r) => formatTimeOnlyHMS(r.fecha_entrada) },
     { header: "Kilometraje", width: 12, value: (r) => fmtInt(r.kilometraje) },
     { header: "Formulario mantenimiento de armas", width: 28, value: (r) => excelCellString(r.mant_armas_form) },
     { header: "Categoría de mantenimiento", width: 22, value: (r) => excelCellString(r.categoria_mantinimiento) },
@@ -258,12 +262,21 @@ const MANTENIMIENTO_EXCEL_COLUMNS: ExcelColumnDef[] = [
     { header: "Costo insumos", width: 14, value: (r) => fmtInt(r.costo_i) },
     { header: "IVA", width: 12, value: (r) => fmtInt(r.iva) },
     { header: "Costo total", width: 14, value: (r) => fmtInt(r.costo_total) },
-    { header: "Fecha de fin", width: 20, value: (r) => r.fecha_fin_txt },
+    { header: "Fecha de fin", width: 14, value: (r) => formatDateOnlyDMY(r.fecha_fin) },
+    { header: "Hora de fin", width: 12, value: (r) => formatTimeOnlyHMS(r.fecha_fin) },
     { header: "Reincidencia en 30 días", width: 14, value: (r) => r.reincidencia_treinta_dias_txt },
     { header: "Tipo mantenimiento (reincidencia)", width: 24, value: (r) => excelCellString(r.tipo_mant_art_reincid) },
-    { header: "Fecha de creación", width: 20, value: (r) => r.created_at_txt },
-    { header: "Fecha de actualización", width: 20, value: (r) => r.updated_at_txt },
+    { header: "Fecha de creación", width: 14, value: (r) => formatDateOnlyDMY(r.created_at) },
+    { header: "Hora de creación", width: 12, value: (r) => formatTimeOnlyHMS(r.created_at) },
+    { header: "Fecha de actualización", width: 14, value: (r) => formatDateOnlyDMY(r.updated_at) },
+    { header: "Hora de actualización", width: 12, value: (r) => formatTimeOnlyHMS(r.updated_at) },
     { header: "Cantidad de archivos adjuntos", width: 14, value: (r) => r.archivos_adjuntos_count },
+];
+
+/** Columnas adicionales de auditoría (último cambio registrado en `c_cambios_apps_modules`). */
+const MANTENIMIENTO_CAMBIOS_COLUMNS: ExcelColumnDef[] = [
+    { header: "Usuario modifica", width: 16, value: (r: any) => r.usuario_modifica ?? "" },
+    { header: "Fecha y hora modifica", width: 20, value: (r: any) => r.fecha_hora_modifica ?? "" },
 ];
 
 type ArticuloLinkRef = ArticuloLink;
@@ -481,9 +494,9 @@ export async function queryMantenimientoArticulosRows(
             cantidad_necesaria: m.cantidad_necesaria,
             cantidad_real: m.cantidad_real,
             observaciones: m.observaciones,
-            fecha_solucion_txt: fmtDateTime(m.fecha_solucion),
+            fecha_solucion: m.fecha_solucion,
             accion: m.accion ?? "",
-            fecha_inicio_txt: fmtDateTime(m.fecha_inicio),
+            fecha_inicio: m.fecha_inicio,
             numero_boleta_proveeduria: m.numero_boleta_proveeduria ?? "",
             tipo: m.tipo ?? "",
             marca: m.marca ?? "",
@@ -494,8 +507,8 @@ export async function queryMantenimientoArticulosRows(
             serie_placa_nuevo: m.serie_placa_nuevo ?? "",
             categoria: m.categoria ?? "",
             tipo_mantenimiento_art: m.tipo_mantenimiento_art ?? "",
-            fecha_salida_txt: fmtDateTime(m.fecha_salida),
-            fecha_entrada_txt: fmtDateTime(m.fecha_entrada),
+            fecha_salida: m.fecha_salida,
+            fecha_entrada: m.fecha_entrada,
             kilometraje: m.kilometraje,
             mant_armas_form: m.mant_armas_form ?? "",
             categoria_mantinimiento: m.categoria_mantinimiento ?? "",
@@ -506,11 +519,11 @@ export async function queryMantenimientoArticulosRows(
             costo_i: m.costo_i,
             iva: m.iva,
             costo_total: m.costo_total,
-            fecha_fin_txt: fmtDateTime(m.fecha_fin),
+            fecha_fin: m.fecha_fin,
             reincidencia_treinta_dias_txt: fmtBool(m.reincidencia_treinta_dias),
             tipo_mant_art_reincid: m.tipo_mant_art_reincid ?? "",
-            created_at_txt: fmtDateTime(m.created_at),
-            updated_at_txt: fmtDateTime(m.updated_at),
+            created_at: m.created_at,
+            updated_at: m.updated_at,
             archivos_adjuntos_count: m._count.c_archivos_adjuntos_articulo_mantenimiento,
         });
     }
@@ -518,28 +531,48 @@ export async function queryMantenimientoArticulosRows(
     return sortMantenimientoRows(out, orderKey);
 }
 
-export async function buildMantenimientoArticulosExcelConsolidado(rows: MantenimientoArticuloReportRow[]): Promise<Buffer> {
+export async function buildMantenimientoArticulosExcelConsolidado(
+    rows: MantenimientoArticuloReportRow[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet("Mantenimiento");
 
-    const headers = MANTENIMIENTO_EXCEL_COLUMNS.map((c) => c.header);
-    ws.addRow(headers);
-    applyHeaderRow(ws.getRow(1), headers.length, MAIN_HDR);
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_articulo_mantenimiento",
+        rows.map((r) => r.id),
+    );
+    const rowsWithCambios = rows.map((r) => ({
+        ...r,
+        usuario_modifica: cambiosByRegistro.get(r.id)?.cedula ?? "",
+        fecha_hora_modifica: cambiosByRegistro.get(r.id)?.fechaHoraTexto ?? "",
+    }));
 
-    for (const r of rows) {
-        const row = ws.addRow(MANTENIMIENTO_EXCEL_COLUMNS.map((c) => c.value(r)));
-        row.eachCell((cell) => {
+    const allColumns = [...MANTENIMIENTO_EXCEL_COLUMNS, ...MANTENIMIENTO_CAMBIOS_COLUMNS];
+    const headers = allColumns.map((c) => c.header);
+
+    applyConsolidadoReportBanner(ws, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(ws, headers);
+    applyHeaderRow(ws.getRow(12), headers.length, MAIN_HDR, 2);
+
+    for (const r of rowsWithCambios) {
+        const row = addMainRow(ws, allColumns.map((c) => c.value(r as any)));
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = borderThin;
             cell.alignment = { wrapText: true, vertical: "top" };
         });
     }
 
     ws.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, rows.length + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rowsWithCambios.length + 12), column: headers.length + 1 },
     };
 
-    ws.columns = MANTENIMIENTO_EXCEL_COLUMNS.map((c) => ({ width: c.width }));
+    ws.columns = [{ width: 3 }, ...allColumns.map((c) => ({ width: c.width }))];
 
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

@@ -231,7 +231,7 @@ const NOMENCLATOR_TYPES: NomenclatorType[] = [
   {
     slug: REPORTES_CONTROL_VERSIONES_SLUG,
     label: 'Control de versiones de reportes',
-    description: 'Permite editar el título, versión, fecha de aprobación y departamento de los registros de control de versiones de reportes ya existentes.',
+    description: 'Permite editar el título, versión, fecha de aprobación y dueño de proceso de los registros de control de versiones de reportes ya existentes.',
     formKind: 'reportes-control-versiones',
   },
 ];
@@ -758,33 +758,22 @@ export default function NomencladoresScreen() {
       }
       body = { articulo_id, nombre };
     } else if (selectedType.formKind === 'reportes-control-versiones') {
+      // Todos los campos son opcionales: se pueden dejar en blanco. Si se llenan, deben respetar su formato.
       const title = stripCommas(formCvTitle.trim());
-      if (!title) {
-        Alert.alert('Validación', 'El título es obligatorio.');
-        return;
-      }
       if (title.length > REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH) {
         Alert.alert('Validación', `El título no puede superar los ${REPORTES_CONTROL_VERSIONES_TITLE_MAX_LENGTH} caracteres.`);
         return;
       }
       const versionTrimmed = formCvVersion.trim();
-      if (!/^-?\d+$/.test(versionTrimmed)) {
+      if (versionTrimmed && !/^-?\d+$/.test(versionTrimmed)) {
         Alert.alert('Validación', 'La versión debe ser un número entero.');
         return;
       }
-      if (!formCvApproveDate) {
-        Alert.alert('Validación', 'Debe seleccionar la fecha de aprobación.');
-        return;
-      }
       const department = stripCommas(formCvDepartment.trim());
-      if (!department) {
-        Alert.alert('Validación', 'El departamento es obligatorio.');
-        return;
-      }
       body = {
         title,
-        version: Number(versionTrimmed),
-        approve_date: toIsoDateOnly(formCvApproveDate),
+        version: versionTrimmed ? Number(versionTrimmed) : null,
+        approve_date: formCvApproveDate ? toIsoDateOnly(formCvApproveDate) : null,
         department,
       };
     } else {
@@ -1280,23 +1269,34 @@ export default function NomencladoresScreen() {
                       />
 
                       <ThemedText style={styles.label}>Fecha de aprobación</ThemedText>
-                      <TouchableOpacity
-                        style={styles.dateButton}
-                        onPress={() => setShowCvApproveDatePicker(true)}
-                        activeOpacity={0.85}
-                      >
-                        <ThemedText style={styles.dateButtonText}>
-                          {formatDateOnlyDisplay(formCvApproveDate)}
-                        </ThemedText>
-                        <Ionicons name="calendar-outline" size={18} color="#007AFF" />
-                      </TouchableOpacity>
+                      <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <TouchableOpacity
+                          style={[styles.dateButton, { flex: 1 }]}
+                          onPress={() => setShowCvApproveDatePicker(true)}
+                          activeOpacity={0.85}
+                        >
+                          <ThemedText style={styles.dateButtonText}>
+                            {formatDateOnlyDisplay(formCvApproveDate)}
+                          </ThemedText>
+                          <Ionicons name="calendar-outline" size={18} color="#007AFF" />
+                        </TouchableOpacity>
+                        {formCvApproveDate ? (
+                          <TouchableOpacity
+                            onPress={() => setFormCvApproveDate(null)}
+                            activeOpacity={0.85}
+                            accessibilityLabel="Borrar fecha de aprobación"
+                          >
+                            <Ionicons name="close-circle" size={22} color="#999" />
+                          </TouchableOpacity>
+                        ) : null}
+                      </ThemedView>
 
-                      <ThemedText style={styles.label}>Departamento</ThemedText>
+                      <ThemedText style={styles.label}>Dueño de proceso</ThemedText>
                       <TextInput
                         style={styles.input}
                         value={formCvDepartment}
                         onChangeText={(text) => setFormCvDepartment(stripCommas(text))}
-                        placeholder="Departamento"
+                        placeholder="Dueño de proceso"
                         placeholderTextColor="#999"
                       />
                     </>

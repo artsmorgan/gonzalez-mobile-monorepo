@@ -3,7 +3,7 @@ import { verifyAccessTokenByApi } from "../../../utils/verifyAccessTokenByApi";
 import { callDynamicPrisma } from "../../../utils/callDynamicPrisma";
 import { prisma } from "../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
-import { sendNotificationByPlaza } from "../../../utils/sendNotification";
+import { sendNotificationByPlaza, sendNotificationByEmployee } from "../../../utils/sendNotification";
 import { uploadDynamicFiles } from "../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../utils/reportError";
 
@@ -20,73 +20,119 @@ export async function GET(req: NextRequest) {
         if (!valid) { return NextResponse.json({ status: false, expired: expired, message: message }, { status: expired ? 401 : 403 }); }
 
         const puestoIdStr = req.nextUrl.searchParams.get("puesto_id");
-        if (!puestoIdStr || String(puestoIdStr).trim() === "") {
-            await reportError(req, "api/job-manuals", "GET", 400, "Puesto no especificado");
+        const empleadoIdStr = req.nextUrl.searchParams.get("empleado_id");
+        const hasPuestoParam = !!puestoIdStr && String(puestoIdStr).trim() !== "";
+        const hasEmpleadoParam = !!empleadoIdStr && String(empleadoIdStr).trim() !== "";
+
+        if (!hasPuestoParam && !hasEmpleadoParam) {
+            await reportError(req, "api/job-manuals", "GET", 400, "Puesto o empleado no especificado");
             return NextResponse.json(
-                { status: false, message: "Puesto no especificado" },
+                { status: false, message: "Puesto o empleado no especificado" },
+                { status: 400 }
+            );
+        }
+        if (hasPuestoParam && hasEmpleadoParam) {
+            await reportError(req, "api/job-manuals", "GET", 400, "Especifique solo puesto_id o solo empleado_id");
+            return NextResponse.json(
+                { status: false, message: "Especifique solo puesto_id o solo empleado_id" },
                 { status: 400 }
             );
         }
 
-        const targetPuestoId = parseInt(String(puestoIdStr), 10);
-        if (!Number.isFinite(targetPuestoId) || targetPuestoId <= 0) {
-            await reportError(req, "api/job-manuals", "GET", 400, "puesto_id inválido");
-            return NextResponse.json(
-                { status: false, message: "puesto_id inválido" },
-                { status: 400 }
-            );
-        }
-
-        const puesto = await prisma.e_estructura_puesto.findUnique({
-            where: { id: targetPuestoId },
-        });
-
-        if (!puesto) {
-            await reportError(req, "api/job-manuals", "GET", 404, "Puesto no encontrado");
-            return NextResponse.json(
-                { status: false, message: "Puesto no encontrado" },
-                { status: 404 }
-            );
-        }
-
-        const puestoObj = puesto as any;
         const employeeId = payload?.id as number;
-
-        // Obtener manuales asociados al puesto mediante la tabla de relación
-        const manualLinks = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_puestos_manual_puesto",
-                operation: "findMany",
-                where: { puesto_id: puestoObj.id },
-            },
-        });
-
+        let puestoObj: any = null;
         const manualIdsSet = new Set<number>();
-        const manualLinksArray = Array.isArray(manualLinks) ? manualLinks : [];
-        manualLinksArray.forEach((link: any) => {
-            if (link.manual_puesto_id) {
-                manualIdsSet.add(link.manual_puesto_id);
-            }
-        });
 
-        // Compatibilidad hacia atrás: también incluir manuales que tengan puesto_id directamente
-        const directManuals = await callDynamicPrisma({
-            req,
-            data: {
-                action: "GET",
-                table: "e_manual_puesto",
-                operation: "findMany",
-                where: { puesto_id: puestoObj.id, isActive: true },
-            },
-        });
-        const directManualsArray = Array.isArray(directManuals) ? directManuals : [];
-        directManualsArray.forEach((manual: any) => {
-            if (manual.id) {
-                manualIdsSet.add(manual.id);
+        if (hasPuestoParam) {
+            const targetPuestoId = parseInt(String(puestoIdStr), 10);
+            if (!Number.isFinite(targetPuestoId) || targetPuestoId <= 0) {
+                await reportError(req, "api/job-manuals", "GET", 400, "puesto_id inválido");
+                return NextResponse.json(
+                    { status: false, message: "puesto_id inválido" },
+                    { status: 400 }
+                );
             }
-        });
+
+            const puesto = await prisma.e_estructura_puesto.findUnique({
+                where: { id: targetPuestoId },
+            });
+            if (!puesto) {
+                await reportError(req, "api/job-manuals", "GET", 404, "Puesto no encontrado");
+                return NextResponse.json(
+                    { status: false, message: "Puesto no encontrado" },
+                    { status: 404 }
+                );
+            }
+            puestoObj = puesto as any;
+
+            // Obtener manuales asociados al puesto mediante la tabla de relación
+            const manualLinks = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_puestos_manual_puesto",
+                    operation: "findMany",
+                    where: { puesto_id: puestoObj.id },
+                },
+            });
+            const manualLinksArray = Array.isArray(manualLinks) ? manualLinks : [];
+            manualLinksArray.forEach((link: any) => {
+                if (link.manual_puesto_id) {
+                    manualIdsSet.add(link.manual_puesto_id);
+                }
+            });
+
+            // Compatibilidad hacia atrás: también incluir manuales que tengan puesto_id directamente
+            const directManuals = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_manual_puesto",
+                    operation: "findMany",
+                    where: { puesto_id: puestoObj.id, isActive: true },
+                },
+            });
+            const directManualsArray = Array.isArray(directManuals) ? directManuals : [];
+            directManualsArray.forEach((manual: any) => {
+                if (manual.id) {
+                    manualIdsSet.add(manual.id);
+                }
+            });
+        } else {
+            const targetEmpleadoId = parseInt(String(empleadoIdStr), 10);
+            if (!Number.isFinite(targetEmpleadoId) || targetEmpleadoId <= 0) {
+                await reportError(req, "api/job-manuals", "GET", 400, "empleado_id inválido");
+                return NextResponse.json(
+                    { status: false, message: "empleado_id inválido" },
+                    { status: 400 }
+                );
+            }
+
+            const empleado = await prisma.c_empleado.findUnique({ where: { id: targetEmpleadoId } });
+            if (!empleado) {
+                await reportError(req, "api/job-manuals", "GET", 404, "Empleado no encontrado");
+                return NextResponse.json(
+                    { status: false, message: "Empleado no encontrado" },
+                    { status: 404 }
+                );
+            }
+
+            const manualLinks = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "GET",
+                    table: "e_empleados_manual_puesto",
+                    operation: "findMany",
+                    where: { empleado_id: targetEmpleadoId },
+                },
+            });
+            const manualLinksArray = Array.isArray(manualLinks) ? manualLinks : [];
+            manualLinksArray.forEach((link: any) => {
+                if (link.manual_puesto_id) {
+                    manualIdsSet.add(link.manual_puesto_id);
+                }
+            });
+        }
 
         const manualIds = Array.from(manualIdsSet);
 
@@ -96,6 +142,26 @@ export async function GET(req: NextRequest) {
                 { status: 200 }
             );
         }
+
+        // Vínculos a empleados de todos los manuales resultantes (para cachear en el cliente)
+        const empleadosLinksAll = await callDynamicPrisma({
+            req,
+            data: {
+                action: "GET",
+                table: "e_empleados_manual_puesto",
+                operation: "findMany",
+                where: { manual_puesto_id: { in: manualIds } },
+            },
+        });
+        const empleadosVinculadosByManualId = new Map<number, number[]>();
+        (Array.isArray(empleadosLinksAll) ? empleadosLinksAll : []).forEach((link: any) => {
+            const mid = Number(link?.manual_puesto_id);
+            const eid = Number(link?.empleado_id);
+            if (!Number.isFinite(mid) || !Number.isFinite(eid)) return;
+            const arr = empleadosVinculadosByManualId.get(mid) ?? [];
+            arr.push(eid);
+            empleadosVinculadosByManualId.set(mid, arr);
+        });
 
         const manuals = await callDynamicPrisma({
             req,
@@ -113,6 +179,23 @@ export async function GET(req: NextRequest) {
 
         // Usar el origin de la petición para construir URLs absolutas accesibles desde el móvil
         const baseUrl = req.nextUrl.origin;
+
+        // En modo empleado no hay un "puesto de la consulta": se muestra el puesto propio de cada manual
+        const ownPuestoIds = Array.from(
+            new Set(
+                manualsArray
+                    .map((m: any) => Number(m?.puesto_id))
+                    .filter((id: number) => Number.isFinite(id) && id > 0)
+            )
+        );
+        const ownPuestosById = new Map<number, { id: number; nombre: string }>();
+        if (!puestoObj && ownPuestoIds.length > 0) {
+            const ownPuestos = await prisma.e_estructura_puesto.findMany({
+                where: { id: { in: ownPuestoIds } },
+                select: { id: true, nombre: true },
+            });
+            ownPuestos.forEach((p) => ownPuestosById.set(p.id, { id: p.id, nombre: p.nombre }));
+        }
 
         const manualsWithFiles = await Promise.all(
             manualsArray.map(async (manual: any) => {
@@ -214,11 +297,11 @@ export async function GET(req: NextRequest) {
                     corpo_id: manual.corpo_id ?? null,
                     division_id: manual.division_id ?? null,
                     contrato_id: manual.contrato_id ?? null,
-                    // Para el cliente móvil, mostramos el puesto de la consulta
-                    puesto: {
-                        id: puesto.id,
-                        nombre: puesto.nombre
-                    },
+                    // Para el cliente móvil: en modo puesto, el puesto de la consulta; en modo empleado, el puesto propio del manual
+                    puesto: puestoObj
+                        ? { id: puestoObj.id, nombre: puestoObj.nombre }
+                        : ownPuestosById.get(Number(manual.puesto_id)) ?? { id: manual.puesto_id, nombre: "" },
+                    empleados_vinculados_ids: empleadosVinculadosByManualId.get(Number(manual.id)) ?? [],
                     created_by: manual.created_by,
                     created_at: manual.created_at,
                     classification: manual.classification ?? null,
@@ -229,6 +312,7 @@ export async function GET(req: NextRequest) {
                         manual_puesto_id: v.manual_puesto_id,
                         nombre_empleado: v.nombre_empleado,
                         firma_empleado: v.firma_empleado,
+                        firma_empleado_manual: v.firma_empleado_manual ?? null,
                         quiz_answear: v.quiz_answear ?? null,
                         approved: v.approved ?? null,
                         created_at: v.created_at,
@@ -269,6 +353,7 @@ export async function POST(req: NextRequest) {
             description,
             firma_responsable,
             puestos,
+            empleados,
             files,
             quiz,
             classification,
@@ -444,6 +529,45 @@ export async function POST(req: NextRequest) {
             }
         });
 
+        // 2b) Vínculos opcionales a empleados específicos (e_empleados_manual_puesto)
+        const empleadosParsedRaw: number[] = empleados ? JSON.parse(empleados) : [];
+        const empleadosParsed = Array.from(
+            new Set(
+                (Array.isArray(empleadosParsedRaw) ? empleadosParsedRaw : [])
+                    .map((id: any) => Number(id))
+                    .filter((id: number) => Number.isFinite(id) && id > 0)
+            )
+        );
+        let confirmedEmpleadoIds: number[] = [];
+        if (empleadosParsed.length > 0) {
+            const existingEmpleados = await prisma.c_empleado.findMany({
+                where: { id: { in: empleadosParsed } },
+                select: { id: true },
+            });
+            confirmedEmpleadoIds = Array.from(
+                new Set(
+                    (Array.isArray(existingEmpleados) ? existingEmpleados : [])
+                        .map((e: any) => Number(e?.id))
+                        .filter((id: number) => Number.isFinite(id) && id > 0)
+                )
+            );
+            if (confirmedEmpleadoIds.length > 0) {
+                await callDynamicPrisma({
+                    req,
+                    data: {
+                        action: "POST",
+                        table: "e_empleados_manual_puesto",
+                        operation: "createMany",
+                        many: true,
+                        data: confirmedEmpleadoIds.map((empleado_id: number) => ({
+                            manual_puesto_id: manualObj.id,
+                            empleado_id,
+                        })),
+                    }
+                });
+            }
+        }
+
         // Guardar archivos una sola vez para el manual, delegando a /api/dynamic-prisma/files
         if (filesParsed.length > 0) {
             const uploadResp = await uploadDynamicFiles({
@@ -496,6 +620,21 @@ export async function POST(req: NextRequest) {
         const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
 
         await sendNotificationByPlaza(req, marcaObj.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
+
+        if (confirmedEmpleadoIds.length > 0) {
+            try {
+                await sendNotificationByEmployee(
+                    req,
+                    marcaObj.corpo_id,
+                    [],
+                    "Manual creado",
+                    `Se te ha vinculado el manual ${title} el día ${fecha_string} a las ${hora_string}`,
+                    confirmedEmpleadoIds
+                );
+            } catch (err) {
+                console.warn("Fallo enviando notificación a empleados vinculados (no bloquea la creación):", err);
+            }
+        }
 
         return NextResponse.json(
             {

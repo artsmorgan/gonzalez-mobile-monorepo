@@ -4,6 +4,14 @@ import ExcelJS from "exceljs";
 import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type AperturaCierrePuestoModuleFilters = ActaEntregaModuleFilters & {
     createdByIds?: number[] | null;
@@ -287,7 +295,11 @@ export async function queryAperturaCierrePuestoRows(
     });
 }
 
-export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildAperturaCierrePuestoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const workbook = new ExcelJS.Workbook();
     const main = workbook.addWorksheet("Apertura-Cierre");
     const details = workbook.addWorksheet("Detalles");
@@ -297,6 +309,12 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         bottom: { style: "thin" },
         right: { style: "thin" },
     };
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_apertura_cierre_puesto",
+        rows.map((r) => Number(r.id)),
+    );
 
     /** Cuadrícula jerárquica: el registro (nivel 0) más sus subregistros hermanos (actividades del checklist / inventario, nivel 1). */
     main.properties.outlineProperties = { summaryBelow: false, summaryRight: false };
@@ -308,6 +326,8 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         "Tipo de fila",
         "ID Apertura-Cierre",
         "Creador",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Empresa",
         "Cliente",
         "División",
@@ -315,6 +335,7 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         "Sucursal",
         "Puesto",
         "Fecha",
+        "Hora",
         "Tipo (Apertura/Cierre)",
         "Ver actividades",
         "Ver inventario",
@@ -330,32 +351,39 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         "Modelo (inventario)",
         "Descripción (inventario)",
     ];
-    const COL_VER_ACTIVIDADES = 15;
-    const COL_VER_INVENTARIO = 16;
+    const COL_VER_ACTIVIDADES = 19;
+    const COL_VER_INVENTARIO = 20;
 
-    const h = main.addRow(headers);
+    applyConsolidadoReportBanner(main, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const h = addMainRow(main, headers);
     h.font = { bold: true };
     h.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    h.eachCell((c) => {
-        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
-        c.border = borderThin;
-    });
-    main.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } };
+        cell.border = borderThin;
+    }
+    main.views = [{ state: "frozen", ySplit: 12 }];
     main.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
         { width: 22 },
         { width: 14 },
         { width: 30 },
+        { width: 16 },
+        { width: 20 },
         { width: 30 },
         { width: 26 },
         { width: 22 },
         { width: 30 },
         { width: 28 },
         { width: 30 },
+        { width: 14 },
+        { width: 12 },
         { width: 18 },
-        { width: 16 },
         { width: 18 },
         { width: 18 },
         { width: 34 },
@@ -434,33 +462,37 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
     for (const r of rows) {
         const detailRow = detailsStartById.get(Number(r.id)) ?? 1;
-        const fechaTxt = r.fecha instanceof Date ? r.fecha.toISOString().slice(0, 10) : String(r.fecha ?? "");
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general = [
             String(r.id),
             r.creador_nombre,
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
             r.contrato_nombre,
             r.corpo_nombre,
             r.puesto_nombre,
-            fechaTxt,
+            formatDateOnlyDMY(r.fecha),
+            formatTimeOnlyHMS(r.fecha),
             r.tipo_txt,
         ];
 
-        const rootRow = main.addRow([
+        const rootRow = addMainRow(main, [
             String(r.id),
             "",
             0,
@@ -479,7 +511,7 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         totalDataRows += 1;
 
         parseArrayJSON(r.actividades).forEach((a, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.act${idx + 1}`,
                 String(r.id),
                 1,
@@ -496,7 +528,7 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         });
 
         parseArrayJSON(r.inventario).forEach((inv, idx) => {
-            const row = main.addRow([
+            const row = addMainRow(main, [
                 `${r.id}.inv${idx + 1}`,
                 String(r.id),
                 1,
@@ -516,8 +548,8 @@ export async function buildAperturaCierrePuestoExcelConsolidado(rows: any[]): Pr
         });
     }
     main.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
     };
     return Buffer.from(await workbook.xlsx.writeBuffer());
 }

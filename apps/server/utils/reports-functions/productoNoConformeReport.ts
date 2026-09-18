@@ -5,6 +5,14 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer, getImageDimensionsFromFile } from "./imageDimensions";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type ProductoNoConformeModuleFilters = ActaEntregaModuleFilters & {
     /** Nombre del tipo (tabla `c_tipos_producto_no_conforme` / campo `tipo_servicio_no_conforme`). */
@@ -51,12 +59,6 @@ function fmtDateOnly(v: unknown): string {
     const d = v instanceof Date ? v : new Date(String(v ?? ""));
     if (Number.isNaN(d.getTime())) return "";
     return d.toISOString().slice(0, 10);
-}
-
-function fmtDateTime(v: unknown): string {
-    const d = v instanceof Date ? v : new Date(String(v ?? ""));
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
 function normalizeSignatureDataUri(raw: unknown): string | null {
@@ -274,7 +276,6 @@ export async function queryProductoNoConformeRows(
             corpo_nombre: corpo ? `${corpo.nro_sucursal ? `${corpo.nro_sucursal} - ` : ""}${corpo.nombre}` : String(r.corpo_id),
             corpo_nro: corpo?.nro_sucursal != null ? String(corpo.nro_sucursal) : "",
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : String(r.puesto_id),
-            created_at_txt: r.created_at instanceof Date ? fmtDateTime(r.created_at) : String(r.created_at ?? ""),
             created_by_nombre: creador ? empleadoDisplayName(creador) : excelCellString(r.created_by),
             fecha_identificacion_txt: fmtDateOnly(r.fecha_identificacion),
             fecha_solucion_txt: fmtDateOnly(r.fecha_solucion),
@@ -397,7 +398,11 @@ const HDR_MAIN = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F3864
 /** Cabecera hoja principal en reportes consolidados (Mutuos, Llaves, …). */ // Consolidado
 const GRP_HDR_FILL = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9EAF7" } } as const;
 
-export async function buildProductoNoConformeExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildProductoNoConformeExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("c_producto_no_conforme");
     const wsFir = wb.addWorksheet("Firmas");
@@ -434,31 +439,45 @@ export async function buildProductoNoConformeExcelConsolidado(rows: any[]): Prom
         "Persona que originó PNC",
         "Acción implementada",
         "Fecha solución",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Responsable aprobar acción",
         "Firma responsable",
         "Firma identificó PNC",
         "Firma originó PNC",
     ];
-    const colWidths = [9, 28, 28, 24, 28, 28, 24, 16, 22, 26, 24, 40, 24, 36, 14, 20, 28, 36, 36, 22, 22];
-    const colLinkIdent = headers.length - 1;
-    const colLinkOrig = headers.length;
+    const colWidths = [9, 28, 28, 24, 28, 28, 24, 16, 22, 26, 24, 40, 24, 36, 14, 14, 12, 28, 16, 20, 36, 36, 22, 22];
+    // Recalculadas tras insertar "Usuario modifica"/"Fecha y hora modifica"; +1 por la columna de margen que agrega `addMainRow`.
+    const colLinkIdent = headers.length;
+    const colLinkOrig = headers.length + 1;
 
-    const h = wsMain.addRow(headers);
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_producto_no_conforme",
+        rows.map((r: any) => Number(r.id)),
+    );
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const h = addMainRow(wsMain, headers);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = GRP_HDR_FILL;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    wsMain.columns = colWidths.map((w) => ({ width: w, outlineLevel: 1 }));
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR_FILL;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    wsMain.columns = [{ width: 3 }, ...colWidths.map((w) => ({ width: w, outlineLevel: 1 }))];
 
     for (const r of rows) {
         const ri = anchorIdentById.get(Number(r.id)) ?? 1;
         const ro = anchorOrigById.get(Number(r.id)) ?? 1;
-        const row = wsMain.addRow([
+        const cambio = cambiosByRegistro.get(Number(r.id));
+        const row = addMainRow(wsMain, [
             Number(r.id),
             excelCellString(r.empresa_nombre),
             excelCellString(r.cliente_nombre),
@@ -466,16 +485,19 @@ export async function buildProductoNoConformeExcelConsolidado(rows: any[]): Prom
             excelCellString(r.contrato_nombre),
             excelCellString(r.corpo_nombre),
             excelCellString(r.puesto_nombre),
-            excelCellString(r.fecha_identificacion_txt),
+            formatDateOnlyDMY(r.fecha_identificacion),
             excelCellString(r.responsable_cuenta),
             excelCellString(r.tipo_servicio_no_conforme),
             excelCellString(r.persona_identifico_pnc),
             excelCellString(r.descripcion),
             excelCellString(r.persona_origino_pnc),
             excelCellString(r.accion_implementada),
-            excelCellString(r.fecha_solucion_txt),
-            excelCellString(r.created_at_txt),
+            formatDateOnlyDMY(r.fecha_solucion),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             excelCellString(r.created_by_nombre ?? r.created_by),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
             excelCellString(r.responsable_aprobar),
             previewFirmaResponsableOTextoLargo(r.firma_responsable),
             "",
@@ -485,12 +507,16 @@ export async function buildProductoNoConformeExcelConsolidado(rows: any[]): Prom
         row.getCell(colLinkIdent).font = { color: { argb: "FF0563C1" }, underline: true };
         row.getCell(colLinkOrig).value = { text: "Ver firma", hyperlink: `#'Firmas'!A${ro}` };
         row.getCell(colLinkOrig).font = { color: { argb: "FF0563C1" }, underline: true };
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, rows.length + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
+    };
     for (let c = 1; c <= maxCol; c++) wsFir.getColumn(c).width = c === 1 ? 48 : 14;
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

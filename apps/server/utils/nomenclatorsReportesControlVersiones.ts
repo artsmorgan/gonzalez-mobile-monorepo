@@ -77,11 +77,12 @@ export async function fetchReportesControlVersionesList(
 
 export type ReportesControlVersionesUpdatePayload = {
     title: string;
-    version: number;
-    approve_date: string;
+    version: number | null;
+    approve_date: string | null;
     department: string;
 };
 
+/** Todos los campos son opcionales (se pueden dejar en blanco); si se llenan, deben respetar su formato. */
 export function parseReportesControlVersionesUpdatePayload(
     body: unknown
 ): ReportesControlVersionesUpdatePayload | { error: string } {
@@ -96,40 +97,38 @@ export function parseReportesControlVersionesUpdatePayload(
     };
 
     const title = stripCommas(String(b.title ?? "").trim());
-    if (!title) {
-        return { error: "El título es obligatorio" };
-    }
     if (title.length > TITLE_MAX_LENGTH) {
         return { error: `El título no puede superar los ${TITLE_MAX_LENGTH} caracteres` };
     }
 
     const versionRaw = String(b.version ?? "").trim();
-    if (!/^-?\d+$/.test(versionRaw)) {
-        return { error: "La versión debe ser un número entero" };
-    }
-    const version = Number(versionRaw);
-    if (!Number.isSafeInteger(version)) {
-        return { error: "La versión está fuera de rango" };
+    let version: number | null = null;
+    if (versionRaw) {
+        if (!/^-?\d+$/.test(versionRaw)) {
+            return { error: "La versión debe ser un número entero" };
+        }
+        version = Number(versionRaw);
+        if (!Number.isSafeInteger(version)) {
+            return { error: "La versión está fuera de rango" };
+        }
     }
 
     const approveDateRaw = String(b.approve_date ?? "").trim();
-    if (!approveDateRaw) {
-        return { error: "La fecha de aprobación es obligatoria" };
-    }
-    const approveDate = new Date(approveDateRaw);
-    if (Number.isNaN(approveDate.getTime())) {
-        return { error: "La fecha de aprobación no es válida" };
+    let approve_date: string | null = null;
+    if (approveDateRaw) {
+        const approveDate = new Date(approveDateRaw);
+        if (Number.isNaN(approveDate.getTime())) {
+            return { error: "La fecha de aprobación no es válida" };
+        }
+        approve_date = approveDate.toISOString();
     }
 
     const department = stripCommas(String(b.department ?? "").trim());
-    if (!department) {
-        return { error: "El departamento es obligatorio" };
-    }
 
     return {
         title,
         version,
-        approve_date: approveDate.toISOString(),
+        approve_date,
         department,
     };
 }

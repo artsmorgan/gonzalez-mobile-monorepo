@@ -2,6 +2,14 @@
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type BitacoraNovedadesModuleFilters = ActaEntregaModuleFilters & {
     categoriaId?: number | null;
@@ -34,12 +42,6 @@ function fmtDate(v: unknown): string {
     const d = v instanceof Date ? v : new Date(String(v ?? ""));
     if (Number.isNaN(d.getTime())) return "";
     return d.toISOString().slice(0, 10);
-}
-
-function fmtDateTime(v: unknown): string {
-    const d = v instanceof Date ? v : new Date(String(v ?? ""));
-    if (Number.isNaN(d.getTime())) return "";
-    return d.toISOString().replace("T", " ").slice(0, 19);
 }
 
 function parseIds(v: unknown): number[] {
@@ -206,11 +208,21 @@ function sortRowsForExcelOrder(rows: any[], orderKey: BitacoraNovedadesOrderKey)
     return copy;
 }
 
-export async function buildBitacoraNovedadesExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildBitacoraNovedadesExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Bitácora de novedades");
     const border: Partial<ExcelJS.Borders> = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
     const hdrFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1F3D63" } } as const;
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_puesto_notas",
+        rows.map((r) => Number(r.id)),
+    );
 
     const headers = [
         "ID",
@@ -224,19 +236,26 @@ export async function buildBitacoraNovedadesExcelConsolidado(rows: any[]): Promi
         "Puesto",
         "Categoría",
         "Relevancia",
-        "Creado",
-        "Actualizado",
+        "Creado (fecha)",
+        "Creado (hora)",
+        "Actualizado (fecha)",
+        "Actualizado (hora)",
         "Firma manual cliente",
         "Firma responsable (texto)",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
-    const hr = wsMain.addRow(headers);
+
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FF1F3D63", mainColumnCount: headers.length });
+
+    const hr = addMainRow(wsMain, headers);
     hr.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    hr.eachCell((cell) => {
+    hr.eachCell((cell, colNumber) => {
+        if (colNumber === 1) return;
         cell.fill = hdrFill;
         cell.border = border;
         cell.alignment = { vertical: "middle", wrapText: true };
     });
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: headers.length } };
 
     const wsFirma = wb.addWorksheet("Firmas");
     const fh = wsFirma.addRow(["Nota ID", "Contenido firma manual cliente"]);
@@ -271,15 +290,16 @@ export async function buildBitacoraNovedadesExcelConsolidado(rows: any[]): Promi
     }
     wsFirma.columns = [12, 56].map((w) => ({ width: w }));
 
-    const firmaColIdx = 14;
+    const firmaColIdx = 17;
     for (const r of rows) {
         const descShort = excelCellString(r.description ?? "").length > 800 ? `${excelCellString(r.description ?? "").slice(0, 800)}…` : excelCellString(r.description ?? "");
         const firmaRespShort =
             excelCellString(r.firma_responsable ?? "").length > 500
                 ? `${excelCellString(r.firma_responsable ?? "").slice(0, 500)}…`
                 : excelCellString(r.firma_responsable ?? "");
+        const cambio = cambiosByRegistro.get(Number(r.id));
 
-        const row = wsMain.addRow([
+        const row = addMainRow(wsMain, [
             String(r.id),
             excelCellString(r.titulo),
             descShort,
@@ -291,12 +311,17 @@ export async function buildBitacoraNovedadesExcelConsolidado(rows: any[]): Promi
             excelCellString(r.puesto_nombre),
             excelCellString(r.categoria_nombre),
             excelCellString(r.relevancia ?? ""),
-            fmtDateTime(r.created_at),
-            fmtDateTime(r.updated_at),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
+            formatDateOnlyDMY(r.updated_at),
+            formatTimeOnlyHMS(r.updated_at),
             r.firma_manual_responsable ? "Ver firma manual" : "",
             firmaRespShort,
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ]);
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "top", wrapText: true };
         });
@@ -308,6 +333,11 @@ export async function buildBitacoraNovedadesExcelConsolidado(rows: any[]): Promi
         }
     }
 
-    wsMain.columns = [8, 28, 42, 22, 22, 18, 22, 22, 22, 18, 12, 18, 18, 18, 36].map((w) => ({ width: w }));
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: headers.length + 1 },
+    };
+
+    wsMain.columns = [{ width: 3 }, ...[8, 28, 42, 22, 22, 18, 22, 22, 22, 18, 12, 14, 12, 14, 12, 18, 36, 16, 20].map((w) => ({ width: w }))];
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

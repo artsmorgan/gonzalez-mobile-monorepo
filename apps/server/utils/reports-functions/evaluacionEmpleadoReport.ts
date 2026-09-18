@@ -5,6 +5,13 @@ import fs from "fs/promises";
 import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type EvaluacionPersonalModuleFilters = ActaEntregaModuleFilters & {
     empleadoEvaluadoIds?: number[] | null;
@@ -236,7 +243,6 @@ export async function queryEvaluacionEmpleadoRows(
             puesto_nombre: puesto ? `${puesto.codigo ? `${puesto.codigo} - ` : ""}${puesto.nombre}` : String(r.puesto_id),
             empleado_evaluado_txt: empEv ? `${fmtEmp(empEv)} (${empEv.codigo})` : String(r.nombre_empleado || r.empleado_id),
             evaluador_txt: eva ? `${fmtEmp(eva)} (${eva.codigo})` : String(r.nombre_evaluador || r.evaluador_id),
-            created_at_txt: r.created_at instanceof Date ? r.created_at.toISOString().replace("T", " ").slice(0, 19) : String(r.created_at ?? ""),
         };
     });
 
@@ -401,7 +407,12 @@ async function appendEvaluacionPersonalDetailBlock(
     return { evalStartRow, firmaRow };
 }
 
-export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+export async function buildEvaluacionPersonalExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
+    void reportDb; // `c_evaluacion_empleado` no tiene created_by ni tracking en `c_cambios_apps_modules` — no hay nada que resolver con la BD aquí.
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Evaluaciones");
     const wsDet = wb.addWorksheet("Detalles");
@@ -432,7 +443,8 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         "Nivel",
         "Tipo de fila",
         "ID Evaluación",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Empresa",
         "Cliente",
         "División",
@@ -450,25 +462,31 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         "Respuesta",
         "Imágenes (nombres)",
     ];
-    const COL_VER_EVAL = 16;
-    const COL_VER_FIRMA = 17;
-    const COL_SECCION = 19;
+    const COL_VER_EVAL = headers.indexOf("Ver evaluación") + 2;
+    const COL_VER_FIRMA = headers.indexOf("Ver firma") + 2;
+    const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 2;
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = hdrFill;
-        c.border = border;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = hdrFill;
+        cell.border = border;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
         { width: 20 },
         { width: 12 },
-        { width: 18 },
+        { width: 14 },
+        { width: 12 },
         { width: 24 },
         { width: 22 },
         { width: 20 },
@@ -490,13 +508,14 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(COL_TIPO_FILA).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
     };
 
     const imagesJoined = (q: any): string => {
@@ -518,7 +537,8 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         const fiRow = anchorFirmaById.get(Number(r.id)) ?? 1;
         const general = [
             String(r.id),
-            r.created_at_txt,
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
             r.empresa_nombre,
             r.cliente_nombre,
             r.division_nombre,
@@ -530,7 +550,7 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
             r.evaluador_txt,
         ];
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(r.id),
             "",
             0,
@@ -552,7 +572,7 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
         sections.forEach((sec, secIdx) => {
             const secTitle = String(sec.title ?? "").trim() || `Sección ${secIdx + 1}`;
             const secId = `${r.id}.s${secIdx + 1}`;
-            const secRow = wsMain.addRow([
+            const secRow = addMainRow(wsMain, [
                 secId,
                 String(r.id),
                 1,
@@ -569,7 +589,7 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
 
             const questions = Array.isArray(sec.questions) ? sec.questions : [];
             questions.forEach((q, qIdx) => {
-                const row = wsMain.addRow([
+                const row = addMainRow(wsMain, [
                     `${secId}.q${qIdx + 1}`,
                     secId,
                     2,
@@ -586,7 +606,10 @@ export async function buildEvaluacionPersonalExcelConsolidado(rows: any[]): Prom
             });
         });
     }
-    wsMain.autoFilter = { from: { row: 1, column: 1 }, to: { row: Math.max(1, totalDataRows + 1), column: headers.length } };
+    wsMain.autoFilter = {
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
+    };
     for (let c = 1; c <= maxCol; c++) wsDet.getColumn(c).width = c <= 2 ? 40 : 12;
     return Buffer.from(await wb.xlsx.writeBuffer());
 }

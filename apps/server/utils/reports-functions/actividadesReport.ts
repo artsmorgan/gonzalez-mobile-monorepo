@@ -13,6 +13,14 @@ import {
     hydratePreexistentChildRelations,
     splitIncludeByTableGroup,
 } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const ACTIVIDADES_REPORT_INCLUDE = {
     e_actividades_puesto: {
@@ -425,7 +433,11 @@ const SHEET_PUESTOS = "Puestos de la actividad";
 const SHEET_USUARIOS = "Actividades de usuarios";
 const SHEET_ARTICULOS = "Articulos de la tarea";
 
-export async function buildActividadesExcelConsolidado(activities: any[]): Promise<Buffer> {
+export async function buildActividadesExcelConsolidado(
+    activities: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const borderThin: Partial<ExcelJS.Borders> = {
         top: { style: "thin" },
@@ -439,6 +451,13 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
     const wsP = wb.addWorksheet(SHEET_PUESTOS);
     const wsU = wb.addWorksheet(SHEET_USUARIOS);
     const wsA = wb.addWorksheet(SHEET_ARTICULOS);
+
+    // `e_actividades` no tiene `created_by`: no hay ancla para "Creado por".
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_actividades",
+        activities.map((a) => Number(a.id)),
+    );
 
     const plazaToArticulosRow = new Map<number, number>();
     const activitiesDesc = [...activities].sort((a, b) => Number(b.id) - Number(a.id));
@@ -581,7 +600,8 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         "Código puesto (vínculo)",
         "Plaza (vínculo)",
         "Marcada (vínculo)",
-        "Creado (vínculo)",
+        "Creado (vínculo) (fecha)",
+        "Creado (vínculo) (hora)",
         "Nombre artículo",
         "Tipo artículo",
         "Marca artículo",
@@ -591,18 +611,24 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         "Cant. real artículo",
         "Estado artículo",
         "Observaciones artículo",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
     const COL_PUESTOS_VINCULADOS = 12;
 
-    const mh = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    const mh = addMainRow(wsMain, headers);
     mh.font = { bold: true };
     mh.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    mh.eachCell((c) => {
+    mh.eachCell((c, colNumber) => {
+        if (colNumber === 1) return;
         c.fill = hdrFill;
         c.border = borderThin;
     });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -619,7 +645,8 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         { width: 20 },
         { width: 30 },
         { width: 14 },
-        { width: 20 },
+        { width: 14 },
+        { width: 12 },
         { width: 32 },
         { width: 18 },
         { width: 18 },
@@ -629,35 +656,40 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
         { width: 14 },
         { width: 22 },
         { width: 48 },
+        { width: 16 },
+        { width: 20 },
     ];
 
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = borderThin;
             c.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     let totalDataRows = 0;
     for (const act of activities) {
         const pRow = actToPuestosRow.get(act.id) ?? 1;
         const frecTit = frecuenciaTitleOnly(act.frecuencia);
+        const cambio = cambiosByRegistro.get(Number(act.id));
+        const cambioVals = [cambio?.cedula ?? "", cambio?.fechaHoraTexto ?? ""];
         const general = [
             String(act.id),
             act.nombre_actividad,
-            act.fecha_inicio instanceof Date ? act.fecha_inicio.toISOString().slice(0, 10) : String(act.fecha_inicio ?? ""),
-            act.fecha_fin ? (act.fecha_fin instanceof Date ? act.fecha_fin.toISOString().slice(0, 10) : String(act.fecha_fin)) : "",
+            formatDateOnlyDMY(act.fecha_inicio),
+            formatDateOnlyDMY(act.fecha_fin),
             frecTit,
             act.es_revision_equipo ? "Sí" : "No",
             String(act.descripcion_actividad ?? "").slice(0, 5000),
         ];
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(act.id),
             "",
             0,
@@ -665,16 +697,17 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
             ...general,
             "Puestos vinculados",
             ...blank(2),
-            ...blank(3),
+            ...blank(4),
             ...blank(9),
+            ...cambioVals,
         ]);
-        rootRow.getCell(COL_PUESTOS_VINCULADOS).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
-        rootRow.getCell(COL_PUESTOS_VINCULADOS).font = { color: { argb: "FF0563C1" }, underline: true };
+        rootRow.getCell(COL_PUESTOS_VINCULADOS + 1).value = { text: "Puestos vinculados", hyperlink: `#'${SHEET_PUESTOS}'!A${pRow}` };
+        rootRow.getCell(COL_PUESTOS_VINCULADOS + 1).font = { color: { argb: "FF0563C1" }, underline: true };
         styleDataRow(rootRow, 0);
         totalDataRows += 1;
 
         for (const ap of act.e_actividades_puesto || []) {
-            const apRow = wsMain.addRow([
+            const apRow = addMainRow(wsMain, [
                 String(ap.id),
                 String(act.id),
                 1,
@@ -683,15 +716,16 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
                 "",
                 String(ap.e_estructura_puesto?.nombre ?? ap.puesto_id ?? ""),
                 String(ap.e_estructura_puesto?.codigo ?? ""),
-                ...blank(3),
+                ...blank(4),
                 ...blank(9),
+                ...cambioVals,
             ]);
             styleDataRow(apRow, 1);
             totalDataRows += 1;
 
             for (const pl of ap.e_actividades_puesto_plaza || []) {
                 if (!actividadPuestoPlazaIncluyeReporteConsolidado(pl)) continue; // Consolidado
-                const plRow = wsMain.addRow([
+                const plRow = addMainRow(wsMain, [
                     String(pl.id),
                     String(ap.id),
                     2,
@@ -700,20 +734,22 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
                     ...blank(3),
                     String(pl.e_estructura_plazas?.nombre ?? pl.plaza_id ?? ""),
                     pl.marcada ? "Sí" : "No",
-                    pl.created_at instanceof Date ? pl.created_at.toISOString().slice(0, 19) : String(pl.created_at ?? ""),
+                    formatDateOnlyDMY(pl.created_at),
+                    formatTimeOnlyHMS(pl.created_at),
                     ...blank(9),
+                    ...cambioVals,
                 ]);
                 styleDataRow(plRow, 2);
                 totalDataRows += 1;
 
                 parseArticles(pl.articles).forEach((art, idx) => {
-                    const artRow = wsMain.addRow([
+                    const artRow = addMainRow(wsMain, [
                         `${pl.id}.art${idx + 1}`,
                         String(pl.id),
                         3,
                         "Artículo",
                         ...general,
-                        ...blank(6),
+                        ...blank(7),
                         String(art?.nombre ?? ""),
                         String(art?.tipo ?? ""),
                         String(art?.marca ?? ""),
@@ -723,6 +759,7 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
                         art?.cantidad_real != null ? String(art.cantidad_real) : "",
                         String(art?.estado ?? ""),
                         String(art?.observaciones ?? ""),
+                        ...cambioVals,
                     ]);
                     styleDataRow(artRow, 3);
                     totalDataRows += 1;
@@ -732,8 +769,8 @@ export async function buildActividadesExcelConsolidado(activities: any[]): Promi
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
     };
 
     wsP.columns = [{ width: 14 }, { width: 42 }, { width: 36 }, { width: 20 }, { width: 14 }, { width: 32 }];

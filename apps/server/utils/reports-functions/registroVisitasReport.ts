@@ -8,6 +8,14 @@ import path from "path";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
 import { fitImageExtInsideBox, getImageDimensionsFromBuffer } from "./imageDimensions";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const REGISTRO_VISITAS_INCLUDE = {
     e_activo_visitante: { include: { n_tipo_activo_visitas: { select: { nombre: true } } } },
@@ -390,16 +398,29 @@ function applyRightBlackBorderKRows2To4(ws: ExcelJS.Worksheet) {
 function styleConsolidadoHeaderRow(row: ExcelJS.Row) {
     row.font = { bold: true };
     row.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-    row.eachCell((c) => {
+    row.eachCell((c, colNumber) => {
+        if (colNumber === 1) return;
         c.fill = HDR_FILL_CONSOLIDADO;
         c.border = BORDER;
     });
 }
 
-export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildRegistroVisitasExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Registro visitas");
     const wsDet = wb.addWorksheet("Detalles");
+
+    // `e_registro_personas` no tiene `created_by`, pero sí tiene tracking en `c_cambios_apps_modules`
+    // (ver apps/server/app/api/visitors/route.ts y [id]/route.ts) — se agrega como últimas 2 columnas.
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "e_registro_personas",
+        rows.map((r) => Number(r.id)),
+    );
 
     const anchorByVisitId = new Map<number, number>();
 
@@ -561,34 +582,43 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
         "Cédula",
         "Foto cédula",
         "Firma",
+        "Fecha entrada",
         "Hora entrada",
+        "Fecha salida",
         "Hora salida",
         "Puesto de salida",
         "Motivo / visita",
         "Depto / pers. visita",
         "Funcionario",
         "Responsable",
-        "Creado en",
+        "Creado en (fecha)",
+        "Creado en (hora)",
         "Ver activos",
         "Tipo activo",
         "Nombre activo",
         "N° identificación (activo)",
         "N° activo",
         "Detalle / descripción",
+        "Usuario modifica",
+        "Fecha y hora modifica",
     ];
-    const fotoCedulaCol = mainHeaders.indexOf("Foto cédula") + 1;
-    const firmaCol = mainHeaders.indexOf("Firma") + 1;
-    const activosLinkCol = mainHeaders.indexOf("Ver activos") + 1;
-    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 1;
+    // +1 extra respecto a `indexOf(...) + 1` porque `addMainRow` corre todo un lugar a la derecha (columna A de margen).
+    const fotoCedulaCol = mainHeaders.indexOf("Foto cédula") + 2;
+    const firmaCol = mainHeaders.indexOf("Firma") + 2;
+    const activosLinkCol = mainHeaders.indexOf("Ver activos") + 2;
+    const COL_TIPO_FILA = mainHeaders.indexOf("Tipo de fila") + 2;
 
-    const h = wsMain.addRow(mainHeaders);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: mainHeaders.length });
+
+    const h = addMainRow(wsMain, mainHeaders);
     styleConsolidadoHeaderRow(h);
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: 1, column: mainHeaders.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, rows.length + 12), column: mainHeaders.length + 1 },
     };
     wsMain.columns = [
+        { width: 3 },
         { width: 12 },
         { width: 14 },
         { width: 8 },
@@ -604,24 +634,30 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
         { width: 14 },
         { width: 16 },
         { width: 14 },
-        { width: 16 },
-        { width: 16 },
+        { width: 14 },
+        { width: 12 },
+        { width: 14 },
+        { width: 12 },
         { width: 22 },
         { width: 26 },
         { width: 28 },
         { width: 12 },
         { width: 26 },
-        { width: 16 },
+        { width: 14 },
+        { width: 12 },
         { width: 14 },
         { width: 20 },
         { width: 26 },
         { width: 22 },
         { width: 16 },
         { width: 40 },
+        { width: 16 },
+        { width: 20 },
     ];
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((c) => {
+        row.eachCell((c, colNumber) => {
+            if (colNumber === 1) return;
             c.border = BORDER;
             c.alignment = { vertical: "top", wrapText: true };
         });
@@ -643,14 +679,19 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
             [mainHeaders.indexOf("Puesto") + 1]: excelCellString(r.e_estructura_puesto?.nombre),
             [mainHeaders.indexOf("Visitante") + 1]: excelCellString(r.nombre),
             [mainHeaders.indexOf("Cédula") + 1]: excelCellString(r.cedula),
-            [mainHeaders.indexOf("Hora entrada") + 1]: formatDt(r.hora_entrada),
-            [mainHeaders.indexOf("Hora salida") + 1]: formatDt(r.hora_salida),
+            [mainHeaders.indexOf("Fecha entrada") + 1]: formatDateOnlyDMY(r.hora_entrada),
+            [mainHeaders.indexOf("Hora entrada") + 1]: formatTimeOnlyHMS(r.hora_entrada),
+            [mainHeaders.indexOf("Fecha salida") + 1]: formatDateOnlyDMY(r.hora_salida),
+            [mainHeaders.indexOf("Hora salida") + 1]: formatTimeOnlyHMS(r.hora_salida),
             [mainHeaders.indexOf("Puesto de salida") + 1]: excelCellString(r.puesto_salida_nombre),
             [mainHeaders.indexOf("Motivo / visita") + 1]: excelCellString(r.razon_visita),
             [mainHeaders.indexOf("Depto / pers. visita") + 1]: [r.dep_pers_visita, r.pers_autoriza_salida].filter(Boolean).join(" / "),
             [mainHeaders.indexOf("Funcionario") + 1]: r.es_funcionario ? "Sí" : "No",
             [mainHeaders.indexOf("Responsable") + 1]: excelCellString(r.responsable_label),
-            [mainHeaders.indexOf("Creado en") + 1]: formatDt(r.created_at),
+            [mainHeaders.indexOf("Creado en (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [mainHeaders.indexOf("Creado en (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [mainHeaders.indexOf("Usuario modifica") + 1]: cambiosByRegistro.get(vid)?.cedula ?? "",
+            [mainHeaders.indexOf("Fecha y hora modifica") + 1]: cambiosByRegistro.get(vid)?.fechaHoraTexto ?? "",
         };
 
         const activos = Array.isArray(r.e_activo_visitante) ? r.e_activo_visitante : [];
@@ -662,8 +703,8 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
         rootValues[2] = 0;
         rootValues[3] = "Visita";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        if (activos.length > 0) rootValues[activosLinkCol - 1] = "Ver activos";
-        const rootRow = wsMain.addRow(rootValues);
+        if (activos.length > 0) rootValues[activosLinkCol - 2] = "Ver activos";
+        const rootRow = addMainRow(wsMain, rootValues);
         styleDataRow(rootRow, 0);
 
         const fotoCell = rootRow.getCell(fotoCedulaCol);
@@ -696,7 +737,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
             activoValues[mainHeaders.indexOf("Nombre activo")] = excelCellString(a?.nombre ?? "");
             activoValues[mainHeaders.indexOf("N° identificación (activo)")] = excelCellString(a?.numero_id ?? "");
             activoValues[mainHeaders.indexOf("N° activo")] = excelCellString(a?.numero_activo ?? "");
-            const activoRow = wsMain.addRow(activoValues);
+            const activoRow = addMainRow(wsMain, activoValues);
             styleDataRow(activoRow, 1);
 
             let detalles: any[] = [];
@@ -720,7 +761,7 @@ export async function buildRegistroVisitasExcelConsolidado(rows: any[]): Promise
                 detValues[3] = "Detalle del activo";
                 for (const [col, val] of Object.entries(general)) detValues[Number(col) - 1] = val;
                 detValues[mainHeaders.indexOf("Detalle / descripción")] = det && desc ? `${det}: ${desc}` : det || desc;
-                const detRow = wsMain.addRow(detValues);
+                const detRow = addMainRow(wsMain, detValues);
                 styleDataRow(detRow, 2);
             });
         });

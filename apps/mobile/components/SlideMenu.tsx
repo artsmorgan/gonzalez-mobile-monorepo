@@ -1040,6 +1040,33 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
               </TouchableOpacity>
             )}
 
+            {releaseAction('job-manuals') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
+              <TouchableOpacity
+                style={[
+                  styles.menuItem,
+                  isActiveRoute('JobManuals') && styles.activeMenuItem
+                ]}
+                onPress={handleJobManualsPress}
+              >
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
+                </ThemedText>
+                <ThemedText
+                  style={[
+                    styles.menuItemText,
+                    isActiveRoute('JobManuals') && styles.activeMenuItemText
+                  ]}
+                >
+                  Documentos
+                </ThemedText>
+              </TouchableOpacity>
+            )}
+
             {releaseAction('documentos-entregados') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO']) && (
               <TouchableOpacity
                 style={[
@@ -1254,33 +1281,6 @@ export default function SlideMenu({ isVisible, onClose, onHomePress, onProfilePr
                   ]}
                 >
                   Maestro de Quejas y reclamos
-                </ThemedText>
-              </TouchableOpacity>
-            )}
-
-            {releaseAction('job-manuals') && hasCurrentMarca && hasActiveCurrentMarca(['OPERATIVO','SUPERVISOR', 'ADMINISTRATIVO']) && (
-              <TouchableOpacity
-                style={[
-                  styles.menuItem,
-                  isActiveRoute('JobManuals') && styles.activeMenuItem
-                ]}
-                onPress={handleJobManualsPress}
-              >
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('JobManuals') && styles.activeMenuItemText
-                  ]}
-                >
-                  {getActionIcon('job-manuals', isActiveRoute('JobManuals'))}
-                </ThemedText>
-                <ThemedText
-                  style={[
-                    styles.menuItemText,
-                    isActiveRoute('JobManuals') && styles.activeMenuItemText
-                  ]}
-                >
-                  Manuales de Trabajo
                 </ThemedText>
               </TouchableOpacity>
             )}

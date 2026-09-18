@@ -19,8 +19,16 @@ function fileInDocumentDir(fileName: string): File {
   return new File(Paths.document, fileName);
 }
 
+/** `data:<mime>;base64,<payload>` -> payload puro (o `null` si `uri` no es un data URI). */
+function extractBase64FromDataUri(uri: string): string | null {
+  const match = /^data:[^;]*;base64,([\s\S]+)$/.exec(uri);
+  return match ? match[1] : null;
+}
+
 /**
  * Guardar archivo: copia bytes desde `uri` (fetch o `File.copy`) a `Paths.document`.
+ * Si `uri` es un data URI (`data:...;base64,...`), se escribe el base64 directamente — `fetch`/`File`
+ * no soportan URIs `data:` en Android (`URI is not hierarchical`), así que ese camino nunca se intenta.
  */
 export async function saveFile(params: {
   uri: string;
@@ -39,6 +47,13 @@ export async function saveFile(params: {
   const fileName = `${prefix}_${uuid}_${safeName}.${extension}`;
   const dest = fileInDocumentDir(fileName);
 
+  const base64Payload = extractBase64FromDataUri(uri);
+  if (base64Payload != null) {
+    dest.create({ overwrite: true });
+    dest.write(base64Payload, { encoding: 'base64' });
+    return fileName;
+  }
+
   try {
     const res = await fetch(uri);
     if (!res.ok) {
@@ -54,6 +69,30 @@ export async function saveFile(params: {
     const source = new File(uri);
     source.copy(dest);
   }
+
+  return fileName;
+}
+
+/**
+ * Guardar un base64 puro (sin prefijo `data:...;base64,`) directamente como archivo — evita por
+ * completo `fetch`/`File.copy`, que no soportan URIs `data:` en Android.
+ */
+export async function saveBase64File(params: {
+  base64: string;
+  extension: string;
+  type: StoredFileType;
+  prefix: string;
+}): Promise<string> {
+  const { base64, extension, prefix } = params;
+  if (!base64) throw new Error('Base64 requerido');
+
+  const payload = extractBase64FromDataUri(base64) ?? base64;
+  const uuid = generateUUID();
+  const fileName = `${prefix}_${uuid}.${extension}`;
+  const dest = fileInDocumentDir(fileName);
+
+  dest.create({ overwrite: true });
+  dest.write(payload, { encoding: 'base64' });
 
   return fileName;
 }

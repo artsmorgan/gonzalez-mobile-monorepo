@@ -90,6 +90,32 @@ export async function deleteJobManualLocalFileRefsFromJson(raw: unknown) {
 }
 
 /**
+ * Firma manual (`firma_empleado_manual`): en cola/caché se guarda como referencia a expo-files (no
+ * en base64). Al sincronizar, se lee de disco y se arma el data URI que espera el endpoint; si por
+ * compatibilidad ya viniera en base64 (dato viejo), se deja igual.
+ */
+export async function hydrateJobManualSignatureRef(ref: string | null | undefined): Promise<string | undefined> {
+  if (!ref) return undefined;
+  if (ref.startsWith('data:')) return ref;
+  try {
+    const g = await getFile(ref);
+    return `data:image/png;base64,${g.base64}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Borra el archivo local de la firma manual tras subirla con éxito (no hace nada si ya era un data URI). */
+export async function deleteJobManualSignatureLocalRef(ref: string | null | undefined): Promise<void> {
+  if (!ref || ref.startsWith('data:')) return;
+  try {
+    await deleteFile(ref);
+  } catch {
+    /* idempotente */
+  }
+}
+
+/**
  * Reasigna en la cola el id de servidor a acciones colgando del `id_local` de creación (sign, quiz, append puestos).
  */
 function reassignQueuedActionsToServerId(
@@ -98,10 +124,11 @@ function reassignQueuedActionsToServerId(
   serverId: number
 ): any[] {
   return actions.map((a) => {
-    if (a.type === 'sign' && a.manualLocalId != null && String(a.manualLocalId) === String(createId)) {
-      return { ...a, id: serverId, manualLocalId: undefined };
-    }
-    if (a.type === 'quiz_result' && a.manualLocalId != null && String(a.manualLocalId) === String(createId)) {
+    if (
+      (a.type === 'sign' || a.type === 'quiz_result' || a.type === 'auto_visualizacion' || a.type === 'visualizacion_field_update') &&
+      a.manualLocalId != null &&
+      String(a.manualLocalId) === String(createId)
+    ) {
       return { ...a, id: serverId, manualLocalId: undefined };
     }
     if (a.type === 'append_puestos' && a.pendingManualLocalId != null && String(a.pendingManualLocalId) === String(createId)) {

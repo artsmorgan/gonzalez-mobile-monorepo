@@ -4,8 +4,6 @@ import { callDynamicPrisma } from "../../../../../utils/callDynamicPrisma";
 import { prisma } from "../../../../../utils/prismaClient";
 import { toZonedTime } from "date-fns-tz";
 import { sendNotificationByEmployee, sendNotificationByRole } from "../../../../../utils/sendNotification";
-import fs from "fs";
-import path from "path";
 import { uploadDynamicFiles } from "../../../../../utils/callDynamicFilesApi";
 import { reportError } from "../../../../../utils/reportError";
 
@@ -76,7 +74,7 @@ export async function POST(
             );
         }
 
-        const { firma_empleado, marca_id, quiz_answear, files } = await req.json();
+        const { firma_empleado, marca_id, quiz_answear, files, firma_empleado_manual } = await req.json();
         if (!firma_empleado || !marca_id) {
             await reportError(req, "api/job-manuals/[id]/sign", "POST", 400, "Firma del empleado requerida");
             return NextResponse.json(
@@ -164,7 +162,9 @@ export async function POST(
         }
 
         const corpoObj = corpo as any;
-        // Evitar firmas duplicadas del mismo empleado para el mismo manual
+        // Upsert: reutiliza la visualización existente del mismo empleado para el mismo manual
+        // en lugar de borrarla y recrearla (evita perder firma_empleado_manual, archivos u otros
+        // datos guardados por una llamada anterior, p. ej. la visualización automática al abrir el manual).
         const existing = await callDynamicPrisma({
             req,
             data: {
@@ -183,61 +183,56 @@ export async function POST(
             "America/Costa_Rica"
         ) as Date;
 
-        // Si ya firmó antes, eliminar el registro para crear uno nuevo (permite reintentos/revisión de quiz)
-        if (existing) {
-            const existingObj = existing as any;
-            // borrar archivos físicos asociados a la visualización anterior (si existieran)
-            const oldDir = path.join(
-                process.cwd(),
-                "public",
-                "uploads",
-                "job-manuals",
-                `${id}`,
-                "visualizaciones",
-                `${existingObj.id}`
-            );
-            if (fs.existsSync(oldDir)) {
-                try {
-                    fs.rmSync(oldDir, { recursive: true, force: true });
-                } catch {
-                    // ignore
-                }
-            }
-            await callDynamicPrisma({
-                req,
-                data: {
-                    action: "DELETE",
-                    table: "e_empleado_visualizacion_manual_puesto",
-                    operation: "delete",
-                    where: { id: existingObj.id },
-                },
-            });
-        }
-
         const quizAnswearToStore =
             typeof quiz_answear === "string" && quiz_answear.trim().length > 0
                 ? quiz_answear.trim()
                 : null;
 
-        const createdVis = await callDynamicPrisma({
-            req,
-            data: {
-                action: "POST",
-                table: "e_empleado_visualizacion_manual_puesto",
-                operation: "create",
+        let createdVisObj: any;
+        if (existing) {
+            const existingObj = existing as any;
+            const updated = await callDynamicPrisma({
+                req,
                 data: {
-                    empleado_id: empleadoId,
-                    manual_puesto_id: id,
-                    nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
-                    firma_empleado,
-                    quiz_answear: quizAnswearToStore,
-                    approved: null,
-                    created_at: created_at.toISOString(),
-                    updated_at: created_at.toISOString()
+                    action: "UPDATE",
+                    table: "e_empleado_visualizacion_manual_puesto",
+                    operation: "update",
+                    where: { id: existingObj.id },
+                    data: {
+                        nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
+                        firma_empleado,
+                        // Solo se pisa el quiz si esta llamada trae uno; si no, se conserva el existente
+                        // (permite crear la visualización automática y completar el quiz después, sin perder datos).
+                        ...(quizAnswearToStore !== null ? { quiz_answear: quizAnswearToStore, approved: null } : {}),
+                        // La firma manual es de una sola vez: no se pisa si ya existía una registrada.
+                        ...(firma_empleado_manual !== undefined && !existingObj.firma_empleado_manual ? { firma_empleado_manual } : {}),
+                        updated_at: created_at.toISOString(),
+                    },
+                },
+            });
+            createdVisObj = updated as any;
+        } else {
+            const createdVis = await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "e_empleado_visualizacion_manual_puesto",
+                    operation: "create",
+                    data: {
+                        empleado_id: empleadoId,
+                        manual_puesto_id: id,
+                        nombre_empleado: `${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido}`,
+                        firma_empleado,
+                        quiz_answear: quizAnswearToStore,
+                        approved: null,
+                        firma_empleado_manual: firma_empleado_manual ?? null,
+                        created_at: created_at.toISOString(),
+                        updated_at: created_at.toISOString()
+                    }
                 }
-            }
-        });
-        const createdVisObj = createdVis as any;
+            });
+            createdVisObj = createdVis as any;
+        }
 
         // Guardar archivos adjuntos (opcional), delegando a /api/dynamic-prisma/files
         if (filesParsed.length > 0) {
@@ -274,7 +269,7 @@ export async function POST(
 
         const fecha_string = created_at.toISOString().split("T")[0];
         const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
-        const description = `El empleado ${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido} ha firmado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
+        const description = `El empleado ${empleadoObj.nombre} ${empleadoObj.primer_apellido} ${empleadoObj.segundo_apellido} ha visualizado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
         // Notificaciones NO deben bloquear la firma (si fallan, solo registrar warning)
         try {
             await sendNotificationByRole(req, marcaObj.corpo_id, [marcaObj.plaza_id], "Firma de manual", description, ["ADMINISTRATIVO", "SUPERVISOR"]);
@@ -288,7 +283,7 @@ export async function POST(
 
         if (creator) {
             const creatorObj = creator as any;
-            const description = `El empleado ${creatorObj.nombre} ${creatorObj.primer_apellido} ${creatorObj.segundo_apellido} ha firmado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
+            const description = `El empleado ${creatorObj.nombre} ${creatorObj.primer_apellido} ${creatorObj.segundo_apellido} ha visualizado el manual ${manualObj.title} desde el puesto ${puestoObj.nombre} en la sucursal ${corpoObj.nombre} el día ${fecha_string} a las ${hora_string}`;
             try {
                 await sendNotificationByEmployee(req, marcaObj.corpo_id, [creatorObj.id], "Firma de manual", description, [creatorObj.id]);
             } catch (err) {

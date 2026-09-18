@@ -5,6 +5,14 @@ import path from "path";
 import type { ReportDataAccess } from "../reportDynamicPrisma";
 import ExcelJS from "exceljs";
 import { normalizeActaEntregaFilters, type ActaEntregaModuleFilters } from "./actaEntregaProductos";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 export type ChecklistSupervisionModuleFilters = ActaEntregaModuleFilters & {
     ejecutivoCuentaIds?: number[] | null;
@@ -611,7 +619,21 @@ async function appendEvaluacionDetalleBlock(params: {
     }
 }
 
-export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Promise<Buffer> { // Consolidado
+function fmtCreadorEmpleado(
+    e: { codigo?: string | null; nombre?: string | null; primer_apellido?: string | null; segundo_apellido?: string | null } | undefined,
+): string {
+    if (!e) return "";
+    const parts = [e.nombre, e.primer_apellido, e.segundo_apellido].filter(Boolean);
+    const name = parts.join(" ").trim();
+    const c = e.codigo ? String(e.codigo).trim() : "";
+    return c ? `${c} — ${name}` : name;
+}
+
+export async function buildChecklistSupervisionExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> { // Consolidado
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Checklist supervisión");
     const wsDet = wb.addWorksheet("Detalles");
@@ -754,9 +776,14 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         "Empleado",
         "Ejecutivo cuenta",
         "Fecha",
+        "Hora",
         "Hora inicio",
         "Hora fin",
-        "Creado (servidor)",
+        "Creado (fecha)",
+        "Creado (hora)",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Ver evaluación",
         "Ver artículos",
         "Ver firma",
@@ -773,31 +800,53 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         "Estado artículo",
         "Observaciones artículo",
     ];
-    const COL_VER_EVAL = 18;
-    const COL_VER_ART = 19;
-    const COL_VER_FIR = 20;
+    const COL_VER_EVAL = 24;
+    const COL_VER_ART = 25;
+    const COL_VER_FIR = 26;
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FF1F3D63", mainColumnCount: headers.length });
+
+    // "Creado por": ancla nueva (batch propio de `c_empleado`; no reutiliza `empleado_display`/`Empleado`).
+    const createdByIds = [...new Set(rows.map((r) => Number(r.created_by)).filter((n) => Number.isFinite(n) && n > 0))];
+    const creadores = createdByIds.length
+        ? await reportDb.c_empleado.findMany({
+              where: { id: { in: createdByIds } },
+              select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+          })
+        : [];
+    const creadorById = new Map(creadores.map((e: any) => [e.id, e]));
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_checklist_supervision",
+        rows.map((r) => Number(r.id)),
+    );
+
+    const h = addMainRow(wsMain, headers);
     h.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    h.eachCell((cell) => {
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
         cell.fill = hdrFill;
         cell.border = border;
         cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    const colWidths = [12, 16, 8, 20, 10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 18, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30];
-    wsMain.columns = colWidths.map((w) => ({ width: w }));
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    const colWidths = [
+        12, 16, 8, 20, 10, 26, 22, 18, 24, 24, 22, 24, 22, 14, 12, 12, 12, 14, 12, 16, 16, 20, 16, 16, 16, 22, 26, 32, 34, 26, 30, 26, 16, 14, 14, 16, 30,
+    ];
+    wsMain.columns = [{ width: 3 }, ...colWidths.map((w) => ({ width: w }))];
 
     const blank = (n: number) => Array.from({ length: n }, () => "");
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
-        row.eachCell((cell) => {
+        row.eachCell((cell, colNumber) => {
+            if (colNumber === 1) return;
             cell.border = border;
             cell.alignment = { vertical: "middle", wrapText: true };
         });
-        row.getCell(4).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(5).alignment = { vertical: "middle", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(4).font = { bold: true };
+        if (nivel === 0) row.getCell(5).font = { bold: true };
     };
 
     const imagesJoinedFromInput = (inp: any): string => {
@@ -809,6 +858,7 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
     let totalDataRows = 0;
     for (const r of rows) {
         const anchor = anchorById.get(Number(r.id)) ?? 1;
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general = [
             String(r.id),
             excelCellString(r.empresa_nombre),
@@ -819,16 +869,21 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
             excelCellString(r.puesto_nombre),
             excelCellString(r.empleado_display ?? formatEmpleadoDisplay(r)),
             excelCellString(r.ejecutivo_cuenta_nombre),
-            fmtDt(r.fecha),
+            formatDateOnlyDMY(r.fecha),
+            formatTimeOnlyHMS(r.fecha),
             excelCellString(r.hora_inicio_txt ?? timeToHHmm(r.hora_inicio)),
             excelCellString(r.hora_fin_txt ?? timeToHHmm(r.hora_fin)),
-            fmtDt(r.created_at),
+            formatDateOnlyDMY(r.created_at),
+            formatTimeOnlyHMS(r.created_at),
+            fmtCreadorEmpleado(creadorById.get(Number(r.created_by))),
+            cambio?.cedula ?? "",
+            cambio?.fechaHoraTexto ?? "",
         ];
 
         const evaluacion = parseEvalJson(r.evaluacion);
         const articulos = parseArticulosJson(r.articulos_puesto);
 
-        const rootRow = wsMain.addRow([
+        const rootRow = addMainRow(wsMain, [
             String(r.id),
             "",
             0,
@@ -860,7 +915,7 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         evaluacion.forEach((sec: any, secIdx: number) => {
             const secTitle = excelCellString(sec?.title ?? "").trim() || `Sección ${secIdx + 1}`;
             const secId = `${r.id}.s${secIdx + 1}`;
-            const secRow = wsMain.addRow([
+            const secRow = addMainRow(wsMain, [
                 secId,
                 String(r.id),
                 1,
@@ -878,7 +933,7 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
                 const subTitle = excelCellString(sub?.title ?? "").trim() || `Subsección ${subIdx + 1}`;
                 const subDetalle = excelCellString(sub?.detalle ?? "").trim();
                 const subId = `${secId}.sub${subIdx + 1}`;
-                const subRow = wsMain.addRow([
+                const subRow = addMainRow(wsMain, [
                     subId,
                     secId,
                     2,
@@ -896,7 +951,7 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
                 inputs.forEach((inp: any, inpIdx: number) => {
                     const label = resolveChecklistEvalInputLabel(inp, subTitle);
                     const val = formatEvalInputDisplayValue(inp);
-                    const row = wsMain.addRow([
+                    const row = addMainRow(wsMain, [
                         `${subId}.q${inpIdx + 1}`,
                         subId,
                         3,
@@ -915,7 +970,7 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
         });
 
         articulos.forEach((a: any, idx: number) => {
-            const row = wsMain.addRow([
+            const row = addMainRow(wsMain, [
                 `${r.id}.art${idx + 1}`,
                 String(r.id),
                 1,
@@ -935,8 +990,8 @@ export async function buildChecklistSupervisionExcelConsolidado(rows: any[]): Pr
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, totalDataRows + 1), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, totalDataRows + 12), column: headers.length + 1 },
     };
 
     return Buffer.from(await wb.xlsx.writeBuffer());

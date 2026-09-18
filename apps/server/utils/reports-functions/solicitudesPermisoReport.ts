@@ -8,6 +8,14 @@ import {
     type ActaEntregaModuleFilters,
 } from "./actaEntregaProductos";
 import { hydratePreexistentRelations, splitIncludeByTableGroup } from "../hydratePreexistentIncludes";
+import {
+    addMainRow,
+    applyConsolidadoReportBanner,
+    fetchLatestCambiosPorRegistro,
+    formatDateOnlyDMY,
+    formatTimeOnlyHMS,
+    type ConsolidadoBannerMeta,
+} from "./reportConsolidadoBanner";
 
 const SOLICITUDES_PERMISO_INCLUDE = {
     c_empleado: {
@@ -252,7 +260,7 @@ export async function querySolicitudesPermisoRows(
     }
 
     const ids = <T>(vals: T[]) => [...new Set(vals.map((x: any) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))];
-    const [empresaIds, clienteIds, divisionIds, contratoIds, corpoIds, puestoIds, ejecutivoIds, reemplazoIds] = [
+    const [empresaIds, clienteIds, divisionIds, contratoIds, corpoIds, puestoIds, ejecutivoIds, reemplazoIds, creadorIds] = [
         ids(rows.map((x) => x.empresa_id)),
         ids(rows.map((x) => x.cliente_id)),
         ids(rows.map((x) => x.division_id)),
@@ -267,9 +275,10 @@ export async function querySolicitudesPermisoRows(
                     .filter((n) => Number.isFinite(n) && n > 0),
             ),
         ),
+        ids(rows.map((x) => x.created_by)),
     ];
 
-    const [empresas, clientes, divisiones, contratos, corpos, puestos, ejecutivos, reemplazos] = await Promise.all([
+    const [empresas, clientes, divisiones, contratos, corpos, puestos, ejecutivos, reemplazos, creadores] = await Promise.all([
         empresaIds.length
             ? prisma.e_estructura_empresa.findMany({ where: { id: { in: empresaIds } }, select: { id: true, nombre: true, codigo: true } })
             : [],
@@ -303,6 +312,12 @@ export async function querySolicitudesPermisoRows(
                   select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
               })
             : [],
+        creadorIds.length
+            ? prisma.c_empleado.findMany({
+                  where: { id: { in: creadorIds } },
+                  select: { id: true, codigo: true, nombre: true, primer_apellido: true, segundo_apellido: true },
+              })
+            : [],
     ]);
 
     const empresaById = new Map(empresas.map((x) => [x.id, x]));
@@ -313,6 +328,7 @@ export async function querySolicitudesPermisoRows(
     const puestoById = new Map(puestos.map((x) => [x.id, x]));
     const ejecutivoById = new Map(ejecutivos.map((x) => [x.id, x]));
     const reemplazoById = new Map(reemplazos.map((x) => [x.id, x]));
+    const creadorById = new Map(creadores.map((x) => [x.id, x]));
 
     const enriched = rows.map((r) => {
         const empresa = empresaById.get(Number(r.empresa_id));
@@ -323,6 +339,7 @@ export async function querySolicitudesPermisoRows(
         const puesto = puestoById.get(Number(r.puesto_id));
         const ejecutivo = ejecutivoById.get(Number(r.ejecutivo_cuenta));
         const emp = r.c_empleado;
+        const creador = creadorById.get(Number(r.created_by));
         const turnos = safeParseTurnos(r.turnos).map((t) => {
             const rid = Number(t?.reemplazo_id);
             const rep = Number.isFinite(rid) && rid > 0 ? reemplazoById.get(rid) : null;
@@ -348,6 +365,7 @@ export async function querySolicitudesPermisoRows(
             ejecutivo_cuenta_nombre: ejecutivo?.nombre ?? String(r.ejecutivo_cuenta),
             empleado_nombre: emp ? empleadoNombre(emp) : String(r.empleado_id),
             empleado_codigo: emp?.codigo ?? "",
+            creado_por_nombre: creador ? empleadoNombre(creador) : String(r.created_by),
             created_at_txt: fmtDateTimeCol(r.created_at),
             fecha_inicio_txt: fmtDateOnly(r.fecha_inicio),
             fecha_fin_txt: fmtDateOnly(r.fecha_fin),
@@ -504,11 +522,21 @@ function appendDetalleBlock(wsDet: ExcelJS.Worksheet, r: any): DetalleAnchors {
     return { turnosRow: turnosAnchor, firmaEmpleadoRow: firmaEmpleadoAnchor, firmaEjecutivoRow: firmaEjecutivoAnchor };
 }
 
-export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Promise<Buffer> {
+export async function buildSolicitudesPermisoExcelConsolidado(
+    rows: any[],
+    reportDb: ReportDataAccess,
+    bannerMeta: ConsolidadoBannerMeta,
+): Promise<Buffer> {
     const wb = new ExcelJS.Workbook();
     const wsMain = wb.addWorksheet("Solicitudes de permiso");
     const wsDet = wb.addWorksheet("Detalles");
     const anchorsById = new Map<number, DetalleAnchors>();
+
+    const cambiosByRegistro = await fetchLatestCambiosPorRegistro(
+        reportDb,
+        "c_solicitud_permiso",
+        rows.map((r) => Number(r.id)),
+    );
 
     for (const r of [...rows].sort((a, b) => Number(b.id) - Number(a.id))) {
         anchorsById.set(Number(r.id), appendDetalleBlock(wsDet, r));
@@ -535,9 +563,15 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
         "Tipo salario",
         "Estado",
         "Fecha inicio",
+        "Hora inicio",
         "Fecha fin",
+        "Hora fin",
         "Días",
-        "Creado",
+        "Creado (fecha)",
+        "Creado (hora)",
+        "Creado por",
+        "Usuario modifica",
+        "Fecha y hora modifica",
         "Motivo",
         "Observaciones",
         "Ver turnos",
@@ -553,31 +587,42 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
     const colTurnos = headers.indexOf("Ver turnos") + 1;
     const colFirmaEmpleado = headers.indexOf("Firma empleado") + 1;
     const colFirmaEjecutivo = headers.indexOf("Firma ejecutivo") + 1;
-    const linkCols = new Set([colTurnos, colFirmaEmpleado, colFirmaEjecutivo]);
     const COL_TIPO_FILA = headers.indexOf("Tipo de fila") + 1;
+    // +1 adicional: columnas reales en la hoja (con margen de `addMainRow` en A).
+    const colTurnosReal = colTurnos + 1;
+    const colFirmaEmpleadoReal = colFirmaEmpleado + 1;
+    const colFirmaEjecutivoReal = colFirmaEjecutivo + 1;
+    const colTipoFilaReal = COL_TIPO_FILA + 1;
+    const linkCols = new Set([colTurnosReal, colFirmaEmpleadoReal, colFirmaEjecutivoReal]);
 
-    const h = wsMain.addRow(headers);
+    applyConsolidadoReportBanner(wsMain, bannerMeta, { headerFillArgb: "FFD9EAF7", mainColumnCount: headers.length });
+
+    addMainRow(wsMain, headers);
+    const h = wsMain.getRow(12);
     h.font = { bold: true };
-    h.eachCell((c) => {
-        c.fill = GRP_HDR;
-        c.border = borderThin;
-        c.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
-    });
-    wsMain.views = [{ state: "frozen", ySplit: 1 }];
-    wsMain.columns = headers.map(() => ({ width: 18 }));
+    for (let c = 2; c <= headers.length + 1; c++) {
+        const cell = h.getCell(c);
+        cell.fill = GRP_HDR;
+        cell.border = borderThin;
+        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
+    }
+    wsMain.views = [{ state: "frozen", ySplit: 12 }];
+    wsMain.columns = [{ width: 3 }, ...headers.map(() => ({ width: 18 }))];
 
     const styleDataRow = (row: ExcelJS.Row, nivel: number) => {
         row.eachCell((cell, col) => {
+            if (col === 1) return;
             cell.border = borderThin;
             if (!linkCols.has(col)) cell.alignment = { vertical: "top", wrapText: true };
         });
-        row.getCell(COL_TIPO_FILA).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
+        row.getCell(colTipoFilaReal).alignment = { vertical: "top", horizontal: "left", wrapText: true, indent: nivel };
         row.outlineLevel = nivel;
-        if (nivel === 0) row.getCell(COL_TIPO_FILA).font = { bold: true };
+        if (nivel === 0) row.getCell(colTipoFilaReal).font = { bold: true };
     };
 
     for (const r of rows) {
         const anchors = anchorsById.get(Number(r.id));
+        const cambio = cambiosByRegistro.get(Number(r.id));
         const general: Record<number, unknown> = {
             [headers.indexOf("ID Solicitud") + 1]: r.id,
             [headers.indexOf("Empresa") + 1]: r.empresa_nombre,
@@ -591,10 +636,16 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
             [headers.indexOf("Ejecutivo de cuenta") + 1]: r.ejecutivo_cuenta_nombre,
             [headers.indexOf("Tipo salario") + 1]: r.tipo,
             [headers.indexOf("Estado") + 1]: r.estado,
-            [headers.indexOf("Fecha inicio") + 1]: r.fecha_inicio_txt,
-            [headers.indexOf("Fecha fin") + 1]: r.fecha_fin_txt,
+            [headers.indexOf("Fecha inicio") + 1]: formatDateOnlyDMY(r.fecha_inicio),
+            [headers.indexOf("Hora inicio") + 1]: formatTimeOnlyHMS(r.fecha_inicio),
+            [headers.indexOf("Fecha fin") + 1]: formatDateOnlyDMY(r.fecha_fin),
+            [headers.indexOf("Hora fin") + 1]: formatTimeOnlyHMS(r.fecha_fin),
             [headers.indexOf("Días") + 1]: r.dias_permiso,
-            [headers.indexOf("Creado") + 1]: r.created_at_txt,
+            [headers.indexOf("Creado (fecha)") + 1]: formatDateOnlyDMY(r.created_at),
+            [headers.indexOf("Creado (hora)") + 1]: formatTimeOnlyHMS(r.created_at),
+            [headers.indexOf("Creado por") + 1]: r.creado_por_nombre,
+            [headers.indexOf("Usuario modifica") + 1]: cambio?.cedula ?? "",
+            [headers.indexOf("Fecha y hora modifica") + 1]: cambio?.fechaHoraTexto ?? "",
             [headers.indexOf("Motivo") + 1]: String(r.motivo_txt ?? r.motivo ?? "").slice(0, 500),
             [headers.indexOf("Observaciones") + 1]: String(r.observaciones_txt ?? r.observaciones ?? "").slice(0, 500),
         };
@@ -604,20 +655,20 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
         rootValues[2] = 0;
         rootValues[3] = "Solicitud";
         for (const [col, val] of Object.entries(general)) rootValues[Number(col) - 1] = val;
-        const rootRow = wsMain.addRow(rootValues);
+        const rootRow = addMainRow(wsMain, rootValues);
         if (anchors) {
-            rootRow.getCell(colTurnos).value = { text: "Ver turnos", hyperlink: `#'Detalles'!A${anchors.turnosRow}` };
-            rootRow.getCell(colTurnos).font = { color: { argb: "FF0563C1" }, underline: true };
-            rootRow.getCell(colFirmaEmpleado).value = {
+            rootRow.getCell(colTurnosReal).value = { text: "Ver turnos", hyperlink: `#'Detalles'!A${anchors.turnosRow}` };
+            rootRow.getCell(colTurnosReal).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(colFirmaEmpleadoReal).value = {
                 text: "Ver firma",
                 hyperlink: `#'Detalles'!A${anchors.firmaEmpleadoRow}`,
             };
-            rootRow.getCell(colFirmaEmpleado).font = { color: { argb: "FF0563C1" }, underline: true };
-            rootRow.getCell(colFirmaEjecutivo).value = {
+            rootRow.getCell(colFirmaEmpleadoReal).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(colFirmaEjecutivoReal).value = {
                 text: "Ver firma",
                 hyperlink: `#'Detalles'!A${anchors.firmaEjecutivoRow}`,
             };
-            rootRow.getCell(colFirmaEjecutivo).font = { color: { argb: "FF0563C1" }, underline: true };
+            rootRow.getCell(colFirmaEjecutivoReal).font = { color: { argb: "FF0563C1" }, underline: true };
         }
         styleDataRow(rootRow, 0);
 
@@ -635,14 +686,14 @@ export async function buildSolicitudesPermisoExcelConsolidado(rows: any[]): Prom
             values[headers.indexOf("Tipo turno")] = String(t.tipo_turno ?? "");
             values[headers.indexOf("Horas duración (turno)")] = String(t.horas_duracion ?? "");
             values[headers.indexOf("Reemplazo (turno)")] = String(t.reemplazo_nombre ?? t.reemplazo_id ?? "");
-            const row = wsMain.addRow(values);
+            const row = addMainRow(wsMain, values);
             styleDataRow(row, 1);
         });
     }
 
     wsMain.autoFilter = {
-        from: { row: 1, column: 1 },
-        to: { row: Math.max(1, wsMain.rowCount), column: headers.length },
+        from: { row: 12, column: 2 },
+        to: { row: Math.max(12, wsMain.rowCount), column: headers.length + 1 },
     };
     wsDet.columns = [{ width: 22 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 28 }];
     return Buffer.from(await wb.xlsx.writeBuffer());

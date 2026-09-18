@@ -99,15 +99,21 @@ async function fetchControlVersionsByModules(
   return map;
 }
 
+/** Solo se considera completo si tiene todos sus datos; si falta alguno, la casilla del nombre queda en blanco. */
+function isControlVersionComplete(controlVersion: ControlVersionRow | undefined): controlVersion is ControlVersionRow {
+  if (!controlVersion) return false;
+  return Boolean(controlVersion.title) && Boolean(controlVersion.version) && Boolean(controlVersion.approve_date) && Boolean(controlVersion.department);
+}
+
 function buildChildReportMeta(
   modulo: string,
   tipo: string,
   ts: string,
   controlVersion: ControlVersionRow | undefined,
 ) {
-  const nombre = controlVersion
+  const nombre = isControlVersionComplete(controlVersion)
     ? `${controlVersion.title}, V${controlVersion.version}, ${formatControlVersionDateDisplay(controlVersion.approve_date)}, ${controlVersion.department}`
-    : `${modulo} ${tipo} ${ts}`;
+    : "";
   return {
     nombre,
     numero: ts,

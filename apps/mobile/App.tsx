@@ -205,13 +205,23 @@ import getValidAccessTokenOrLogout from './hooks/getValidAccessTokenOrLogout';
 import { isStoredPlanillasTokenValid, readStoredPlanillasToken } from './hooks/planillasTokenStorage';
 import PlanillasPasswordRevalidationModal from './components/PlanillasPasswordRevalidationModal';
 import JobManualsScreen from './screens/JobManualsScreen';
-import { createJobManual, deleteJobManual, signJobManual, putJobManualQuizResult, appendJobManualPuestos } from './hooks/jobManualsFunctions';
-import { patchJobManualPuestosVinculadosInCache } from './hooks/jobManualsCacheHelpers';
+import {
+  createJobManual,
+  deleteJobManual,
+  signJobManual,
+  putJobManualQuizResult,
+  appendJobManualPuestos,
+  appendJobManualEmpleados,
+  updateJobManualVisualizacionField,
+} from './hooks/jobManualsFunctions';
+import { patchJobManualPuestosVinculadosInCache, patchJobManualEmpleadosVinculadosInCache } from './hooks/jobManualsCacheHelpers';
 import {
   applyJobManualCreateSuccess,
   deleteJobManualLocalFileRefsFromJson,
   hydrateJobManualCreateRequestData,
   hydrateJobManualSignFiles,
+  hydrateJobManualSignatureRef,
+  deleteJobManualSignatureLocalRef,
 } from './hooks/jobManualsQueueUtils';
 import StaffEvaluationsScreen from './screens/StaffEvaluationsScreen';
 import BitacoraVehiculosDetenidosScreen from './screens/BitacoraVehiculosDetenidosScreen';
@@ -1116,14 +1126,23 @@ function AppContent() {
       if (!Array.isArray(q)) return false;
       return q.some((a: any) => {
         if (a.type !== action.type) return false;
-        if (action.type === 'sign' && (action as any).manualLocalId) {
+        if ((action.type === 'sign' || action.type === 'auto_visualizacion') && (action as any).manualLocalId) {
           return String((a as any).manualLocalId) === String((action as any).manualLocalId);
         }
-        if (action.type === 'create' || action.type === 'delete' || action.type === 'sign') {
+        if (action.type === 'create' || action.type === 'delete' || action.type === 'sign' || action.type === 'auto_visualizacion') {
           return String(a.id) === String(action.id);
         }
-        if (action.type === 'append_puestos') {
+        if (action.type === 'append_puestos' || action.type === 'append_empleados') {
           return String(a.action_queue_id ?? a.id) === String(action.action_queue_id ?? action.id);
+        }
+        if (action.type === 'visualizacion_field_update') {
+          if ((action as any).manualLocalId) {
+            return (
+              String((a as any).manualLocalId) === String((action as any).manualLocalId) &&
+              a.field === action.field
+            );
+          }
+          return String(a.id) === String(action.id) && a.field === action.field;
         }
         if (action.type === 'quiz_result') {
           if ((action as any).manualLocalId) {
@@ -1138,6 +1157,25 @@ function AppContent() {
         }
         return false;
       });
+    };
+
+    /**
+     * Busca (sin remover de `work`, para no desincronizar el índice del `for` que la recorre) una
+     * acción `visualizacion_field_update` pendiente del mismo manual, para fusionarla en una sola
+     * petición junto con `sign`/`auto_visualizacion`. Su remoción real de storage la hace el llamador
+     * (vía `removeJobManualActionsFromStorage`); cuando el `for` llegue luego a esa misma entrada,
+     * `actionStillQueued` ya no la encontrará en storage y la saltará con `continue`.
+     */
+    const takePendingVisualizacionFieldUpdate = (manualIdOrLocal: { id?: number; manualLocalId?: string }) => {
+      return (
+        work.find((a: any) => {
+          if (a.type !== 'visualizacion_field_update') return false;
+          if (manualIdOrLocal.manualLocalId) {
+            return String(a.manualLocalId) === String(manualIdOrLocal.manualLocalId);
+          }
+          return Number(a.id) === Number(manualIdOrLocal.id);
+        }) ?? null
+      );
     };
 
     // Reprocesa la cola tras un `create` (reasigna sign/quiz/append a id de servidor)
@@ -1209,11 +1247,21 @@ function AppContent() {
           }
           console.log('Firmando manual de trabajo:', action.id);
           const filesHydrated = await hydrateJobManualSignFiles(action.files ?? null);
+          // Si hay una firma manual pendiente para el mismo manual, se fusiona aquí para que todo
+          // se sincronice en una sola petición (igual que `checkStaffEvaluationsActionsCache`).
+          const pendingManualFirmaForSign = takePendingVisualizacionFieldUpdate({ id: signManualId });
+          // Referencia local (expo-files) de la firma manual pendiente de subir; se hidrata a base64
+          // justo antes de enviarla y se borra del disco solo si la petición tiene éxito.
+          const firmaEmpleadoManualRefForSign =
+            action.firmaEmpleadoManual ??
+            (pendingManualFirmaForSign?.field === 'firma_empleado_manual' ? pendingManualFirmaForSign.value : undefined);
+          const firmaEmpleadoManualForSign = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForSign);
           const result = await signJobManual({
             id: signManualId,
             firma: action.firma,
             quizAnswear: action.quizAnswear ?? null,
             files: filesHydrated,
+            firmaEmpleadoManual: firmaEmpleadoManualForSign,
             refreshAccessToken,
             logout,
             marcaId: action.marcaId,
@@ -1224,8 +1272,15 @@ function AppContent() {
             const visId =
               Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
             await deleteJobManualLocalFileRefsFromJson(action.files);
+            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForSign);
             await removeJobManualActionsFromStorage(
-              (a: any) => a.type === 'sign' && String(a.id) === signId
+              (a: any) =>
+                (a.type === 'sign' && String(a.id) === signId) ||
+                (pendingManualFirmaForSign &&
+                  a.type === 'visualizacion_field_update' &&
+                  a.field === pendingManualFirmaForSign.field &&
+                  String(a.id) === String(pendingManualFirmaForSign.id) &&
+                  String(a.manualLocalId ?? '') === String(pendingManualFirmaForSign.manualLocalId ?? ''))
             );
 
             // Actualizar cache: marcar como firmado y agregar visualización
@@ -1267,6 +1322,9 @@ function AppContent() {
                     created_at: new Date(horaAccion).toISOString(),
                     updated_at: new Date(horaAccion).toISOString(),
                     files: filesForVis,
+                    // El archivo local ya se borró tras subir con éxito: se deja en null hasta que el
+                    // próximo refresco lo traiga del servidor y lo vuelva a guardar en expo-files.
+                    ...(firmaEmpleadoManualRefForSign ? { firma_empleado_manual: null } : {}),
                   };
                   return {
                     ...item,
@@ -1278,6 +1336,168 @@ function AppContent() {
               });
               await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
             }
+          }
+        } else if (action.type === 'auto_visualizacion') {
+          const autoManualId = Number(action.id);
+          if (!Number.isFinite(autoManualId) || autoManualId <= 0) {
+            if ((action as any).manualLocalId) {
+              console.log('Visualización automática: pendiente reasignación de id de servidor, se reintentará luego');
+            } else {
+              console.warn('Visualización automática: acción con id inválido, se omite');
+            }
+            continue;
+          }
+          console.log('Sincronizando visualización automática del manual:', action.id);
+          const pendingManualFirmaForAuto = takePendingVisualizacionFieldUpdate({ id: autoManualId });
+          const firmaEmpleadoManualRefForAuto =
+            pendingManualFirmaForAuto?.field === 'firma_empleado_manual' ? pendingManualFirmaForAuto.value : undefined;
+          const firmaEmpleadoManualForAuto = await hydrateJobManualSignatureRef(firmaEmpleadoManualRefForAuto);
+          const result = await signJobManual({
+            id: autoManualId,
+            firma: action.firma,
+            quizAnswear: null,
+            files: null,
+            firmaEmpleadoManual: firmaEmpleadoManualForAuto,
+            refreshAccessToken,
+            logout,
+            marcaId: action.marcaId,
+          });
+
+          if (result.status) {
+            const autoId = String(action.id);
+            const visId = Number((result as any).visualizacion_id ?? (result as any).id ?? 0) || Date.now();
+            await deleteJobManualSignatureLocalRef(firmaEmpleadoManualRefForAuto);
+            await removeJobManualActionsFromStorage(
+              (a: any) =>
+                (a.type === 'auto_visualizacion' && String(a.id) === autoId) ||
+                (pendingManualFirmaForAuto &&
+                  a.type === 'visualizacion_field_update' &&
+                  a.field === pendingManualFirmaForAuto.field &&
+                  String(a.id) === String(pendingManualFirmaForAuto.id) &&
+                  String(a.manualLocalId ?? '') === String(pendingManualFirmaForAuto.manualLocalId ?? ''))
+            );
+
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((item: any) => {
+                if (String(item.id) !== autoId) return item;
+                const visualizaciones = (item.visualizaciones || []).filter(
+                  (v: any) => Number(v.empleado_id) !== Number(employee?.id || 0)
+                );
+                const newVis = {
+                  id: visId,
+                  empleado_id: employee?.id || 0,
+                  manual_puesto_id: action.id,
+                  nombre_empleado: employee?.name || 'Empleado',
+                  firma_empleado: action.firma,
+                  quiz_answear: null,
+                  approved: null,
+                  created_at: new Date(horaAccion).toISOString(),
+                  updated_at: new Date(horaAccion).toISOString(),
+                  files: [],
+                  // El archivo local ya se borró tras subir con éxito (ver `deleteJobManualSignatureLocalRef`).
+                  ...(firmaEmpleadoManualRefForAuto ? { firma_empleado_manual: null } : {}),
+                };
+                return { ...item, currentEmployeeSigned: true, visualizaciones: [...visualizaciones, newVis] };
+              });
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'visualizacion_field_update') {
+          const vfuManualId = Number(action.id);
+          if (!Number.isFinite(vfuManualId) || vfuManualId <= 0) {
+            if ((action as any).manualLocalId) {
+              // El `create`/`auto_visualizacion` padre todavía no tiene id de servidor: se fusionará
+              // con él cuando se procese (ver `takePendingVisualizacionFieldUpdate`).
+              continue;
+            }
+            console.warn('Actualización de visualización: acción con id inválido, se omite');
+            continue;
+          }
+          const hasPendingParent = work.some(
+            (a: any) =>
+              (a.type === 'sign' || a.type === 'auto_visualizacion') && Number(a.id) === vfuManualId
+          );
+          if (hasPendingParent) {
+            // Se fusionará cuando se procese la acción padre (`sign`/`auto_visualizacion`) más arriba.
+            continue;
+          }
+          console.log('Actualizando campo de visualización del manual:', action.id, action.field);
+          const result = await updateJobManualVisualizacionField({
+            id: vfuManualId,
+            marcaId: action.marcaId,
+            field: action.field,
+            value: action.value ?? null,
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const vfuId = String(action.id);
+            await removeJobManualActionsFromStorage(
+              (a: any) => a.type === 'visualizacion_field_update' && String(a.id) === vfuId && a.field === action.field
+            );
+
+            const cacheStr = await AsyncStorage.getItem('job_manuals_cache');
+            if (cacheStr) {
+              const cache = JSON.parse(cacheStr);
+              const updatedCache = cache.map((item: any) => {
+                if (String(item.id) !== vfuId) return item;
+                const eid = Number(employee?.id || 0);
+                const visualizaciones = item.visualizaciones || [];
+                const exists = visualizaciones.some((v: any) => Number(v.empleado_id) === eid);
+                const nextVisualizaciones = exists
+                  ? visualizaciones.map((v: any) =>
+                      Number(v.empleado_id) === eid
+                        ? { ...v, [action.field]: action.value, updated_at: new Date(horaAccion).toISOString() }
+                        : v
+                    )
+                  : [
+                      ...visualizaciones,
+                      {
+                        id: Date.now() + Math.floor(Math.random() * 1000),
+                        empleado_id: eid,
+                        manual_puesto_id: action.id,
+                        nombre_empleado: employee?.name || 'Empleado',
+                        firma_empleado: '',
+                        [action.field]: action.value,
+                        quiz_answear: null,
+                        approved: null,
+                        created_at: new Date(horaAccion).toISOString(),
+                        updated_at: new Date(horaAccion).toISOString(),
+                        files: [],
+                      },
+                    ];
+                return { ...item, visualizaciones: nextVisualizaciones };
+              });
+              await AsyncStorage.setItem('job_manuals_cache', JSON.stringify(updatedCache));
+            }
+          }
+        } else if (action.type === 'append_empleados') {
+          console.log('Vinculando empleados adicionales al manual:', action.manualId);
+          const result = await appendJobManualEmpleados({
+            manualId: Number(action.manualId),
+            marcaId: Number(action.marcaId),
+            empleadosIds: Array.isArray(action.empleados_ids) ? action.empleados_ids.map((n: any) => Number(n)) : [],
+            refreshAccessToken,
+            logout,
+          });
+
+          if (result.status) {
+            const empleadosIds = Array.isArray(action.empleados_ids)
+              ? action.empleados_ids.map((n: any) => Number(n))
+              : [];
+            if (empleadosIds.length > 0) {
+              await patchJobManualEmpleadosVinculadosInCache(
+                { manualServerId: Number(action.manualId), replaceAll: false },
+                empleadosIds
+              );
+            }
+            const actionQueueId = String(action.action_queue_id ?? action.id);
+            await removeJobManualActionsFromStorage(
+              (a: any) => a.type === 'append_empleados' && String(a.action_queue_id ?? a.id) === actionQueueId
+            );
           }
         } else if (action.type === 'append_puestos') {
           console.log('Vinculando puestos adicionales al manual:', action.manualId);
