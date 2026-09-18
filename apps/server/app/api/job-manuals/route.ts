@@ -436,6 +436,15 @@ export async function POST(req: NextRequest) {
             )
         );
 
+        const empleadosParsedRaw: number[] = empleados ? JSON.parse(empleados) : [];
+        const empleadosParsed = Array.from(
+            new Set(
+                (Array.isArray(empleadosParsedRaw) ? empleadosParsedRaw : [])
+                    .map((id: any) => Number(id))
+                    .filter((id: number) => Number.isFinite(id) && id > 0)
+            )
+        );
+
         let filesParsed: ManualFileInput[] = [];
         if (files) {
             try {
@@ -455,37 +464,44 @@ export async function POST(req: NextRequest) {
 
         let plazasIds: number[] = [];
 
-        // Crear un único manual y luego asociarlo a múltiples puestos mediante e_puestos_manual_puesto
-        if (puestosParsed.length === 0) {
-            await reportError(req, "api/job-manuals", "POST", 400, "Debe especificarse al menos un puesto");
+        // Crear un único manual y asociarlo a puestos y/o empleados específicos: se requiere al
+        // menos uno de los dos (mediante e_puestos_manual_puesto / e_empleados_manual_puesto).
+        if (puestosParsed.length === 0 && empleadosParsed.length === 0) {
+            await reportError(req, "api/job-manuals", "POST", 400, "Debe especificarse al menos un puesto o un empleado");
             return NextResponse.json(
-                { status: false, message: "Debe especificarse al menos un puesto" },
+                { status: false, message: "Debe especificarse al menos un puesto o un empleado" },
                 { status: 400 }
             );
         }
 
-        // 1) Confirmar puestos existentes en BD (findMany con ids recibidos)
-        const existingPuestos = await prisma.e_estructura_puesto.findMany({
-            where: { id: { in: puestosParsed } },
-            select: { id: true },
-        });
-        const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
-        const confirmedPuestoIds = Array.from(
-            new Set(
-                existingPuestosArray
-                    .map((p: any) => Number(p?.id))
-                    .filter((id: number) => Number.isFinite(id) && id > 0)
-            )
-        );
-
-        if (confirmedPuestoIds.length === 0) {
-            await reportError(req, "api/job-manuals", "POST", 404, "No se encontraron puestos válidos");
-            return NextResponse.json(
-                { status: false, message: "No se encontraron puestos válidos" },
-                { status: 404 }
+        // 1) Confirmar puestos existentes en BD (findMany con ids recibidos), si se especificaron
+        let confirmedPuestoIds: number[] = [];
+        if (puestosParsed.length > 0) {
+            const existingPuestos = await prisma.e_estructura_puesto.findMany({
+                where: { id: { in: puestosParsed } },
+                select: { id: true },
+            });
+            const existingPuestosArray = Array.isArray(existingPuestos) ? existingPuestos : [];
+            confirmedPuestoIds = Array.from(
+                new Set(
+                    existingPuestosArray
+                        .map((p: any) => Number(p?.id))
+                        .filter((id: number) => Number.isFinite(id) && id > 0)
+                )
             );
+
+            if (confirmedPuestoIds.length === 0) {
+                await reportError(req, "api/job-manuals", "POST", 404, "No se encontraron puestos válidos");
+                return NextResponse.json(
+                    { status: false, message: "No se encontraron puestos válidos" },
+                    { status: 404 }
+                );
+            }
         }
-        const primaryPuestoId = confirmedPuestoIds[0];
+        // `puesto_id` es obligatorio en e_manual_puesto por compatibilidad; si no se vinculó
+        // ningún puesto, se usa el puesto de la marca actual solo para completar la columna,
+        // sin crear un vínculo real en e_puestos_manual_puesto.
+        const primaryPuestoId = confirmedPuestoIds.length > 0 ? confirmedPuestoIds[0] : marcaObj.puesto_id;
 
         const manual = await callDynamicPrisma({
             req,
@@ -514,30 +530,24 @@ export async function POST(req: NextRequest) {
         });
         const manualObj = manual as any;
 
-        // 2) Crear relaciones en e_puestos_manual_puesto con una sola petición createMany
-        await callDynamicPrisma({
-            req,
-            data: {
-                action: "POST",
-                table: "e_puestos_manual_puesto",
-                operation: "createMany",
-                many: true,
-                data: confirmedPuestoIds.map((puesto_id: number) => ({
-                    manual_puesto_id: manualObj.id,
-                    puesto_id,
-                })),
-            }
-        });
+        // 2) Crear relaciones en e_puestos_manual_puesto con una sola petición createMany, si aplica
+        if (confirmedPuestoIds.length > 0) {
+            await callDynamicPrisma({
+                req,
+                data: {
+                    action: "POST",
+                    table: "e_puestos_manual_puesto",
+                    operation: "createMany",
+                    many: true,
+                    data: confirmedPuestoIds.map((puesto_id: number) => ({
+                        manual_puesto_id: manualObj.id,
+                        puesto_id,
+                    })),
+                }
+            });
+        }
 
         // 2b) Vínculos opcionales a empleados específicos (e_empleados_manual_puesto)
-        const empleadosParsedRaw: number[] = empleados ? JSON.parse(empleados) : [];
-        const empleadosParsed = Array.from(
-            new Set(
-                (Array.isArray(empleadosParsedRaw) ? empleadosParsedRaw : [])
-                    .map((id: any) => Number(id))
-                    .filter((id: number) => Number.isFinite(id) && id > 0)
-            )
-        );
         let confirmedEmpleadoIds: number[] = [];
         if (empleadosParsed.length > 0) {
             const existingEmpleados = await prisma.c_empleado.findMany({
@@ -619,7 +629,9 @@ export async function POST(req: NextRequest) {
         const fecha_string = created_at.toISOString().split("T")[0];
         const hora_string = created_at.toISOString().split("T")[1].split(".")[0];
 
-        await sendNotificationByPlaza(req, marcaObj.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
+        if (plazasIds.length > 0) {
+            await sendNotificationByPlaza(req, marcaObj.id, "Manual creado", `Se ha creado el manual ${title} para tu puesto el día ${fecha_string} a las ${hora_string}`, plazasIds);
+        }
 
         if (confirmedEmpleadoIds.length > 0) {
             try {
